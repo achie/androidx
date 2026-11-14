@@ -24,12 +24,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,7 +37,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class LayoutReuseTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun reuseBox() {
@@ -96,12 +95,11 @@ class LayoutReuseTest {
 
     private fun assertNoRemeasureOnReuse(content: @Composable (Modifier) -> Unit) {
         var measureCount = 0
-        val layoutModifier =
-            Modifier.layout { measurable, constraints ->
-                measureCount++
-                val placeable = measurable.measure(constraints)
-                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-            }
+        val layoutModifier = Modifier.layout { measurable, constraints ->
+            measureCount++
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        }
         var key by mutableStateOf(0)
         rule.setContent { ReusableContent(key = key) { content(layoutModifier) } }
         rule.runOnIdle {

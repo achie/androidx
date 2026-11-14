@@ -17,10 +17,13 @@
 package androidx.car.app.media.model;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
 
 import androidx.car.app.model.Action;
 import androidx.car.app.model.Header;
+import androidx.car.app.model.StrokeCap;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -46,6 +49,9 @@ public class MediaPlaybackTemplateTest {
                 new MediaPlaybackTemplate.Builder().build();
 
         assertEquals(template.getHeader(), null);
+        assertEquals(template.getStyle(), null);
+        assertFalse(template.isVideoEnabled());
+        assertFalse(template.isAutoHideControlsEnabled());
     }
 
     @Test
@@ -62,6 +68,36 @@ public class MediaPlaybackTemplateTest {
                 new MediaPlaybackTemplate.Builder().setHeader(HEADER).build();
 
         assertEquals(template.getHeader(), HEADER);
+    }
+
+    @Test
+    public void createInstance_styleProvided_isValid() {
+        MediaPlaybackStyle style =
+                new MediaPlaybackStyle.Builder()
+                        .setProgressBarStrokeCap(StrokeCap.ROUND)
+                        .build();
+        MediaPlaybackTemplate template =
+                new MediaPlaybackTemplate.Builder().setStyle(style).build();
+
+        assertEquals(template.getStyle(), style);
+    }
+
+    @Test
+    public void createInstance_videoEnabledProvided_isValid() {
+        MediaPlaybackTemplate template =
+                new MediaPlaybackTemplate.Builder().setVideoEnabled(true).build();
+
+        assertTrue(template.isVideoEnabled());
+    }
+
+    @Test
+    public void createInstance_autoHideControlsEnabledProvided_isValid() {
+        MediaPlaybackTemplate template =
+                new MediaPlaybackTemplate.Builder()
+                        .setAutoHideControlsEnabled(true)
+                        .build();
+
+        assertTrue(template.isAutoHideControlsEnabled());
     }
 
     @Test
@@ -95,5 +131,79 @@ public class MediaPlaybackTemplateTest {
                 new MediaPlaybackTemplate.Builder().setHeader(null).build();
 
         assertNotEquals(template1, template2);
+    }
+
+    @Test
+    public void notEquals_differentStyles() {
+        MediaPlaybackStyle style1 =
+                new MediaPlaybackStyle.Builder()
+                        .setProgressBarStrokeCap(StrokeCap.ROUND)
+                        .build();
+
+        MediaPlaybackStyle style2 =
+                new MediaPlaybackStyle.Builder()
+                        .setProgressBarStrokeCap(StrokeCap.SQUARE)
+                        .build();
+
+        MediaPlaybackTemplate template1 =
+                new MediaPlaybackTemplate.Builder().setStyle(style1).build();
+        MediaPlaybackTemplate template2 =
+                new MediaPlaybackTemplate.Builder().setStyle(style2).build();
+
+        assertNotEquals(template1, template2);
+    }
+
+    @Test
+    public void copyBuilder_copiesStyle() {
+        MediaPlaybackStyle style =
+                new MediaPlaybackStyle.Builder()
+                        .setProgressBarStrokeCap(StrokeCap.SQUARE)
+                        .build();
+        MediaPlaybackTemplate template =
+                new MediaPlaybackTemplate.Builder().setStyle(style).build();
+        MediaPlaybackTemplate copy =
+                new MediaPlaybackTemplate.Builder(template).build();
+
+        assertEquals(template, copy);
+        assertEquals(copy.getStyle(), style);
+    }
+
+    @Test
+    public void notEquals_differentVideoEnabled() {
+        MediaPlaybackTemplate template1 =
+                new MediaPlaybackTemplate.Builder().setVideoEnabled(true).build();
+        MediaPlaybackTemplate template2 =
+                new MediaPlaybackTemplate.Builder().setVideoEnabled(false).build();
+
+        assertNotEquals(template1, template2);
+    }
+
+    @Test
+    public void notEquals_differentAutoHideControlsEnabled() {
+        MediaPlaybackTemplate template1 =
+                new MediaPlaybackTemplate.Builder()
+                        .setAutoHideControlsEnabled(true)
+                        .build();
+        MediaPlaybackTemplate template2 =
+                new MediaPlaybackTemplate.Builder()
+                        .setAutoHideControlsEnabled(false)
+                        .build();
+
+        assertNotEquals(template1, template2);
+    }
+
+    @Test
+    public void copyBuilder_copiesVideoSettings() {
+        MediaPlaybackTemplate template =
+                new MediaPlaybackTemplate.Builder()
+                        .setVideoEnabled(true)
+                        .setAutoHideControlsEnabled(true)
+                        .build();
+        MediaPlaybackTemplate copy =
+                new MediaPlaybackTemplate.Builder(template).build();
+
+        assertEquals(template, copy);
+        assertTrue(copy.isVideoEnabled());
+        assertTrue(copy.isAutoHideControlsEnabled());
     }
 }

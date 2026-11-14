@@ -63,6 +63,7 @@ import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.PlatformTextInputSessionScope
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.TaskDispatchers
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.WindowInfo
@@ -72,10 +73,12 @@ import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsModifier
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.spatial.RectManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextInputService
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
@@ -660,7 +663,7 @@ class LayoutNodeTest {
     fun testRemoveBeyondIndex() {
         val node = LayoutNode()
         node.insertAt(0, LayoutNode())
-        Assert.assertThrows(NullPointerException::class.java) { node.removeAt(1, 1) }
+        Assert.assertThrows(IndexOutOfBoundsException::class.java) { node.removeAt(1, 1) }
     }
 
     // LayoutNode should error when removing at count < 0
@@ -676,14 +679,14 @@ class LayoutNodeTest {
     fun testRemoveWithIndexBeyondSize() {
         val node = LayoutNode()
         node.insertAt(0, LayoutNode())
-        Assert.assertThrows(NullPointerException::class.java) { node.removeAt(0, 2) }
+        Assert.assertThrows(IndexOutOfBoundsException::class.java) { node.removeAt(0, 2) }
     }
 
     // LayoutNode should error when there aren't enough items
     @Test
     fun testRemoveWithIndexEqualToSize() {
         val node = LayoutNode()
-        Assert.assertThrows(NullPointerException::class.java) { node.removeAt(0, 1) }
+        Assert.assertThrows(IndexOutOfBoundsException::class.java) { node.removeAt(0, 1) }
     }
 
     // LayoutNode should allow removing two items
@@ -891,11 +894,10 @@ class LayoutNodeTest {
         parent.attach(MockOwner())
         val child = ZeroSizedLayoutNode()
         parent.insertAt(0, child)
-        child.modifier =
-            Modifier.graphicsLayer {
-                translationX = 5f
-                translationY = 2f
-            }
+        child.modifier = Modifier.graphicsLayer {
+            translationX = 5f
+            translationY = 2f
+        }
         parent.outerCoordinator.measure(listOf(parent.outerCoordinator), Constraints())
         child.outerCoordinator.measure(listOf(child.outerCoordinator), Constraints())
         parent.place(0, 0)
@@ -985,20 +987,18 @@ class LayoutNodeTest {
         parent.attach(MockOwner())
         val child1 = ZeroSizedLayoutNode()
         parent.insertAt(0, child1)
-        child1.modifier =
-            Modifier.graphicsLayer {
-                scaleX = 0.5f
-                scaleY = 0.25f
-                transformOrigin = TransformOrigin(0f, 0f)
-            }
+        child1.modifier = Modifier.graphicsLayer {
+            scaleX = 0.5f
+            scaleY = 0.25f
+            transformOrigin = TransformOrigin(0f, 0f)
+        }
         val child2 = ZeroSizedLayoutNode()
         parent.insertAt(0, child2)
-        child2.modifier =
-            Modifier.graphicsLayer {
-                scaleX = 5f
-                scaleY = 2f
-                transformOrigin = TransformOrigin(0f, 0f)
-            }
+        child2.modifier = Modifier.graphicsLayer {
+            scaleX = 5f
+            scaleY = 2f
+            transformOrigin = TransformOrigin(0f, 0f)
+        }
         parent.outerCoordinator.measure(listOf(parent.outerCoordinator), Constraints())
         child1.outerCoordinator.measure(listOf(child1.outerCoordinator), Constraints())
         child2.outerCoordinator.measure(listOf(child2.outerCoordinator), Constraints())
@@ -1398,6 +1398,7 @@ class LayoutNodeTest {
     @Test
     fun hitTestSemantics_pointerInMinimumTouchTarget_pointerInputFilterHit() {
         val semanticsConfiguration = SemanticsConfiguration()
+        semanticsConfiguration.contentDescription = "test"
         val semanticsModifier =
             object : SemanticsModifier {
                 override val semanticsConfiguration: SemanticsConfiguration = semanticsConfiguration
@@ -1417,6 +1418,7 @@ class LayoutNodeTest {
     @Test
     fun hitTestSemantics_pointerInMinimumTouchTarget_pointerInputFilterHit_nestedNodes() {
         val semanticsConfiguration = SemanticsConfiguration()
+        semanticsConfiguration.contentDescription = "test"
         val semanticsModifier =
             object : SemanticsModifier {
                 override val semanticsConfiguration: SemanticsConfiguration = semanticsConfiguration
@@ -1438,11 +1440,15 @@ class LayoutNodeTest {
     fun hitTestSemantics_pointerInMinimumTouchTarget_closestHit() {
         val semanticsNode1 =
             object : SemanticsModifierNode, Modifier.Node() {
-                override fun SemanticsPropertyReceiver.applySemantics() {}
+                override fun SemanticsPropertyReceiver.applySemantics() {
+                    contentDescription = "node1"
+                }
             }
         val semanticsNode2 =
             object : SemanticsModifierNode, Modifier.Node() {
-                override fun SemanticsPropertyReceiver.applySemantics() {}
+                override fun SemanticsPropertyReceiver.applySemantics() {
+                    contentDescription = "node2"
+                }
             }
         data class TestSemanticsElement(private val node: Modifier.Node) :
             ModifierNodeElement<Modifier.Node>() {
@@ -1507,6 +1513,7 @@ class LayoutNodeTest {
     @Test
     fun hitTestSemantics_pointerInMinimumTouchTarget_closestHitWithOverlap() {
         val semanticsConfiguration = SemanticsConfiguration()
+        semanticsConfiguration.contentDescription = "test description"
         val semanticsModifier1 =
             object : SemanticsModifier {
                 override val semanticsConfiguration: SemanticsConfiguration = semanticsConfiguration
@@ -2320,6 +2327,25 @@ class LayoutNodeTest {
 
     private fun ZeroSizedLayoutNode() = LayoutNode(0, 0, 0, 0)
 
+    @Test
+    fun deactivatedNode_removedFromMeasureAndLayoutDelegate() {
+        val root = LayoutNode()
+        val delegate = MeasureAndLayoutDelegate(root)
+        val owner =
+            object : MockOwner() {
+                override fun onLayoutNodeDeactivated(layoutNode: LayoutNode) {
+                    delegate.onNodeDeactivated(layoutNode)
+                }
+            }
+        root.attach(owner)
+        delegate.updateRootConstraints(Constraints.fixed(100, 100))
+        assertTrue(delegate.hasPendingMeasureOrLayout)
+
+        root.onDeactivate()
+
+        assertFalse(delegate.hasPendingMeasureOrLayout)
+    }
+
     private class PointerInputModifierImpl(override val pointerInputFilter: PointerInputFilter) :
         PointerInputModifier
 }
@@ -2334,7 +2360,7 @@ private class EmptyLayoutModifier : LayoutModifier {
     }
 }
 
-internal class MockOwner(
+internal open class MockOwner(
     private val position: IntOffset = IntOffset.Zero,
     override val root: LayoutNode = LayoutNode(),
     override val semanticsOwner: SemanticsOwner =
@@ -2404,6 +2430,9 @@ internal class MockOwner(
     override val windowInfo: WindowInfo
         get() = TODO("Not yet implemented")
 
+    override val taskDispatchers: TaskDispatchers
+        get() = TODO("Not yet implemented")
+
     override val rectManager: RectManager = RectManager()
 
     @Deprecated(
@@ -2420,7 +2449,10 @@ internal class MockOwner(
     override val layoutDirection: LayoutDirection
         get() = LayoutDirection.Ltr
 
-    @InternalCoreApi override var showLayoutBounds: Boolean = false
+    override val localeList: LocaleList
+        get() = TODO("Not yet implemented")
+
+    override var showLayoutBounds: Boolean = false
     override val snapshotObserver = OwnerSnapshotObserver { it.invoke() }
     override val modifierLocalManager: ModifierLocalManager = ModifierLocalManager(this)
     override val dragAndDropManager: DragAndDropManager

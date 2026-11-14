@@ -49,7 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeWithVelocity
@@ -65,7 +65,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withContext
 import org.junit.Rule
 import org.junit.Test
@@ -74,7 +73,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class SnapFlingBehaviorTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun remainingScrollOffset_cannotApproach_shouldRepresentJustSnappingOffsets() {
@@ -188,13 +187,12 @@ class SnapFlingBehaviorTest {
                 override fun calculateSnapOffset(velocity: Float): Float = Float.NaN
             }
         lateinit var testFlingBehavior: TargetedFlingBehavior
-        val exception =
-            kotlin.runCatching {
-                rule.setContent {
-                    testFlingBehavior = rememberSnapFlingBehavior(testLayoutInfoProvider)
-                    VelocityEffect(testFlingBehavior, TestVelocity)
-                }
+        val exception = kotlin.runCatching {
+            rule.setContent {
+                testFlingBehavior = rememberSnapFlingBehavior(testLayoutInfoProvider)
+                VelocityEffect(testFlingBehavior, TestVelocity)
             }
+        }
         assert(exception.isFailure)
     }
 
@@ -208,13 +206,12 @@ class SnapFlingBehaviorTest {
                 override fun calculateSnapOffset(velocity: Float): Float = 0.0f
             }
         lateinit var testFlingBehavior: TargetedFlingBehavior
-        val exception =
-            kotlin.runCatching {
-                rule.setContent {
-                    testFlingBehavior = rememberSnapFlingBehavior(testLayoutInfoProvider)
-                    VelocityEffect(testFlingBehavior, TestVelocity)
-                }
+        val exception = kotlin.runCatching {
+            rule.setContent {
+                testFlingBehavior = rememberSnapFlingBehavior(testLayoutInfoProvider)
+                VelocityEffect(testFlingBehavior, TestVelocity)
             }
+        }
         assert(exception.isFailure)
     }
 

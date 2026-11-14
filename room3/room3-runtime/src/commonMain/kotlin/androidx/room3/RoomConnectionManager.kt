@@ -17,14 +17,22 @@
 package androidx.room3
 
 import androidx.annotation.RestrictTo
-import androidx.room3.RoomDatabase.JournalMode.TRUNCATE
 import androidx.room3.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING
-import androidx.room3.concurrent.ExclusiveLock
-import androidx.room3.util.findMigrationPath
+import androidx.room3.coroutines.ConnectionFactory
+import androidx.room3.coroutines.ExclusiveMutex
+import androidx.room3.util.deleteDatabaseFiles
+import androidx.room3.util.ensureParentDirectoryExists
 import androidx.room3.util.isMigrationRequired
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteDriver
-import androidx.sqlite.execSQL
+import androidx.sqlite.SQLiteException
+import androidx.sqlite.async.executeSQL
+import androidx.sqlite.async.open
+import androidx.sqlite.async.prepare
+import androidx.sqlite.async.step
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 /** Expect implementation declaration of Room's connection manager. */
 internal expect class RoomConnectionManager
@@ -54,25 +62,39 @@ public abstract class BaseRoomConnectionManager {
     // Lets impl class resolve driver file name if necessary.
     internal open fun resolveFileName(fileName: String): String = fileName
 
-    /* A driver wrapper that configures opened connections per the manager. */
-    protected inner class DriverWrapper(private val actual: SQLiteDriver) : SQLiteDriver by actual {
-        override fun open(fileName: String): SQLiteConnection {
-            return openLocked(resolveFileName(fileName))
-        }
+    /* Creates a connection factory that configures opened connections per the manager. */
+    protected fun createConnectionFactory(
+        driver: SQLiteDriver,
+        fileName: String,
+    ): ConnectionFactory {
+        return { openLocked(driver, fileName) }
+    }
 
-        private fun openLocked(filename: String) =
-            ExclusiveLock(
-                    filename = filename,
-                    useFileLock = !isConfigured && !isInitializing && filename != ":memory:",
-                )
-                .withLock(
-                    onLocked = {
-                        check(!isInitializing) {
-                            "Recursive database initialization detected. Did you try to use the " +
-                                "database instance during initialization? Maybe in one of the " +
-                                "callbacks?"
+    /* Open and configure a connection. Called from the connection factory. */
+    private suspend fun openLocked(delegate: SQLiteDriver, filename: String): SQLiteConnection {
+        val resolvedFileName = resolveFileName(filename)
+        if (!isConfigured && resolvedFileName != ":memory:") {
+            ensureParentDirectoryExists(resolvedFileName)
+        }
+        return ExclusiveMutex(
+                filename = resolvedFileName,
+                useFileLock = !isConfigured && !isInitializing && resolvedFileName != ":memory:",
+            )
+            .withLock(
+                onLocked = {
+                    check(!isInitializing) {
+                        "Recursive database initialization detected. Did you try to use the " +
+                            "database instance during initialization? Maybe in one of the " +
+                            "callbacks?"
+                    }
+
+                    val connection =
+                        if (!isConfigured) {
+                            tryOpenInitialConnection(delegate, resolvedFileName)
+                        } else {
+                            delegate.open(resolvedFileName)
                         }
-                        val connection = actual.open(filename)
+                    try {
                         if (!isConfigured) {
                             // Perform initial connection configuration
                             try {
@@ -85,24 +107,81 @@ public abstract class BaseRoomConnectionManager {
                             // Perform other non-initial connection configuration
                             configurationConnection(connection)
                         }
-                        return@withLock connection
-                    },
-                    onLockError = { error ->
-                        throw IllegalStateException(
-                            "Unable to open database '$filename'. Was a proper path / " +
-                                "name used in Room's database builder?",
-                            error,
-                        )
-                    },
-                )
+                    } catch (th: Throwable) {
+                        // Close connection if anything goes wrong during configuration, avoids leak
+                        connection.close()
+                        throw th
+                    }
+                    return@withLock connection
+                },
+                onLockError = { error ->
+                    throw IllegalStateException(
+                        "Unable to open database '$resolvedFileName'. " +
+                            "Was a proper path / name used in Room's database builder?",
+                        error,
+                    )
+                },
+            )
+    }
+
+    /**
+     * Attempts to open and verify the database connection with retries on transient errors and
+     * corruption recovery if [DatabaseConfiguration.allowDataLossOnRecovery] is enabled.
+     */
+    private suspend fun tryOpenInitialConnection(
+        driver: SQLiteDriver,
+        fileName: String,
+    ): SQLiteConnection {
+        // First attempt to open the connection
+        try {
+            return openAndVerify(driver, fileName)
+        } catch (t: CancellationException) {
+            throw t
+        } catch (_: Throwable) {
+            // ignore errors to retry
+        }
+
+        // A small backoff before retrying
+        delay(500.milliseconds)
+        val openRetryError: Throwable =
+            try {
+                return openAndVerify(driver, fileName)
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Throwable) {
+                t
+            }
+
+        // Checking if the error is recoverable via deletion
+        if (
+            openRetryError !is SQLiteException ||
+                fileName == ":memory:" ||
+                !configuration.allowDataLossOnRecovery
+        ) {
+            throw openRetryError
+        }
+
+        // Deleting the database and trying one last time
+        deleteDatabaseFiles(fileName)
+        return openAndVerify(driver, fileName)
+    }
+
+    private suspend fun openAndVerify(driver: SQLiteDriver, fileName: String): SQLiteConnection {
+        val connection = driver.open(fileName)
+        return runCatching {
+            // This is just for checking corruptions
+            connection.prepare("PRAGMA schema_version").use { it.step() }
+            connection
+        }
+            .onFailure { connection.close() }
+            .getOrThrow()
     }
 
     /**
      * Performs initial database connection configuration and opening procedure, such as running
      * migrations if necessary, validating schema and invoking configured callbacks if any.
      */
-    // TODO(b/316944352): Retry mechanism
-    private fun configureDatabase(connection: SQLiteConnection) {
+    private suspend fun configureDatabase(connection: SQLiteConnection) {
         configureBusyTimeout(connection)
         configureJournalMode(connection)
         configureSynchronousFlag(connection)
@@ -112,18 +191,18 @@ public abstract class BaseRoomConnectionManager {
                 statement.getLong(0).toInt()
             }
         if (version != openDelegate.version) {
-            connection.execSQL("BEGIN EXCLUSIVE TRANSACTION")
+            connection.executeSQL("BEGIN EXCLUSIVE TRANSACTION")
             runCatching {
-                    if (version == 0) {
-                        onCreate(connection)
-                    } else {
-                        onMigrate(connection, version, openDelegate.version)
-                    }
-                    connection.execSQL("PRAGMA user_version = ${openDelegate.version}")
+                if (version == 0) {
+                    onCreate(connection)
+                } else {
+                    onMigrate(connection, version, openDelegate.version)
                 }
-                .onSuccess { connection.execSQL("END TRANSACTION") }
+                connection.executeSQL("PRAGMA user_version = ${openDelegate.version}")
+            }
+                .onSuccess { connection.executeSQL("END TRANSACTION") }
                 .onFailure {
-                    connection.execSQL("ROLLBACK TRANSACTION")
+                    connection.executeSQL("ROLLBACK TRANSACTION")
                     throw it
                 }
         }
@@ -134,33 +213,33 @@ public abstract class BaseRoomConnectionManager {
      * Performs non-initial database connection configuration, specifically executing any
      * per-connection PRAGMA.
      */
-    protected fun configurationConnection(connection: SQLiteConnection) {
+    protected suspend fun configurationConnection(connection: SQLiteConnection) {
         configureBusyTimeout(connection)
         configureSynchronousFlag(connection)
         openDelegate.onOpen(connection)
     }
 
-    private fun configureJournalMode(connection: SQLiteConnection) {
+    private suspend fun configureJournalMode(connection: SQLiteConnection) {
         val wal = configuration.journalMode == WRITE_AHEAD_LOGGING
         if (wal) {
-            connection.execSQL("PRAGMA journal_mode = WAL")
+            connection.executeSQL("PRAGMA journal_mode = WAL")
         } else {
-            connection.execSQL("PRAGMA journal_mode = TRUNCATE")
+            connection.executeSQL("PRAGMA journal_mode = TRUNCATE")
         }
     }
 
-    private fun configureSynchronousFlag(connection: SQLiteConnection) {
+    private suspend fun configureSynchronousFlag(connection: SQLiteConnection) {
         // Use NORMAL in WAL mode and FULL for non-WAL as recommended in
         // https://www.sqlite.org/pragma.html#pragma_synchronous
         val wal = configuration.journalMode == WRITE_AHEAD_LOGGING
         if (wal) {
-            connection.execSQL("PRAGMA synchronous = NORMAL")
+            connection.executeSQL("PRAGMA synchronous = NORMAL")
         } else {
-            connection.execSQL("PRAGMA synchronous = FULL")
+            connection.executeSQL("PRAGMA synchronous = FULL")
         }
     }
 
-    private fun configureBusyTimeout(connection: SQLiteConnection) {
+    private suspend fun configureBusyTimeout(connection: SQLiteConnection) {
         // Set a busy timeout if no timeout is set to avoid SQLITE_BUSY during slow I/O or during
         // an auto-checkpoint.
         val currentBusyTimeout =
@@ -169,11 +248,11 @@ public abstract class BaseRoomConnectionManager {
                 it.getLong(0)
             }
         if (currentBusyTimeout < BUSY_TIMEOUT_MS) {
-            connection.execSQL("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS")
+            connection.executeSQL("PRAGMA busy_timeout = $BUSY_TIMEOUT_MS")
         }
     }
 
-    protected fun onCreate(connection: SQLiteConnection) {
+    protected suspend fun onCreate(connection: SQLiteConnection) {
         val isEmptyDatabase = hasEmptySchema(connection)
         openDelegate.createAllTables(connection)
         if (!isEmptyDatabase) {
@@ -190,21 +269,25 @@ public abstract class BaseRoomConnectionManager {
         invokeCreateCallback(connection)
     }
 
-    private fun hasEmptySchema(connection: SQLiteConnection): Boolean =
+    private suspend fun hasEmptySchema(connection: SQLiteConnection): Boolean =
         connection
             .prepare("SELECT count(*) FROM sqlite_master WHERE name != 'android_metadata'")
             .use { it.step() && it.getLong(0) == 0L }
 
-    private fun updateIdentity(connection: SQLiteConnection) {
+    private suspend fun updateIdentity(connection: SQLiteConnection) {
         createMasterTableIfNotExists(connection)
-        connection.execSQL(RoomMasterTable.createInsertQuery(openDelegate.identityHash))
+        connection.executeSQL(RoomMasterTable.createInsertQuery(openDelegate.identityHash))
     }
 
-    private fun createMasterTableIfNotExists(connection: SQLiteConnection) {
-        connection.execSQL(RoomMasterTable.CREATE_QUERY)
+    private suspend fun createMasterTableIfNotExists(connection: SQLiteConnection) {
+        connection.executeSQL(RoomMasterTable.CREATE_QUERY)
     }
 
-    protected open fun onMigrate(connection: SQLiteConnection, oldVersion: Int, newVersion: Int) {
+    protected open suspend fun onMigrate(
+        connection: SQLiteConnection,
+        oldVersion: Int,
+        newVersion: Int,
+    ) {
         var migrated = false
         val migrations = configuration.migrationContainer.findMigrationPath(oldVersion, newVersion)
         if (migrations != null) {
@@ -234,7 +317,7 @@ public abstract class BaseRoomConnectionManager {
         }
     }
 
-    private fun dropAllTables(connection: SQLiteConnection) {
+    private suspend fun dropAllTables(connection: SQLiteConnection) {
         if (configuration.allowDestructiveMigrationForAllTables) {
             // Drops all tables and views (excluding special ones)
             connection
@@ -255,9 +338,9 @@ public abstract class BaseRoomConnectionManager {
                 }
                 .forEach { (name, isView) ->
                     if (isView) {
-                        connection.execSQL("DROP VIEW IF EXISTS `$name`")
+                        connection.executeSQL("DROP VIEW IF EXISTS `$name`")
                     } else {
-                        connection.execSQL("DROP TABLE IF EXISTS `$name`")
+                        connection.executeSQL("DROP TABLE IF EXISTS `$name`")
                     }
                 }
         } else {
@@ -266,14 +349,14 @@ public abstract class BaseRoomConnectionManager {
         }
     }
 
-    protected fun onOpen(connection: SQLiteConnection) {
+    protected suspend fun onOpen(connection: SQLiteConnection) {
         checkIdentity(connection)
         openDelegate.onOpen(connection)
         invokeOpenCallback(connection)
         isConfigured = true
     }
 
-    private fun checkIdentity(connection: SQLiteConnection) {
+    private suspend fun checkIdentity(connection: SQLiteConnection) {
         if (hasRoomMasterTable(connection)) {
             val identityHash: String? =
                 connection.prepare(RoomMasterTable.READ_QUERY).use {
@@ -295,29 +378,27 @@ public abstract class BaseRoomConnectionManager {
                 )
             }
         } else {
-            connection.execSQL("BEGIN EXCLUSIVE TRANSACTION")
+            connection.executeSQL("BEGIN EXCLUSIVE TRANSACTION")
             runCatching {
-                    // No room_master_table, this might an a pre-populated DB, we must validate to
-                    // see
-                    // if it's suitable for usage.
-                    val result = openDelegate.onValidateSchema(connection)
-                    if (!result.isValid) {
-                        error(
-                            "Pre-packaged database has an invalid schema: ${result.expectedFoundMsg}"
-                        )
-                    }
-                    openDelegate.onPostMigrate(connection)
-                    updateIdentity(connection)
+                // No room_master_table, this might an a pre-populated DB, we must validate to
+                // see
+                // if it's suitable for usage.
+                val result = openDelegate.onValidateSchema(connection)
+                if (!result.isValid) {
+                    error("Pre-packaged database has an invalid schema: ${result.expectedFoundMsg}")
                 }
-                .onSuccess { connection.execSQL("END TRANSACTION") }
+                openDelegate.onPostMigrate(connection)
+                updateIdentity(connection)
+            }
+                .onSuccess { connection.executeSQL("END TRANSACTION") }
                 .onFailure {
-                    connection.execSQL("ROLLBACK TRANSACTION")
+                    connection.executeSQL("ROLLBACK TRANSACTION")
                     throw it
                 }
         }
     }
 
-    private fun hasRoomMasterTable(connection: SQLiteConnection): Boolean =
+    private suspend fun hasRoomMasterTable(connection: SQLiteConnection): Boolean =
         connection
             .prepare(
                 "SELECT 1 FROM sqlite_master " +
@@ -325,31 +406,15 @@ public abstract class BaseRoomConnectionManager {
             )
             .use { it.step() && it.getLong(0) != 0L }
 
-    @Suppress("REDUNDANT_ELSE_IN_WHEN") // Redundant in common but not in Android
-    protected fun RoomDatabase.JournalMode.getMaxNumberOfReaders(): Int =
-        when (this) {
-            TRUNCATE -> 1
-            WRITE_AHEAD_LOGGING -> 4
-            else -> error("Can't get max number of reader for journal mode '$this'")
-        }
-
-    @Suppress("REDUNDANT_ELSE_IN_WHEN") // Redundant in common but not in Android
-    protected fun RoomDatabase.JournalMode.getMaxNumberOfWriters(): Int =
-        when (this) {
-            TRUNCATE -> 1
-            WRITE_AHEAD_LOGGING -> 1
-            else -> error("Can't get max number of writers for journal mode '$this'")
-        }
-
-    private fun invokeCreateCallback(connection: SQLiteConnection) {
+    private suspend fun invokeCreateCallback(connection: SQLiteConnection) {
         callbacks.forEach { it.onCreate(connection) }
     }
 
-    private fun invokeDestructiveMigrationCallback(connection: SQLiteConnection) {
+    private suspend fun invokeDestructiveMigrationCallback(connection: SQLiteConnection) {
         callbacks.forEach { it.onDestructiveMigration(connection) }
     }
 
-    private fun invokeOpenCallback(connection: SQLiteConnection) {
+    private suspend fun invokeOpenCallback(connection: SQLiteConnection) {
         callbacks.forEach { it.onOpen(connection) }
     }
 

@@ -160,6 +160,16 @@ public class DeviceQuirksLoader {
                 VideoInterlacingQuirk.load())) {
             quirks.add(VideoInterlacingQuirk.INSTANCE);
         }
+        if (quirkSettings.shouldEnableQuirk(
+                VideoEncoderLeaksThreadOnReleaseWithoutStartQuirk.class,
+                VideoEncoderLeaksThreadOnReleaseWithoutStartQuirk.load())) {
+            quirks.add(VideoEncoderLeaksThreadOnReleaseWithoutStartQuirk.INSTANCE);
+        }
+        if (quirkSettings.shouldEnableQuirk(
+                VideoEncoderMimeTypeUnsupportedQuirk.class,
+                VideoEncoderMimeTypeUnsupportedQuirk.load())) {
+            quirks.add(VideoEncoderMimeTypeUnsupportedQuirk.INSTANCE);
+        }
         return quirks;
     }
 }

@@ -19,8 +19,8 @@
 
 package androidx.compose.foundation.relocation
 
+import androidx.collection.mutableObjectListOf
 import androidx.compose.runtime.annotation.RememberInComposition
-import androidx.compose.runtime.collection.mutableVectorOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.node.ModifierNodeElement
@@ -41,7 +41,7 @@ import kotlin.jvm.JvmName
  * @sample androidx.compose.foundation.samples.BringIntoViewSample
  * @sample androidx.compose.foundation.samples.BringPartOfComposableIntoViewSample
  */
-sealed interface BringIntoViewRequester {
+public sealed interface BringIntoViewRequester {
     /**
      * Bring this item into bounds by making all the [BringIntoViewModifierNode] parents to bring
      * their content appropriately.
@@ -57,7 +57,7 @@ sealed interface BringIntoViewRequester {
      * @sample androidx.compose.foundation.samples.BringIntoViewSample
      * @sample androidx.compose.foundation.samples.BringPartOfComposableIntoViewSample
      */
-    suspend fun bringIntoView(rect: Rect? = null)
+    public suspend fun bringIntoView(rect: Rect? = null)
 }
 
 /**
@@ -76,7 +76,7 @@ sealed interface BringIntoViewRequester {
  */
 @JsName("funBringIntoViewRequester")
 @RememberInComposition
-fun BringIntoViewRequester(): BringIntoViewRequester {
+public fun BringIntoViewRequester(): BringIntoViewRequester {
     return BringIntoViewRequesterImpl()
 }
 
@@ -92,11 +92,12 @@ fun BringIntoViewRequester(): BringIntoViewRequester {
  *   used to send [bringIntoView] requests to parents of the current composable.
  */
 @Suppress("ModifierInspectorInfo")
-fun Modifier.bringIntoViewRequester(bringIntoViewRequester: BringIntoViewRequester): Modifier =
-    this.then(BringIntoViewRequesterElement(bringIntoViewRequester))
+public fun Modifier.bringIntoViewRequester(
+    bringIntoViewRequester: BringIntoViewRequester
+): Modifier = this.then(BringIntoViewRequesterElement(bringIntoViewRequester))
 
 private class BringIntoViewRequesterImpl : BringIntoViewRequester {
-    val nodes = mutableVectorOf<BringIntoViewRequesterNode>()
+    val nodes = mutableObjectListOf<BringIntoViewRequesterNode>()
 
     override suspend fun bringIntoView(rect: Rect?) {
         nodes.forEach { it.bringIntoView { rect } }

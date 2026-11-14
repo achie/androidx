@@ -17,10 +17,9 @@
 package androidx.camera.camera2.pipe.compat
 
 import android.hardware.camera2.CaptureFailure
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.RequestFailure
 import androidx.camera.camera2.pipe.RequestMetadata
-import kotlin.reflect.KClass
+import androidx.camera.common.CameraFrameNumber
 
 /**
  * This class implements the [RequestFailure] interface by extracting the fields of the
@@ -29,10 +28,10 @@ import kotlin.reflect.KClass
 internal data class ExtensionRequestFailure(
     override val requestMetadata: RequestMetadata,
     override val wasImageCaptured: Boolean,
-    override val frameNumber: FrameNumber,
+    override val frameNumber: CameraFrameNumber,
     override val reason: Int,
 ) : RequestFailure {
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? {
+    override fun <T : Any> unwrapAs(type: Class<T>): T? {
         return null
     }
 }

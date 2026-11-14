@@ -19,19 +19,19 @@ package androidx.compose.remote.creation;
 import androidx.annotation.RestrictTo;
 import androidx.compose.remote.core.operations.paint.PaintBundle;
 import androidx.compose.remote.core.operations.paint.PaintPathEffects;
+import androidx.compose.remote.creation.dsl.RcFloat;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class RcPaint {
-    protected @NonNull PaintBundle mPaint = new PaintBundle();
-    @NonNull
-    RemoteComposeWriter mBuilder;
-    public static int FONT_TYPE_DEFAULT = PaintBundle.FONT_TYPE_DEFAULT;
-    public static int FONT_TYPE_SANS_SERIF = PaintBundle.FONT_TYPE_SANS_SERIF;
-    public static int FONT_TYPE_SERIF = PaintBundle.FONT_TYPE_SERIF;
-    public static int FONT_TYPE_MONOSPACE = PaintBundle.FONT_TYPE_MONOSPACE;
+    private final @NonNull PaintBundle mPaint = new PaintBundle();
+    private final @NonNull RemoteComposeWriter mBuilder;
+    public static final int FONT_TYPE_DEFAULT = PaintBundle.FONT_TYPE_DEFAULT;
+    public static final int FONT_TYPE_SANS_SERIF = PaintBundle.FONT_TYPE_SANS_SERIF;
+    public static final int FONT_TYPE_SERIF = PaintBundle.FONT_TYPE_SERIF;
+    public static final int FONT_TYPE_MONOSPACE = PaintBundle.FONT_TYPE_MONOSPACE;
     private static final int NORMAL_WEIGHT = 400;
 
     RcPaint(@NonNull RemoteComposeWriter builder) {
@@ -100,6 +100,12 @@ public class RcPaint {
 //    @SuppressWarnings("unchecked")
     public @NonNull RcPaint setStrokeWidth(float width) {
         mPaint.setStrokeWidth(width);
+        return this;
+    }
+
+    /** Sets the stroke width from an RcFloat. */
+    public @NonNull RcPaint setStrokeWidth(@NonNull RcFloat width) {
+        mPaint.setStrokeWidth(width.withWriter(mBuilder).toFloat());
         return this;
     }
 
@@ -219,7 +225,7 @@ public class RcPaint {
             float endY,
             int @NonNull [] colors,
             int mask,
-            float @NonNull [] positions,
+            float @Nullable [] positions,
             int tileMode) {
         mPaint.setLinearGradient(
                 colors, mask, positions, startX, startY, endX, endY, tileMode);
@@ -279,6 +285,88 @@ public class RcPaint {
             int tileMode) {
         mPaint.setRadialGradient(
                 colors, mask, positions, centerX, centerY, radius, tileMode);
+        return this;
+    }
+
+    /**
+     * Sets a shader that draws a radial gradient between two circles, the start circle (often
+     * referred to as the focal circle) and the end circle.
+     *
+     * @param startX      The x-coordinate of the center of the starting circle, often referred
+     *                    to as the focal point.
+     * @param startY      The y-coordinate of the center of the starting circle, often referred
+     *                    to as the focal point.
+     * @param startRadius The radius of the starting circle, often referred to as the focal
+     *                    radius. Must be greater than or equal to zero.
+     * @param endX        The x-coordinate of the center of the ending circle
+     * @param endY        The y-coordinate of the center of the ending circle
+     * @param endRadius   The radius of the ending circle. Must be strictly greater than zero.
+     * @param colors      The sRGB colors to be distributed between the start and end circle
+     * @param positions   May be <code>null</code>. Valid values are between <code>0.0f</code> and
+     *                    <code>1.0f</code>. The relative position of each corresponding color in
+     *                    the colors array.
+     *                    If <code>null</code>, colors are distributed evenly between the start
+     *                    and end circle.
+     * @param tileMode    The Shader tiling mode (ordinal of Shader.TileMode)
+     */
+    public @NonNull RcPaint setRadialGradient(
+            float startX,
+            float startY,
+            float startRadius,
+            float endX,
+            float endY,
+            float endRadius,
+            int @NonNull [] colors,
+            float @Nullable [] positions,
+            int tileMode) {
+        return setRadialGradient(
+                startX, startY, startRadius, endX, endY, endRadius, colors, 0, positions, tileMode);
+    }
+
+    /**
+     * Sets a shader that draws a radial gradient between two circles, the start circle (often
+     * referred to as the focal circle) and the end circle.
+     *
+     * @param startX      The x-coordinate of the center of the starting circle, often referred
+     *                    to as the focal point.
+     * @param startY      The y-coordinate of the center of the starting circle, often referred
+     *                    to as the focal point.
+     * @param startRadius The radius of the starting circle, often referred to as the focal
+     *                    radius. Must be greater than or equal to zero.
+     * @param endX        The x-coordinate of the center of the ending circle
+     * @param endY        The y-coordinate of the center of the ending circle
+     * @param endRadius   The radius of the ending circle. Must be strictly greater than zero.
+     * @param colors      The sRGB colors to be distributed between the start and end circle
+     * @param mask        defines a bit mask of colors that are ids
+     * @param positions   May be <code>null</code>. Valid values are between <code>0.0f</code> and
+     *                    <code>1.0f</code>. The relative position of each corresponding color in
+     *                    the colors array.
+     *                    If <code>null</code>, colors are distributed evenly between the start
+     *                    and end circle.
+     * @param tileMode    The Shader tiling mode (ordinal of Shader.TileMode)
+     */
+    public @NonNull RcPaint setRadialGradient(
+            float startX,
+            float startY,
+            float startRadius,
+            float endX,
+            float endY,
+            float endRadius,
+            int @NonNull [] colors,
+            int mask,
+            float @Nullable [] positions,
+            int tileMode) {
+        mPaint.setRadialGradient(
+                colors,
+                mask,
+                positions,
+                startX,
+                startY,
+                startRadius,
+                endX,
+                endY,
+                endRadius,
+                tileMode);
         return this;
     }
 
@@ -348,6 +436,12 @@ public class RcPaint {
      */
     public @NonNull RcPaint setTextSize(float size) {
         mPaint.setTextSize(size);
+        return this;
+    }
+
+    /** Sets the text size from an RcFloat. */
+    public @NonNull RcPaint setTextSize(@NonNull RcFloat size) {
+        mPaint.setTextSize(size.withWriter(mBuilder).toFloat());
         return this;
     }
 
@@ -493,6 +587,12 @@ public class RcPaint {
      */
     public @NonNull RcPaint setPathEffect(float @Nullable [] pathEffectData) {
         mPaint.setPathEffect(pathEffectData);
+        return this;
+    }
+
+    /** Sets the alpha from an RcFloat. */
+    public @NonNull RcPaint setAlpha(@NonNull RcFloat alpha) {
+        mPaint.setAlpha(alpha.withWriter(mBuilder).toFloat());
         return this;
     }
 }

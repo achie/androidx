@@ -19,12 +19,16 @@ package androidx.glance.wear
 import android.content.ComponentName
 import android.content.Intent
 import android.os.IBinder
+import androidx.annotation.CallSuper
+import androidx.glance.wear.core.WearWidgetProviderInfo
 import androidx.glance.wear.parcel.IWearWidgetProvider
 import androidx.glance.wear.parcel.LegacyTileProviderImpl
 import androidx.glance.wear.parcel.WearWidgetProviderImpl
 import androidx.glance.wear.parcel.legacy.TileProvider
+import androidx.glance.wear.util.isRobolectricBuild
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 /**
  * Service used for communication between the Host and a Widget Provider.
@@ -36,7 +40,17 @@ import androidx.lifecycle.lifecycleScope
  * }
  * ```
  */
-public abstract class GlanceWearWidgetService() : LifecycleService() {
+public abstract class GlanceWearWidgetService : LifecycleService() {
+
+    // Ensure super is called for lifecycle methods. Clients should not rely on the lifecycle of
+    // the service.
+    @CallSuper
+    override fun onCreate() {
+        super.onCreate()
+        if (!isRobolectricBuild()) {
+            updateServiceMapping()
+        }
+    }
 
     /** Instance of [GlanceWearWidget] associated with this provider. */
     public abstract val widget: GlanceWearWidget
@@ -70,6 +84,26 @@ public abstract class GlanceWearWidgetService() : LifecycleService() {
                 }
 
             else -> null
+        }
+    }
+
+    // Ensure super is called for lifecycle methods. Clients should not rely on the lifecycle of
+    // the service.
+    @CallSuper
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        super.onStartCommand(intent, flags, startId)
+
+    // Ensure super is called for lifecycle methods. Clients should not rely on the lifecycle of
+    // the service.
+    @CallSuper
+    override fun onDestroy() {
+        super.onDestroy()
+    }
+
+    private fun updateServiceMapping() {
+        lifecycleScope.launch {
+            GlanceWearWidgetManager(this@GlanceWearWidgetService)
+                .updateServiceMapping(this@GlanceWearWidgetService, widget)
         }
     }
 

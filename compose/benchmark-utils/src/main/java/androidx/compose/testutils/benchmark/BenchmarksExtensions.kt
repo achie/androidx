@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.testutils.ComposeExecutionControl
 import androidx.compose.testutils.ComposeTestCase
 import androidx.compose.testutils.ToggleableTestCase
@@ -33,6 +34,7 @@ import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.SubcomposeLayoutState
 import androidx.compose.ui.layout.SubcomposeSlotReusePolicy
 import androidx.compose.ui.unit.IntOffset
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 /**
@@ -145,6 +147,10 @@ fun ComposeBenchmarkRule.benchmarkDrawPerf(caseFactory: () -> ComposeTestCase) {
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first recomposition without any pending animations.
+ * @param requireRecomposition whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkRecompose(
     caseFactory: () -> T,
@@ -170,32 +176,75 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkRecompose(
 /**
  * Measures measure time of the hierarchy after changing a state.
  *
+ * @param toggleCausesRecompose whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default, this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
  * @param assertOneRecomposition whether the benchmark will fail if there are pending recompositions
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first remeasure without any pending animations.
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkMeasure(
     caseFactory: () -> T,
     toggleCausesRecompose: Boolean = true,
     assertOneRecomposition: Boolean = true,
+    invalidateLayoutCache: Boolean = true,
 ) where T : ComposeTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFramesUntilNoChangesPending() }
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
+
         measureRepeatedOnUiThread {
             runWithMeasurementDisabled {
                 getTestCase().toggleState()
                 if (toggleCausesRecompose) {
                     recomposeAssertHadChanges()
+                } else {
+                    // Send state updates without recomposing, but still triggering other listeners
+                    Snapshot.sendApplyNotifications()
                 }
                 requestLayout()
                 if (assertOneRecomposition) {
                     assertNoPendingChanges()
                 }
             }
-            measure()
+            if (invalidateLayoutCache) {
+                measureWithSpec(measureSpecs[0], measureSpecs[1])
+            } else {
+                measure()
+            }
             if (assertOneRecomposition) {
                 assertNoPendingChanges()
+            }
+            runWithMeasurementDisabled {
+                layout()
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
             }
         }
     }
@@ -204,27 +253,60 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkMeasure(
 /**
  * Measures layout time of the hierarchy after changing a state.
  *
+ * @param toggleCausesRecompose whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default, this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
  * @param assertOneRecomposition whether the benchmark will fail if there are pending recompositions
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first relayout without any pending animations.
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkLayout(
     caseFactory: () -> T,
     toggleCausesRecompose: Boolean = true,
     assertOneRecomposition: Boolean = true,
+    invalidateLayoutCache: Boolean = true,
 ) where T : ComposeTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFramesUntilNoChangesPending() }
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
 
         measureRepeatedOnUiThread {
             runWithMeasurementDisabled {
                 getTestCase().toggleState()
                 if (toggleCausesRecompose) {
                     recomposeAssertHadChanges()
+                } else {
+                    // Send state updates without recomposing, but still triggering other listeners
+                    Snapshot.sendApplyNotifications()
                 }
                 requestLayout()
-                measure()
+                if (invalidateLayoutCache) {
+                    measureWithSpec(measureSpecs[0], measureSpecs[1])
+                } else {
+                    measure()
+                }
                 if (assertOneRecomposition) {
                     assertNoPendingChanges()
                 }
@@ -233,6 +315,14 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkLayout(
             if (assertOneRecomposition) {
                 assertNoPendingChanges()
             }
+            runWithMeasurementDisabled {
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
+            }
         }
     }
 }
@@ -240,6 +330,10 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkLayout(
 /**
  * Measures draw time of the hierarchy after changing a state.
  *
+ * @param toggleCausesRecompose whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default, this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
  * @param assertOneRecomposition whether the benchmark will fail if there are pending recompositions
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
@@ -258,6 +352,9 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkDraw(
                 getTestCase().toggleState()
                 if (toggleCausesRecompose) {
                     recomposeAssertHadChanges()
+                } else {
+                    // Send state updates without recomposing, but still triggering other listeners
+                    Snapshot.sendApplyNotifications()
                 }
                 if (assertOneRecomposition) {
                     assertNoPendingChanges()
@@ -273,41 +370,181 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkDraw(
     }
 }
 
-/** Measures measure time of the hierarchy after changing a state. */
-fun <T> AndroidBenchmarkRule.toggleStateBenchmarkMeasure(caseFactory: () -> T) where
-T : AndroidTestCase,
-T : ToggleableTestCase {
+/**
+ * Measures the time for semantics update after changing a state.
+ *
+ * @param toggleCausesRecompose whether the benchmark is expecting recomposition after the toggle.
+ *   By default, this is true to enforce correctness in the benchmark, but for components where the
+ *   state toggle might not always cause a recomposition this can be turned off.
+ * @param assertOneRecomposition whether the benchmark will fail if there are pending recompositions
+ *   after the first recomposition.
+ */
+fun <T> ComposeBenchmarkRule.toggleStateBenchmarkSemantics(
+    caseFactory: () -> T,
+    toggleCausesRecompose: Boolean = true,
+    assertOneRecomposition: Boolean = true,
+) where T : ComposeTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFrame() }
-
-        measureRepeatedOnUiThread {
-            runWithMeasurementDisabled { getTestCase().toggleState() }
-            measure()
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+            setAccessibilityEnabled(true)
         }
+        measureRepeatedOnUiThread {
+            runWithMeasurementDisabled {
+                getTestCase().toggleState()
+                if (toggleCausesRecompose) {
+                    recomposeAssertHadChanges()
+                } else {
+                    // Send state updates without recomposing, but still triggering other listeners
+                    Snapshot.sendApplyNotifications()
+                }
+                if (assertOneRecomposition) {
+                    assertNoPendingChanges()
+                }
+                requestLayout()
+                measure()
+                layout()
+                drawPrepare()
+                draw()
+                drawFinish()
+            }
+
+            updateSemantics()
+
+            runWithMeasurementDisabled {
+                // ccraik approved ;)
+                // The layout / draw update can result in significant amount of semantics work for
+                // system_server. We spin for small amount of time to allow async binder calls to
+                // be dequeued and processed.
+                spinForMs(10)
+            }
+        }
+
+        runOnUiThread { setAccessibilityEnabled(false) }
     }
 }
 
-/** Measures layout time of the hierarchy after changing a state. */
-fun <T> AndroidBenchmarkRule.toggleStateBenchmarkLayout(caseFactory: () -> T) where
-T : AndroidTestCase,
-T : ToggleableTestCase {
+internal fun spinForMs(timeMillis: Long) {
+    // wait for 10ms to make sure that system server is able to process binder calls
+    val targetMs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeMillis)
+    while (System.nanoTime() < targetMs) {
+        /* 💃💃💃 spin 💃💃💃 */
+    }
+}
+
+/**
+ * Measures measure time of the hierarchy after changing a state.
+ *
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
+ */
+fun <T> AndroidBenchmarkRule.toggleStateBenchmarkMeasure(
+    caseFactory: () -> T,
+    invalidateLayoutCache: Boolean = true,
+) where T : AndroidTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFrame() }
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFrame()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
 
         measureRepeatedOnUiThread {
             runWithMeasurementDisabled {
                 getTestCase().toggleState()
+                requestLayout()
+            }
+            if (invalidateLayoutCache) {
+                measureWithSpec(measureSpecs[0], measureSpecs[1])
+            } else {
                 measure()
             }
+            runWithMeasurementDisabled {
+                layout()
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Measures layout time of the hierarchy after changing a state.
+ *
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
+ */
+fun <T> AndroidBenchmarkRule.toggleStateBenchmarkLayout(
+    caseFactory: () -> T,
+    invalidateLayoutCache: Boolean = true,
+) where T : AndroidTestCase, T : ToggleableTestCase {
+    runBenchmarkFor(caseFactory) {
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFrame()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
+
+        measureRepeatedOnUiThread {
+            runWithMeasurementDisabled {
+                getTestCase().toggleState()
+                requestLayout()
+                if (invalidateLayoutCache) {
+                    measureWithSpec(measureSpecs[0], measureSpecs[1])
+                } else {
+                    measure()
+                }
+            }
             layout()
+            runWithMeasurementDisabled {
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
+            }
         }
     }
 }
 
 /** Measures draw time of the hierarchy after changing a state. */
-fun <T> AndroidBenchmarkRule.toggleStateBenchmarkDraw(caseFactory: () -> T) where
-T : AndroidTestCase,
-T : ToggleableTestCase {
+fun <T> AndroidBenchmarkRule.toggleStateBenchmarkDraw(caseFactory: () -> T)
+    where T : AndroidTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
         runOnUiThread { doFrame() }
 
@@ -331,14 +568,41 @@ T : ToggleableTestCase {
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first recompose, remeasure and relayout without any pending animations.
+ * @param requireRecomposition whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default, this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkComposeMeasureLayout(
     caseFactory: () -> T,
     assertOneRecomposition: Boolean = true,
     requireRecomposition: Boolean = true,
+    invalidateLayoutCache: Boolean = true,
 ) where T : ComposeTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFramesUntilNoChangesPending() }
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
+
         measureRepeatedOnUiThread {
             getTestCase().toggleState()
             if (requireRecomposition) {
@@ -349,12 +613,95 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkComposeMeasureLayout(
             if (assertOneRecomposition) {
                 assertNoPendingChanges()
             }
-            measure()
+            if (invalidateLayoutCache) {
+                measureWithSpec(measureSpecs[0], measureSpecs[1])
+            } else {
+                measure()
+            }
             layout()
             runWithMeasurementDisabled {
                 drawPrepare()
                 draw()
                 drawFinish()
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Measures recompose, measure, layout, and draw time after changing a state.
+ *
+ * @param assertOneRecomposition whether the benchmark will fail if there are pending recompositions
+ *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
+ *   but for components that have animations after being recomposed this can be turned off to
+ *   benchmark just the first recompose, remeasure and relayout without any pending animations.
+ * @param requireRecomposition whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
+ */
+fun <T> ComposeBenchmarkRule.toggleStateBenchmarkComposeMeasureLayoutDraw(
+    caseFactory: () -> T,
+    assertOneRecomposition: Boolean = true,
+    requireRecomposition: Boolean = true,
+    invalidateLayoutCache: Boolean = true,
+) where T : ComposeTestCase, T : ToggleableTestCase {
+    runBenchmarkFor(caseFactory) {
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
+
+        measureRepeatedOnUiThread {
+            getTestCase().toggleState()
+            if (requireRecomposition) {
+                recomposeAssertHadChanges()
+            } else {
+                recompose()
+            }
+            if (assertOneRecomposition) {
+                assertNoPendingChanges()
+            }
+            if (invalidateLayoutCache) {
+                measureWithSpec(measureSpecs[0], measureSpecs[1])
+            } else {
+                measure()
+            }
+            layout()
+            drawPrepare()
+            draw()
+            runWithMeasurementDisabled {
+                drawFinish()
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
             }
         }
     }
@@ -367,6 +714,10 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkComposeMeasureLayout(
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first recompose, remeasure and relayout without any pending animations.
+ * @param requireRecomposition whether the benchmark will fail if there are no pending
+ *   recompositions after the state toggle. By default this is true to enforce correctness in the
+ *   benchmark, but for components where the state toggle might not always cause a recomposition
+ *   this can be turned off.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkCompose(
     caseFactory: () -> T,
@@ -404,13 +755,35 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkCompose(
  *   after the first recomposition. By default this is true to enforce correctness in the benchmark,
  *   but for components that have animations after being recomposed this can be turned off to
  *   benchmark just the first remeasure and relayout without any pending animations.
+ * @param invalidateLayoutCache Forces cache invalidation across iterations by overriding
+ *   measurement specs. By default, this is true to enforce cold-cache consistency across the
+ *   benchmark runs. Set to `false` ONLY if forced size modifications break component's internal
+ *   logic. Examples include LazyLists attempting to measure deactivated pooled nodes, or
+ *   animation-dependent components that timeout in infinite layout loops when external constraints
+ *   constantly override their fixed internal animation targets.
  */
 fun <T> ComposeBenchmarkRule.toggleStateBenchmarkMeasureLayout(
     caseFactory: () -> T,
     assertOneRecomposition: Boolean = true,
+    invalidateLayoutCache: Boolean = true,
 ) where T : ComposeTestCase, T : ToggleableTestCase {
     runBenchmarkFor(caseFactory) {
-        runOnUiThread { doFramesUntilNoChangesPending() }
+        val measureSpecs = if (invalidateLayoutCache) IntArray(4) else IntArray(0)
+        runOnUiThread {
+            doFramesUntilNoChangesPending()
+
+            if (invalidateLayoutCache) {
+                val width = measuredWidth
+                val height = measuredHeight
+
+                measureSpecs[0] = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+                measureSpecs[1] = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+                measureSpecs[2] =
+                    View.MeasureSpec.makeMeasureSpec(width + 10, View.MeasureSpec.EXACTLY)
+                measureSpecs[3] =
+                    View.MeasureSpec.makeMeasureSpec(height + 10, View.MeasureSpec.EXACTLY)
+            }
+        }
 
         measureRepeatedOnUiThread {
             runWithMeasurementDisabled {
@@ -419,9 +792,22 @@ fun <T> ComposeBenchmarkRule.toggleStateBenchmarkMeasureLayout(
                     assertNoPendingChanges()
                 }
             }
-            measure()
+            if (invalidateLayoutCache) {
+                measureWithSpec(measureSpecs[0], measureSpecs[1])
+            } else {
+                measure()
+            }
+            layout()
             if (assertOneRecomposition) {
                 assertNoPendingChanges()
+            }
+            runWithMeasurementDisabled {
+                if (invalidateLayoutCache) {
+                    // Re-measure and layout with different specs to invalidate layout caches for
+                    // next iteration.
+                    measureWithSpec(measureSpecs[2], measureSpecs[3])
+                    layout()
+                }
             }
         }
     }

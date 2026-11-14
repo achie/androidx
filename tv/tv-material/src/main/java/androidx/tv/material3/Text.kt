@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Modifier
@@ -76,9 +77,9 @@ import androidx.tv.material3.tokens.DefaultTextStyle
  * @param lineHeight line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow how visual overflow should be handled.
- * @param softWrap whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines an optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
@@ -91,7 +92,7 @@ import androidx.tv.material3.tokens.DefaultTextStyle
  * @param style style configuration for the text such as color, font, line height etc.
  */
 @Composable
-fun Text(
+public fun Text(
     text: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -171,9 +172,9 @@ fun Text(
  * @param lineHeight line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow how visual overflow should be handled.
- * @param softWrap whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines an optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
@@ -188,7 +189,7 @@ fun Text(
  * @param style style configuration for the text such as color, font, line height etc.
  */
 @Composable
-fun Text(
+public fun Text(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -242,7 +243,8 @@ fun Text(
  *
  * @see ProvideTextStyle
  */
-val LocalTextStyle = compositionLocalOf(structuralEqualityPolicy()) { DefaultTextStyle }
+public val LocalTextStyle: ProvidableCompositionLocal<TextStyle> =
+    compositionLocalOf(structuralEqualityPolicy()) { DefaultTextStyle }
 
 // TODO(b/156598010): remove this and replace with fold definition on the backing CompositionLocal
 /**
@@ -253,7 +255,7 @@ val LocalTextStyle = compositionLocalOf(structuralEqualityPolicy()) { DefaultTex
  * @see LocalTextStyle
  */
 @Composable
-fun ProvideTextStyle(value: TextStyle, content: @Composable () -> Unit) {
+public fun ProvideTextStyle(value: TextStyle, content: @Composable () -> Unit) {
     val mergedStyle = LocalTextStyle.current.merge(value)
     CompositionLocalProvider(LocalTextStyle provides mergedStyle, content = content)
 }

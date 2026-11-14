@@ -160,7 +160,7 @@ public final class ActionsConstraints {
      *
      * <ul>
      *     <li>Maximum of {@code 2}
-     *     <li>Must be of type {@link Action#TYPE_CUSTOM} or {@link Action#TYPE_COMPOSE_MESSAGE} or
+     *     <li>Must be of type {@link Action#TYPE_CUSTOM}, {@link Action#TYPE_COMPOSE_MESSAGE}, or
      *     {@link Action#TYPE_MEDIA_PLAYBACK}
      *     <li>Must have an icon
      *     <li>Must have a background color, though the host may choose to ignore this color
@@ -168,6 +168,16 @@ public final class ActionsConstraints {
      *     custom color and the rest are shown with a neutral color)
      *     <li>Can have a click listener
      * </ul>
+     *
+     * <p>Note: While {@link Action#TYPE_MEDIA_PLAYBACK} continues to be allowed as a floating
+     * action button for backwards compatibility with Car API 8 hosts, starting in Car API 9 it is
+     * ignored by the host and developers should not set it as a floating action button.
+     *
+     * <p>Starting in Car API 9, media apps (apps with
+     * {@link androidx.car.app.CarAppPermission#MEDIA_TEMPLATES}) are strictly allowed to set a
+     * maximum of 1 floating action button. If extra actions are sent by a media app, the host
+     * will drop the extra action. See
+     * {@link androidx.car.app.media.model.MediaPlaybackTemplate} for more details.
      */
     @SuppressLint("UnsafeOptInUsageError")
     public static final @NonNull ActionsConstraints ACTIONS_CONSTRAINTS_FAB =
@@ -181,11 +191,51 @@ public final class ActionsConstraints {
                     .setOnClickListenerAllowed(true)
                     .build();
 
+    /**
+     * Constraints for content action buttons which enforces the following on the list of actions:
+     *
+     * <ul>
+     *     <li>Maximum of {@code 2} actions
+     *     <li>Must be of type {@link Action#TYPE_CUSTOM}, {@link Action#TYPE_COMPOSE_MESSAGE}, or
+     *     {@link Action#TYPE_MEDIA_PLAYBACK}
+     *     <li>Must have an icon
+     *     <li>Up to {@code 2} actions may have custom titles (with
+     *     {@link CarTextConstraints#COLOR_ONLY})
+     *     <li>Maximum of {@code 1} primary action ({@link Action#FLAG_PRIMARY})
+     *     <li>Background colors are optional
+     *     <li>Can have a click listener
+     * </ul>
+     *
+     * <p>Titles and primary actions are supported starting in Car API 9. The host may ignore titles
+     * depending on how it displays the actions, so an icon is always required.
+     */
+    public static final @NonNull ActionsConstraints ACTIONS_CONSTRAINTS_CONTENT_BUTTONS =
+            new ActionsConstraints.Builder(ACTIONS_CONSTRAINTS_FAB)
+                    .setMaxCustomTitles(2)
+                    .setMaxPrimaryActions(1)
+                    .setTitleTextConstraints(CarTextConstraints.COLOR_ONLY)
+                    .setRequireActionIcons(true)
+                    .setRequireActionBackgroundColor(false)
+                    .build();
+
     /** Constraints for TabTemplate. */
     @RequiresCarApi(6)
     public static final @NonNull ActionsConstraints ACTIONS_CONSTRAINTS_TABS =
             new ActionsConstraints.Builder(ACTIONS_CONSTRAINTS_HEADER)
                     .addRequiredActionType(Action.TYPE_APP_ICON)
+                    .build();
+
+    /**
+     * Constraints for {@link androidx.car.app.model.TabTemplate} actions.
+     */
+    @RequiresCarApi(9)
+    public static final @NonNull ActionsConstraints ACTIONS_CONSTRAINTS_TAB_ACTIONS =
+            new ActionsConstraints.Builder()
+                    .setMaxActions(1)
+                    .setRequireActionIcons(true)
+                    .setMaxCustomTitles(0)
+                    .setOnClickListenerAllowed(true)
+                    .addAllowedActionType(Action.TYPE_CUSTOM)
                     .build();
 
     /**
@@ -210,7 +260,7 @@ public final class ActionsConstraints {
      * Constraints for the {@link androidx.car.app.dialer.InCallTemplate} content actions.
      *
      * <ul>
-     *     <li>Maximum of {@code 5}
+     *     <li>Maximum of {@code 9}
      *     <li>Must be of type {@link Action#TYPE_CUSTOM}
      *     <li>Must have an icon
      *     <li>Cannot have custom titles
@@ -222,7 +272,7 @@ public final class ActionsConstraints {
             new ActionsConstraints.Builder()
                     .addAllowedActionType(Action.TYPE_CUSTOM)
                     .setRequireActionIcons(true)
-                    .setMaxActions(5)
+                    .setMaxActions(9)
                     .setMaxCustomTitles(0)
                     .setMaxPrimaryActions(1)
                     .setOnClickListenerAllowed(true)
@@ -255,6 +305,43 @@ public final class ActionsConstraints {
                     .setRequireActionIcons(true)
                     .addAllowedActionType(Action.TYPE_CUSTOM)
                     .setMaxCustomTitles(0)
+                    .build();
+
+    /**
+     * Constraints for the trailing actions of a {@code Banner}.
+     *
+     * <ul>
+     *     <li>Maximum of {@code 2} actions
+     *     <li>Must be {@link Action#TYPE_CUSTOM}
+     *     <li>Must not have backgrounds
+     *     <li>Must not be marked {@link Action#FLAG_PRIMARY}
+     *     <li>May have click listeners
+     * </ul>
+     */
+    public static final @NonNull ActionsConstraints ACTION_CONSTRAINTS_BANNER_TRAILING =
+            new ActionsConstraints.Builder()
+                    .setMaxActions(2)
+                    .setMaxCustomTitles(2)
+                    .setOnClickListenerAllowed(true)
+                    .addAllowedActionType(Action.TYPE_CUSTOM)
+                    .build();
+
+    /**
+     * Constraints for the actions below the title and subtitle of a {@code Banner}.
+     *
+     * <ul>
+     *     <li>Maximum of {@code 3} actions
+     *     <li>Up to 2 actions may have text
+     *     <li>Must be {@link Action#TYPE_CUSTOM}
+     *     <li>May have click listeners
+     * </ul>
+     */
+    public static final @NonNull ActionsConstraints ACTION_CONSTRAINTS_BANNER_BELOW =
+            new ActionsConstraints.Builder()
+                    .setMaxActions(3)
+                    .setMaxCustomTitles(2)
+                    .setOnClickListenerAllowed(true)
+                    .addAllowedActionType(Action.TYPE_CUSTOM)
                     .build();
 
     private final int mMaxActions;

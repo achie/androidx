@@ -14,26 +14,35 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.compose.ui.test
 
-import android.annotation.SuppressLint
+import android.os.Build
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.RestrictTo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Recomposer
 import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.node.RootForTest.UncaughtExceptionHandler
 import androidx.compose.ui.platform.InfiniteAnimationPolicy
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.WindowRecomposerPolicy
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.ComposeRootRegistry.OnRegistrationChangedListener
+import androidx.compose.ui.test.failure.FailurePipelineRunner
 import androidx.compose.ui.unit.Density
+import androidx.core.os.HandlerCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import java.io.PrintStream
 import java.io.PrintWriter
 import kotlin.coroutines.ContinuationInterceptor
@@ -48,6 +57,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -59,14 +69,13 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
-@SuppressLint("ComposeTestRuleDispatcher")
 @ExperimentalTestApi
 @Deprecated(
     level = DeprecationLevel.HIDDEN,
     message = "Replaced with same function, but with suspend block, runTextContext, testTimeout",
 )
 @JvmName("runComposeUiTest")
-fun runComposeUiTestNonSuspendingLambda(
+public fun runComposeUiTestNonSuspendingLambda(
     effectContext: CoroutineContext = EmptyCoroutineContext,
     block: ComposeUiTest.() -> Unit,
 ) {
@@ -80,14 +89,13 @@ fun runComposeUiTestNonSuspendingLambda(
     }
 }
 
-@SuppressLint("ComposeTestRuleDispatcher")
 @ExperimentalTestApi
 @Deprecated(
     level = DeprecationLevel.HIDDEN,
     message = "Replaced with same function, but with suspend block, runTextContext, testTimeout",
 )
 @JvmName("runAndroidComposeUiTest")
-fun <A : ComponentActivity> runAndroidComposeUiTestNonSuspendingLambda(
+public fun <A : ComponentActivity> runAndroidComposeUiTestNonSuspendingLambda(
     activityClass: Class<A>,
     effectContext: CoroutineContext = EmptyCoroutineContext,
     block: AndroidComposeUiTest<A>.() -> Unit,
@@ -102,14 +110,13 @@ fun <A : ComponentActivity> runAndroidComposeUiTestNonSuspendingLambda(
     }
 }
 
-@SuppressLint("ComposeTestRuleDispatcher")
 @ExperimentalTestApi
 @Deprecated(
     level = DeprecationLevel.HIDDEN,
     message = "Replaced with same function, but with suspend block, runTextContext, testTimeout",
 )
 @JvmName("runAndroidComposeUiTest")
-inline fun <reified A : ComponentActivity> runAndroidComposeUiTestNonSuspendingLambda(
+public inline fun <reified A : ComponentActivity> runAndroidComposeUiTestNonSuspendingLambda(
     effectContext: CoroutineContext = EmptyCoroutineContext,
     noinline block: AndroidComposeUiTest<A>.() -> Unit,
 ) {
@@ -129,9 +136,9 @@ inline fun <reified A : ComponentActivity> runAndroidComposeUiTestNonSuspendingL
     message = "Replaced with same function, but with runTextContext and testTimeout",
 )
 @JvmName("AndroidComposeUiTestEnvironment")
-inline fun <A : ComponentActivity> AndroidComposeUiTestEnvironmentNoSuspendingLambda(
+public fun <A : ComponentActivity> AndroidComposeUiTestEnvironmentNoSuspendingLambda(
     effectContext: CoroutineContext = EmptyCoroutineContext,
-    crossinline activityProvider: () -> A?,
+    activityProvider: () -> A?,
 ): AndroidComposeUiTestEnvironment<A> {
     return AndroidComposeUiTestEnvironment(
         effectContext,
@@ -142,6 +149,25 @@ inline fun <A : ComponentActivity> AndroidComposeUiTestEnvironmentNoSuspendingLa
 }
 
 /**
+ * Sets up the test environment, runs the given [test][block] and then tears down the test
+ * environment. Use the methods on [ComposeUiTest] in the test to find Compose content and make
+ * assertions on it. If you need access to platform specific elements (such as the Activity on
+ * Android), use one of the platform specific variants of this method, e.g.
+ * [runAndroidComposeUiTest] on Android.
+ *
+ * Implementations of this method will launch a Compose host (such as an Activity on Android) for
+ * you. If your test needs to launch its own host, use a platform specific variant that doesn't
+ * launch anything for you (if available), e.g. [runEmptyComposeUiTest] on Android. Always make sure
+ * that the Compose content is set during execution of the [test lambda][block] so the test
+ * framework is aware of the content. Whether you need to launch the host from within the test
+ * lambda as well depends on the platform.
+ *
+ * Keeping a reference to the [ComposeUiTest] outside of this function is an error. Also avoid using
+ * [androidx.compose.ui.test.junit4.ComposeTestRule] (e.g., createComposeRule) inside
+ * [runComposeUiTest][block] or any of their respective variants. Since these APIs independently
+ * manage the test environment, mixing them may lead to unexpected behavior.
+ *
+ * @sample androidx.compose.ui.test.samples.RunComposeUiTestSample
  * @param effectContext The [CoroutineContext] used to run the composition. The context for
  *   `LaunchedEffect`s and `rememberCoroutineScope` will be derived from this context. If this
  *   context contains a [TestDispatcher] or [TestCoroutineScheduler] (in that order), it will be
@@ -153,10 +179,17 @@ inline fun <A : ComponentActivity> AndroidComposeUiTestEnvironmentNoSuspendingLa
  *   platform specific timeout exception will be thrown.
  * @param block The suspendable test body.
  */
-@SuppressLint("ComposeTestRuleDispatcher")
+@Deprecated(
+    message =
+        "Use `androidx.compose.ui.test.v2.runComposeUiTest` instead. The v2 APIs align with " +
+            "standard coroutine behavior by queuing tasks rather than executing them " +
+            "immediately. Tests relying on immediate execution may require explicit " +
+            "synchronization. Please refer to the migration guide for more details.",
+    level = DeprecationLevel.WARNING,
+)
 @Suppress("RedundantUnitReturnType")
 @ExperimentalTestApi
-actual fun runComposeUiTest(
+public actual fun runComposeUiTest(
     effectContext: CoroutineContext,
     runTestContext: CoroutineContext,
     testTimeout: Duration,
@@ -177,6 +210,10 @@ actual fun runComposeUiTest(
  * launch, you cannot use [setContent][ComposeUiTest.setContent] on the ComposeUiTest anymore as
  * this would override the content and can lead to subtle bugs.
  *
+ * Avoid using [androidx.compose.ui.test.junit4.ComposeTestRule] (e.g., createComposeRule) inside
+ * [runAndroidComposeUiTest][block] or any of their respective variants. Since these APIs
+ * independently manage the test environment, mixing them may lead to unexpected behavior.
+ *
  * @param A The Activity type to be launched, which typically (but not necessarily) hosts the
  *   Compose content
  * @param effectContext The [CoroutineContext] used to run the composition. The context for
@@ -190,10 +227,17 @@ actual fun runComposeUiTest(
  *   platform specific timeout exception will be thrown.
  * @param block The test function.
  */
-@SuppressLint("ComposeTestRuleDispatcher")
+@Deprecated(
+    message =
+        "Use `androidx.compose.ui.test.v2.runAndroidComposeUiTest` instead. The v2 APIs align with " +
+            "standard coroutine behavior by queuing tasks rather than executing them " +
+            "immediately. Tests relying on immediate execution may require explicit " +
+            "synchronization. Please refer to the migration guide for more details.",
+    level = DeprecationLevel.WARNING,
+)
 @Suppress("RedundantUnitReturnType")
 @ExperimentalTestApi
-inline fun <reified A : ComponentActivity> runAndroidComposeUiTest(
+public inline fun <reified A : ComponentActivity> runAndroidComposeUiTest(
     effectContext: CoroutineContext = EmptyCoroutineContext,
     runTestContext: CoroutineContext = EmptyCoroutineContext,
     testTimeout: Duration = 60.seconds,
@@ -207,6 +251,10 @@ inline fun <reified A : ComponentActivity> runAndroidComposeUiTest(
  * aware that if the Activity [sets content][androidx.activity.compose.setContent] during its
  * launch, you cannot use [setContent][ComposeUiTest.setContent] on the ComposeUiTest anymore as
  * this would override the content and can lead to subtle bugs.
+ *
+ * Avoid using [androidx.compose.ui.test.junit4.ComposeTestRule] (e.g., createComposeRule) inside
+ * [runAndroidComposeUiTest][block] or any of their respective variants. Since these APIs
+ * independently manage the test environment, mixing them may lead to unexpected behavior.
  *
  * @param A The Activity type to be launched, which typically (but not necessarily) hosts the
  *   Compose content
@@ -222,9 +270,18 @@ inline fun <reified A : ComponentActivity> runAndroidComposeUiTest(
  *   platform specific timeout exception will be thrown.
  * @param block The test function.
  */
+@Deprecated(
+    message =
+        "Use `androidx.compose.ui.test.v2.runAndroidComposeUiTest` instead. " +
+            "The v2 APIs use StandardTestDispatcher instead of UnconfinedTestDispatcher, " +
+            "which aligns with standard coroutine behavior by queuing tasks rather than " +
+            "executing them immediately. Tests relying on immediate execution may require " +
+            "explicit synchronization. Please refer to the migration guide for more details.",
+    level = DeprecationLevel.WARNING,
+)
 @Suppress("RedundantUnitReturnType")
 @ExperimentalTestApi
-fun <A : ComponentActivity> runAndroidComposeUiTest(
+public fun <A : ComponentActivity> runAndroidComposeUiTest(
     activityClass: Class<A>,
     effectContext: CoroutineContext = EmptyCoroutineContext,
     runTestContext: CoroutineContext = EmptyCoroutineContext,
@@ -254,12 +311,14 @@ fun <A : ComponentActivity> runAndroidComposeUiTest(
             try {
                 // Run the test
                 block()
+                // Surface any coroutine / recomposer errors before ActivityScenario closes
+                environment.checkPendingExceptions()
             } catch (t: Throwable) {
                 blockException = t
             }
 
-            // Throw the aggregate exception. May be from the test body or from the cleanup.
-            blockException?.let { throw it }
+            // Handle test failure before ActivityScenario closes
+            blockException?.let { environment.handleTestFailureAndRethrow(it) }
         }
     } finally {
         // Close the scenario outside runTest to avoid getting stuck.
@@ -285,10 +344,22 @@ fun <A : ComponentActivity> runAndroidComposeUiTest(
  * directly on the Activity or on an [androidx.compose.ui.platform.AbstractComposeView]. You will
  * need to do this from within the [test lambda][block], or the test framework will not be able to
  * find the content.
+ *
+ * Avoid using [androidx.compose.ui.test.junit4.ComposeTestRule] (e.g., createComposeRule) inside
+ * [runEmptyComposeUiTest][block] or any of their respective variants. Since these APIs
+ * independently manage the test environment, mixing them may lead to unexpected behavior.
  */
+@Deprecated(
+    message =
+        "Use `androidx.compose.ui.test.v2.runEmptyComposeUiTest` instead. The v2 APIs align with " +
+            "standard coroutine behavior by queuing tasks rather than executing them " +
+            "immediately. Tests relying on immediate execution may require explicit " +
+            "synchronization. Please refer to the migration guide for more details.",
+    level = DeprecationLevel.WARNING,
+)
 @Suppress("RedundantUnitReturnType")
 @ExperimentalTestApi
-fun runEmptyComposeUiTest(block: ComposeUiTest.() -> Unit): TestResult {
+public fun runEmptyComposeUiTest(block: ComposeUiTest.() -> Unit): TestResult {
     return AndroidComposeUiTestEnvironment {
             error(
                 "runEmptyComposeUiTest {} does not provide an Activity to set Compose content in. " +
@@ -315,8 +386,8 @@ fun runEmptyComposeUiTest(block: ComposeUiTest.() -> Unit): TestResult {
  * @param A The Activity type to be interacted with, which typically (but not necessarily) is the
  *   activity that was launched and hosts the Compose content
  */
-@ExperimentalTestApi
-sealed interface AndroidComposeUiTest<A : ComponentActivity> : ComposeUiTest {
+public sealed interface AndroidComposeUiTest<A : ComponentActivity> :
+    ComposeUiTest, IdlingResourceOwner {
     /**
      * Returns the current activity of type [A] used in this [ComposeUiTest]. If no such activity is
      * available, for example if you've navigated to a different activity and the original host has
@@ -325,7 +396,15 @@ sealed interface AndroidComposeUiTest<A : ComponentActivity> : ComposeUiTest {
      * Note that you should never hold on to a reference to the Activity, always use [activity] to
      * interact with the Activity.
      */
-    val activity: A?
+    public val activity: A?
+
+    /**
+     * Sets the [ComposeAccessibilityValidator] to perform the accessibility checks with. Providing
+     * `null` means disabling the accessibility checks
+     */
+    @Suppress("BanRestrictTo")
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun setComposeAccessibilityValidator(validator: ComposeAccessibilityValidator?)
 }
 
 /**
@@ -360,14 +439,32 @@ sealed interface AndroidComposeUiTest<A : ComponentActivity> : ComposeUiTest {
  * @param testTimeout The [Duration] within which the test is expected to complete, otherwise a
  *   platform specific timeout exception will be thrown.
  */
+@Deprecated(
+    message =
+        "Use `androidx.compose.ui.test.v2.AndroidComposeUiTestEnvironment` instead. The v2 APIs align with " +
+            "standard coroutine behavior by queuing tasks rather than executing them " +
+            "immediately. Tests relying on immediate execution may require explicit " +
+            "synchronization. Please refer to the migration guide for more details.",
+    level = DeprecationLevel.WARNING,
+)
 @ExperimentalTestApi
-inline fun <A : ComponentActivity> AndroidComposeUiTestEnvironment(
+public fun <A : ComponentActivity> AndroidComposeUiTestEnvironment(
     effectContext: CoroutineContext = EmptyCoroutineContext,
     runTestContext: CoroutineContext = EmptyCoroutineContext,
     testTimeout: Duration = 60.seconds,
-    crossinline activityProvider: () -> A?,
+    activityProvider: () -> A?,
 ): AndroidComposeUiTestEnvironment<A> {
-    return object : AndroidComposeUiTestEnvironment<A>(effectContext, runTestContext, testTimeout) {
+    return object :
+        AndroidComposeUiTestEnvironment<A>(
+            config =
+                ComposeUiTestConfig(
+                    effectContext = effectContext,
+                    runTestContext = runTestContext,
+                    testTimeout = testTimeout,
+                ),
+            useStandardTestDispatcherForComposition = false,
+            enforceInputModeFromConfig = false,
+        ) {
         override val activity: A?
             get() = activityProvider.invoke()
     }
@@ -378,35 +475,91 @@ inline fun <A : ComponentActivity> AndroidComposeUiTestEnvironment(
  * some of the properties and methods on [test] will only work during the call to [runTest], as they
  * require that the environment has been set up.
  *
- * If the [effectContext] contains a [TestDispatcher], that dispatcher will be used to run
- * composition on and its [TestCoroutineScheduler] will be used to construct the [MainTestClock]. If
- * the `effectContext` does not contain a `TestDispatcher`, an [UnconfinedTestDispatcher] will be
- * created, using the `TestCoroutineScheduler` from the `effectContext` if present.
+ * If the [ComposeUiTestConfig.effectContext] contains a [TestDispatcher], that dispatcher will be
+ * used to run composition, and its [TestCoroutineScheduler] will be used to construct the
+ * [MainTestClock]. If the `effectContext` does not contain a `TestDispatcher`, a
+ * [StandardTestDispatcher] will be created for `androidx.compose.ui.test.v2.*` APIs; otherwise, an
+ * [UnconfinedTestDispatcher] will be created. In both cases, the `TestCoroutineScheduler` from the
+ * `effectContext` will be used if present.
  *
  * @param A The Activity type to be interacted with, which typically (but not necessarily) is the
  *   activity that was launched and hosts the Compose content.
- * @param effectContext The [CoroutineContext] used to run the composition. The context for
- *   `LaunchedEffect`s and `rememberCoroutineScope` will be derived from this context. If this
- *   context contains a [TestDispatcher] or [TestCoroutineScheduler] (in that order), it will be
- *   used for composition and the [MainTestClock].
- * @param runTestContext The [CoroutineContext] used to create the context to run the test. By
- *   default it will run using [kotlinx.coroutines.test.StandardTestDispatcher]. [runTestContext]
- *   and [effectContext] must not share [TestCoroutineScheduler].
- * @param testTimeout The [Duration] within which the test is expected to complete, otherwise a
- *   platform specific timeout exception will be thrown.
+ * @param config The [ComposeUiTestConfig] used to set up the test environment, providing control
+ *   over the [CoroutineContext] used for composition, the test timeout, and other
+ *   environment-specific settings.
  */
-@ExperimentalTestApi
-@OptIn(ExperimentalCoroutinesApi::class)
-abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
-    private val effectContext: CoroutineContext = EmptyCoroutineContext,
-    private val runTestContext: CoroutineContext = EmptyCoroutineContext,
-    private val testTimeout: Duration = 60.seconds,
+// Added OptIn(ExperimentalTestApi::class) for TestMonotonicFrameClock.
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalTestApi::class)
+public abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>
+internal constructor(
+    private val config: ComposeUiTestConfig,
+    private val enforceInputModeFromConfig: Boolean = false,
+    private val useStandardTestDispatcherForComposition: Boolean,
 ) {
 
+    @Suppress("unused") public constructor() : this(EmptyCoroutineContext)
+
+    /**
+     * A test environment that can [run tests][runTest] using the [test receiver scope][test]. Note
+     * that some of the properties and methods on [test] will only work during the call to
+     * [runTest], as they require that the environment has been set up.
+     *
+     * If the [ComposeUiTestConfig.effectContext] contains a [TestDispatcher], that dispatcher will
+     * be used to run composition, and its [TestCoroutineScheduler] will be used to construct the
+     * [MainTestClock]. If the `effectContext` does not contain a `TestDispatcher`, a
+     * [StandardTestDispatcher] will be created for `androidx.compose.ui.test.v2.*` APIs; otherwise,
+     * an [UnconfinedTestDispatcher] will be created. In both cases, the `TestCoroutineScheduler`
+     * from the `effectContext` will be used if present.
+     *
+     * @param effectContext The [CoroutineContext] used to run the composition. The context for
+     *   `LaunchedEffect`s and `rememberCoroutineScope` will be derived from this context. If this
+     *   context contains a [TestDispatcher] or [TestCoroutineScheduler] (in that order), it will be
+     *   used for composition and the [MainTestClock].
+     */
     @Suppress("unused")
-    constructor(
+    public constructor(
         effectContext: CoroutineContext = EmptyCoroutineContext
     ) : this(effectContext, EmptyCoroutineContext, 60.seconds)
+
+    /**
+     * A test environment that can [run tests][runTest] using the [test receiver scope][test]. Note
+     * that some of the properties and methods on [test] will only work during the call to
+     * [runTest], as they require that the environment has been set up.
+     *
+     * If the [effectContext] contains a [TestDispatcher], that dispatcher will be used to run
+     * composition, and its [TestCoroutineScheduler] will be used to construct the [MainTestClock].
+     * If the `effectContext` does not contain a `TestDispatcher`, a [StandardTestDispatcher] will
+     * be created for `androidx.compose.ui.test.v2.*` APIs; otherwise, an [UnconfinedTestDispatcher]
+     * will be created. In both cases, the `TestCoroutineScheduler` from the `effectContext` will be
+     * used if present.
+     *
+     * @param effectContext The [CoroutineContext] used to run the composition. The context for
+     *   `LaunchedEffect`s and `rememberCoroutineScope` will be derived from this context. If this
+     *   context contains a [TestDispatcher] or [TestCoroutineScheduler] (in that order), it will be
+     *   used for composition and the [MainTestClock].
+     * @param runTestContext The [CoroutineContext] used to create the context to run the test. By
+     *   default, it will run using [kotlinx.coroutines.test.StandardTestDispatcher].
+     *   [runTestContext] and [effectContext] must not share [TestCoroutineScheduler].
+     * @param testTimeout The [Duration] within which the test is expected to complete, otherwise a
+     *   platform specific timeout exception will be thrown.
+     */
+    public constructor(
+        effectContext: CoroutineContext = EmptyCoroutineContext,
+        runTestContext: CoroutineContext = EmptyCoroutineContext,
+        testTimeout: Duration = 60.seconds,
+    ) : this(
+        ComposeUiTestConfig(effectContext, runTestContext, testTimeout),
+        enforceInputModeFromConfig = false,
+        useStandardTestDispatcherForComposition = true,
+    )
+
+    public constructor(
+        config: ComposeUiTestConfig
+    ) : this(
+        config = config,
+        enforceInputModeFromConfig = true,
+        useStandardTestDispatcherForComposition = true,
+    )
 
     /**
      * Returns the current host activity of type [A]. If no such activity is available, for example
@@ -415,9 +568,16 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
      */
     protected abstract val activity: A?
 
-    private val idlingResourceRegistry = IdlingResourceRegistry()
+    @OptIn(InternalTestApi::class)
+    private val idlingResourceRegistry =
+        IdlingResourceRegistry(
+            pollDispatcher =
+                HandlerCompat.createAsync(Looper.getMainLooper()).asCoroutineDispatcher().immediate
+        )
 
     internal val composeRootRegistry = ComposeRootRegistry()
+
+    private val failurePipelineRunner = FailurePipelineRunner(config)
 
     private val mainClockImpl: MainTestClockImpl
     private lateinit var composeIdlingResource: ComposeIdlingResource
@@ -426,7 +586,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
     private lateinit var recomposer: Recomposer
 
     private val customTestDispatcher: TestDispatcher? =
-        effectContext[ContinuationInterceptor] as? TestDispatcher
+        config.effectContext[ContinuationInterceptor] as? TestDispatcher
 
     /**
      * We can only accept a TestDispatcher here because we need to access its scheduler. Use the
@@ -434,26 +594,13 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
      * TestCoroutineScheduler if it is provided
      */
     private val compositionCoroutineDispatcher: TestDispatcher =
-        customTestDispatcher ?: UnconfinedTestDispatcher(effectContext[TestCoroutineScheduler])
-
-    /**
-     * This flag is set to `false` when a custom `TestDispatcher` (including
-     * `UnconfinedTestDispatcher`) is provided to the `ComposeTestRule`.
-     */
-    private val isDefaultTestDispatcherUsed: Boolean
-        get() = customTestDispatcher == null
-
-    /**
-     * This enables a compatibility layer to support the `StandardTestDispatcher` behavior for
-     * tests.
-     */
-    private val isStandardTestDispatcherSupportEnabled: Boolean =
-        !isDefaultTestDispatcherUsed && ComposeUiTestFlags.isStandardTestDispatcherSupportEnabled
+        customTestDispatcher
+            ?: config.createDefaultTestDispatcher(useStandardTestDispatcherForComposition)
 
     private val frameClockCoroutineScope = TestScope(compositionCoroutineDispatcher)
     private lateinit var recomposerCoroutineScope: CoroutineScope
     private val coroutineExceptionHandler =
-        UncaughtExceptionHandler(effectContext[CoroutineExceptionHandler])
+        UncaughtExceptionHandler(config.effectContext[CoroutineExceptionHandler])
 
     private val frameClock: TestMonotonicFrameClock
     private val recomposerContinuationInterceptor: ApplyingContinuationInterceptor
@@ -487,7 +634,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
             MainTestClockImpl(
                 scheduler = compositionCoroutineDispatcher.scheduler,
                 frameClock = frameClock,
-                isStandardTestDispatcherSupportEnabled = isStandardTestDispatcherSupportEnabled,
+                isStandardTestDispatcherSupportEnabled = useStandardTestDispatcherForComposition,
             )
 
         infiniteAnimationPolicy =
@@ -504,21 +651,22 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
 
         @OptIn(kotlin.ExperimentalStdlibApi::class)
         val testDispatcher =
-            runTestContext[CoroutineDispatcher] as? TestDispatcher ?: StandardTestDispatcher()
+            config.runTestContext[CoroutineDispatcher] as? TestDispatcher
+                ?: StandardTestDispatcher()
 
         combinedRunTestCoroutineContext =
             recomposer.effectCoroutineContext
                 .minusKey(CoroutineExceptionHandler.Key)
                 .minusKey(Job.Key)
                 .minusKey(TestCoroutineScheduler.Key)
-                .plus(runTestContext)
+                .plus(config.runTestContext)
                 .plus(testDispatcher)
     }
 
     private fun createRecomposer() {
         recomposerCoroutineScope =
             CoroutineScope(
-                effectContext +
+                config.effectContext +
                     recomposerContinuationInterceptor +
                     frameClock +
                     infiniteAnimationPolicy +
@@ -532,7 +680,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
                 composeRootRegistry,
                 mainClockImpl,
                 recomposer,
-                isStandardTestDispatcherSupportEnabled,
+                useStandardTestDispatcherForComposition,
             )
     }
 
@@ -549,60 +697,86 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
      * To see full test:
      * click_viewAddedAndRemovedWithRecomposerCancelledAndRecreated_clickStillWorks
      */
-    fun cancelAndRecreateRecomposer() {
+    public fun cancelAndRecreateRecomposer() {
         recomposer.cancel()
         createRecomposer()
     }
 
     internal val testReceiverScope = AndroidComposeUiTestImpl()
     private val testOwner = AndroidTestOwner()
-    private val testContext = TestContext(testOwner)
+    private val testContext = TestContext(testOwner, config.boundsAssertionTolerance)
 
     /**
      * The receiver scope of the test passed to [runTest]. Note that some of the properties and
      * methods will only work during the call to [runTest], as they require that the environment has
      * been set up.
      */
-    val test: AndroidComposeUiTest<A> = testReceiverScope
+    public val test: AndroidComposeUiTest<A> = testReceiverScope
 
     @Deprecated(
         level = DeprecationLevel.HIDDEN,
         message = "Replace with the same function, but with suspend block",
     )
     @JvmName("runTest") // for binary compatibility
-    fun <R> runTestNonSuspendingLambda(block: AndroidComposeUiTest<A>.() -> R?): R? {
+    public fun <R> runTestNonSuspendingLambda(block: AndroidComposeUiTest<A>.() -> R?): R? {
         var result: R? = null
         runTest { result = block() }
         return result
+    }
+
+    /** Checks if there are any pending uncaught coroutine or recomposition exceptions. */
+    @Suppress("BanRestrictTo")
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun checkPendingExceptions() {
+        throwPendingException()
+        coroutineExceptionHandler.throwUncaught()
+    }
+
+    /**
+     * Runs the test failure pipeline and rethrows the given [throwable].
+     *
+     * @param throwable error that caused the test failure
+     */
+    @Suppress("BanRestrictTo")
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun handleTestFailureAndRethrow(throwable: Throwable): Nothing {
+        failurePipelineRunner.runPipeline(
+            throwable = throwable,
+            composeRoots = composeRootRegistry.getCurrentOrPreTearDownRoots(),
+        )
     }
 
     /**
      * Runs the given [block], setting up all test hooks before running the test and tearing them
      * down after running the test.
      */
-    fun <R> runTest(block: suspend AndroidComposeUiTest<A>.() -> R): TestResult =
-        runCatching {
-                kotlinx.coroutines.test.runTest(
-                    context = combinedRunTestCoroutineContext,
-                    timeout = testTimeout,
-                ) {
-                    if (HasRobolectricFingerprint) {
-                        idlingStrategy =
-                            RobolectricIdlingStrategy(composeRootRegistry, composeIdlingResource)
-                    }
-                    // Need to await quiescence before registering our ComposeIdlingResource because
-                    // the
-                    // host activity might still be launching. If it is going to set compose
-                    // content,
-                    // we want that to happen before we install our hooks to avoid a race.
-                    idlingStrategy.runUntilIdle()
+    @Suppress("RedundantUnitReturnType")
+    public fun <R> runTest(block: suspend AndroidComposeUiTest<A>.() -> R): TestResult {
+        try {
+            return kotlinx.coroutines.test.runTest(
+                context = combinedRunTestCoroutineContext,
+                timeout = config.testTimeout,
+            ) {
+                if (HasRobolectricFingerprint) {
+                    idlingStrategy =
+                        RobolectricIdlingStrategy(
+                            composeRootRegistry,
+                            composeIdlingResource,
+                            idlingResourceRegistry,
+                        )
+                }
+                // Need to await quiescence before registering our ComposeIdlingResource because
+                // the host activity might still be launching. If it is going to set compose
+                // content, we want that to happen before we install our hooks to avoid a race.
+                idlingStrategy.runUntilIdle()
 
-                    composeRootRegistry.withRegistry {
-                        idlingResourceRegistry.withRegistry {
-                            idlingStrategy.withStrategy {
-                                withTestCoroutines {
-                                    withWindowRecomposer {
-                                        withComposeIdlingResource { testReceiverScope.block() }
+                composeRootRegistry.withRegistry {
+                    idlingResourceRegistry.withRegistry {
+                        idlingStrategy.withStrategy {
+                            withTestCoroutines {
+                                withWindowRecomposer {
+                                    withComposeIdlingResource {
+                                        withConfiguredInputMode { testReceiverScope.block() }
                                     }
                                 }
                             }
@@ -610,20 +784,51 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
                     }
                 }
             }
-            .onFailure { throwable ->
-                if (
-                    throwable.javaClass.name == "kotlinx.coroutines.test.UncompletedCoroutinesError"
-                ) {
-                    throw AndroidComposeUiTestTimeoutException(
-                            "runTest did not complete within the testTimeout of $testTimeout",
-                            throwable,
-                        )
-                        .also { it.addSuppressed(throwable) }
-                } else {
-                    throw throwable
-                }
-            }
-            .getOrNull() ?: error("runTest failed with an unhandled exception")
+        } catch (throwable: Throwable) {
+            handleTestFailureAndRethrow(throwable)
+        } finally {
+            composeRootRegistry.clearRegisteredComposeRootsBeforeTearDown()
+        }
+    }
+
+    private inline fun <R> withConfiguredInputMode(block: () -> R): R {
+        if (!enforceInputModeFromConfig) {
+            return block()
+        }
+
+        try {
+            setInputMode(config.inputMode)
+            return block()
+        } finally {
+            resetInputMode()
+        }
+    }
+
+    /**
+     * Applies the [InputMode] specified in the [ComposeUiTestConfig] to the
+     * [android.app.Instrumentation].
+     */
+    private fun setInputMode(inputMode: InputMode) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        if (inputMode == InputMode.Touch) {
+            instrumentation.setInTouchMode(true)
+        } else {
+            instrumentation.setInTouchMode(false)
+        }
+    }
+
+    /**
+     * Resets the [android.app.Instrumentation] input mode to the system default, effectively
+     * reverting the input mode specified in the test configuration [ComposeUiTestConfig].
+     */
+    private fun resetInputMode() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        if (Build.VERSION.SDK_INT < 33) {
+            instrumentation.setInTouchMode(true)
+        } else {
+            instrumentation.resetInTouchMode()
+        }
+    }
 
     private fun waitForIdle(atLeastOneRootExpected: Boolean) {
         // First wait until we have a compose root (in case an Activity is being started)
@@ -693,7 +898,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
                 // be called before the dispatch, leading to an unexpected recomposition when
                 // runRecomposeAndApplyChanges() is called.
                 val coroutineStart =
-                    if (isStandardTestDispatcherSupportEnabled) {
+                    if (useStandardTestDispatcherForComposition) {
                         CoroutineStart.UNDISPATCHED
                     } else {
                         CoroutineStart.DEFAULT
@@ -703,11 +908,13 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
                 }
                 block()
             } finally {
-                // Stop the recomposer:
-                recomposer.cancel()
-                // Cancel our scope to ensure there are no active coroutines when
-                // cleanupTestCoroutines is called in the CleanupCoroutinesStatement
-                recomposerCoroutineScope.cancel()
+                runOnUiThread {
+                    // Stop the recomposer:
+                    recomposer.cancel()
+                    // Cancel our scope to ensure there are no active coroutines when
+                    // cleanupTestCoroutines is called in the CleanupCoroutinesStatement
+                    recomposerCoroutineScope.cancel()
+                }
                 // Remove the exception handler installer
                 composeRootRegistry.removeOnRegistrationChangedListener(rootRegistrationListener)
 
@@ -722,8 +929,10 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
         } finally {
             // runTest {} as the last step -
             // to replace deprecated TestCoroutineScope.cleanupTestCoroutines
-            frameClockCoroutineScope.runTest {}
-            frameClockCoroutineScope.cancel()
+            runOnUiThread {
+                frameClockCoroutineScope.runTest {}
+                frameClockCoroutineScope.cancel()
+            }
             coroutineExceptionHandler.throwUncaught()
         }
     }
@@ -737,7 +946,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
         }
     }
 
-    internal inner class AndroidComposeUiTestImpl : AndroidComposeUiTest<A> {
+    internal inner class AndroidComposeUiTestImpl : AndroidComposeUiTest<A>, TestOwnerProvider {
 
         override val activity: A?
             get() = this@AndroidComposeUiTestEnvironment.activity
@@ -748,6 +957,9 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
 
         override val mainClock: MainTestClock
             get() = mainClockImpl
+
+        override val testOwner: TestOwner
+            get() = this@AndroidComposeUiTestEnvironment.testOwner
 
         override fun setComposeAccessibilityValidator(validator: ComposeAccessibilityValidator?) {
             testContext.platform.composeAccessibilityValidator = validator
@@ -762,6 +974,10 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
             waitForIdle()
             // Execute the action on ui thread in a blocking way.
             return runOnUiThread(action)
+        }
+
+        override fun <T> runWithoutImplicitWait(block: () -> T): T {
+            return testOwner.withImplicitWaitSuppression(isSuppressed = true, block = block)
         }
 
         override fun waitForIdle() {
@@ -785,6 +1001,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
             coroutineExceptionHandler.throwUncaught()
         }
 
+        @Suppress("BanThreadSleep")
         override fun waitUntil(
             conditionDescription: String?,
             timeoutMillis: Long,
@@ -794,7 +1011,7 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
 
             // With a StandardTestDispatcher, it could be that tasks are due which can satisfy the
             // condition, so run all pending tasks before checking the condition.
-            if (isStandardTestDispatcherSupportEnabled) {
+            if (useStandardTestDispatcherForComposition) {
                 mainClockImpl.runCurrent()
             }
 
@@ -850,10 +1067,49 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
 
             runOnUiThread { currentActivity.setContent(recomposer, composable) }
 
-            // Synchronizing from the UI thread when we can't leads to a dead lock
-            if (idlingStrategy.canSynchronizeOnUiThread || !isOnUiThread()) {
-                waitForIdle()
-            }
+            waitForIdle()
+            // Gaining focus can change the input mode and isWindowFocused, so settle again.
+            if (waitForInitialWindowFocus()) waitForIdle()
+        }
+
+        /**
+         * Before API 33, ViewRootImpl re-applies the system touch mode when a window gains focus.
+         * If that happens after setContent returns, a test already in keyboard mode loses key
+         * focus. Waits (best effort) for a focusable compose root to gain window focus, and returns
+         * whether it had to wait and focus arrived.
+         */
+        private fun waitForInitialWindowFocus(): Boolean =
+            Build.VERSION.SDK_INT < 33 &&
+                !focusableRootHasWindowFocus() &&
+                pollOnUiThread { focusableRootHasWindowFocus() }
+
+        private fun focusableRootHasWindowFocus(): Boolean = runOnUiThread {
+            val roots =
+                composeRootRegistry.getRegisteredComposeRoots().filter {
+                    val flags =
+                        (it.view.rootView.layoutParams as? WindowManager.LayoutParams)?.flags ?: 0
+                    (flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0
+                }
+            roots.isEmpty() || roots.any { it.view.hasWindowFocus() }
+        }
+
+        override fun hasPendingWork(): Boolean {
+            return !composeIdlingResource.isIdle
+        }
+    }
+
+    /** Executes the given [block] while temporarily setting the implicit wait suppression state. */
+    private inline fun <T> TestOwner.withImplicitWaitSuppression(
+        isSuppressed: Boolean,
+        block: () -> T,
+    ): T {
+        val previousState = this.isImplicitWaitSuppressed
+        this.isImplicitWaitSuppressed = isSuppressed
+        return try {
+            block()
+        } finally {
+            // Always restore the original synchronization state
+            this.isImplicitWaitSuppressed = previousState
         }
     }
 
@@ -865,18 +1121,46 @@ abstract class AndroidComposeUiTestEnvironment<A : ComponentActivity>(
     }
 
     private inner class AndroidTestOwner : TestOwner {
+        /**
+         * Inside [ComposeUiTest.runWithoutImplicitWait] the UI is expected to be stable, so node
+         * queries reuse the collected semantics nodes instead of walking the semantics trees for
+         * every query. The cache is cleared when the suppression state changes or due tasks are
+         * run, as both can change the semantics trees.
+         */
+        private val semanticsNodesCache = SemanticsNodesCache(mainClockImpl)
+
+        override var isImplicitWaitSuppressed: Boolean = false
+            set(value) {
+                field = value
+                semanticsNodesCache.clear()
+            }
+
         override val mainClock: MainTestClock
             get() = mainClockImpl
 
         override fun <T> runOnUiThread(action: () -> T): T = testReceiverScope.runOnUiThread(action)
 
         override fun getRoots(atLeastOneRootExpected: Boolean): Set<RootForTest> {
-            waitForIdle(atLeastOneRootExpected)
+            if (!isImplicitWaitSuppressed) {
+                waitForIdle(atLeastOneRootExpected)
+            }
             return composeRootRegistry.getRegisteredComposeRoots()
         }
 
+        override fun getSemanticsNodes(
+            roots: Set<RootForTest>,
+            useUnmergedTree: Boolean,
+            skipDeactivatedNodes: Boolean,
+        ): List<SemanticsNode> =
+            if (isImplicitWaitSuppressed) {
+                semanticsNodesCache.getOrCollect(roots, useUnmergedTree, skipDeactivatedNodes)
+            } else {
+                collectSemanticsNodes(roots, useUnmergedTree, skipDeactivatedNodes)
+            }
+
         override fun runCurrent() {
             mainClockImpl.runCurrent()
+            semanticsNodesCache.clear()
         }
     }
 
@@ -920,49 +1204,53 @@ internal class BeginningOfCascadingComposeErrors() : RuntimeException(MESSAGE) {
     }
 }
 
-@ExperimentalTestApi
-actual sealed interface ComposeUiTest : SemanticsNodeInteractionsProvider {
-    actual val density: Density
-    actual val mainClock: MainTestClock
-
-    /**
-     * Sets the [ComposeAccessibilityValidator] to perform the accessibility checks with. Providing
-     * `null` means disabling the accessibility checks
-     */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    fun setComposeAccessibilityValidator(validator: ComposeAccessibilityValidator?)
-
-    actual fun <T> runOnUiThread(action: () -> T): T
-
-    actual fun <T> runOnIdle(action: () -> T): T
-
-    actual fun waitForIdle()
-
-    actual suspend fun awaitIdle()
-
-    actual fun waitUntil(
-        conditionDescription: String?,
-        timeoutMillis: Long,
-        condition: () -> Boolean,
-    )
-
-    /** Registers an [IdlingResource] in this test. */
-    fun registerIdlingResource(idlingResource: IdlingResource)
-
-    /** Unregisters an [IdlingResource] from this test. */
-    fun unregisterIdlingResource(idlingResource: IdlingResource)
-
-    actual fun setContent(composable: @Composable () -> Unit)
-}
-
 /**
  * A validator that is used to run accessibility checks before every action through
  * [tryPerformAccessibilityChecks]
  */
+@Suppress("BanRestrictTo")
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-interface ComposeAccessibilityValidator {
-    fun check(view: View)
+public interface ComposeAccessibilityValidator {
+    public fun check(view: View)
 }
 
 internal class AndroidComposeUiTestTimeoutException(message: String, cause: Throwable?) :
     Exception(message, cause)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun ComposeUiTestConfig.createDefaultTestDispatcher(
+    useStandardTestDispatcher: Boolean
+): TestDispatcher {
+    if (useStandardTestDispatcher) {
+        return StandardTestDispatcher(effectContext[TestCoroutineScheduler])
+    }
+    return UnconfinedTestDispatcher(effectContext[TestCoroutineScheduler])
+}
+
+/**
+ * Internal interface to expose the TestOwner safely to extension functions within the same
+ * module/library group.
+ */
+internal interface TestOwnerProvider {
+    val testOwner: TestOwner
+}
+
+/**
+ * Internal setter for [ComposeAccessibilityValidator].
+ *
+ * Use [androidx.compose.ui.test.accessibility.enableAccessibilityChecks] or
+ * [androidx.compose.ui.test.accessibility.disableAccessibilityChecks] to manage accessibility
+ * checks in your tests. Passing `null` here disables the checks.
+ */
+@Suppress("BanRestrictTo")
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun ComposeUiTest.setComposeAccessibilityValidator(
+    validator: ComposeAccessibilityValidator?
+) {
+    val owner =
+        this as? AndroidComposeUiTest<*>
+            ?: error(
+                "This implementation of ComposeUiTest does not support AccessibilityValidators"
+            )
+    owner.setComposeAccessibilityValidator(validator)
+}

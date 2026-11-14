@@ -39,6 +39,7 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.MediaRoute2ProviderService;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,9 +49,8 @@ import android.os.Message;
 import android.os.Messenger;
 import android.text.TextUtils;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.mediarouter.media.MediaRouteProviderService.ClientInfo;
+import androidx.test.annotation.UiThreadTest;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.LargeTest;
@@ -58,6 +58,8 @@ import androidx.test.filters.SdkSuppress;
 import androidx.test.filters.SmallTest;
 import androidx.test.rule.ServiceTestRule;
 
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -71,6 +73,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Test for {@link MediaRouteProviderService}.
@@ -639,6 +642,49 @@ public class MediaRouteProviderServiceTest {
         assertTrue(client2Registered.await(TIME_OUT_MS, TimeUnit.MILLISECONDS));
     }
 
+    @SmallTest
+    @Test
+    @UiThreadTest
+    public void onBind_whenOnCreateMediaRouteProviderReturnsNull_returnsNullForV1Intent() {
+        AtomicInteger onCreateCount = new AtomicInteger();
+        MediaRouteProviderService service =
+                new MediaRouteProviderService() {
+                    @Override
+                    public @Nullable MediaRouteProvider onCreateMediaRouteProvider() {
+                        onCreateCount.incrementAndGet();
+                        return null;
+                    }
+                };
+        service.attachBaseContext(ApplicationProvider.getApplicationContext());
+
+        IBinder binder = service.onBind(new Intent(MediaRouteProviderProtocol.SERVICE_INTERFACE));
+
+        assertNull(binder);
+        assertEquals(1, onCreateCount.get());
+    }
+
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    @SmallTest
+    @Test
+    @UiThreadTest
+    public void onBind_whenOnCreateMediaRouteProviderReturnsNull_returnsNullForV2Intent() {
+        AtomicInteger onCreateCount = new AtomicInteger();
+        MediaRouteProviderService service =
+                new MediaRouteProviderService() {
+                    @Override
+                    public @Nullable MediaRouteProvider onCreateMediaRouteProvider() {
+                        onCreateCount.incrementAndGet();
+                        return null;
+                    }
+                };
+        service.attachBaseContext(ApplicationProvider.getApplicationContext());
+
+        IBinder binder = service.onBind(new Intent(MediaRoute2ProviderService.SERVICE_INTERFACE));
+
+        assertNull(binder);
+        assertEquals(1, onCreateCount.get());
+    }
+
     private void registerClient(Messenger receiveMessenger) throws Exception {
         Message msg = Message.obtain();
         msg.what = MediaRouteProviderProtocol.CLIENT_MSG_REGISTER;
@@ -745,8 +791,13 @@ public class MediaRouteProviderServiceTest {
 
         @Override
         public void onDestroy() {
-            assertNotNull(sInstance);
-            sInstance = null;
+            // This test resets both CountDownLatches to non-null at the test setup. If they are
+            // null, then the onDestroy comes from other tests and sInstance is null.
+            if (sClientInfoListenerAdditionCountDownLatch != null
+                    && sClientInfoListenerRemovalCountDownLatch != null) {
+                assertNotNull(sInstance);
+                sInstance = null;
+            }
             super.onDestroy();
         }
 
@@ -830,8 +881,7 @@ public class MediaRouteProviderServiceTest {
         }
 
         @Override
-        @Nullable
-        public RouteController onCreateRouteController(
+        public @Nullable RouteController onCreateRouteController(
                 @NonNull String routeId, @NonNull RouteControllerOptions routeControllerOptions) {
             sRouteControllerOptions = routeControllerOptions;
             sRouteCreationCountDownLatch.countDown();
@@ -839,8 +889,7 @@ public class MediaRouteProviderServiceTest {
         }
 
         @Override
-        @Nullable
-        public DynamicGroupRouteController onCreateDynamicGroupRouteController(
+        public @Nullable DynamicGroupRouteController onCreateDynamicGroupRouteController(
                 @NonNull String initialMemberRouteId,
                 @NonNull RouteControllerOptions routeControllerOptions) {
             sRouteControllerOptions = routeControllerOptions;

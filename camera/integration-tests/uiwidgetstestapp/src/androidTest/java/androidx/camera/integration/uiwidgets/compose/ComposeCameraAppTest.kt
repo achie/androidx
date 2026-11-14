@@ -19,24 +19,21 @@ package androidx.camera.integration.uiwidgets.compose
 import android.os.Build
 import androidx.camera.integration.uiwidgets.compose.ui.navigation.ComposeCameraScreen
 import androidx.camera.integration.uiwidgets.compose.ui.screen.imagecapture.DEFAULT_LENS_FACING
+import androidx.camera.testing.impl.AndroidUtil
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.LabTestRule
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.view.PreviewView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ActivityScenario
 import androidx.test.filters.LargeTest
-import androidx.test.filters.SdkSuppress
 import androidx.test.rule.GrantPermissionRule
 import androidx.testutils.RepeatRule
-import com.google.common.truth.Truth
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
 import org.junit.Assume
 import org.junit.Before
 import org.junit.Rule
@@ -44,35 +41,46 @@ import org.junit.Test
 
 @LargeTest
 class ComposeCameraAppTest {
-    // Provide permissions to app via ComposeCameraActivity
-    @get:Rule
-    val permissionRule: GrantPermissionRule =
-        GrantPermissionRule.grant(*ComposeCameraActivity.REQUIRED_PERMISSIONS)
+    // Explicit rule ordering is required because createAndroidComposeRule launches
+    // ComposeCameraActivity during rule evaluation: LabTestRule and RequireForegroundRule must
+    // evaluate assumptions and prepare the device UI/foreground (including disabling sensor
+    // privacy) and GrantPermissionRule must grant CAMERA/RECORD_AUDIO permissions before the
+    // activity is launched.
+    @get:Rule(order = 0) val labTest: LabTestRule = LabTestRule()
 
-    @Suppress("ComposeTestRuleDispatcher") // b/457970052
-    @get:Rule
-    val androidComposeTestRule = createAndroidComposeRule<ComposeCameraActivity>()
-
-    @get:Rule val labTest: LabTestRule = LabTestRule()
-
-    @get:Rule val repeatRule = RepeatRule()
-
-    @Before
-    fun setup() {
+    @get:Rule(order = 1)
+    val requireForegroundRule = RequireForegroundRule {
+        // Skip test for b/539514196
+        Assume.assumeFalse(
+            "API 24 emulators crash due to SwiftShader driver defects. Unable to test.",
+            AndroidUtil.isEmulator(24),
+        )
         // Skip test for b/168175357
         Assume.assumeFalse(
             "Cuttlefish has MediaCodec dequeInput/Output buffer fails issue. Unable to test.",
             Build.MODEL.contains("Cuttlefish") && Build.VERSION.SDK_INT == 29,
         )
         Assume.assumeTrue(CameraUtil.hasCameraWithLensFacing(DEFAULT_LENS_FACING))
+    }
 
+    // Provide permissions to app via ComposeCameraActivity
+    @get:Rule(order = 2)
+    val permissionRule: GrantPermissionRule =
+        GrantPermissionRule.grant(*ComposeCameraActivity.REQUIRED_PERMISSIONS)
+
+    @get:Rule(order = 3)
+    val androidComposeTestRule = createAndroidComposeRule<ComposeCameraActivity>()
+
+    @get:Rule(order = 4) val repeatRule = RepeatRule()
+
+    @Before
+    fun setup() {
         // Recreate the activity as it might terminate in other tests
         androidComposeTestRule.activityRule.scenario.recreate()
     }
 
     // Activity launch will render ImageCaptureScreen
     // Ensure that ImageCapture screen's PreviewView is streaming properly
-    @SdkSuppress(maxSdkVersion = 33) // b/360867144: Module crashes on API34
     @Test
     @RepeatRule.Repeat(times = 10)
     fun testPreviewViewStreamStateOnActivityLaunch() {
@@ -84,7 +92,6 @@ class ComposeCameraAppTest {
     @Test
     @LabTestRule.LabTestOnly
     @RepeatRule.Repeat(times = 10)
-    @SdkSuppress(maxSdkVersion = 33) // b/360867144: Module crashes on API34
     fun testPreviewViewStreamStateOnNavigation() {
 
         // Get VideoCapture Navigation Tab (Node)
@@ -119,18 +126,14 @@ class ComposeCameraAppTest {
     private fun assertExpectedScreenAndStreamState(
         scenario: ActivityScenario<ComposeCameraActivity>
     ) =
-        runBlocking<Unit> {
-            lateinit var result: Deferred<Boolean>
-
-            scenario.onActivity { activity ->
-                // Make async Coroutine to wait the result, not block the test thread.
-                result = async { activity.waitForExpectedScreenAndStreamState() }
-            }
-
-            Truth.assertThat(result.await()).isTrue()
+        androidComposeTestRule.waitUntil(timeoutMillis = LATCH_TIMEOUT) {
+            var reached = false
+            scenario.onActivity { activity -> reached = activity.isExpectedStateReached() }
+            reached
         }
 
     companion object {
         private const val TAG = "ComposeCameraAppTest"
+        private const val LATCH_TIMEOUT: Long = 5000
     }
 }

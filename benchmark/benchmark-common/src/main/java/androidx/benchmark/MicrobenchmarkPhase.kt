@@ -51,9 +51,7 @@ internal class MicrobenchmarkPhase(
                     "THERMAL THROTTLE DETECTED, SLEEPING FOR $THROTTLE_BACKOFF_S SECONDS",
                 )
                 val startTimeNs = System.nanoTime()
-                inMemoryTrace("Sleep due to Thermal Throttle") {
-                    Thread.sleep(TimeUnit.SECONDS.toMillis(THROTTLE_BACKOFF_S))
-                }
+                inMemoryTrace("Sleep due to Thermal Throttle") { Thread.sleep(THROTTLE_BACKOFF_MS) }
                 val sleepTimeNs = System.nanoTime() - startTimeNs
                 thermalThrottleSleepSeconds += TimeUnit.NANOSECONDS.toSeconds(sleepTimeNs)
                 true
@@ -84,15 +82,14 @@ internal class MicrobenchmarkPhase(
             var profilerStartEnd = 0L
             while (true) { // keep running until phase successful
                 try {
-                    phaseProfilerResult =
-                        profiler?.run {
-                            profilerStartBegin = System.nanoTime()
-                            startIfNotRiskingAnrDeadline(
-                                    traceUniqueName = traceUniqueName,
-                                    estimatedDurationNs = state.warmupEstimatedIterationTimeNs,
-                                )
-                                .also { profilerStartEnd = System.nanoTime() }
-                        }
+                    phaseProfilerResult = profiler?.run {
+                        profilerStartBegin = System.nanoTime()
+                        startIfNotRiskingAnrDeadline(
+                                traceUniqueName = traceUniqueName,
+                                estimatedDurationNs = state.warmupEstimatedIterationTimeNs,
+                            )
+                            .also { profilerStartEnd = System.nanoTime() }
+                    }
                     state.metrics = metricsContainer // needed for pausing
                     metricsContainer.captureInit()
 
@@ -145,17 +142,18 @@ internal class MicrobenchmarkPhase(
                     break
                 } else {
                     // thermal throttled! delay and retry!
+                    val sleepDurationMs = Arguments.thermalThrottleSleepDurationMs
+                    val sleepDurationSeconds = TimeUnit.MILLISECONDS.toSeconds(sleepDurationMs)
                     Log.d(
                         BenchmarkState.TAG,
-                        "THERMAL THROTTLE DETECTED, DELAYING FOR " +
-                            "${Arguments.thermalThrottleSleepDurationSeconds} SECONDS",
+                        "THERMAL THROTTLE DETECTED, DELAYING FOR $sleepDurationSeconds SECONDS",
                     )
                     val startTimeNs = System.nanoTime()
                     inMemoryTrace("Sleep due to Thermal Throttle") {
-                        delay(
-                            TimeUnit.SECONDS.toMillis(Arguments.thermalThrottleSleepDurationSeconds)
-                        )
+                        // force yield, even in tests
+                        delay(sleepDurationMs.coerceAtLeast(1))
                     }
+                    state.resetTaskDeadlines()
                     val sleepTimeNs = System.nanoTime() - startTimeNs
                     state.totalThermalThrottleSleepSeconds +=
                         TimeUnit.NANOSECONDS.toSeconds(sleepTimeNs)
@@ -209,7 +207,8 @@ internal class MicrobenchmarkPhase(
     }
 
     companion object {
-        private val THROTTLE_BACKOFF_S = Arguments.thermalThrottleSleepDurationSeconds
+        private val THROTTLE_BACKOFF_MS = Arguments.thermalThrottleSleepDurationMs
+        private val THROTTLE_BACKOFF_S = TimeUnit.MILLISECONDS.toSeconds(THROTTLE_BACKOFF_MS)
 
         // static instance ensures there's only one, and we don't leak native memory
         internal val cpuEventCounter: CpuEventCounter by lazy {
@@ -244,7 +243,14 @@ internal class MicrobenchmarkPhase(
                     if (collectCpuEventInstructions) {
                         arrayOf(
                             TimeCapture(),
-                            CpuEventCounterCapture(cpuEventCounter, listOf(Event.Instructions)),
+                            CpuEventCounterCapture(
+                                cpuEventCounter = cpuEventCounter,
+                                events = listOf(Event.Instructions),
+                                // Disables validation checks during warmup as extremely short runs
+                                // or framework estimation loops may naturally record 0
+                                // instructions.
+                                validateMeasurements = false,
+                            ),
                         )
                     } else {
                         arrayOf(TimeCapture())

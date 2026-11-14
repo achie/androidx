@@ -1,0 +1,79 @@
+/*
+ * Copyright (C) 2024 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package androidx.compose.remote.integration.view.demos.examples.old.compose
+
+import androidx.compose.remote.creation.compose.layout.RemoteAlignment
+import androidx.compose.remote.creation.compose.layout.RemoteArrangement
+import androidx.compose.remote.creation.compose.layout.RemoteCanvas
+import androidx.compose.remote.creation.compose.layout.RemoteColumn
+import androidx.compose.remote.creation.compose.layout.RemoteComposable
+import androidx.compose.remote.creation.compose.layout.RemoteOffset
+import androidx.compose.remote.creation.compose.modifier.RemoteModifier
+import androidx.compose.remote.creation.compose.modifier.background
+import androidx.compose.remote.creation.compose.modifier.fillMaxSize
+import androidx.compose.remote.creation.compose.state.RemotePaint
+import androidx.compose.remote.creation.compose.state.RemoteTimeVariables
+import androidx.compose.remote.creation.compose.state.animateRemoteFloatAsState
+import androidx.compose.remote.creation.compose.state.rc
+import androidx.compose.remote.creation.compose.state.remoteTween
+import androidx.compose.remote.creation.compose.state.rf
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.tooling.preview.Preview
+
+@Preview
+@Composable
+@RemoteComposable
+@Suppress("RestrictedApiAndroidX") // translate
+fun AnimatedChangesDemo() {
+    RemoteColumn(
+        modifier = RemoteModifier.fillMaxSize(),
+        verticalArrangement = RemoteArrangement.Center,
+        horizontalAlignment = RemoteAlignment.CenterHorizontally,
+    ) {
+        RemoteCanvas(modifier = RemoteModifier.fillMaxSize().background(Color.White.rc)) {
+            val centerX = width / 2.rf
+            val centerY = height / 2.rf
+            val rad = width.min(height) / 4.rf
+
+            val beat = RemoteTimeVariables.continuousSeconds * 2.rf
+            val anim = animateRemoteFloatAsState(beat, remoteTween(durationMillis = 500))
+
+            translate(0.rf, anim * 100.rf) {
+                drawCircle(
+                    paint = RemotePaint().apply { color = Color.Red.rc },
+                    radius = rad,
+                    center = RemoteOffset(centerX, centerY),
+                )
+            }
+
+            run {
+                val color = Color(0xFF7B00FF).rc
+                val len = centerY
+                drawLine(
+                    paint = RemotePaint().apply { this.color = color },
+                    start = RemoteOffset(centerX, 0.rf),
+                    end = RemoteOffset(centerX, len),
+                )
+                drawCircle(
+                    paint = RemotePaint().apply { this.color = color },
+                    radius = rad,
+                    center = RemoteOffset(centerX, len),
+                )
+            }
+        }
+    }
+}

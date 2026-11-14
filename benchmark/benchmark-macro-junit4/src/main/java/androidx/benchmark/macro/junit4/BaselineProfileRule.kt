@@ -45,7 +45,7 @@ import org.junit.runners.model.Statement
  * @sample androidx.benchmark.samples.baselineProfileRuleLibrarySample
  */
 @RequiresApi(28)
-class BaselineProfileRule : TestRule {
+public class BaselineProfileRule : TestRule {
     private lateinit var currentDescription: Description
 
     override fun apply(base: Statement, description: Description): Statement =
@@ -66,7 +66,7 @@ class BaselineProfileRule : TestRule {
      * @param stableIterations Minimum number of iterations to observe as stable before assuming
      *   stability, and completing profile generation.
      * @param outputFilePrefix An optional file name prefix used when creating the output file with
-     *   the contents of the human readable baseline profile. For example:
+     *   the contents of the human-readable baseline profile. For example:
      *   `outputFilePrefix-baseline-prof.txt`
      * @param includeInStartupProfile determines whether the generated profile should be also used
      *   as a startup profile. A startup profile is utilized during the build process in order to
@@ -81,7 +81,7 @@ class BaselineProfileRule : TestRule {
      * @param [profileBlock] defines the critical user journey.
      */
     @JvmOverloads
-    fun collect(
+    public fun collect(
         packageName: String,
         maxIterations: Int = 15,
         stableIterations: Int = 3,
@@ -112,7 +112,7 @@ class BaselineProfileRule : TestRule {
      * @param stableIterations Minimum number of iterations to observe as stable before assuming
      *   stability, and completing profile generation.
      * @param outputFilePrefix An optional file name prefix used when creating the output file with
-     *   the contents of the human readable baseline profile. For example:
+     *   the contents of the human-readable baseline profile. For example:
      *   `outputFilePrefix-baseline-prof.txt`
      * @param includeInStartupProfile determines whether the generated profile should be also used
      *   as a startup profile. A startup profile is utilized during the build process in order to
@@ -170,6 +170,8 @@ class BaselineProfileRule : TestRule {
             strictStability = config.isStrictStability(),
             filterPredicate = config.getFilterPredicate(),
             profileBlock = config.getProfileBlock(),
+            maxLoadOrderIterations = config.getMaxLoadOrderIterations(),
+            restrictLoadOrderToDataDirectory = config.isRestrictLoadOrderToDataDirectory(),
         )
     }
 

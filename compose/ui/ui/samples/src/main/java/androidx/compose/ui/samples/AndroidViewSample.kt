@@ -34,7 +34,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -57,7 +58,7 @@ fun AndroidViewSample() {
     // Compose a TextView.
     AndroidView({ context -> TextView(context).apply { text = "This is a TextView" } })
     // Compose a View and update its size based on state. Note the modifiers.
-    var size by remember { mutableStateOf(20) }
+    var size by remember { mutableIntStateOf(20) }
     AndroidView(::View, Modifier.clickable { size += 20 }.background(Color.Blue)) { view ->
         view.layoutParams = ViewGroup.LayoutParams(size, size)
     }
@@ -129,7 +130,8 @@ fun ReusableAndroidViewInLazyColumnSample() {
 @Sampled
 @Composable
 fun AndroidDrawableInDrawScopeSample() {
-    val drawable = LocalContext.current.getDrawable(R.drawable.sample_drawable)
+    val drawable =
+        LocalResources.current.getDrawable(R.drawable.sample_drawable, LocalContext.current.theme)
     Box(
         modifier =
             Modifier.requiredSize(100.dp).drawBehind {

@@ -19,10 +19,12 @@
 package androidx.compose.foundation.text
 
 import androidx.compose.foundation.ComposeFoundationFlags
+import androidx.compose.foundation.ComposeFoundationFlags.isBasicTextFieldSizeOptimizationEnabled
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.Interaction
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
@@ -30,6 +32,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.handwriting.stylusHandwriting
 import androidx.compose.foundation.text.input.internal.CoreTextFieldSemanticsModifier
+import androidx.compose.foundation.text.input.internal.HeightForSingleLineFieldProvider
 import androidx.compose.foundation.text.input.internal.createLegacyPlatformTextInputServiceAdapter
 import androidx.compose.foundation.text.input.internal.legacyTextInputAdapter
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
@@ -90,6 +93,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLocaleList
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -110,8 +114,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TextInputService
 import androidx.compose.ui.text.input.TextInputSession
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastRoundToInt
@@ -216,6 +222,7 @@ internal fun CoreTextField(
     // CompositionLocals
     val density = LocalDensity.current
     val fontFamilyResolver = LocalFontFamilyResolver.current
+    val localeList = LocalLocaleList.current
     val selectionBackgroundColor = LocalTextSelectionColors.current.backgroundColor
     val focusManager = LocalFocusManager.current
     val windowInfo = LocalWindowInfo.current
@@ -262,6 +269,7 @@ internal fun CoreTextField(
                     softWrap = softWrap,
                     density = density,
                     fontFamilyResolver = fontFamilyResolver,
+                    defaultLocaleList = localeList,
                 ),
                 recomposeScope = scope,
                 keyboardController = keyboardController,
@@ -274,6 +282,7 @@ internal fun CoreTextField(
         softWrap,
         density,
         fontFamilyResolver,
+        localeList,
         onValueChange,
         keyboardActions,
         focusManager,
@@ -305,7 +314,10 @@ internal fun CoreTextField(
     @OptIn(ExperimentalFoundationApi::class)
     if (ComposeFoundationFlags.isSmartSelectionEnabled) {
         manager.platformSelectionBehaviors =
-            rememberPlatformSelectionBehaviors(SelectedTextType.EditableText, textStyle.localeList)
+            rememberPlatformSelectionBehaviors(
+                SelectedTextType.EditableText,
+                textStyle.localeList ?: LocalLocaleList.current,
+            )
     }
 
     rememberClipboardEventsHandler(
@@ -393,59 +405,42 @@ internal fun CoreTextField(
             offsetMapping,
         )
 
-    val drawModifier =
-        Modifier.drawBehind {
-            state.layoutResult?.let { layoutResult ->
-                drawIntoCanvas { canvas ->
-                    TextFieldDelegate.draw(
-                        canvas,
-                        value,
-                        state.selectionPreviewHighlightRange,
-                        state.deletionPreviewHighlightRange,
-                        offsetMapping,
-                        layoutResult.value,
-                        state.highlightPaint,
-                        state.selectionBackgroundColor,
-                    )
-                }
-            }
-        }
+    val drawModifier = Modifier.textFieldDraw(state, value, offsetMapping)
 
-    val onPositionedModifier =
-        Modifier.onGloballyPositioned {
-            state.layoutCoordinates = it
-            state.layoutResult?.innerTextFieldCoordinates = it
-            if (enabled) {
-                if (state.handleState == HandleState.Selection) {
-                    if (state.showFloatingToolbar && windowInfo.isWindowFocused) {
-                        manager.showSelectionToolbar()
-                    } else {
-                        manager.hideSelectionToolbar()
-                    }
-                    state.showSelectionHandleStart =
-                        manager.isSelectionHandleInVisibleBound(isStartHandle = true)
-                    state.showSelectionHandleEnd =
-                        manager.isSelectionHandleInVisibleBound(isStartHandle = false)
-                    state.showCursorHandle = value.selection.collapsed
-                } else if (state.handleState == HandleState.Cursor) {
-                    state.showCursorHandle =
-                        manager.isSelectionHandleInVisibleBound(isStartHandle = true)
+    val onPositionedModifier = Modifier.onGloballyPositioned {
+        state.layoutCoordinates = it
+        state.layoutResult?.innerTextFieldCoordinates = it
+        if (enabled) {
+            if (state.handleState == HandleState.Selection) {
+                if (state.showFloatingToolbar && windowInfo.isWindowFocused) {
+                    manager.showSelectionToolbar()
+                } else {
+                    manager.hideSelectionToolbar()
                 }
-                notifyFocusedRect(state, value, offsetMapping)
-                state.layoutResult?.let { layoutResult ->
-                    state.inputSession?.let { inputSession ->
-                        if (state.hasFocus) {
-                            TextFieldDelegate.updateTextLayoutResult(
-                                inputSession,
-                                value,
-                                offsetMapping,
-                                layoutResult,
-                            )
-                        }
+                state.showSelectionHandleStart =
+                    manager.isSelectionHandleInVisibleBound(isStartHandle = true)
+                state.showSelectionHandleEnd =
+                    manager.isSelectionHandleInVisibleBound(isStartHandle = false)
+                state.showCursorHandle = value.selection.collapsed
+            } else if (state.handleState == HandleState.Cursor) {
+                state.showCursorHandle =
+                    manager.isSelectionHandleInVisibleBound(isStartHandle = true)
+            }
+            notifyFocusedRect(state, value, offsetMapping)
+            state.layoutResult?.let { layoutResult ->
+                state.inputSession?.let { inputSession ->
+                    if (state.hasFocus) {
+                        TextFieldDelegate.updateTextLayoutResult(
+                            inputSession,
+                            value,
+                            offsetMapping,
+                            layoutResult,
+                        )
                     }
                 }
             }
         }
+    }
 
     val isPassword = visualTransformation is PasswordVisualTransformation
     val semanticsModifier =
@@ -463,7 +458,8 @@ internal fun CoreTextField(
         )
 
     val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.hasHighlight()
-    val cursorModifier = Modifier.cursor(state, value, offsetMapping, cursorBrush, showCursor)
+    val cursorModifier =
+        Modifier.textFieldCursor(state, value, offsetMapping, cursorBrush, showCursor)
 
     DisposableEffect(manager) { onDispose { manager.hideSelectionToolbar() } }
 
@@ -522,15 +518,14 @@ internal fun CoreTextField(
             color = LocalAutofillHighlightColor.current,
             defaultColor = autofillHighlightColor(),
         )
-    val drawDecorationModifier =
-        Modifier.drawWithContent {
-            drawContent()
-            // Autofill highlight is drawn on top of the content — this way the coloring appears
-            // over any Material background applied.
-            if (state.autofillHighlightOn || state.justAutofilled) {
-                drawRect(brush = autofillHighlightBrush)
-            }
+    val drawDecorationModifier = Modifier.drawWithContent {
+        drawContent()
+        // Autofill highlight is drawn on top of the content — this way the coloring appears
+        // over any Material background applied.
+        if (state.autofillHighlightOn || state.justAutofilled) {
+            drawRect(brush = autofillHighlightBrush)
         }
+    }
 
     val overscrollEffect = rememberTextFieldOverscrollEffect()
 
@@ -550,6 +545,7 @@ internal fun CoreTextField(
             .then(semanticsModifier)
             .onGloballyPositioned @DontMemoize { state.layoutResult?.decorationBoxCoordinates = it }
             .addContextMenuComponents(manager, coroutineScope)
+            .textFieldOverlay(state, imeOptions, interactionSource)
 
     val showHandleAndMagnifier =
         enabled && state.hasFocus && state.isInTouchMode && windowInfo.isWindowFocused
@@ -560,26 +556,59 @@ internal fun CoreTextField(
             Modifier
         }
 
+    @OptIn(ExperimentalFoundationApi::class)
     CoreTextFieldRootBox(decorationBoxModifier, manager) {
         decorationBox {
             // Modifiers applied directly to the internal input field implementation. In general,
             // these will most likely include draw, layout and IME related modifiers.
+            val sizingModifier =
+                if (isBasicTextFieldSizeOptimizationEnabled) {
+                    Modifier.textFieldSize(
+                        textStyle = textStyle,
+                        singleLineHeightProvider = state,
+                        minLines = minLines,
+                        maxLines = maxLines,
+                        // in legacy code heightForSingleLineField was calculated for
+                        // `maxLines == 1` instead of a more narrow `isSingleLine` check.
+                        useSingleLineHeightProvider = maxLines == 1,
+                        unboundedWidth = singleLine,
+                    )
+                } else {
+                    Modifier
+                        // min height is set for maxLines == 1 in order to prevent text cuts for
+                        // single
+                        // line
+                        // TextFields
+                        .run {
+                            val height = state.heightForSingleLineField
+                            heightIn(
+                                min = height,
+                                max = if (height == 0.dp) Dp.Unspecified else height,
+                            )
+                        }
+                        .heightInLines(
+                            textStyle = textStyle,
+                            minLines = minLines,
+                            maxLines = maxLines,
+                            softWrap = softWrap,
+                        )
+                }
             val coreTextFieldModifier =
-                Modifier
-                    // min height is set for maxLines == 1 in order to prevent text cuts for single
-                    // line
-                    // TextFields
-                    .heightIn(min = state.minHeightForSingleLineField)
-                    .heightInLines(textStyle = textStyle, minLines = minLines, maxLines = maxLines)
+                sizingModifier
                     .textFieldScroll(
                         scrollerPosition = scrollerPosition,
                         textFieldValue = value,
                         visualTransformation = visualTransformation,
+                        overscrollEffect = overscrollEffect,
                         textLayoutResultProvider = { state.layoutResult },
                     )
                     .then(cursorModifier)
                     .then(drawModifier)
-                    .textFieldMinSize(textStyle)
+                    .then(
+                        if (!isBasicTextFieldSizeOptimizationEnabled)
+                            Modifier.textFieldMinSize(textStyle)
+                        else Modifier
+                    )
                     .then(onPositionedModifier)
                     .then(magnifierModifier)
                     .bringIntoViewRequester(bringIntoViewRequester)
@@ -593,8 +622,9 @@ internal fun CoreTextField(
                                 measurables: List<Measurable>,
                                 constraints: Constraints,
                             ): MeasureResult {
-                                val prevProxy =
-                                    Snapshot.withoutReadObservation { state.layoutResult }
+                                val prevProxy = Snapshot.withoutReadObservation {
+                                    state.layoutResult
+                                }
                                 val prevResult = prevProxy?.value
                                 val (width, height, result) =
                                     TextFieldDelegate.layout(
@@ -603,6 +633,11 @@ internal fun CoreTextField(
                                         layoutDirection,
                                         prevResult,
                                     )
+
+                                // ensure measure restarts
+                                // when hasStaleResolvedFonts by reading in measure
+                                result.multiParagraph.intrinsics.hasStaleResolvedFonts
+
                                 if (prevResult != result) {
                                     state.layoutResult =
                                         TextLayoutResultProxy(
@@ -610,6 +645,21 @@ internal fun CoreTextField(
                                             decorationBoxCoordinates =
                                                 prevProxy?.decorationBoxCoordinates,
                                         )
+                                    val showCursor =
+                                        manager.enabled &&
+                                            manager.editable &&
+                                            windowInfo.isWindowFocused &&
+                                            !state.hasHighlight()
+                                    if (
+                                        showCursor &&
+                                            state.hasFocus &&
+                                            prevResult?.layoutInput?.text != result.layoutInput.text
+                                    ) {
+                                        coroutineScope.launch {
+                                            val cursorRect = manager.getCursorRect()
+                                            bringIntoViewRequester.bringIntoView(cursorRect)
+                                        }
+                                    }
                                     onTextLayout(result)
                                     notifyFocusedRect(state, value, offsetMapping)
                                 }
@@ -621,7 +671,7 @@ internal fun CoreTextField(
                                 // constant characters therefore if the user enters a character that
                                 // is
                                 // longer (i.e. emoji or a tall script) the text is cut
-                                state.minHeightForSingleLineField =
+                                state.heightForSingleLineField =
                                     with(density) {
                                         when (maxLines) {
                                             1 -> result.getLineBottom(0).ceilToIntPx()
@@ -741,7 +791,7 @@ internal class LegacyTextFieldState(
     var textDelegate: TextDelegate,
     val recomposeScope: RecomposeScope,
     val keyboardController: SoftwareKeyboardController?,
-) {
+) : HeightForSingleLineFieldProvider {
     val processor = EditProcessor()
     var inputSession: TextInputSession? = null
 
@@ -752,7 +802,7 @@ internal class LegacyTextFieldState(
     var hasFocus by mutableStateOf(false)
 
     /** Set to a non-zero value for single line TextFields in order to prevent text cuts. */
-    var minHeightForSingleLineField by mutableStateOf(0.dp)
+    override var heightForSingleLineField by mutableStateOf(0.dp)
 
     /**
      * The last layout coordinates for the inner text field LayoutNode, used by selection and
@@ -910,6 +960,7 @@ internal class LegacyTextFieldState(
         softWrap: Boolean,
         density: Density,
         fontFamilyResolver: FontFamily.Resolver,
+        defaultLocaleList: LocaleList,
         onValueChange: (TextFieldValue) -> Unit,
         keyboardActions: KeyboardActions,
         focusManager: FocusManager,
@@ -931,6 +982,7 @@ internal class LegacyTextFieldState(
                 softWrap = softWrap,
                 density = density,
                 fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
                 placeholders = emptyList(),
             )
 
@@ -1019,6 +1071,7 @@ internal suspend fun BringIntoViewRequester.bringSelectionEndIntoView(
                         textDelegate.style,
                         textDelegate.density,
                         textDelegate.fontFamilyResolver,
+                        textDelegate.defaultLocaleList,
                     )
                 Rect(0f, 0f, 1.0f, defaultSize.height.toFloat())
             }
@@ -1106,6 +1159,69 @@ internal fun TextFieldCursorHandle(manager: TextFieldSelectionManager) {
     }
 }
 
+/**
+ * Applies a modifier to a text field to handle cursor rendering.
+ *
+ * The default common implementation provided in [cursor].
+ *
+ * @param state The state representing the internal configuration and status of the text field.
+ * @param value The current value of the text field including text and selection information.
+ * @param offsetMapping Maps character offsets between the visual text and the composable's internal
+ *   representation.
+ * @param cursorBrush The brush used to draw the cursor, allowing customization of its appearance.
+ * @param showCursor A flag indicating whether the cursor should be visible.
+ * @return A [Modifier] that applies the cursor functionality to the text field.
+ */
+internal expect fun Modifier.textFieldCursor(
+    state: LegacyTextFieldState,
+    value: TextFieldValue,
+    offsetMapping: OffsetMapping,
+    cursorBrush: Brush,
+    showCursor: Boolean,
+): Modifier
+
+/**
+ * Applies drawing behavior for a text field on the given [Modifier].
+ *
+ * This function modifies the provided [Modifier] to include logic for rendering visual aspects of a
+ * composable text field: text, text selection highlight and selection and deletion preview
+ * highlight
+ *
+ * The default common implementation is stored in [defaultTextFieldDraw]
+ *
+ * @param state The state object managing the internal state of the legacy text field.
+ * @param value The current text field value, including the text content and selection info.
+ * @param offsetMapping A mapping between character offsets and visual cursor positions.
+ * @return A [Modifier] instance that includes the text field drawing behavior.
+ */
+internal expect fun Modifier.textFieldDraw(
+    state: LegacyTextFieldState,
+    value: TextFieldValue,
+    offsetMapping: OffsetMapping,
+): Modifier
+
+internal fun Modifier.defaultTextFieldDraw(
+    state: LegacyTextFieldState,
+    value: TextFieldValue,
+    offsetMapping: OffsetMapping,
+): Modifier =
+    this.drawBehind {
+        state.layoutResult?.let { layoutResult ->
+            drawIntoCanvas { canvas ->
+                TextFieldDelegate.draw(
+                    canvas,
+                    value,
+                    state.selectionPreviewHighlightRange,
+                    state.deletionPreviewHighlightRange,
+                    offsetMapping,
+                    layoutResult.value,
+                    state.highlightPaint,
+                    state.selectionBackgroundColor,
+                )
+            }
+        }
+    }
+
 @Composable
 internal expect fun CursorHandle(
     offsetProvider: OffsetProvider,
@@ -1146,3 +1262,15 @@ private fun Modifier.addContextMenuComponents(
     if (ComposeFoundationFlags.isNewContextMenuEnabled)
         addBasicTextFieldTextContextMenuComponents(textFieldSelectionManager, coroutineScope)
     else this
+
+/**
+ * A modifier that can be used to determine the location and state of the text field. It is used on
+ * multiplatform, where knowledge of the text field's state and location is required in order to
+ * support platform-dependent features such as VoiceOver or Autofill (password autofill, one-time
+ * codes, etc.).
+ */
+internal expect fun Modifier.textFieldOverlay(
+    state: LegacyTextFieldState,
+    imeOptions: ImeOptions,
+    interactionSource: InteractionSource?,
+): Modifier

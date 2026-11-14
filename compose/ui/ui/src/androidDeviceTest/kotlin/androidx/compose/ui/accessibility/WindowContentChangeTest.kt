@@ -40,14 +40,13 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.TestActivity
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Correspondence
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -56,7 +55,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class WindowContentChangeTest {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     private lateinit var androidComposeView: AndroidComposeView
     private val dispatchedAccessibilityEvents = mutableListOf<AccessibilityEvent>()
@@ -328,8 +327,10 @@ class WindowContentChangeTest {
                         actual.scrollY == expected.scrollY &&
                         actual.maxScrollX == expected.maxScrollX &&
                         actual.maxScrollY == expected.maxScrollY &&
-                        (SDK_INT < P || actual.scrollDeltaX == expected.scrollDeltaX) &&
-                        (SDK_INT < P || actual.scrollDeltaY == expected.scrollDeltaY) &&
+                        // Prior to API 30 (R), AccessibilityRecord.clear() does not reset
+                        // mScrollDeltaX/Y when AccessibilityEvents are recycled into sPool.
+                        (SDK_INT < R || actual.scrollDeltaX == expected.scrollDeltaX) &&
+                        (SDK_INT < R || actual.scrollDeltaY == expected.scrollDeltaY) &&
                         actual.addedCount == expected.addedCount &&
                         actual.removedCount == expected.removedCount &&
                         actual.parcelableData == expected.parcelableData &&

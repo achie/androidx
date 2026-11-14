@@ -16,10 +16,10 @@
 
 package androidx.compose.foundation.lazy.layout
 
+import androidx.collection.MutableObjectList
+import androidx.collection.mutableObjectListOf
 import androidx.compose.foundation.internal.requirePrecondition
 import androidx.compose.foundation.internal.throwIndexOutOfBoundsException
-import androidx.compose.runtime.collection.MutableVector
-import androidx.compose.runtime.collection.mutableVectorOf
 
 /**
  * The list consisting of multiple intervals.
@@ -34,7 +34,7 @@ import androidx.compose.runtime.collection.mutableVectorOf
  * Note: this class is a part of [LazyLayout] harness that allows for building custom lazy layouts.
  * LazyLayout and all corresponding APIs are still under development and are subject to change.
  */
-sealed interface IntervalList<out T> {
+public sealed interface IntervalList<out T> {
 
     /**
      * The total amount of items in all the intervals.
@@ -42,14 +42,14 @@ sealed interface IntervalList<out T> {
      * Note that it is not the amount of intervals, but the sum of [Interval.size] for all the
      * intervals added into this list.
      */
-    val size: Int
+    public val size: Int
 
     /**
      * Returns the interval containing the given [index].
      *
      * @throws IndexOutOfBoundsException if the index is not within 0..[size] - 1 range.
      */
-    operator fun get(index: Int): Interval<T>
+    public operator fun get(index: Int): Interval<T>
 
     /**
      * Iterates through all the intervals starting from the one containing [fromIndex] until the one
@@ -61,21 +61,21 @@ sealed interface IntervalList<out T> {
      * @param block will be invoked on each interval within the defined indexes
      * @throws IndexOutOfBoundsException if the indexes are not within 0..[size] - 1 range.
      */
-    fun forEach(fromIndex: Int = 0, toIndex: Int = size - 1, block: (Interval<T>) -> Unit)
+    public fun forEach(fromIndex: Int = 0, toIndex: Int = size - 1, block: (Interval<T>) -> Unit)
 
     /**
      * The interval holder.
      *
      * @see get
      */
-    class Interval<out T>
+    public class Interval<out T>
     internal constructor(
         /** The index of the first item in the interval. */
-        val startIndex: Int,
+        public val startIndex: Int,
         /** The amount of items in the interval. */
-        val size: Int,
+        public val size: Int,
         /** The value representing this interval. */
-        val value: T,
+        public val value: T,
     ) {
         init {
             requirePrecondition(startIndex >= 0) { "startIndex should be >= 0" }
@@ -90,10 +90,10 @@ sealed interface IntervalList<out T> {
  * Note: this class is a part of [LazyLayout] harness that allows for building custom lazy layouts.
  * LazyLayout and all corresponding APIs are still under development and are subject to change.
  */
-class MutableIntervalList<T> : IntervalList<T> {
-    private val intervals = mutableVectorOf<IntervalList.Interval<T>>()
+public class MutableIntervalList<T> : IntervalList<T> {
+    private val intervals = mutableObjectListOf<IntervalList.Interval<T>>()
 
-    override var size = 0
+    override var size: Int = 0
         private set
 
     /**
@@ -108,7 +108,7 @@ class MutableIntervalList<T> : IntervalList<T> {
      * @param size the amount of items in the new interval.
      * @param value the value representing this interval.
      */
-    fun addInterval(size: Int, value: T) {
+    public fun addInterval(size: Int, value: T) {
         requirePrecondition(size >= 0) { "size should be >=0" }
         if (size == 0) {
             return
@@ -175,29 +175,7 @@ class MutableIntervalList<T> : IntervalList<T> {
  * Finds the index of the interval which contains the highest value of
  * [IntervalList.Interval.startIndex] that is less than or equal to the given [itemIndex].
  */
-private fun <T> MutableVector<IntervalList.Interval<T>>.binarySearch(itemIndex: Int): Int {
-    var left = 0
-    var right = lastIndex
-
-    while (left < right) {
-        val middle = left + (right - left) / 2
-
-        val middleValue = get(middle).startIndex
-        if (middleValue == itemIndex) {
-            return middle
-        }
-
-        if (middleValue < itemIndex) {
-            left = middle + 1
-
-            // Verify that the left will not be bigger than our value
-            if (itemIndex < get(left).startIndex) {
-                return middle
-            }
-        } else {
-            right = middle - 1
-        }
-    }
-
-    return left
+private fun <T> MutableObjectList<IntervalList.Interval<T>>.binarySearch(itemIndex: Int): Int {
+    val result = binarySearchBy(itemIndex) { it.startIndex }
+    return if (result >= 0) result else -result - 2
 }

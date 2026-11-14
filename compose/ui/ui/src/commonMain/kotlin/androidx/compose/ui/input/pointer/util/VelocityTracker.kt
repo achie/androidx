@@ -30,6 +30,9 @@ import kotlin.math.sqrt
 private const val AssumePointerMoveStoppedMilliseconds: Int = 40
 private const val HistorySize: Int = 20
 
+// Minimum number of samples needed to calculate a velocity, for all strategies.
+private const val MinSampleSize: Int = 2
+
 // TODO(b/204895043): Keep value in sync with VelocityPathFinder.HorizonMilliSeconds
 private const val HorizonMilliseconds: Int = 100
 
@@ -45,8 +48,7 @@ private const val HorizonMilliseconds: Int = 100
  *
  * The quality of the velocity estimation will be better if more data points have been received.
  */
-@OptIn(ExperimentalVelocityTrackerApi::class)
-class VelocityTracker {
+public class VelocityTracker {
     internal val platformVelocityTracker = PlatformVelocityTracker()
 
     /**
@@ -59,7 +61,7 @@ class VelocityTracker {
     // TODO(shepshapard): VelocityTracker needs to be updated to be passed vectors instead of
     //   positions. For velocity tracking, the only thing that is important is the change in
     //   position over time.
-    fun addPosition(timeMillis: Long, position: Offset) =
+    public fun addPosition(timeMillis: Long, position: Offset): Unit =
         platformVelocityTracker.addPosition(timeMillis, position)
 
     /**
@@ -70,7 +72,7 @@ class VelocityTracker {
      *
      * This can be expensive. Only call this when you need the velocity.
      */
-    fun calculateVelocity(): Velocity =
+    public fun calculateVelocity(): Velocity =
         calculateVelocity(Velocity(Float.MAX_VALUE, Float.MAX_VALUE))
 
     /**
@@ -85,11 +87,11 @@ class VelocityTracker {
      * @param maximumVelocity the absolute values of the X and Y maximum velocities to be returned
      *   in units/second. `units` is the units of the positions provided to this VelocityTracker.
      */
-    fun calculateVelocity(maximumVelocity: Velocity): Velocity =
+    public fun calculateVelocity(maximumVelocity: Velocity): Velocity =
         platformVelocityTracker.calculateVelocity(maximumVelocity)
 
     /** Clears the tracked positions added by [addPosition]. */
-    fun resetTracking() = platformVelocityTracker.resetTracking()
+    public fun resetTracking(): Unit = platformVelocityTracker.resetTracking()
 }
 
 /**
@@ -107,7 +109,7 @@ class VelocityTracker {
  * @param event Pointer change to track.
  */
 @OptIn(ExperimentalComposeUiApi::class)
-fun VelocityTracker.addPointerInputChange(event: PointerInputChange) =
+public fun VelocityTracker.addPointerInputChange(event: PointerInputChange): Unit =
     addPointerInputChange(event, Offset.Zero)
 
 /**
@@ -127,7 +129,7 @@ fun VelocityTracker.addPointerInputChange(event: PointerInputChange) =
  *   adding it to the tracker.
  */
 @OptIn(ExperimentalComposeUiApi::class)
-fun VelocityTracker.addPointerInputChange(event: PointerInputChange, offset: Offset) =
+public fun VelocityTracker.addPointerInputChange(event: PointerInputChange, offset: Offset): Unit =
     platformVelocityTracker.addPointerInputChange(event, offset)
 
 /**
@@ -138,13 +140,13 @@ fun VelocityTracker.addPointerInputChange(event: PointerInputChange, offset: Off
  * Note: for calculating touch-related or other 2 dimensional/planar velocities, please use
  * [VelocityTracker], which handles velocity tracking across both X and Y dimensions at once.
  */
-class VelocityTracker1D
+public class VelocityTracker1D
 internal constructor(
     // whether the data points added to the tracker represent differential values
     // (i.e. change in the  tracked object's displacement since the previous data point).
     // If false, it means that the data points added to the tracker will be considered as absolute
     // values (e.g. positional values).
-    val isDataDifferential: Boolean = false,
+    public val isDataDifferential: Boolean = false,
     // The velocity tracking strategy that this instance uses for all velocity calculations.
     private val strategy: Strategy = Strategy.Lsq2,
 ) {
@@ -171,16 +173,10 @@ internal constructor(
      * data points is when tracking velocity for an object whose positions on a geometrical axis
      * over different instances of time are known.
      *
-     * @param isDataDifferential [true] if the data ponits provided to the constructed tracker are
-     *   differential. [false] otherwise.
+     * @param isDataDifferential `true` if the data ponits provided to the constructed tracker are
+     *   differential. `false` otherwise.
      */
-    constructor(isDataDifferential: Boolean) : this(isDataDifferential, Strategy.Impulse)
-
-    private val minSampleSize: Int =
-        when (strategy) {
-            Strategy.Impulse -> 2
-            Strategy.Lsq2 -> 3
-        }
+    public constructor(isDataDifferential: Boolean) : this(isDataDifferential, Strategy.Impulse)
 
     /**
      * A strategy used for velocity calculation. Each strategy has a different philosophy that could
@@ -223,7 +219,7 @@ internal constructor(
      * and some in `m` will result in incorrect velocity calculations, as this method (and the
      * tracker) has no knowledge of the units used.
      */
-    fun addDataPoint(timeMillis: Long, dataPoint: Float) {
+    public fun addDataPoint(timeMillis: Long, dataPoint: Float) {
         index = (index + 1) % HistorySize
         samples.set(index, timeMillis, dataPoint)
     }
@@ -236,7 +232,7 @@ internal constructor(
      *
      * This can be expensive. Only call this when you need the velocity.
      */
-    fun calculateVelocity(): Float {
+    public fun calculateVelocity(): Float {
         val dataPoints = reusableDataPointsArray
         val time = reusableTimeArray
         var sampleCount = 0
@@ -271,7 +267,7 @@ internal constructor(
             sampleCount += 1
         } while (sampleCount < HistorySize)
 
-        if (sampleCount >= minSampleSize) {
+        if (sampleCount >= MinSampleSize) {
             // Choose computation logic based on strategy.
             return when (strategy) {
                 Strategy.Impulse -> {
@@ -300,7 +296,7 @@ internal constructor(
      * @param maximumVelocity the absolute value of the maximum velocity to be returned in
      *   units/second, where `units` is the units of the positions provided to this VelocityTracker.
      */
-    fun calculateVelocity(maximumVelocity: Float): Float {
+    public fun calculateVelocity(maximumVelocity: Float): Float {
         checkPrecondition(maximumVelocity > 0f) {
             "maximumVelocity should be a positive value. You specified=$maximumVelocity"
         }
@@ -316,7 +312,7 @@ internal constructor(
     }
 
     /** Clears data points added by [addDataPoint]. */
-    fun resetTracking() {
+    public fun resetTracking() {
         samples.fill(element = null)
         index = 0
     }
@@ -500,10 +496,10 @@ internal fun polyFitLeastSquares(
  * Summing along the path, we get: W = sum(dW) = sum(m * v * dv) = m * sum(v * dv) Since the mass
  * stays constant, the equation for final velocity is: vfinal = sqrt(2*sum(v * dv))
  *
- * Here, dv : change of velocity = (v[i+1]-v[i]) dx : change of distance = (x[i+1]-x[i]) dt : change
- * of time = (t[i+1]-t[i]) v : instantaneous velocity = dx/dt
+ * Here, dv : change of velocity = `(v[i+1]-v[i])` dx : change of distance = `(x[i+1]-x[i])` dt :
+ * change of time = `(t[i+1]-t[i])` v : instantaneous velocity = dx/dt
  *
- * The final formula is: vfinal = sqrt(2) * sqrt(sum((v[i]-v[i-1])*|v[i]|)) for all i The absolute
+ * The final formula is: vfinal = `sqrt(2) * sqrt(sum((v[i]-v[i-1])*|v[i]|))` for all i The absolute
  * value is needed to properly account for the sign. If the velocity over a particular segment
  * descreases, then this indicates braking, which means that negative work was done. So for two
  * positive, but decreasing, velocities, this contribution would be negative and will cause a
@@ -599,22 +595,3 @@ private inline operator fun Matrix.get(row: Int, col: Int): Float = this[row][co
 private inline operator fun Matrix.set(row: Int, col: Int, value: Float) {
     this[row][col] = value
 }
-
-/**
- * A flag to indicate that we'll use the fix of how we add points to the velocity tracker.
- *
- * This is an experiment flag and will be removed once the experiments with the fix a finished. The
- * final goal is that we will use the true path once the flag is removed. If you find any issues
- * with the new fix, flip this flag to false to confirm they are newly introduced then file a bug.
- * Tracking bug: (b/318621681)
- */
-@Suppress("GetterSetterNames")
-@ExperimentalComposeUiApi
-var VelocityTrackerAddPointsFix: Boolean = true
-
-@RequiresOptIn(
-    "This an opt-in flag to test the Velocity Tracker strategy algorithm used " +
-        "for calculating gesture velocities in Compose."
-)
-@Retention(AnnotationRetention.BINARY)
-annotation class ExperimentalVelocityTrackerApi

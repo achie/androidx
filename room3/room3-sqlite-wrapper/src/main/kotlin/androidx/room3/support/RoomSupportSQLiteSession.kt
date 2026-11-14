@@ -27,13 +27,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.getOrSet
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.InternalForInheritanceCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
@@ -96,18 +96,17 @@ internal class RoomSupportSQLiteSession(val roomDatabase: RoomDatabase) {
     }
 
     fun beginTransaction(type: SQLiteTransactionType, listener: SQLiteTransactionListener? = null) {
-        val currentTransaction =
-            threadTransaction.getOrSet {
-                try {
-                    threadWaiters.incrementAndGet()
-                    ThreadTransaction.acquire(roomDatabase, type).also {
-                        threadTransaction.set(it)
-                        threadTransactionContext.set(it.getCoroutineContext())
-                    }
-                } finally {
-                    threadWaiters.decrementAndGet()
+        val currentTransaction = threadTransaction.getOrSet {
+            try {
+                threadWaiters.incrementAndGet()
+                ThreadTransaction.acquire(roomDatabase, type).also {
+                    threadTransaction.set(it)
+                    threadTransactionContext.set(it.getCoroutineContext())
                 }
+            } finally {
+                threadWaiters.decrementAndGet()
             }
+        }
         currentTransaction.begin(listener)
         try {
             currentTransaction.listener?.onBegin()
@@ -237,7 +236,8 @@ private constructor(
         }
 
     fun getCoroutineContext(): CoroutineContext {
-        return connectionContext
+        // Minus the dispatcher
+        return connectionContext.minusKey(ContinuationInterceptor)
     }
 
     fun begin(listener: SQLiteTransactionListener?) {
@@ -269,20 +269,19 @@ private constructor(
     }
 
     /**
-     * A [CompletableDeferred] that also awaits for the [latch] which is only released when the
-     * transaction coroutine is completed.
+     * A holder of a [CompletableDeferred] that also awaits for the [latch] which is only released
+     * when the transaction coroutine is completed.
      *
-     * @property delegate The actual [CompletableDeferred] that once completed will release the
-     *   active transaction coroutine.
+     * @property completable The [CompletableDeferred] that once completed will release the active
+     *   transaction coroutine.
      * @property latch The latch to await for the completion of the transaction coroutine.
      */
-    @OptIn(InternalForInheritanceCoroutinesApi::class)
     private class TransactionCompletable(
-        private val delegate: CompletableDeferred<Boolean>,
+        private val completable: CompletableDeferred<Boolean>,
         private val latch: CountDownLatch,
-    ) : CompletableDeferred<Boolean> by delegate {
-        override fun complete(value: Boolean): Boolean {
-            check(delegate.complete(value))
+    ) {
+        fun complete(value: Boolean): Boolean {
+            check(completable.complete(value))
             latch.await()
             return true
         }
@@ -300,47 +299,52 @@ private constructor(
 
     companion object {
         fun acquire(db: RoomDatabase, type: SQLiteTransactionType): ThreadTransaction {
-            val transactionFuture =
-                CallbackToFutureAdapter.getFuture { completer ->
-                    // a latch to wait (blocking) for the coroutine to finish
-                    val completionLatch = CountDownLatch(1)
-                    val transactionBlock: suspend (Transactor) -> Unit = {
-                        it.withTransaction(type) {
-                            // a completable to commit or rollback the transaction
-                            val successSignal = CompletableDeferred<Boolean>()
-                            // the transaction object that will be stored in a thread local
-                            val threadTransaction =
-                                ThreadTransaction(
-                                    type = type,
-                                    connectionContext = currentCoroutineContext(),
-                                    completable =
-                                        TransactionCompletable(successSignal, completionLatch),
-                                )
-                            completer.set(threadTransaction)
-                            val success = successSignal.await()
-                            if (!success) {
-                                rollback(Unit)
-                            }
+            val transactionFuture = CallbackToFutureAdapter.getFuture { completer ->
+                // a latch to wait (blocking) for the coroutine to finish
+                val completionLatch = CountDownLatch(1)
+                val transactionBlock: suspend (Transactor) -> Unit = {
+                    it.withTransaction(type) {
+                        // a completable to commit or rollback the transaction
+                        val successSignal = CompletableDeferred<Boolean>()
+                        // the transaction object that will be stored in a thread local
+                        val threadTransaction =
+                            ThreadTransaction(
+                                type = type,
+                                connectionContext = currentCoroutineContext(),
+                                completable =
+                                    TransactionCompletable(successSignal, completionLatch),
+                            )
+                        completer.set(threadTransaction)
+                        val success = successSignal.await()
+                        if (!success) {
+                            rollback(Unit)
                         }
                     }
-                    // launch a transaction coroutine that will be kept alive until the transaction
-                    // object ends.
-                    db.getCoroutineScope()
-                        .launch(
-                            Dispatchers.Unconfined + CoroutineName("RoomSupportSQLiteTransaction")
-                        ) {
-                            db.useConnection(
-                                isReadOnly = type == SQLiteTransactionType.DEFERRED,
-                                block = transactionBlock,
-                            )
-                        }
-                        .invokeOnCompletion { error ->
-                            if (error != null) {
-                                completer.setException(error)
-                            }
-                            completionLatch.countDown()
-                        }
                 }
+                // Launch a transaction coroutine that will be kept alive until the transaction
+                // object ends. The usage of the Unconfined dispatcher is on-purpose and quite
+                // delicate. It is to avoid thread hops on blocking wrapper APIs within a
+                // transaction. The proper solution would be to use a single thread dispatcher
+                // for drivers that are thread confined, but that kills performance. To avoid
+                // issues that could occur due to a driver suspending and resuming on another
+                // thread that does not have the active transaction, Room's
+                // PassthroughConnectionPool validates that a driver used with this transaction
+                // wrapper does not resume in a different thread during initialization. It is
+                // not perfect, but it's the best we have so far.
+                db.getCoroutineScope()
+                    .launch(Dispatchers.Unconfined + COROUTINE_NAME) {
+                        db.useConnection(
+                            isReadOnly = type == SQLiteTransactionType.DEFERRED,
+                            block = transactionBlock,
+                        )
+                    }
+                    .invokeOnCompletion { error ->
+                        if (error != null) {
+                            completer.setException(error)
+                        }
+                        completionLatch.countDown()
+                    }
+            }
             try {
                 // wait for the transaction coroutine to be started, this includes waiting for an
                 // available database connection to be acquired plus the start of the transaction
@@ -350,5 +354,8 @@ private constructor(
                 throw e.cause ?: IllegalStateException("Failed to begin transaction")
             }
         }
+
+        // *WARNING* : If this name is changed, revisit its usage in PassthroughConnectionPool.kt
+        private val COROUTINE_NAME = CoroutineName("RoomSupportSQLiteTransaction")
     }
 }

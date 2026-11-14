@@ -63,7 +63,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -80,7 +80,6 @@ import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -90,7 +89,7 @@ import org.junit.runner.RunWith
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class TextFieldFocusTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
     private val inputMethodInterceptor = InputMethodInterceptor(rule)
 
     private val testKeyboardController = TestSoftwareKeyboardController(rule)
@@ -99,6 +98,7 @@ class TextFieldFocusTest {
     private fun TextFieldApp(dataList: List<FocusTestData>) {
         for (data in dataList) {
             val editor = remember { mutableStateOf("") }
+            @Suppress("DEPRECATION") // b/552879150
             BasicTextField(
                 value = editor.value,
                 modifier =
@@ -117,12 +117,13 @@ class TextFieldFocusTest {
         lateinit var testDataList: List<FocusTestData>
 
         rule.setContent {
-            testDataList =
+            testDataList = remember {
                 listOf(
                     FocusTestData(FocusRequester()),
                     FocusTestData(FocusRequester()),
                     FocusTestData(FocusRequester()),
                 )
+            }
 
             TextFieldApp(testDataList)
         }
@@ -283,6 +284,7 @@ class TextFieldFocusTest {
                     focusRequester.requestFocus()
                 }
 
+                @Suppress("DEPRECATION") // b/552879150
                 BasicTextField(
                     value = "",
                     onValueChange = {},
@@ -369,6 +371,7 @@ class TextFieldFocusTest {
         testKeyboardController.assertShown()
     }
 
+    @SdkSuppress(minSdkVersion = 25) // b/538602207
     @Test
     fun basicTextField_checkFocusNavigation_onDPadLeft_hardwareKeyboard() {
         setupAndEnableBasicTextField()
@@ -388,6 +391,7 @@ class TextFieldFocusTest {
         rule.onNodeWithTag("test-text-field-1").assertSelection(TextRange(2))
     }
 
+    @SdkSuppress(minSdkVersion = 25) // b/538602207
     @Test
     fun basicTextField_checkFocusNavigation_onDPadRight_hardwareKeyboard() {
         setupAndEnableBasicTextField()
@@ -409,6 +413,7 @@ class TextFieldFocusTest {
         rule.onNodeWithTag("test-text-field-1").assertSelection(TextRange(1))
     }
 
+    @SdkSuppress(minSdkVersion = 25) // b/538602207
     @Test
     fun basicTextField_checkFocusNavigation_onDPadUp_hardwareKeyboard() {
         setupAndEnableBasicTextField()
@@ -428,6 +433,7 @@ class TextFieldFocusTest {
         rule.onNodeWithTag("test-text-field-1").assertSelection(TextRange(3))
     }
 
+    @SdkSuppress(minSdkVersion = 25) // b/538602207
     @Test
     fun basicTextField_checkFocusNavigation_onDPadDown_hardwareKeyboard() {
         setupAndEnableBasicTextField()
@@ -596,6 +602,7 @@ class TextFieldFocusTest {
         val focusRequester = remember { FocusRequester() }
         val modifier = if (requestFocus) Modifier.focusRequester(focusRequester) else Modifier
 
+        @Suppress("DEPRECATION") // b/552879150
         BasicTextField(
             value = textInput,
             onValueChange = { textInput = it },

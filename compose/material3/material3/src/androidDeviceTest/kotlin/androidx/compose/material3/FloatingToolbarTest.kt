@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -72,7 +73,7 @@ import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -87,8 +88,6 @@ import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
-import kotlinx.coroutines.test.StandardTestDispatcher
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,10 +95,9 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 class FloatingToolbarTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun horizontalFloatingToolbar_default_scrolledPositioning() {
@@ -134,22 +132,23 @@ class FloatingToolbarTest {
 
     @Test
     fun horizontalFloatingToolbar_custom_scrolledPositioning() {
-        val scrollBehavior =
-            ExitAlwaysFloatingToolbarScrollBehavior(
-                exitDirection = Bottom,
-                state =
-                    FloatingToolbarState(
-                        initialOffsetLimit = -Float.MAX_VALUE,
-                        initialOffset = 0f,
-                        initialContentOffset = 0f,
-                    ),
-                snapAnimationSpec = spring(),
-                flingAnimationSpec = splineBasedDecay<Float>(rule.density),
-            )
+        lateinit var scrollBehavior: FloatingToolbarScrollBehavior
         lateinit var colors: FloatingToolbarColors
 
         rule.setMaterialContent(lightColorScheme()) {
             colors = FloatingToolbarDefaults.standardFloatingToolbarColors()
+            scrollBehavior =
+                FloatingToolbarDefaults.exitAlwaysScrollBehavior(
+                    exitDirection = Bottom,
+                    state =
+                        FloatingToolbarState(
+                            initialOffsetLimit = -Float.MAX_VALUE,
+                            initialOffset = 0f,
+                            initialContentOffset = 0f,
+                        ),
+                    snapAnimationSpec = spring(),
+                    flingAnimationSpec = splineBasedDecay<Float>(rule.density),
+                )
             HorizontalFloatingToolbar(
                 modifier = Modifier.testTag(FloatingToolbarTestTag).offset(y = -ScreenOffset),
                 expanded = false,
@@ -225,22 +224,23 @@ class FloatingToolbarTest {
 
     @Test
     fun verticalFloatingToolbar_custom_scrolledPositioning() {
-        val scrollBehavior =
-            ExitAlwaysFloatingToolbarScrollBehavior(
-                exitDirection = End,
-                state =
-                    FloatingToolbarState(
-                        initialOffsetLimit = -Float.MAX_VALUE,
-                        initialOffset = 0f,
-                        initialContentOffset = 0f,
-                    ),
-                snapAnimationSpec = spring(),
-                flingAnimationSpec = splineBasedDecay<Float>(rule.density),
-            )
+        lateinit var scrollBehavior: FloatingToolbarScrollBehavior
         lateinit var colors: FloatingToolbarColors
 
         rule.setMaterialContent(lightColorScheme()) {
             colors = FloatingToolbarDefaults.standardFloatingToolbarColors()
+            scrollBehavior =
+                FloatingToolbarDefaults.exitAlwaysScrollBehavior(
+                    exitDirection = End,
+                    state =
+                        FloatingToolbarState(
+                            initialOffsetLimit = -Float.MAX_VALUE,
+                            initialOffset = 0f,
+                            initialContentOffset = 0f,
+                        ),
+                    snapAnimationSpec = spring(),
+                    flingAnimationSpec = splineBasedDecay<Float>(rule.density),
+                )
             VerticalFloatingToolbar(
                 modifier = Modifier.testTag(FloatingToolbarTestTag).offset(x = -ScreenOffset),
                 expanded = false,
@@ -1113,7 +1113,6 @@ class FloatingToolbarTest {
     }
 
     @Test
-    @Ignore("b/422764590")
     fun verticalFloatingToolbar_scrollBehavior() {
         rule.setMaterialContent(lightColorScheme()) {
             val scrollBehavior =
@@ -1121,7 +1120,11 @@ class FloatingToolbarTest {
             Scaffold(modifier = Modifier.nestedScroll(scrollBehavior).testTag(MainLayoutTag)) {
                 innerPadding ->
                 Box(Modifier.padding(innerPadding)) {
-                    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .testTag("Content")
+                    ) {
                         Text(text = remember { LoremIpsum().values.first() })
                     }
                     VerticalFloatingToolbar(
@@ -1141,7 +1144,7 @@ class FloatingToolbarTest {
         rule.onNodeWithTag(FloatingToolbarContentLastItemTestTag).assertIsDisplayed()
 
         // Swipe the content up to collapse the FloatingToolbar.
-        rule.onNodeWithTag(MainLayoutTag).performTouchInput { swipeUp(bottom, bottom - 1000) }
+        rule.onNodeWithTag("Content").performTouchInput { swipeUp(bottom, bottom - 1000) }
         rule.waitForIdle()
         // Check that the FAB and a sample from the toolbar content are not displayed.
         rule.onNodeWithTag(FloatingActionButtonTestTag).assertIsNotDisplayed()
@@ -1149,7 +1152,6 @@ class FloatingToolbarTest {
     }
 
     @Test
-    @Ignore("b/422736884")
     fun horizontalFloatingToolbar_scrollBehavior() {
         rule.setMaterialContent(lightColorScheme()) {
             val scrollBehavior =
@@ -1157,7 +1159,11 @@ class FloatingToolbarTest {
             Scaffold(modifier = Modifier.nestedScroll(scrollBehavior).testTag(MainLayoutTag)) {
                 innerPadding ->
                 Box(Modifier.padding(innerPadding)) {
-                    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .testTag("Content")
+                    ) {
                         Text(text = remember { LoremIpsum().values.first() })
                     }
                     HorizontalFloatingToolbar(
@@ -1177,7 +1183,7 @@ class FloatingToolbarTest {
         rule.onNodeWithTag(FloatingToolbarContentLastItemTestTag).assertIsDisplayed()
 
         // Swipe the content up to collapse the FloatingToolbar.
-        rule.onNodeWithTag(MainLayoutTag).performTouchInput { swipeUp(bottom, bottom - 1000) }
+        rule.onNodeWithTag("Content").performTouchInput { swipeUp(bottom, bottom - 1000) }
         rule.waitForIdle()
         // Check that the FAB and a sample from the toolbar content are not displayed.
         rule.onNodeWithTag(FloatingActionButtonTestTag).assertIsNotDisplayed()
@@ -1382,6 +1388,22 @@ class FloatingToolbarTest {
 
         assertThat(action).hasSize(1)
         assertThat(action[0].label).isEqualTo(actionLabel)
+    }
+
+    @Test
+    fun floatingToolbar_customSize_doesNotCrash() {
+        rule.setMaterialContent(lightColorScheme()) {
+            HorizontalFloatingToolbar(
+                expanded = true,
+                floatingActionButton = {},
+                modifier = Modifier.height(40.dp),
+            ) {}
+            VerticalFloatingToolbar(
+                expanded = true,
+                floatingActionButton = {},
+                modifier = Modifier.width(40.dp),
+            ) {}
+        }
     }
 
     @Test

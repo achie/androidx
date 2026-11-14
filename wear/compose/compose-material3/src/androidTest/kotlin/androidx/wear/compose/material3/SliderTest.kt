@@ -16,6 +16,7 @@
 
 package androidx.wear.compose.material3
 
+import android.os.Build
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
@@ -33,7 +34,8 @@ import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertRangeInfoEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
@@ -41,15 +43,15 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.wear.compose.material3.internal.Strings
 import com.google.common.truth.Truth
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 class SliderTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun supports_testtag() {
@@ -252,6 +254,115 @@ class SliderTest {
 
         rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
         rule.runOnIdle { Truth.assertThat(state.value).isWithin(0.001f).of(1f) }
+    }
+
+    @Test
+    fun reaches_min_clicking_left_with_steps_overload() {
+        val state = mutableStateOf(2)
+        rule.setContentWithTheme {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = state.value,
+                onValueChange = { state.value = it },
+                steps = 4,
+            )
+        }
+
+        // Clicking left decreases from 2 to 1
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(1) }
+
+        // Clicking left again cannot decrease below 1 (decrease button disabled)
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(1) }
+    }
+
+    @Test
+    fun reaches_max_clicking_right_with_steps_overload() {
+        val state = mutableStateOf(3)
+        rule.setContentWithTheme {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = state.value,
+                onValueChange = { state.value = it },
+                steps = 4,
+            )
+        }
+
+        // Clicking right increases from 3 to 4
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(width - 15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(4) }
+
+        // Clicking right again cannot increase above 4 (increase button disabled)
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(width - 15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(4) }
+    }
+
+    @Test
+    fun reaches_min_clicking_left_with_float_showMinimumSegment() {
+        val state = mutableStateOf(2f)
+        rule.setContentWithTheme {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = state.value,
+                onValueChange = { state.value = it },
+                valueRange = 1f..4f,
+                steps = 2,
+                showMinimumSegment = true,
+            )
+        }
+
+        // Clicking left decreases from 2f to 1f
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isWithin(0.001f).of(1f) }
+
+        // Clicking left again cannot decrease below 1f (decrease button disabled)
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isWithin(0.001f).of(1f) }
+    }
+
+    @Test
+    fun reaches_min_clicking_left_with_showMinimumSegment() {
+        val state = mutableStateOf(2)
+        rule.setContentWithTheme {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = state.value,
+                onValueChange = { state.value = it },
+                valueProgression = 1..4,
+                showMinimumSegment = true,
+            )
+        }
+
+        // Clicking left decreases from 2 to 1
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(1) }
+
+        // Clicking left again cannot decrease below 1 (decrease button disabled)
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(1) }
+    }
+
+    @Test
+    fun reaches_max_clicking_right_with_showMinimumSegment() {
+        val state = mutableStateOf(3)
+        rule.setContentWithTheme {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = state.value,
+                onValueChange = { state.value = it },
+                valueProgression = 1..4,
+                showMinimumSegment = true,
+            )
+        }
+
+        // Clicking right increases from 3 to 4
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(width - 15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(4) }
+
+        // Clicking right again cannot increase beyond 4 (increase button disabled)
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { click(Offset(width - 15f, height / 2f)) }
+        rule.runOnIdle { Truth.assertThat(state.value).isEqualTo(4) }
     }
 
     @Test
@@ -609,6 +720,14 @@ class SliderTest {
             onValueChange = onValueChange,
             valueProgression = valueProgression,
         )
+    }
+
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
+    @Test
+    fun draws_focus_ring_when_button_focused() {
+        rule.verifyFocusRingDrawnAfterRequestFocus(hasClickAction()) { modifier ->
+            Slider(value = 2f, onValueChange = {}, steps = 5, modifier = modifier)
+        }
     }
 
     private fun getString(string: Strings) =

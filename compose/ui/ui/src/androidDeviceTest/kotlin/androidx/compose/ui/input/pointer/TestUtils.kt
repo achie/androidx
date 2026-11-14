@@ -16,16 +16,17 @@
 
 package androidx.compose.ui.input.pointer
 
+import android.os.Handler
+import android.os.Looper
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.MotionEvent.ACTION_DOWN
 import android.view.MotionEvent.ACTION_HOVER_MOVE
+import android.view.MotionEvent.ACTION_MOVE
 import android.view.MotionEvent.ACTION_UP
 import android.view.View
 import androidx.collection.LongSparseArray
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.node.ModifierNodeElement
@@ -33,11 +34,13 @@ import androidx.compose.ui.node.NodeCoordinator
 import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.debugInspectorInfo
+import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.unit.IntSize
 import com.google.common.truth.FailureMetadata
 import com.google.common.truth.Subject
-import com.google.common.truth.Subject.Factory
 import com.google.common.truth.Truth
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert
 
 internal fun PointerInputEventData(
@@ -54,6 +57,8 @@ internal fun PointerInputEventData(
         down,
         pressure = 1.0f,
         PointerType.Touch,
+        scaleGestureFactor = 0f,
+        panGestureOffset = Offset.Zero,
     )
 }
 
@@ -61,17 +66,21 @@ internal fun PointerInputEvent(
     id: Int,
     uptime: Long,
     position: Offset,
-    down: Boolean,
+    action: Int = ACTION_DOWN,
 ): PointerInputEvent {
+    val down = action != ACTION_UP
     return PointerInputEvent(
         uptime,
         listOf(PointerInputEventData(id, uptime, position, down)),
-        MotionEventDouble,
+        getMotionEventForAction(action),
     )
 }
 
-internal fun PointerInputEvent(uptime: Long, pointers: List<PointerInputEventData>) =
-    PointerInputEvent(uptime, pointers, MotionEventDouble)
+internal fun PointerInputEvent(
+    uptime: Long,
+    pointers: List<PointerInputEventData>,
+    action: Int = ACTION_DOWN,
+) = PointerInputEvent(uptime, pointers, getMotionEventForAction(action))
 
 internal fun catchThrowable(lambda: () -> Unit): Throwable? {
     var exception: Throwable? = null
@@ -89,13 +98,28 @@ internal fun catchThrowable(lambda: () -> Unit): Throwable? {
  * To be used to construct types that require a MotionEvent but where no details of the MotionEvent
  * are actually needed.
  */
-internal val MotionEventDouble = MotionEvent.obtain(0L, 0L, ACTION_DOWN, 0f, 0f, 0)
+internal val MotionEventDown = MotionEvent.obtain(0L, 0L, ACTION_DOWN, 0f, 0f, 0)
+
+/**
+ * To be used to construct types that require a MotionEvent but where only the ACTION_MOVE type is
+ * needed.
+ */
+internal val MotionEventMove = MotionEvent.obtain(0L, 0L, ACTION_MOVE, 0f, 0f, 0)
 
 /**
  * To be used to construct types that require a MotionEvent but where only the ACTION_UP type is
  * needed.
  */
 internal val MotionEventUp = MotionEvent.obtain(0L, 0L, ACTION_UP, 0f, 0f, 0)
+
+internal fun getMotionEventForAction(action: Int): MotionEvent {
+    return when (action) {
+        ACTION_DOWN -> MotionEventDown
+        ACTION_UP -> MotionEventUp
+        ACTION_MOVE -> MotionEventMove
+        else -> throw IllegalArgumentException("Invalid action: $action")
+    }
+}
 
 /**
  * To be used to construct types that require a MotionEvent but where we only care if the event is a
@@ -129,37 +153,56 @@ fun createHoverMotionEvent(action: Int, x: Float, y: Float): MotionEvent {
     )
 }
 
-internal fun Modifier.spyGestureFilter(callback: (PointerEventPass) -> Unit): Modifier = composed {
-    val modifier = remember { SpyGestureModifier() }
-    modifier.callback = callback
-    modifier
+fun createPanMotionEvent(action: Int, x: Float, y: Float): MotionEvent {
+    val pointerProperties =
+        MotionEvent.PointerProperties().apply { toolType = MotionEvent.TOOL_TYPE_FINGER }
+    val pointerCoords =
+        MotionEvent.PointerCoords().also {
+            it.x = x
+            it.y = y
+        }
+    return MotionEvent.obtain(
+        0L /* downTime */,
+        0L /* eventTime */,
+        action,
+        1 /* pointerCount */,
+        arrayOf(pointerProperties),
+        arrayOf(pointerCoords),
+        0 /* metaState */,
+        0 /* buttonState */,
+        0f /* xPrecision */,
+        0f /* yPrecision */,
+        0 /* deviceId */,
+        0 /* edgeFlags */,
+        InputDevice.SOURCE_TOUCHSCREEN,
+        0, /* flags */
+    )
 }
 
-internal class SpyGestureModifier : PointerInputModifier {
+internal fun Modifier.spyGestureFilter(callback: (PointerEventPass) -> Unit): Modifier =
+    this then SpyGestureElement(callback)
 
-    lateinit var callback: (PointerEventPass) -> Unit
+private data class SpyGestureElement(val callback: (PointerEventPass) -> Unit) :
+    ModifierNodeElement<SpyGestureNode>() {
+    override fun create() = SpyGestureNode(callback)
 
-    override val pointerInputFilter: PointerInputFilter =
-        object : PointerInputFilter() {
+    override fun update(node: SpyGestureNode) {
+        node.callback = callback
+    }
+}
 
-            override fun onPointerEvent(
-                pointerEvent: PointerEvent,
-                pass: PointerEventPass,
-                bounds: IntSize,
-            ) {
-                callback.invoke(pass)
-            }
+private class SpyGestureNode(var callback: (PointerEventPass) -> Unit) :
+    Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(
+        pointerEvent: PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
+        callback.invoke(pass)
+    }
 
-            override fun onCancel() {
-                // Nothing
-            }
-        }
-
-    // We only need this because IR compiler doesn't like converting lambdas to Runnables
-    @Suppress("DEPRECATION")
-    internal fun androidx.test.rule.ActivityTestRule<*>.runOnUiThreadIR(block: () -> Unit) {
-        val runnable = Runnable { block() }
-        runOnUiThread(runnable)
+    override fun onCancelPointerInput() {
+        // Nothing
     }
 }
 
@@ -239,8 +282,14 @@ internal fun PointerEvent.deepCopy() =
 
 internal fun pointerEventOf(
     vararg changes: PointerInputChange,
-    motionEvent: MotionEvent = MotionEventDouble,
+    motionEvent: MotionEvent = MotionEventDown,
 ) = PointerEvent(changes.toList(), InternalPointerEvent(changes.toLongSparseArray(), motionEvent))
+
+internal fun pointerMoveEventOf(vararg changes: PointerInputChange) =
+    PointerEvent(
+        changes.toList(),
+        InternalPointerEvent(changes.toLongSparseArray(), MotionEventMove),
+    )
 
 fun Array<out PointerInputChange>.toLongSparseArray(): LongSparseArray<PointerInputChange> {
     val returnArray = LongSparseArray<PointerInputChange>(this.count())
@@ -266,6 +315,8 @@ internal fun InternalPointerEvent(
                 down = data.pressed,
                 pressure = data.pressure,
                 type = data.type,
+                scaleGestureFactor = data.scaleFactor,
+                panGestureOffset = data.panOffset,
             )
         )
     }
@@ -369,24 +420,27 @@ internal fun internalPointerEventOf(vararg changes: PointerInputChange): Interna
     val event =
         if (changes.any { it.changedToUpIgnoreConsumed() }) {
             MotionEventUp
+        } else if (changes.any { it.changedToDownIgnoreConsumed() }) {
+            MotionEventDown
         } else {
-            MotionEventDouble
+            MotionEventMove
         }
 
-    val pointers =
-        changes.map {
-            PointerInputEventData(
-                id = it.id,
-                uptime = it.uptimeMillis,
-                positionOnScreen = it.position,
-                position = it.position,
-                down = it.pressed,
-                pressure = it.pressure,
-                type = it.type,
-                activeHover = false,
-                historical = emptyList(),
-            )
-        }
+    val pointers = changes.map {
+        PointerInputEventData(
+            id = it.id,
+            uptime = it.uptimeMillis,
+            positionOnScreen = it.position,
+            position = it.position,
+            down = it.pressed,
+            pressure = it.pressure,
+            type = it.type,
+            activeHover = false,
+            historical = emptyList(),
+            scaleGestureFactor = 0f,
+            panGestureOffset = Offset.Zero,
+        )
+    }
     val pointerEvent = PointerInputEvent(0L, pointers, event)
     return InternalPointerEvent(changes.toLongSparseArray(), pointerEvent)
 }
@@ -420,6 +474,8 @@ internal fun hoverInternalPointerEvent(
             type = change.type,
             activeHover = true,
             historical = emptyList(),
+            scaleGestureFactor = 0f,
+            panGestureOffset = Offset.Zero,
         )
     val pointerEvent = PointerInputEvent(0L, listOf(pointer), createHoverMotionEvent(action, x, y))
 
@@ -601,3 +657,11 @@ internal fun elementFor(key1: Any? = null, instance: Modifier.Node) =
             return key1?.hashCode() ?: 0
         }
     }
+
+internal fun waitForPointerUpdate(rule: ComposeTestRule, delayMillis: Long = 200L) {
+    rule.waitForIdle()
+    val latch = CountDownLatch(1)
+    Handler(Looper.getMainLooper()).postDelayed({ latch.countDown() }, delayMillis)
+    latch.await(2, TimeUnit.SECONDS)
+    rule.waitForIdle()
+}

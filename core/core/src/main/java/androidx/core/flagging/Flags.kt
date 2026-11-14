@@ -21,7 +21,7 @@ package androidx.core.flagging
 import android.os.Build.VERSION.SDK_INT
 import android.os.flagging.AconfigPackage
 import android.os.flagging.AconfigStorageReadException
-import androidx.annotation.RequiresApi
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RestrictTo
 import androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX
 import java.util.concurrent.ConcurrentHashMap
@@ -35,11 +35,8 @@ import java.util.concurrent.CopyOnWriteArraySet
 @RestrictTo(LIBRARY_GROUP_PREFIX)
 public class Flags {
     public companion object {
-        @get:RequiresApi(36)
         private val aconfigCache: MutableMap<String, AconfigPackage>? =
             if (SDK_INT >= 36) ConcurrentHashMap() else null
-
-        @get:RequiresApi(36)
         private val missingPackageCache: MutableSet<String>? =
             if (SDK_INT >= 36) CopyOnWriteArraySet() else null
 
@@ -63,6 +60,7 @@ public class Flags {
          * @param defaultValue The value to return if the flag is not found.
          * @return The boolean value of the flag, or `defaultValue` if the flag is not found.
          */
+        @ChecksSdkIntAtLeast(10000)
         @Suppress("MemberExtensionConflict") // b/406991279 fixed in AGP 8.11.0-alpha05
         @JvmOverloads
         @JvmStatic

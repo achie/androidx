@@ -95,10 +95,10 @@ public class DrawTextOnPath extends PaintOperation implements VariableSupport, S
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int textId = buffer.readInt();
-        int pathId = buffer.readInt();
-        float vOffset = buffer.readFloat();
-        float hOffset = buffer.readFloat();
+        int textId = buffer.readId();
+        int pathId = buffer.readId();
+        float vOffset = buffer.readNanId();
+        float hOffset = buffer.readNanId();
         DrawTextOnPath op = new DrawTextOnPath(textId, pathId, hOffset, vOffset);
         operations.add(op);
     }
@@ -146,12 +146,16 @@ public class DrawTextOnPath extends PaintOperation implements VariableSupport, S
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Draw Operations", OP_CODE, CLASS_NAME)
-                .description("Draw text along path object")
-                .field(DocumentedOperation.INT, "textId", "id of the text")
-                .field(DocumentedOperation.INT, "pathId", "id of the path")
-                .field(DocumentedOperation.FLOAT, "xOffset", "x Shift of the text")
-                .field(DocumentedOperation.FLOAT, "yOffset", "y Shift of the text");
+        doc.operation("Text Operations", OP_CODE, CLASS_NAME)
+                .additionalDocumentation("draw_text_on_path")
+                .description("Draw text along a path")
+                .field(DocumentedOperation.INT, "textId", "The ID of the text")
+                .field(DocumentedOperation.INT, "pathId", "The ID of the path")
+                .field(DocumentedOperation.FLOAT, "hOffset", "Horizontal offset along the path")
+                .field(
+                        DocumentedOperation.FLOAT,
+                        "vOffset",
+                        "Vertical offset relative to the path");
     }
 
     @Override
@@ -167,5 +171,30 @@ public class DrawTextOnPath extends PaintOperation implements VariableSupport, S
                 .add("textId", mTextId)
                 .add("vOffset", mVOffset, mOutVOffset)
                 .add("hOffset", mHOffset, mOutHOffset);
+    }
+
+    /** Returns {@code mPathId}. */
+    public int getPathId() {
+        return mPathId;
+    }
+
+    /** Returns the raw horizontal offset, preserving NaN-encoded variable IDs. */
+    public float getHOffset() {
+        return mHOffset;
+    }
+
+    /** Returns the raw vertical offset, preserving NaN-encoded variable IDs. */
+    public float getVOffset() {
+        return mVOffset;
+    }
+
+    /** Returns {@code mOutHOffset}. */
+    public float getOutHOffset() {
+        return mOutHOffset;
+    }
+
+    /** Returns {@code mOutVOffset}. */
+    public float getOutVOffset() {
+        return mOutVOffset;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 The Android Open Source Project
+ * Copyright 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,25 +19,22 @@ package androidx.xr.scenecore.spatial.rendering
 import android.app.Activity
 import android.os.Looper
 import androidx.annotation.VisibleForTesting
-import androidx.concurrent.futures.ResolvableFuture
+import androidx.xr.runtime.Config
+import androidx.xr.runtime.math.BoundingBox
+import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.Matrix3
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.runtime.math.Vector4
-import androidx.xr.scenecore.impl.impress.ExrImage
-import androidx.xr.scenecore.impl.impress.GltfModel
-import androidx.xr.scenecore.impl.impress.ImpressApi
-import androidx.xr.scenecore.impl.impress.ImpressApiImpl
-import androidx.xr.scenecore.impl.impress.KhronosPbrMaterial
-import androidx.xr.scenecore.impl.impress.Material
-import androidx.xr.scenecore.impl.impress.Texture
-import androidx.xr.scenecore.impl.impress.WaterMaterial
+import androidx.xr.scenecore.runtime.CustomMeshResource
 import androidx.xr.scenecore.runtime.Entity
 import androidx.xr.scenecore.runtime.ExrImageResource
 import androidx.xr.scenecore.runtime.GltfEntity
 import androidx.xr.scenecore.runtime.GltfModelResource
 import androidx.xr.scenecore.runtime.KhronosPbrMaterialSpec
 import androidx.xr.scenecore.runtime.MaterialResource
+import androidx.xr.scenecore.runtime.MeshBufferResource
+import androidx.xr.scenecore.runtime.MeshEntity
 import androidx.xr.scenecore.runtime.RenderingEntityFactory
 import androidx.xr.scenecore.runtime.RenderingRuntime
 import androidx.xr.scenecore.runtime.SceneRuntime
@@ -46,18 +43,27 @@ import androidx.xr.scenecore.runtime.SpatialEnvironmentFeature
 import androidx.xr.scenecore.runtime.SurfaceEntity
 import androidx.xr.scenecore.runtime.TextureResource
 import androidx.xr.scenecore.runtime.TextureSampler
-import androidx.xr.scenecore.runtime.extensions.XrExtensionsProvider.getXrExtensions
+import androidx.xr.scenecore.runtime.TypeHolder
+import androidx.xr.scenecore.runtime.extensions.XrExtensionsHolderAccessor
+import androidx.xr.scenecore.spatial.rendering.impress.CustomMesh
+import androidx.xr.scenecore.spatial.rendering.impress.ExrImage
+import androidx.xr.scenecore.spatial.rendering.impress.GltfModel
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressApi
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressApiImpl
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressNode
+import androidx.xr.scenecore.spatial.rendering.impress.KhronosPbrMaterial
+import androidx.xr.scenecore.spatial.rendering.impress.Material
+import androidx.xr.scenecore.spatial.rendering.impress.MeshBuffer
+import androidx.xr.scenecore.spatial.rendering.impress.Texture
 import com.android.extensions.xr.XrExtensions
 import com.google.androidxr.splitengine.SplitEngineSubspaceManager
 import com.google.ar.imp.view.splitengine.ImpSplitEngine
 import com.google.ar.imp.view.splitengine.ImpSplitEngineRenderer
-import com.google.common.util.concurrent.ListenableFuture
-import java.util.concurrent.CancellationException
-import java.util.function.Supplier
+import java.nio.ByteBuffer
 
 /**
  * Implementation of [RenderingRuntime] for devices that support the
- * [androidx.xr.runtime.internal.Feature.SPATIAL] system feature.
+ * [androidx.xr.runtime.interfaces.Feature.SPATIAL] system feature.
  */
 internal class SpatialRenderingRuntime
 private constructor(
@@ -68,6 +74,9 @@ private constructor(
     private val subspaceManager: SplitEngineSubspaceManager,
     private val renderer: ImpSplitEngineRenderer,
 ) : RenderingRuntime {
+
+    override var config: Config = Config.Builder().build()
+        private set
 
     private lateinit var renderingEntityFactory: RenderingEntityFactory
     private var spatialEnvironmentFeature: SpatialEnvironmentFeatureImpl?
@@ -89,177 +98,49 @@ private constructor(
         )
     }
 
-    private suspend fun loadGltfAssetAsync(
-        modelLoader: () -> ListenableFuture<GltfModel>
-    ): GltfModelResource {
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-        val gltfToken: GltfModel = modelLoader().awaitSuspending()
-        return gltfToken
-    }
-
-    @SuppressWarnings("FutureReturnValueIgnored")
-    private fun loadGltfAsset(
-        modelLoader: Supplier<ListenableFuture<GltfModel>>
-    ): ListenableFuture<GltfModelResource>? {
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-
-        val gltfModelResourceFuture = ResolvableFuture.create<GltfModelResource>()
-
-        val gltfTokenFuture: ListenableFuture<GltfModel> =
-            try {
-                modelLoader.get()
-            } catch (e: RuntimeException) {
-                return null
-            }
-
-        gltfTokenFuture.addListener(
-            {
-                try {
-                    val gltfToken: GltfModel = gltfTokenFuture.get()
-                    gltfModelResourceFuture.set(gltfToken)
-                } catch (e: Exception) {
-                    when (e) {
-                        is InterruptedException -> Thread.currentThread().interrupt()
-                        is CancellationException -> gltfModelResourceFuture.cancel(false)
-                        else -> gltfModelResourceFuture.setException(e)
-                    }
-                }
-            },
-            // TODO(b/458776699): Handle activity nullability.
-            activity!!::runOnUiThread,
-        )
-
-        return gltfModelResourceFuture
-    }
-
-    private suspend fun loadExrImageAsync(
-        assetLoader: () -> ListenableFuture<ExrImage>
-    ): ExrImageResource {
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-        val exrImageToken: ExrImage = assetLoader().awaitSuspending()
-        return exrImageToken
-    }
-
-    @SuppressWarnings("FutureReturnValueIgnored")
-    private fun loadExrImage(
-        assetLoader: Supplier<ListenableFuture<ExrImage>>
-    ): ListenableFuture<ExrImageResource>? {
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-
-        val exrImageResourceFuture = ResolvableFuture.create<ExrImageResource>()
-
-        val exrImageTokenFuture: ListenableFuture<ExrImage> =
-            try {
-                assetLoader.get()
-            } catch (e: RuntimeException) {
-                return null
-            }
-
-        exrImageTokenFuture.addListener(
-            {
-                try {
-                    val exrImageToken = exrImageTokenFuture.get()
-                    exrImageResourceFuture.set(exrImageToken)
-                } catch (e: Exception) {
-                    when (e) {
-                        is InterruptedException -> Thread.currentThread().interrupt()
-                        is CancellationException -> exrImageResourceFuture.cancel(false)
-                        else -> exrImageResourceFuture.setException(e)
-                    }
-                }
-            },
-            // TODO(b/458776699): Handle activity nullability.
-            activity!!::runOnUiThread,
-        )
-
-        return exrImageResourceFuture
+    override fun configure(config: Config) {
+        this.config = config
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun loadGltfByAssetNameAsync(assetName: String): GltfModelResource {
-        return loadGltfAssetAsync { impressApi.loadGltfAsset(assetName) }
-    }
-
-    // ResolvableFuture is marked as RestrictTo(LIBRARY_GROUP_PREFIX), which is intended for classes
-    // within AndroidX. We're in the process of migrating to AndroidX. Without suppressing this
-    // warning, however, we get a build error - go/bugpattern/RestrictTo.
-    @SuppressWarnings("RestrictTo", "AsyncSuffixFuture")
-    override fun loadGltfByAssetName(assetName: String): ListenableFuture<GltfModelResource> {
-        // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
-        return loadGltfAsset { impressApi.loadGltfAsset(assetName) }!!
+    override suspend fun loadGltfByAssetName(assetName: String): GltfModelResource {
+        return impressApi.loadGltfAsset(assetName)
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun loadGltfByByteArrayAsync(
+    override suspend fun loadGltfByByteArray(
         assetData: ByteArray,
         assetKey: String,
     ): GltfModelResource {
         // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
-        return loadGltfAssetAsync { impressApi.loadGltfAsset(assetData, assetKey) }
-    }
-
-    @SuppressWarnings("RestrictTo", "AsyncSuffixFuture")
-    override fun loadGltfByByteArray(
-        assetData: ByteArray,
-        assetKey: String,
-    ): ListenableFuture<GltfModelResource> {
-        // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
-        return loadGltfAsset { impressApi.loadGltfAsset(assetData, assetKey) }!!
+        return impressApi.loadGltfAsset(assetData, assetKey)
     }
 
     @Override
     override fun destroyGltfModel(gltfModel: GltfModelResource) {
-        val gltfModelResource: GltfModel = gltfModel as GltfModel
-        impressApi.releaseGltfAsset(gltfModelResource.nativeHandle)
+        (gltfModel as GltfModel).destroy()
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun loadExrImageByAssetNameAsync(assetName: String): ExrImageResource {
-        return loadExrImageAsync { impressApi.loadImageBasedLightingAsset(assetName) }
-    }
-
-    // ResolvableFuture is marked as RestrictTo(LIBRARY_GROUP_PREFIX), which is intended for classes
-    // within AndroidX. We're in the process of migrating to AndroidX. Without suppressing this
-    // warning, however, we get a build error - go/bugpattern/RestrictTo.
-    @SuppressWarnings("FutureReturnValueIgnored", "RestrictTo", "AsyncSuffixFuture")
-    override fun loadExrImageByAssetName(assetName: String): ListenableFuture<ExrImageResource> {
-        // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
-        return loadExrImage { impressApi.loadImageBasedLightingAsset(assetName) }!!
+    override suspend fun loadExrImageByAssetName(assetName: String): ExrImageResource {
+        return impressApi.loadImageBasedLightingAsset(assetName)
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun loadExrImageByByteArrayAsync(
+    override suspend fun loadExrImageByByteArray(
         assetData: ByteArray,
         assetKey: String,
     ): ExrImageResource {
-        return loadExrImageAsync { impressApi.loadImageBasedLightingAsset(assetData, assetKey) }
-    }
-
-    @SuppressWarnings("FutureReturnValueIgnored", "RestrictTo", "AsyncSuffixFuture")
-    override fun loadExrImageByByteArray(
-        assetData: ByteArray,
-        assetKey: String,
-    ): ListenableFuture<ExrImageResource> {
-        // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
-        return loadExrImage { impressApi.loadImageBasedLightingAsset(assetData, assetKey) }!!
+        return impressApi.loadImageBasedLightingAsset(assetData, assetKey)
     }
 
     @Override
     override fun destroyExrImage(exrImage: ExrImageResource) {
-        val exrImageResource: ExrImage = exrImage as ExrImage
-        impressApi.releaseImageBasedLightingAsset(exrImageResource.nativeHandle)
+        (exrImage as ExrImage).destroy()
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun loadTextureAsync(assetName: String): TextureResource {
+    override suspend fun loadTexture(assetName: String): TextureResource {
         // TODO:b/374216912 - Consider calling setFuture() here to catch if the application calls
         // cancel() on the return value from this function, so we can propagate the cancelation
         // message to the Impress API.
@@ -272,55 +153,8 @@ private constructor(
         // from within a listener. We defensively post to the main thread here, but in
         // practice this should not cause a thread hop because the Impress API already
         // dispatches its callbacks to the main thread.
-        val texture: Texture = impressApi.loadTextureTemp(assetName)
+        val texture: Texture = impressApi.loadTexture(assetName)
         return texture
-    }
-
-    // ResolvableFuture is marked as RestrictTo(LIBRARY_GROUP_PREFIX), which is intended for classes
-    // within AndroidX. We're in the process of migrating to AndroidX. Without suppressing this
-    // warning, however, we get a build error - go/bugpattern/RestrictTo.
-    @SuppressWarnings("RestrictTo", "AsyncSuffixFuture")
-    override fun loadTexture(assetName: String): ListenableFuture<TextureResource> {
-        val textureResourceFuture = ResolvableFuture.create<TextureResource>()
-        // TODO:b/374216912 - Consider calling setFuture() here to catch if the application calls
-        // cancel() on the return value from this function, so we can propagate the cancelation
-        // message to the Impress API.
-
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-
-        val textureFuture: ListenableFuture<Texture> =
-            try {
-                impressApi.loadTexture(assetName)
-            } catch (e: RuntimeException) {
-                textureResourceFuture.setException(e)
-                return textureResourceFuture
-            }
-
-        textureFuture.addListener(
-            {
-                try {
-                    val texture = textureFuture.get()
-                    textureResourceFuture.set(texture)
-                } catch (e: Exception) {
-                    when (e) {
-                        is InterruptedException -> Thread.currentThread().interrupt()
-                        is CancellationException -> textureResourceFuture.cancel(false)
-                        else -> textureResourceFuture.setException(e)
-                    }
-                }
-            },
-            // It's convenient for the main application for us to dispatch their listeners on
-            // the main thread, because they are required to call back to Impress from there,
-            // and it's likely that they will want to call back into the SDK to create entities
-            // from within a listener. We defensively post to the main thread here, but in
-            // practice this should not cause a thread hop because the Impress API already
-            // dispatches its callbacks to the main thread.
-            // TODO(b/458776699): Handle activity nullability.
-            activity!!::runOnUiThread,
-        )
-        return textureResourceFuture
     }
 
     override fun borrowReflectionTexture(): TextureResource? {
@@ -328,8 +162,7 @@ private constructor(
     }
 
     override fun destroyTexture(texture: TextureResource) {
-        val textureResource = texture as Texture
-        impressApi.destroyNativeObject(textureResource.nativeHandle)
+        (texture as Texture).destroy()
     }
 
     override fun getReflectionTextureFromIbl(iblToken: ExrImageResource): TextureResource? {
@@ -339,7 +172,7 @@ private constructor(
     }
 
     @SuppressWarnings("RestrictTo")
-    override suspend fun createWaterMaterialAsync(isAlphaMapVersion: Boolean): MaterialResource {
+    override suspend fun createWaterMaterial(isAlphaMapVersion: Boolean): MaterialResource {
         // TODO:b/374216912 - Consider calling setFuture() here to catch if the application calls
         // cancel() on the return value from this function, so we can propagate the cancelation
         // message to the Impress API.
@@ -352,57 +185,8 @@ private constructor(
         // from within a listener. We defensively post to the main thread here, but in
         // practice this should not cause a thread hop because the Impress API already
         // dispatches its callbacks to the main thread.
-        val materialResource = impressApi.createWaterMaterialTemp(isAlphaMapVersion)
+        val materialResource = impressApi.createWaterMaterial(isAlphaMapVersion)
         return materialResource
-    }
-
-    // ResolvableFuture is marked as RestrictTo(LIBRARY_GROUP_PREFIX), which is intended for classes
-    // within AndroidX. We're in the process of migrating to AndroidX. Without suppressing this
-    // warning, however, we get a build error - go/bugpattern/RestrictTo.
-    @SuppressWarnings("RestrictTo", "AsyncSuffixFuture")
-    override fun createWaterMaterial(
-        isAlphaMapVersion: Boolean
-    ): ListenableFuture<MaterialResource> {
-        val materialResourceFuture = ResolvableFuture.create<MaterialResource>()
-        // TODO:b/374216912 - Consider calling setFuture() here to catch if the application calls
-        // cancel() on the return value from this function, so we can propagate the cancelation
-        // message to the Impress API.
-
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-
-        val materialFuture: ListenableFuture<WaterMaterial> =
-            try {
-                impressApi.createWaterMaterial(isAlphaMapVersion)
-            } catch (e: RuntimeException) {
-                materialResourceFuture.setException(e)
-                return materialResourceFuture
-            }
-
-        materialFuture.addListener(
-            {
-                try {
-                    val material = materialFuture.get()
-                    materialResourceFuture.set(material)
-                } catch (e: Exception) {
-                    when (e) {
-                        is InterruptedException -> Thread.currentThread().interrupt()
-                        is CancellationException -> materialResourceFuture.cancel(false)
-                        else -> materialResourceFuture.setException(e)
-                    }
-                }
-            },
-            // It's convenient for the main application for us to dispatch their listeners on
-            // the main thread, because they are required to call back to Impress from there,
-            // and it's likely that they will want to call back into the SDK to create entities
-            // from within a listener. We defensively post to the main thread here, but in
-            // practice this should not cause a thread hop because the Impress API already
-            // dispatches its callbacks to the main thread.
-            // TODO(b/458776699): Handle activity nullability.
-            activity!!::runOnUiThread,
-        )
-        return materialResourceFuture
     }
 
     override fun destroyWaterMaterial(material: MaterialResource) {
@@ -479,60 +263,12 @@ private constructor(
         impressApi.setNormalBoundaryOnWaterMaterial(material.nativeHandle, normalBoundary)
     }
 
-    override suspend fun createKhronosPbrMaterialAsync(
-        spec: KhronosPbrMaterialSpec
-    ): MaterialResource {
+    override suspend fun createKhronosPbrMaterial(spec: KhronosPbrMaterialSpec): MaterialResource {
         check(Looper.getMainLooper().isCurrentThread) {
             "This method must be called on the main thread."
         }
-        val material: KhronosPbrMaterial = impressApi.createKhronosPbrMaterialTemp(spec)
+        val material: KhronosPbrMaterial = impressApi.createKhronosPbrMaterial(spec)
         return material
-    }
-
-    @SuppressWarnings("AsyncSuffixFuture")
-    override fun createKhronosPbrMaterial(
-        spec: KhronosPbrMaterialSpec
-    ): ListenableFuture<MaterialResource> {
-        val materialResourceFuture = ResolvableFuture.create<MaterialResource>()
-        // TODO:b/374216912 - Consider calling setFuture() here to catch if the application calls
-        // cancel() on the return value from this function, so we can propagate the cancelation
-        // message to the Impress API.
-
-        check(Looper.getMainLooper().isCurrentThread) {
-            "This method must be called on the main thread."
-        }
-
-        val materialFuture: ListenableFuture<KhronosPbrMaterial> =
-            try {
-                impressApi.createKhronosPbrMaterial(spec)
-            } catch (e: RuntimeException) {
-                materialResourceFuture.setException(e)
-                return materialResourceFuture
-            }
-
-        materialFuture.addListener(
-            {
-                try {
-                    val material = materialFuture.get()
-                    materialResourceFuture.set(material)
-                } catch (e: Exception) {
-                    when (e) {
-                        is InterruptedException -> Thread.currentThread().interrupt()
-                        is CancellationException -> materialResourceFuture.cancel(false)
-                        else -> materialResourceFuture.setException(e)
-                    }
-                }
-            },
-            // It's convenient for the main application for us to dispatch their listeners on
-            // the main thread, because they are required to call back to Impress from there,
-            // and it's likely that they will want to call back into the SDK to create entities
-            // from within a listener. We defensively post to the main thread here, but in
-            // practice this should not cause a thread hop because the Impress API already
-            // dispatches its callbacks to the main thread.
-            // TODO(b/458776699): Handle activity nullability.
-            activity!!::runOnUiThread,
-        )
-        return materialResourceFuture
     }
 
     override fun destroyKhronosPbrMaterial(material: MaterialResource) {
@@ -934,12 +670,19 @@ private constructor(
     ): GltfEntity {
         // TODO(b/458779328): Fix incorrect use of !! on a nullable return value.
         val feature =
-            GltfFeatureImpl(loadedGltf as GltfModel, impressApi, subspaceManager, extensions)
+            GltfFeatureImpl(
+                loadedGltf as GltfModel,
+                impressApi,
+                subspaceManager,
+                extensions,
+                renderer,
+            )
         return renderingEntityFactory.createGltfEntity(feature, pose, parentEntity)
     }
 
     override fun createSurfaceEntity(
         @SurfaceEntity.StereoMode stereoMode: Int,
+        @SurfaceEntity.MediaBlendingMode mediaBlendingMode: Int,
         pose: Pose,
         shape: SurfaceEntity.Shape,
         @SurfaceEntity.SurfaceProtection surfaceProtection: Int,
@@ -957,11 +700,161 @@ private constructor(
                 subspaceManager,
                 extensions,
                 stereoMode,
+                mediaBlendingMode,
                 shape,
                 surfaceProtection,
                 superSampling,
             )
         return renderingEntityFactory.createSurfaceEntity(feature, pose, parentEntity)
+    }
+
+    override fun createMeshBuffer(
+        attributeIds: IntArray,
+        attributeTypes: IntArray,
+        bufferIndices: ByteArray,
+        byteOffsets: IntArray,
+        byteStrides: IntArray,
+        maxVertices: Int,
+        maxIndices: Int,
+        vertexData: Array<java.nio.ByteBuffer>?,
+        vertexDataOffsets: IntArray?,
+        vertexDataSizes: IntArray?,
+        indexData: java.nio.ByteBuffer?,
+        indexDataOffset: Int,
+        indexDataSize: Int,
+    ): MeshBufferResource {
+        return impressApi.createMeshBuffer(
+            attributeIds,
+            attributeTypes,
+            bufferIndices,
+            byteOffsets,
+            byteStrides,
+            maxVertices,
+            maxIndices,
+            vertexData,
+            vertexDataOffsets,
+            vertexDataSizes,
+            indexData,
+            indexDataOffset,
+            indexDataSize,
+        )
+    }
+
+    override fun destroyMeshBuffer(meshBuffer: MeshBufferResource) {
+        (meshBuffer as MeshBuffer).destroy()
+    }
+
+    override fun updateMeshBufferVertexData(
+        meshBuffer: MeshBufferResource,
+        bufferIndex: Int,
+        vertexData: ByteBuffer,
+        vertexDataOffset: Int,
+        vertexDataSize: Int,
+        destOffsetInBytes: Int,
+    ) {
+        impressApi.updateMeshBufferVertexData(
+            (meshBuffer as MeshBuffer).nativeHandle,
+            bufferIndex,
+            vertexData,
+            vertexDataOffset,
+            vertexDataSize,
+            destOffsetInBytes,
+        )
+    }
+
+    override fun updateMeshBufferIndexData(
+        meshBuffer: MeshBufferResource,
+        indexData: ByteBuffer,
+        indexDataOffset: Int,
+        indexDataSize: Int,
+        destOffsetInBytes: Int,
+    ) {
+        impressApi.updateMeshBufferIndexData(
+            (meshBuffer as MeshBuffer).nativeHandle,
+            indexData,
+            indexDataOffset,
+            indexDataSize,
+            destOffsetInBytes,
+        )
+    }
+
+    override fun createCustomMesh(
+        meshBuffer: MeshBufferResource,
+        subsetOffsets: IntArray,
+        subsetCounts: IntArray,
+        subsetTopologies: IntArray,
+        centerX: Float,
+        centerY: Float,
+        centerZ: Float,
+        halfExtentX: Float,
+        halfExtentY: Float,
+        halfExtentZ: Float,
+    ): CustomMeshResource {
+        return impressApi.createCustomMesh(
+            (meshBuffer as MeshBuffer).nativeHandle,
+            subsetOffsets,
+            subsetCounts,
+            subsetTopologies,
+            centerX,
+            centerY,
+            centerZ,
+            halfExtentX,
+            halfExtentY,
+            halfExtentZ,
+        )
+    }
+
+    override fun getCustomMeshBoundingBox(customMesh: CustomMeshResource): BoundingBox {
+        val aabb = FloatArray(6)
+        impressApi.getCustomMeshAabb((customMesh as CustomMesh).nativeHandle, aabb)
+        val center = Vector3(aabb[0], aabb[1], aabb[2])
+        val halfExtents = FloatSize3d(aabb[3], aabb[4], aabb[5])
+        return BoundingBox.fromCenterAndHalfExtents(center, halfExtents)
+    }
+
+    override fun setCustomMeshBoundingBox(customMesh: CustomMeshResource, bounds: BoundingBox) {
+        impressApi.setCustomMeshAabb(
+            (customMesh as CustomMesh).nativeHandle,
+            bounds.center.x,
+            bounds.center.y,
+            bounds.center.z,
+            bounds.halfExtents.width,
+            bounds.halfExtents.height,
+            bounds.halfExtents.depth,
+        )
+    }
+
+    override fun destroyCustomMesh(customMesh: CustomMeshResource) {
+        (customMesh as CustomMesh).destroy()
+    }
+
+    override fun createMeshEntity(
+        customMesh: CustomMeshResource,
+        materials: List<MaterialResource>,
+        boneCount: Int,
+        pose: Pose,
+        parent: Entity?,
+    ): MeshEntity {
+        val materialHandles = LongArray(materials.size)
+        for (i in materials.indices) {
+            val material = materials[i]
+            require(material is Material) { "MaterialResource is not a Material" }
+            materialHandles[i] = material.nativeHandle
+        }
+
+        val impressNodeId =
+            impressApi.createCustomMeshNode(
+                (customMesh as CustomMesh).nativeHandle,
+                materialHandles,
+                boneCount,
+                /* enableCollider= */ false,
+            )
+        val impressNode = ImpressNode(impressNodeId)
+        val meshBoundingBox = getCustomMeshBoundingBox(customMesh)
+
+        val feature =
+            MeshFeatureImpl(impressApi, subspaceManager, extensions, impressNode, meshBoundingBox)
+        return renderingEntityFactory.createMeshEntity(feature, pose, parent)
     }
 
     // JxrRuntime lifecycle
@@ -1019,8 +912,10 @@ private constructor(
             splitEngineSubspaceManager: SplitEngineSubspaceManager?,
             splitEngineRenderer: ImpSplitEngineRenderer?,
         ): SpatialRenderingRuntime {
-            val extensions =
-                getXrExtensions() ?: throw IllegalStateException("XrExtensions is null")
+            val extensionsHolder =
+                XrExtensionsHolderAccessor.holderLegacy
+                    ?: throw IllegalStateException("XrExtensions is null")
+            val extensions = TypeHolder.assertGetValue(extensionsHolder, XrExtensions::class.java)
 
             val finalImpressApi = impressApi ?: ImpressApiImpl()
 
@@ -1031,7 +926,10 @@ private constructor(
                             ImpSplitEngine.SplitEngineSetupParams().apply {
                                 jniLibraryName = SPLIT_ENGINE_LIBRARY_NAME
                             }
-                        ImpSplitEngineRenderer.create(activity, impApiSetupParams, extensions)
+                        ImpSplitEngineRenderer.Builder(activity)
+                            .setSetupParams(impApiSetupParams)
+                            .setXrExtensions(extensions)
+                            .create()
                     }
 
             val finalSubspaceManager =

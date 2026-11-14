@@ -43,6 +43,7 @@ import androidx.camera.core.UseCase;
 import androidx.camera.core.ZoomState;
 import androidx.camera.core.impl.CameraCaptureCallback;
 import androidx.camera.core.impl.CameraConfig;
+import androidx.camera.core.impl.CameraExtensionCapabilities;
 import androidx.camera.core.impl.CameraInfoInternal;
 import androidx.camera.core.impl.DynamicRanges;
 import androidx.camera.core.impl.EncoderProfilesProvider;
@@ -77,6 +78,7 @@ import java.util.concurrent.Executor;
  *
  * <p>This camera info can be constructed with fake values.
  */
+@SuppressWarnings("HiddenSuperclass")
 public final class FakeCameraInfoInternal implements CameraInfoInternal {
     private static final String TAG = "FakeCameraInfoInternal";
     private static final Set<Range<Integer>> FAKE_FPS_RANGES = Collections.unmodifiableSet(
@@ -100,6 +102,11 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
 
     private final Set<DynamicRange> mSupportedDynamicRanges = new HashSet<>(DEFAULT_DYNAMIC_RANGES);
     private final Set<Integer> mAvailableCapabilities = new HashSet<>();
+    private final Object mExtensionsLock = new Object();
+    private final Set<Integer> mSupportedExtensions = new HashSet<>();
+    private final Set<Integer> mVendorDefinedModes = new HashSet<>();
+    private final Map<Integer, CameraExtensionCapabilities> mExtensionCapabilitiesMap =
+            new HashMap<>();
     private String mImplementationType = IMPLEMENTATION_TYPE_FAKE;
 
     // Leave uninitialized to support camera-core:1.0.0 dependencies.
@@ -113,6 +120,7 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
     private boolean mIsFocusMeteringSupported = false;
     private boolean mIsHighSpeedSupported = false;
     private boolean mIsPreviewStabilizationSupported = false;
+    private boolean mIsVideoStabilizationSupported = false;
 
     private ExposureState mExposureState = new FakeExposureState();
     private final @NonNull List<Quirk> mCameraQuirks = new ArrayList<>();
@@ -226,6 +234,14 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public void setIsPreviewStabilizationSupported(boolean supported) {
         mIsPreviewStabilizationSupported = supported;
+    }
+
+    /**
+     * Sets the return value for {@link #isVideoStabilizationSupported()}.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public void setVideoStabilizationSupported(boolean supported) {
+        mIsVideoStabilizationSupported = supported;
     }
 
     @Override
@@ -459,7 +475,7 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
 
     @Override
     public boolean isVideoStabilizationSupported() {
-        return false;
+        return mIsVideoStabilizationSupported;
     }
 
     /** Adds a quirk to the list of this camera's quirks. */
@@ -601,6 +617,59 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
     public void setAvailableCapabilities(@NonNull Set<@NonNull Integer> availableCapabilities) {
         mAvailableCapabilities.clear();
         mAvailableCapabilities.addAll(availableCapabilities);
+    }
+
+    /** Sets the supported extensions for testing. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public void setSupportedExtensions(@NonNull Set<Integer> supportedExtensions) {
+        synchronized (mExtensionsLock) {
+            mSupportedExtensions.clear();
+            mSupportedExtensions.addAll(supportedExtensions);
+        }
+    }
+
+    /** Sets the vendor-defined extensions for testing. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public void setVendorDefinedModes(@NonNull Set<Integer> vendorDefinedModes) {
+        synchronized (mExtensionsLock) {
+            mVendorDefinedModes.clear();
+            mVendorDefinedModes.addAll(vendorDefinedModes);
+        }
+    }
+
+    /** Sets the camera extension capabilities for testing. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public void setCameraExtensionCapabilities(int extensionMode,
+            @Nullable CameraExtensionCapabilities capabilities) {
+        synchronized (mExtensionsLock) {
+            mExtensionCapabilitiesMap.put(extensionMode, capabilities);
+        }
+    }
+
+    @Override
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public @NonNull Set<Integer> getSupportedExtensions() {
+        synchronized (mExtensionsLock) {
+            return new HashSet<>(mSupportedExtensions);
+        }
+    }
+
+    @Override
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public boolean isExtensionSupported(int extensionMode) {
+        synchronized (mExtensionsLock) {
+            return mSupportedExtensions.contains(extensionMode)
+                    || mVendorDefinedModes.contains(extensionMode);
+        }
+    }
+
+    @Override
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public @Nullable CameraExtensionCapabilities getCameraExtensionCapabilities(
+            int extensionMode) {
+        synchronized (mExtensionsLock) {
+            return mExtensionCapabilitiesMap.get(extensionMode);
+        }
     }
 
     static final class FakeExposureState implements ExposureState {

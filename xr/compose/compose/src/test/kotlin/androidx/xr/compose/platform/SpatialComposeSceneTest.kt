@@ -23,8 +23,9 @@ import androidx.xr.compose.subspace.layout.CoreGroupEntity
 import androidx.xr.compose.testing.SubspaceTestingActivity
 import androidx.xr.compose.testing.configureFakeSession
 import androidx.xr.runtime.Session
-import androidx.xr.scenecore.GroupEntity
+import androidx.xr.scenecore.Entity
 import androidx.xr.scenecore.runtime.SceneRuntime
+import androidx.xr.scenecore.scene
 import com.google.common.truth.Truth.assertThat
 import org.junit.Before
 import org.junit.Rule
@@ -35,7 +36,12 @@ import org.mockito.kotlin.mock
 @RunWith(AndroidJUnit4::class)
 class SpatialComposeSceneTest {
 
-    @get:Rule val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
+    // Migrate to `androidx.compose.ui.test.junit4.v2.createAndroidComposeRule`,
+    // available starting with v1.11.0.
+    // See API docs for details.
+    @Suppress("DEPRECATION")
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
 
     lateinit var mockSceneRuntime: SceneRuntime
 
@@ -81,8 +87,8 @@ class SpatialComposeSceneTest {
         val session = composeTestRule.configureFakeSession()
 
         var currentSession: Session? = null
-        val entity = GroupEntity.create(session, "test")
-        val coreEntity = CoreGroupEntity(entity)
+        val entity = Entity.create(session, "test")
+        val coreEntity = CoreGroupEntity(session.scene.virtualPixelDensity, entity)
 
         lateinit var scene: SpatialComposeScene
         lateinit var composition: androidx.compose.runtime.CompositionContext

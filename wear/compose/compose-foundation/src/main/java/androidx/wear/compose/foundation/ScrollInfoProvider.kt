@@ -32,7 +32,7 @@ import androidx.wear.compose.foundation.pager.PagerState
 import androidx.wear.compose.foundation.pager.VerticalPager
 
 /**
- * An interface for providing scroll information for different scrollable containers, such lists.
+ * An interface for providing scroll information for different scrollable containers, such as lists.
  * Used for scrolling away, showing, hiding or scaling screen elements based on scrollable state.
  *
  * [ScrollInfoProvider] can be used to create a ScrollAway modifier, typically applied to an object
@@ -75,15 +75,17 @@ public interface ScrollInfoProvider {
 /**
  * Function for creating a [ScrollInfoProvider] from a [ScalingLazyListState], for use with
  * [ScalingLazyColumn] - used to coordinate between scrollable content and scaffold content such as
- * [TimeText] which is scrolled away at the top of the screen and [EdgeButton] which is scaled.
+ * [androidx.wear.compose.material.TimeText] which is scrolled away at the top of the screen and
+ * [androidx.wear.compose.material3.EdgeButton] which is scaled.
  */
 public fun ScrollInfoProvider(state: ScalingLazyListState): ScrollInfoProvider =
     ScalingLazyListStateScrollInfoProvider(state)
 
 /**
  * Function for creating a [ScrollInfoProvider] from a [LazyListState], for use with [LazyColumn] -
- * used to coordinate between scrollable content and scaffold content such as [TimeText] which is
- * scrolled away at the top of the screen and [EdgeButton] which is scaled.
+ * used to coordinate between scrollable content and scaffold content such as
+ * [androidx.wear.compose.material.TimeText] which is scrolled away at the top of the screen and
+ * [androidx.wear.compose.material3.EdgeButton] which is scaled.
  */
 public fun ScrollInfoProvider(state: LazyListState): ScrollInfoProvider =
     LazyListStateScrollInfoProvider(state)
@@ -91,16 +93,17 @@ public fun ScrollInfoProvider(state: LazyListState): ScrollInfoProvider =
 /**
  * Function for creating a [ScrollInfoProvider] from a [TransformingLazyColumnState], for use with
  * [TransformingLazyColumn] - used to coordinate between scrollable content and scaffold content
- * such as [TimeText] which is scrolled away at the top of the screen and [EdgeButton] which is
- * scaled.
+ * such as [androidx.wear.compose.material.TimeText] which is scrolled away at the top of the screen
+ * and [androidx.wear.compose.material3.EdgeButton] which is scaled.
  */
 public fun ScrollInfoProvider(state: TransformingLazyColumnState): ScrollInfoProvider =
     TransformingLazyColumnStateScrollInfoProvider(state)
 
 /**
  * Function for creating a [ScrollInfoProvider] from a [ScrollState], for use with [Column] - used
- * to coordinate between scrollable content and scaffold content such as [TimeText] which is
- * scrolled away at the top of the screen and [EdgeButton] which is scaled.
+ * to coordinate between scrollable content and scaffold content such as
+ * [androidx.wear.compose.material.TimeText] which is scrolled away at the top of the screen and
+ * [androidx.wear.compose.material3.EdgeButton] which is scaled.
  *
  * @param state the [ScrollState] to use as the base for creating the [ScrollInfoProvider]
  */
@@ -110,8 +113,9 @@ public fun ScrollInfoProvider(state: ScrollState): ScrollInfoProvider =
 /**
  * Function for creating a [ScrollInfoProvider] from a [PagerState], for use with [HorizontalPager]
  * and [VerticalPager]
- * - used to coordinate when to fade out the PageIndicator and [TimeText]. The PageIndicator fades
- *   out when when scrolling is finished and the screen is in an idle state.
+ * - used to coordinate when to fade out the PageIndicator and
+ *   [androidx.wear.compose.material.TimeText]. The PageIndicator fades out when scrolling is
+ *   finished and the screen is in an idle state.
  *
  * @param state the [PagerState] to use as the base for creating the [ScrollInfoProvider]
  */
@@ -141,9 +145,14 @@ private class ScalingLazyListStateScrollInfoProvider(val state: ScalingLazyListS
             return layoutInfo.visibleItemsInfo
                 .fastFirstOrNull { it.index == 1 }
                 ?.let {
-                    val startOffset = it.startOffset(ScalingLazyListAnchorType.ItemStart)
-                    if (initialStartOffset == null || startOffset > initialStartOffset!!) {
-                        initialStartOffset = startOffset
+                    val newStartOffset = it.startOffset(ScalingLazyListAnchorType.ItemStart)
+                    if (initialStartOffset == null || newStartOffset > initialStartOffset!!) {
+                        initialStartOffset = newStartOffset
+                    } else if (!state.canScrollBackward && !state.isScrollInProgress) {
+                        // Reset the initialStartOffset if at the top boundary and idle to account
+                        // for layout mutations (like items shrinking or content padding changes)
+                        // that would otherwise cause a scroll desync.
+                        initialStartOffset = newStartOffset
                     }
                     -it.offset + initialStartOffset!!
                 } ?: Float.NaN
@@ -295,11 +304,16 @@ private class TransformingLazyColumnStateScrollInfoProvider(
                 if (item.index != 0) {
                     return@let Float.NaN
                 }
-                val newOffset = item.offset.toFloat()
-                if (initialStartOffset.isNaN() || newOffset > initialStartOffset) {
-                    initialStartOffset = newOffset
+                val newStartOffset = item.offset.toFloat()
+                if (initialStartOffset.isNaN() || newStartOffset > initialStartOffset) {
+                    initialStartOffset = newStartOffset
+                } else if (!state.canScrollBackward && !state.isScrollInProgress) {
+                    // Reset the initialStartOffset if at the top boundary and idle to account
+                    // for layout mutations (like items shrinking or content padding changes)
+                    // that would otherwise cause a scroll desync.
+                    initialStartOffset = newStartOffset
                 }
-                initialStartOffset - newOffset
+                initialStartOffset - newStartOffset
             } ?: Float.NaN
 
     private var previousLastItemKey: Any? = null

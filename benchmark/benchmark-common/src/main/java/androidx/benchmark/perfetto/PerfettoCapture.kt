@@ -18,16 +18,18 @@ package androidx.benchmark.perfetto
 
 import android.os.Build
 import android.util.JsonReader
+import android.util.Log
 import androidx.annotation.CheckResult
 import androidx.annotation.RequiresApi
 import androidx.annotation.RestrictTo
+import androidx.benchmark.BenchmarkState
+import androidx.benchmark.InProcessTracingMode
 import androidx.benchmark.Outputs
 import androidx.benchmark.Shell
 import androidx.benchmark.ShellFile
 import androidx.benchmark.UserFile
 import androidx.benchmark.UserInfo
 import androidx.benchmark.inMemoryTrace
-import androidx.benchmark.perfetto.PerfettoCapture.PerfettoSdkConfig.InitialProcessState
 import androidx.benchmark.perfetto.PerfettoHelper.Companion.isAbiSupported
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.tracing.perfetto.handshake.PerfettoSdkHandshake
@@ -52,10 +54,10 @@ public class PerfettoCapture(
 
     private val helper: PerfettoHelper = PerfettoHelper(unbundled)
 
-    fun isRunning() = helper.isRunning()
+    public fun isRunning(): Boolean = helper.isRunning()
 
     /** Start collecting perfetto trace. */
-    fun start(config: PerfettoConfig) =
+    public fun start(config: PerfettoConfig): Unit =
         inMemoryTrace("start perfetto") {
             // Write config proto to dir that shell can read
             //     We use `.pb` even with textproto so we'll only ever have one file
@@ -82,20 +84,28 @@ public class PerfettoCapture(
      * @param destinationPath Absolute path to write perfetto trace to. Must be shell-writable, such
      *   as result of `context.getExternalFilesDir(null)` or other similar `external` paths.
      */
-    public fun stop(destinationPath: String, inMemoryTracingLabel: String?) =
+    public fun stop(
+        destinationPath: String,
+        inMemoryTracingLabel: String?,
+        additionalPaths: List<String>,
+    ): Unit =
         inMemoryTrace("stop perfetto") {
-            helper.stopCollecting(destinationPath, inMemoryTracingLabel)
+            helper.stopCollecting(
+                destination = destinationPath,
+                inMemoryLabel = inMemoryTracingLabel,
+                additionalPaths = additionalPaths,
+            )
         }
 
     /**
-     * Enables Perfetto SDK tracing in the [PerfettoSdkConfig.targetPackage]
+     * Enables Perfetto SDK tracing in the [TracingLibraryConfig.targetPackage]
      *
      * @return a pair of [androidx.tracing.perfetto.handshake.protocol.ResultCode] and a
      *   user-friendly message explaining the code
      */
     @RequiresApi(30) // TODO(234351579): Support API < 30
     @CheckResult
-    fun enableAndroidxTracingPerfetto(config: PerfettoSdkConfig): Pair<Int, String> =
+    public fun enableAndroidxTracingPerfetto(config: TracingLibraryConfig): Pair<Int, String> =
         enableAndroidxTracingPerfetto(
             targetPackage = config.targetPackage,
             provideBinariesIfMissing = config.provideBinariesIfMissing,
@@ -105,7 +115,7 @@ public class PerfettoCapture(
     @RequiresApi(30) // TODO(234351579): Support API < 30
     @CheckResult
     /**
-     * Enables Perfetto SDK tracing in the [PerfettoSdkConfig.targetPackage]
+     * Enables Perfetto SDK tracing in the [TracingLibraryConfig.targetPackage]
      *
      * @return a pair of [androidx.tracing.perfetto.handshake.protocol.ResultCode] and a
      *   user-friendly message explaining the code
@@ -124,18 +134,18 @@ public class PerfettoCapture(
             PerfettoSdkHandshake(
                 targetPackage = targetPackage,
                 parseJsonMap = { jsonString: String ->
+                    Log.d(BenchmarkState.TAG, "Handshake Result: $jsonString")
                     sequence {
-                            JsonReader(StringReader(jsonString)).use { reader ->
-                                reader.beginObject()
-                                while (reader.hasNext()) yield(
-                                    reader.nextName() to reader.nextString()
-                                )
-                                reader.endObject()
-                            }
+                        JsonReader(StringReader(jsonString)).use { reader ->
+                            reader.beginObject()
+                            while (reader.hasNext()) yield(reader.nextName() to reader.nextString())
+                            reader.endObject()
                         }
+                    }
                         .toMap()
                 },
                 executeShellCommand = { cmd ->
+                    Log.d(BenchmarkState.TAG, "Executing Command: $cmd")
                     val (stdout, stderr) = Shell.executeScriptCaptureStdoutStderr(cmd)
                     listOf(stdout, stderr)
                         .filter { it.isNotBlank() }
@@ -194,8 +204,8 @@ public class PerfettoCapture(
                     if (responseNoSideloading.resultCode == RESULT_CODE_ERROR_BINARY_MISSING) {
                         binaryMissingResponseString(
                             responseNoSideloading.requiredVersion,
-                            response
-                                .message, // note: we're using the error from the sideloading attempt
+                            response.message, // note: we're using the error from the sideloading
+                            // attempt
                         )
                     } else {
                         "Error: ${response.message}."
@@ -235,13 +245,46 @@ public class PerfettoCapture(
         )
     }
 
-    class PerfettoSdkConfig(
-        val targetPackage: String,
-        val processState: InitialProcessState,
-        val provideBinariesIfMissing: Boolean = true,
+    /** Additional optional configuration when enabling `in-process-tracing`. */
+    public class InProcessTracingConfig(
+        /** The in-process tracing mode for the target process. */
+        public val inProcessTracingMode: InProcessTracingMode = InProcessTracingMode.UseIfAvailable,
+        /** The array of tracing categories to enable. When `empty` all categories are enabled. */
+        public val enabledCategories: Array<String> = emptyArray(),
+    ) {
+
+        override fun toString(): String {
+            return "InProcessTracingConfig(enabledCategories=${enabledCategories.contentToString()})"
+        }
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+
+            other as InProcessTracingConfig
+
+            if (inProcessTracingMode != other.inProcessTracingMode) return false
+            if (!enabledCategories.contentEquals(other.enabledCategories)) return false
+
+            return true
+        }
+
+        override fun hashCode(): Int {
+            var result = inProcessTracingMode.hashCode()
+            result = 31 * result + enabledCategories.contentHashCode()
+            return result
+        }
+    }
+
+    public class TracingLibraryConfig(
+        public val targetPackage: String,
+        public val processState: InitialProcessState = InitialProcessState.Unknown,
+        public val enablePerfettoSdk: Boolean = false,
+        public val provideBinariesIfMissing: Boolean = true,
+        public val inProcessTracingConfig: InProcessTracingConfig? = null,
     ) {
         /** State of process before tracing begins. */
-        enum class InitialProcessState {
+        public enum class InitialProcessState {
             /** will schedule tracing on next cold start */
             NotAlive,
 
@@ -256,7 +299,7 @@ public class PerfettoCapture(
          * Returns true if the target package is not running, and thus will require a cold start
          * tracing handshake
          */
-        fun launchWouldBeCold(): Boolean {
+        public fun launchWouldBeCold(): Boolean {
             return when (processState) {
                 InitialProcessState.NotAlive -> true
                 InitialProcessState.Alive -> false

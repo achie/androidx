@@ -30,6 +30,8 @@ import androidx.compose.remote.creation.computePosition
 import androidx.compose.remote.creation.minus
 import androidx.compose.remote.creation.modifiers.RectShape
 import androidx.compose.remote.creation.platform.AndroidxRcPlatformServices
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
 
 @Suppress("RestrictedApiAndroidX")
 fun RcCanvasComponents1(): RemoteComposeContext {
@@ -66,6 +68,10 @@ fun RcCanvasComponents1(): RemoteComposeContext {
         }
     }
 }
+
+@Preview
+@Composable
+private fun RcCanvasComponents1Preview() = RemoteDocumentPreview(RcCanvasComponents1())
 
 @Suppress("RestrictedApiAndroidX")
 fun RcCanvasComponents2(): RemoteComposeContext {
@@ -115,6 +121,10 @@ fun RcCanvasComponents2(): RemoteComposeContext {
         }
     }
 }
+
+@Preview
+@Composable
+private fun RcCanvasComponents2Preview() = RemoteDocumentPreview(RcCanvasComponents2())
 
 fun getFonts(): Array<Font> {
     val fList = SystemFonts.getAvailableFonts().toTypedArray()
@@ -168,6 +178,10 @@ fun RcCanvasComponents3(): RemoteComposeContext {
     }
 }
 
+@Preview
+@Composable
+private fun RcCanvasComponents3Preview() = RemoteDocumentPreview(RcCanvasComponents3())
+
 @Suppress("RestrictedApiAndroidX")
 fun RcCanvasComponents4(): RemoteComposeContext {
     return RemoteComposeContextAndroid(
@@ -201,6 +215,10 @@ fun RcCanvasComponents4(): RemoteComposeContext {
         }
     }
 }
+
+@Preview
+@Composable
+private fun RcCanvasComponents4Preview() = RemoteDocumentPreview(RcCanvasComponents4())
 
 @Suppress("RestrictedApiAndroidX")
 fun RcCanvasComponents5(): RemoteComposeContext {
@@ -262,3 +280,7 @@ fun RcCanvasComponents5(): RemoteComposeContext {
         }
     }
 }
+
+@Preview
+@Composable
+private fun RcCanvasComponents5Preview() = RemoteDocumentPreview(RcCanvasComponents5())

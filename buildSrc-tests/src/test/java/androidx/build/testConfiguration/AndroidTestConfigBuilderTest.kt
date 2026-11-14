@@ -54,6 +54,34 @@ class AndroidTestConfigBuilderTest {
     }
 
     @Test
+    fun testXmlWithMaxShardCountOneProducesNotShardable() {
+        builder.maxShardCount(1)
+        val xml = builder.buildXml()
+        MatcherAssert.assertThat(
+            xml,
+            CoreMatchers.containsString("<option name=\"not-shardable\" value=\"true\" />"),
+        )
+        MatcherAssert.assertThat(
+            xml,
+            CoreMatchers.not(CoreMatchers.containsString("ajur-max-shard")),
+        )
+    }
+
+    @Test
+    fun testXmlWithMaxShardCountGreaterThanOneProducesAjurMaxShard() {
+        builder.maxShardCount(2)
+        val xml = builder.buildXml()
+        MatcherAssert.assertThat(
+            xml,
+            CoreMatchers.containsString("<option name=\"ajur-max-shard\" value=\"2\" />"),
+        )
+        MatcherAssert.assertThat(
+            xml,
+            CoreMatchers.not(CoreMatchers.containsString("not-shardable")),
+        )
+    }
+
+    @Test
     fun testXmlAgainstGoldenMicrobenchmark() {
         builder.isMicrobenchmark(true)
 
@@ -115,9 +143,10 @@ class AndroidTestConfigBuilderTest {
                       "value": "androidx.test.filters.FlakyTest"
                     }
                   ],
-                  "additionalApkKeys": []
+                  "additionalApkKeys": [],
+                  "useOrchestrator": false
                 }
-            """
+                """
                     .trimIndent()
             ),
         )
@@ -146,9 +175,10 @@ class AndroidTestConfigBuilderTest {
                   ],
                   "additionalApkKeys": [
                     "customKey"
-                  ]
+                  ],
+                  "useOrchestrator": false
                 }
-            """
+                """
                     .trimIndent()
             ),
         )
@@ -179,9 +209,10 @@ class AndroidTestConfigBuilderTest {
                       "value": "true"
                     }
                   ],
-                  "additionalApkKeys": []
+                  "additionalApkKeys": [],
+                  "useOrchestrator": false
                 }
-            """
+                """
                     .trimIndent()
             ),
         )
@@ -212,9 +243,10 @@ class AndroidTestConfigBuilderTest {
                       "value": "androidx.test.filters.FlakyTest"
                     }
                   ],
-                  "additionalApkKeys": []
+                  "additionalApkKeys": [],
+                  "useOrchestrator": false
                 }
-            """
+                """
                     .trimIndent()
             ),
         )
@@ -305,7 +337,7 @@ private val goldenDefaultConfig =
     <option name="package" value="com.androidx.placeholder.Placeholder" />
     </test>
     </configuration>
-"""
+    """
         .trimIndent()
 
 private val goldenDefaultConfigBenchmark =
@@ -348,7 +380,7 @@ private val goldenDefaultConfigBenchmark =
     <option name="device-listeners" value="androidx.benchmark.junit4.SideEffectRunListener" />
     </test>
     </configuration>
-"""
+    """
         .trimIndent()
 
 private val goldenDefaultConfigMacroBenchmark =
@@ -391,5 +423,5 @@ private val goldenDefaultConfigMacroBenchmark =
     <option name="device-listeners" value="androidx.benchmark.macro.junit4.SideEffectRunListener" />
     </test>
     </configuration>
-"""
+    """
         .trimIndent()

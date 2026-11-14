@@ -19,11 +19,12 @@ package androidx.camera.camera2.pipe.testing
 import androidx.camera.camera2.pipe.CameraTimestamp
 import androidx.camera.camera2.pipe.FrameInfo
 import androidx.camera.camera2.pipe.FrameMetadata
-import androidx.camera.camera2.pipe.FrameNumber
+import androidx.camera.camera2.pipe.OutputId
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestFailure
 import androidx.camera.camera2.pipe.RequestMetadata
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.common.CameraFrameNumber
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -62,9 +63,14 @@ public class FakeRequestListener(private val replayBuffer: Int = 10) : Request.L
     private val _onFailedFlow = MutableSharedFlow<OnFailed>(replay = replayBuffer)
     public val onFailedFlow: SharedFlow<OnFailed> = _onFailedFlow.asSharedFlow()
 
+    private val _onRequestSequenceCompletedFlow =
+        MutableSharedFlow<OnRequestSequenceCompleted>(replay = replayBuffer)
+    public val onRequestSequenceCompletedFlow: SharedFlow<OnRequestSequenceCompleted> =
+        _onRequestSequenceCompletedFlow.asSharedFlow()
+
     override fun onStarted(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         timestamp: CameraTimestamp,
     ): Unit =
         check(_onStartedFlow.tryEmit(OnStarted(requestMetadata, frameNumber, timestamp))) {
@@ -74,7 +80,7 @@ public class FakeRequestListener(private val replayBuffer: Int = 10) : Request.L
 
     override fun onPartialCaptureResult(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         captureResult: FrameMetadata,
     ): Unit =
         check(
@@ -88,7 +94,7 @@ public class FakeRequestListener(private val replayBuffer: Int = 10) : Request.L
 
     override fun onTotalCaptureResult(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         totalCaptureResult: FrameInfo,
     ): Unit =
         check(
@@ -102,7 +108,7 @@ public class FakeRequestListener(private val replayBuffer: Int = 10) : Request.L
 
     override fun onComplete(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         result: FrameInfo,
     ): Unit =
         check(_onCompleteFlow.tryEmit(OnComplete(requestMetadata, frameNumber, result))) {
@@ -118,21 +124,39 @@ public class FakeRequestListener(private val replayBuffer: Int = 10) : Request.L
 
     override fun onBufferLost(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
-        stream: StreamId,
+        frameNumber: CameraFrameNumber,
+        streamId: StreamId,
+        outputId: OutputId,
     ): Unit =
-        check(_onBufferLostFlow.tryEmit(OnBufferLost(requestMetadata, frameNumber, stream))) {
+        check(
+            _onBufferLostFlow.tryEmit(
+                OnBufferLost(requestMetadata, frameNumber, streamId, outputId)
+            )
+        ) {
             "Failed to emit OnBufferLost event! The size of the replay buffer" +
                 "($replayBuffer) may need to be increased."
         }
 
     override fun onFailed(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         requestFailure: RequestFailure,
     ): Unit =
         check(_onFailedFlow.tryEmit(OnFailed(requestMetadata, frameNumber, requestFailure))) {
             "Failed to emit OnFailed event! The size of the replay buffer" +
+                "($replayBuffer) may need to be increased."
+        }
+
+    override fun onRequestSequenceCompleted(
+        requestMetadata: RequestMetadata,
+        frameNumber: CameraFrameNumber,
+    ): Unit =
+        check(
+            _onRequestSequenceCompletedFlow.tryEmit(
+                OnRequestSequenceCompleted(requestMetadata, frameNumber)
+            )
+        ) {
+            "Failed to emit OnRequestSequenceCompleted event! The size of the replay buffer" +
                 "($replayBuffer) may need to be increased."
         }
 }
@@ -141,25 +165,25 @@ public sealed class RequestListenerEvent
 
 public class OnStarted(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val timestamp: CameraTimestamp,
 ) : RequestListenerEvent()
 
 public class OnPartialCaptureResult(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val frameMetadata: FrameMetadata,
 ) : RequestListenerEvent()
 
 public class OnTotalCaptureResult(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val frameInfo: FrameInfo,
 ) : RequestListenerEvent()
 
 public class OnComplete(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val frameInfo: FrameInfo,
 ) : RequestListenerEvent()
 
@@ -167,12 +191,18 @@ public class OnAborted(public val request: Request) : RequestListenerEvent()
 
 public class OnBufferLost(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val streamId: StreamId,
+    public val outputId: OutputId,
 ) : RequestListenerEvent()
 
 public class OnFailed(
     public val requestMetadata: RequestMetadata,
-    public val frameNumber: FrameNumber,
+    public val frameNumber: CameraFrameNumber,
     public val requestFailure: RequestFailure,
+) : RequestListenerEvent()
+
+public class OnRequestSequenceCompleted(
+    public val requestMetadata: RequestMetadata,
+    public val frameNumber: CameraFrameNumber,
 ) : RequestListenerEvent()

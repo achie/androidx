@@ -118,6 +118,28 @@
         </activity>
 
         <activity
+            android:name=".SimpleDrawCurvedToEdgeActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name=
+                    "androidx.wear.compose.material3.macrobenchmark.target.SIMPLE_DRAW_CURVED_TO_EDGE_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ComplexDrawCurvedToEdgeActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name=
+                    "androidx.wear.compose.material3.macrobenchmark.target.COMPLEX_DRAW_CURVED_TO_EDGE_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".DatePickerActivity"
             android:theme="@style/AppTheme"
             android:exported="true"
@@ -222,6 +244,16 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.wear.compose.material3.macrobenchmark.target.ICON_TOGGLE_BUTTON_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".OneHandedGestureActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.wear.compose.material3.macrobenchmark.target.ONE_HANDED_GESTURE_ACTIVITY" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -490,12 +522,34 @@
         </activity>
 
         <activity
+            android:name=".TransformingLazyColumnOneHandedGesturesActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name=
+                    "androidx.wear.compose.material3.macrobenchmark.target.TRANSFORMING_LAZY_COLUMN_ONE_HANDED_GESTURES_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".TransformingLazyColumnNotificationsActivity"
             android:theme="@style/AppTheme"
             android:exported="true">
             <intent-filter>
                 <action android:name=
                     "androidx.wear.compose.material3.macrobenchmark.target.TRANSFORMING_LAZY_COLUMN_NOTIFICATIONS_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".TransformingLazyColumnOffscreenContainerActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name=
+                    "androidx.wear.compose.material3.macrobenchmark.target.TRANSFORMING_LAZY_COLUMN_OFFSCREEN_ACTIVITY" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -518,6 +572,17 @@
             <intent-filter>
                 <action android:name=
                     "androidx.wear.compose.material3.macrobenchmark.target.TRANSFORMING_LAZY_COLUMN_HEAVY_ITEM_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".TransformingLazyColumnNotificationsWithSnapActivity"
+            android:theme="@style/AppTheme"
+            android:exported="true">
+            <intent-filter>
+                <action android:name=
+                    "androidx.wear.compose.material3.macrobenchmark.target.TRANSFORMING_LAZY_COLUMN_NOTIFICATIONS_WITH_SNAP_ACTIVITY" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>

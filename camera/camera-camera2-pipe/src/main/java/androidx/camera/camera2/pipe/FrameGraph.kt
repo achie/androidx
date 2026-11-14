@@ -16,7 +16,10 @@
 
 package androidx.camera.camera2.pipe
 
+import android.hardware.camera2.CaptureRequest
 import androidx.annotation.RestrictTo
+import androidx.camera.common.Metadata
+import androidx.camera.common.UnsafeWrapper
 
 /** [FrameGraph] extends the capabilities of [CameraGraph] to provide stream controls. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
@@ -29,7 +32,7 @@ public interface FrameGraph : CameraGraphBase<FrameGraph.Session>, CameraControl
     ) {
         init {
             val cameraGraphCount = cameraGraphConfigs.graphConfigs.size
-            val frameGraphCount = cameraGraphConfigs.graphConfigs.size
+            val frameGraphCount = frameGraphConfigs.size
 
             require(frameGraphCount == cameraGraphCount) {
                 "Invalid FrameGraph.ConcurrentConfig! Expected $cameraGraphCount configs, but " +
@@ -47,11 +50,79 @@ public interface FrameGraph : CameraGraphBase<FrameGraph.Session>, CameraControl
     }
 
     /**
+     * Submit the [Request] to the camera, and aggregate the results into a [FrameCapture], which
+     * can be used to wait for the [Frame] to start using [FrameCapture.awaitFrame].
+     *
+     * The [FrameCapture] **must** be closed, or it will result in a memory leak.
+     */
+    public fun capture(request: Request): FrameCapture
+
+    /**
+     * Submit the [Request]s to the camera, and aggregate the results into a list of
+     * [FrameCapture]s, which can be used to wait for the associated [Frame] using
+     * [FrameCapture.awaitFrame].
+     *
+     * Each [FrameCapture] **must** be closed, or it will result in a memory leak.
+     */
+    public fun capture(requests: List<Request>): List<FrameCapture>
+
+    /**
      * Add the set of [streamIds] and [parameters] to the current repeating request, updating and
-     * submitting a new repeating repeating request as needed.
+     * submitting a new repeating request as needed.
      *
      * Returns a buffer with [capacity] that will accumulate and cycle Frames that are produced by
      * the FrameGraph that have the attached [streamIds] and [parameters] until closed.
+     *
+     * A frame is only added to the buffer if its [Request] matches [parameters]: for each key in
+     * [parameters], the request must carry the key ([Request.parameters] for a
+     * [CaptureRequest.Key], [Request.extras] for a [Metadata.Key]) with a value equal to the buffer
+     * value. Only the [Request] values are compared, not values that
+     * [CameraGraph.Config.defaultParameters] or [CameraGraph.Config.requiredParameters] may
+     * override. A buffer whose key or value is not in the running repeating request (for example,
+     * right after a buffer with another value was closed) receives repeating frames once the new
+     * repeating request is running.
+     *
+     * ### Filtering frames with tags
+     * A [Metadata.Key] in [parameters] whose value type is a [TagBundle] (e.g.
+     * `Metadata.Key<TagBundle<Tag>>`) filters which frames enter this [FrameBuffer]. A key whose
+     * value is a plain [Set] is a regular parameter. Tags identify the consumer of a frame, not its
+     * streams; streams are already matched by [streamIds]. Passing a value that is not a
+     * [TagBundle] for a tag key throws [IllegalArgumentException].
+     * - **Repeating request union:** Unlike other parameters (which must not conflict across
+     *   attached buffers), buffers may specify different tag bundles for the same key. The union of
+     *   all attached buffers' tag bundles is placed into the repeating request's [Request.extras].
+     * - **Frame matching:** When a frame is produced (from either a repeating or non-repeating
+     *   request), it is added to this buffer only if, for every tag bundle on this buffer, the
+     *   frame's [Request.extras] contains a [TagBundle] for that key that includes every tag in
+     *   this buffer's tag bundle. A request that does not carry a [TagBundle] for the key is not
+     *   added.
+     * - **Omitted tag keys:** A buffer that does not have the tag key does not filter frames by
+     *   that key.
+     *
+     * Because repeating and non-repeating requests use the same matching rule, a buffer attached
+     * with a new tag bundle will begin receiving repeating frames once the updated repeating
+     * request carrying its tags starts running.
+     *
+     * ### Example: Isolating a one-shot capture from a FrameBuffer
+     *
+     * ```kotlin
+     * val BUFFER_TAGS = Metadata.Key<TagBundle<String>>("my.buffer.tags")
+     *
+     * // 1. Attach a buffer tagged with "continuous".
+     * val buffer = frameGraph.captureWith(
+     *     streamIds = setOf(streamId),
+     *     parameters = mapOf(BUFFER_TAGS to tagsOf("continuous")),
+     * )
+     *
+     * // 2. Submit a single capture on the same stream tagged with "oneShot".
+     * // Because tagsOf("oneShot") does not contain "continuous", this frame will NOT enter buffer.
+     * // It is still returned through the FrameCapture, which must be closed.
+     * val frameCapture = frameGraph.useSession { session ->
+     *     session.capture(
+     *         Request(streams = listOf(streamId), extras = mapOf(BUFFER_TAGS to tagsOf("oneShot")))
+     *     )
+     * }
+     * ```
      *
      * Closing the FrameBuffer will detach the streams and parameters, and the repeating request may
      * be re-issued.
@@ -59,8 +130,14 @@ public interface FrameGraph : CameraGraphBase<FrameGraph.Session>, CameraControl
     public fun captureWith(
         streamIds: Set<StreamId> = emptySet(),
         parameters: Map<Any, Any?> = emptyMap(),
-        capacity: Int = 1,
+        capacity: Int = DEFAULT_FRAME_BUFFER_CAPACITY,
     ): FrameBuffer
+
+    /**
+     * Release all internally held buffers, frames and pending images associated with the
+     * [streamId].
+     */
+    public fun drain(streamId: StreamId) {}
 
     /**
      * A [Session] is an interactive lock for [FrameGraph].
@@ -70,8 +147,38 @@ public interface FrameGraph : CameraGraphBase<FrameGraph.Session>, CameraControl
      * short-lived state updates, or for interactive capture sequences that must not be altered.
      * (Flash photo sequences, for example).
      *
-     * While this object is thread-safe, it should not shared or held for long periods of time.
+     * While this object is thread-safe, it should not be shared or held for long periods of time.
      * Example: A [Session] should *not* be held during video recording.
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public interface Session : CameraGraph.Session
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public interface Session : CameraGraph.Session {
+        /**
+         * Submit the [Request] to the camera, and aggregate the results into a [FrameCapture],
+         * which can be used to wait for the [Frame] to start using [FrameCapture.awaitFrame].
+         *
+         * The [FrameCapture] **must** be closed, or it will result in a memory leak.
+         */
+        public fun capture(request: Request): FrameCapture
+
+        /**
+         * Submit the [Request]s to the camera, and aggregate the results into a list of
+         * [FrameCapture]s, which can be used to wait for the associated [Frame] using
+         * [FrameCapture.awaitFrame].
+         *
+         * Each [FrameCapture] **must** be closed, or it will result in a memory leak.
+         */
+        public fun capture(requests: List<Request>): List<FrameCapture>
+    }
+
+    public companion object {
+        private const val DEFAULT_FRAME_BUFFER_CAPACITY = 1
+
+        /** Utility function for the common case of attaching a single stream. See [captureWith]. */
+        @JvmStatic
+        public fun FrameGraph.captureWith(
+            streamId: StreamId,
+            parameters: Map<Any, Any?> = emptyMap(),
+            capacity: Int = DEFAULT_FRAME_BUFFER_CAPACITY,
+        ): FrameBuffer = captureWith(setOf(streamId), parameters, capacity)
+    }
 }

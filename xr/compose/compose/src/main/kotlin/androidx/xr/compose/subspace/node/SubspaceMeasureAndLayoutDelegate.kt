@@ -26,8 +26,8 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
     val snapshotStateObserver: SnapshotStateObserver = SnapshotStateObserver(::run)
 
     /**
-     * Set of nodes that have invalidated measurement and need to to call "remeasure()".
-     * Automatically sorted by depth (parents first)
+     * Set of nodes that have invalidated measurement and need to call "remeasure()". Automatically
+     * sorted by depth (parents first).
      */
     private val nodesPendingMeasure = SubspaceDepthSortedSet(extraAssertions = false)
 
@@ -36,6 +36,12 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
      * depth.
      */
     private val nodesPendingLayout = SubspaceDepthSortedSet(extraAssertions = false)
+
+    /**
+     * Set of nodes that have invalidated Core Entities and need to be updated. Automatically sorted
+     * by depth.
+     */
+    private val nodesPendingEntityUpdate = SubspaceDepthSortedSet(extraAssertions = false)
 
     /**
      * The current state of the measure and layout scheduler. With this we determine if we should
@@ -56,6 +62,10 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
 
     private val onCommitAffectingLayout: (SubspaceLayoutNode) -> Unit = { layoutNode ->
         layoutNode.requestLayout()
+    }
+
+    private val onCommitAffectingEntityUpdate: (SubspaceLayoutNode) -> Unit = {
+        it.requestEntityUpdate()
     }
 
     /**
@@ -104,13 +114,25 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
         return !measureAndLayoutInProgress
     }
 
+    fun requestEntityUpdate(node: SubspaceLayoutNode, forceRequest: Boolean = false): Boolean {
+        if (!node.isAttached || (node.entityUpdatePending && !forceRequest)) return false
+
+        node.entityUpdatePending = true
+        nodesPendingEntityUpdate.add(node)
+        return !measureAndLayoutInProgress
+    }
+
     /**
      * This is the main measure and layout pass, triggered by the [snapshotStateObserver]. It
      * processes all nodes that have been marked as "dirty" for measure or layout.
      */
     fun measureAndLayout() {
-        if (nodesPendingMeasure.isEmpty() && nodesPendingLayout.isEmpty()) {
-            return // No measurement or layout scheduled.
+        if (
+            nodesPendingMeasure.isEmpty() &&
+                nodesPendingLayout.isEmpty() &&
+                nodesPendingEntityUpdate.isEmpty()
+        ) {
+            return // No measurement, layout, or entity updates scheduled.
         }
         measureAndLayoutInProgress = true
 
@@ -121,6 +143,7 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
                 processMeasureRequests()
                 processLayoutRequests()
             }
+            processEntityUpdateRequests()
         } finally {
             measureAndLayoutInProgress = false
             drainPostponedRequests()
@@ -157,6 +180,16 @@ internal class SubspaceMeasureAndLayoutDelegate(private val root: SubspaceLayout
         nodesPendingLayout.drain { node ->
             if (node.layoutPending && node.isAttached) {
                 snapshotStateObserver.observeReads(node, onCommitAffectingLayout) { node.replace() }
+            }
+        }
+    }
+
+    private fun processEntityUpdateRequests() {
+        nodesPendingEntityUpdate.drain { node ->
+            if (node.entityUpdatePending && node.isAttached) {
+                snapshotStateObserver.observeReads(node, onCommitAffectingEntityUpdate) {
+                    node.updateCoreEntityProperties()
+                }
             }
         }
     }

@@ -18,8 +18,8 @@ package androidx.camera.integration.core.util
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraFilter
 import androidx.camera.core.CameraInfo
@@ -42,6 +42,7 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 
 private const val CORE_TEST_APP_PACKAGE = "androidx.camera.integration.core"
@@ -86,6 +87,9 @@ object StressTestUtil {
 
         val activityScenario: ActivityScenario<CameraXActivity> = ActivityScenario.launch(intent)
 
+        // Wait for viewfinder to receive enough frames for its IdlingResource to idle.
+        activityScenario.waitForViewfinderIdle()
+
         activityScenario.onActivity {
             // Checks that the camera id is correct
             if ((it.camera!!.cameraInfo as CameraInfoInternal).cameraId != cameraId) {
@@ -95,10 +99,6 @@ object StressTestUtil {
                 )
             }
         }
-
-        // Ensure ActivityScenario is cleaned up properly
-        // Wait for viewfinder to receive enough frames for its IdlingResource to idle.
-        activityScenario.waitForViewfinderIdle()
 
         return activityScenario
     }
@@ -157,23 +157,11 @@ object StressTestUtil {
     @JvmStatic
     fun getAllCameraXConfigCameraIdCombinations() =
         mutableListOf<Array<Any?>>().apply {
-            val cameraxConfigs =
-                listOf(Camera2Config::class.simpleName, CameraPipeConfig::class.simpleName)
+            val cameraxConfigs = listOf(Camera2Config::class.simpleName)
 
             cameraxConfigs.forEach { configImplName ->
                 CameraUtil.getBackwardCompatibleCameraIdListOrThrow().forEach { cameraId ->
-                    add(
-                        arrayOf(
-                            configImplName,
-                            when (configImplName) {
-                                CameraPipeConfig::class.simpleName ->
-                                    CameraPipeConfig.defaultConfig()
-                                Camera2Config::class.simpleName -> Camera2Config.defaultConfig()
-                                else -> Camera2Config.defaultConfig()
-                            },
-                            cameraId,
-                        )
-                    )
+                    add(arrayOf(configImplName, Camera2Config.defaultConfig(), cameraId))
                 }
             }
         }
@@ -216,4 +204,16 @@ object StressTestUtil {
 
     /** Constant to specify that the verification target is [ImageAnalysis]. */
     const val VERIFICATION_TARGET_IMAGE_ANALYSIS = 0x8
+
+    /**
+     * Skips test cases on redfin 64-bit-only builds where the vendor camera HAL (camera.lito.so /
+     * live_rectiface_processor.cc) crashes with native SIGABRT or SIGSEGV (b/579704076).
+     */
+    @JvmStatic
+    fun assumeNotRedfin64BitOnly() {
+        assumeFalse(
+            Build.DEVICE.equals("redfin", ignoreCase = true) &&
+                Build.SUPPORTED_32_BIT_ABIS.isEmpty()
+        )
+    }
 }

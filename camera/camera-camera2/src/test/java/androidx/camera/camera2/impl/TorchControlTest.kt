@@ -21,6 +21,7 @@ import androidx.camera.camera2.adapter.RobolectricCameraPipeTestRunner
 import androidx.camera.camera2.compat.workaround.NoOpAutoFlashAEModeDisabler
 import androidx.camera.camera2.pipe.Result3A
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.testing.FakeCameraProperties
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
 import androidx.camera.core.CameraControl
@@ -64,8 +65,7 @@ class TorchControlTest {
         }
     }
 
-    private val metadata =
-        FakeCameraMetadata(mapOf(CameraCharacteristics.FLASH_INFO_AVAILABLE to true))
+    private val metadata = FakeCameraMetadata.fromTemplate(HighEndDeviceTemplate)
 
     private val neverCompleteTorchRequestControl =
         FakeUseCaseCameraRequestControl().apply {
@@ -82,9 +82,12 @@ class TorchControlTest {
         torchControl =
             TorchControl(
                 fakeCameraProperties,
-                State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                    requestControl = fakeUseCaseCameraRequestControl
-                },
+                State3AControl(
+                        fakeCameraProperties,
+                        NoOpAutoFlashAEModeDisabler,
+                        fakeUseCaseThreads,
+                    )
+                    .apply { requestControl = fakeUseCaseCameraRequestControl },
                 fakeUseCaseThreads,
             )
         torchControl.requestControl = fakeUseCaseCameraRequestControl
@@ -94,14 +97,24 @@ class TorchControlTest {
     fun enableTorch_whenNoFlashUnit(): Unit = runBlocking {
         assertThrows<IllegalStateException> {
             val fakeUseCaseCameraRequestControl = FakeUseCaseCameraRequestControl()
-            val fakeCameraProperties = FakeCameraProperties()
+            val fakeCameraProperties =
+                FakeCameraProperties(
+                    FakeCameraMetadata.fromTemplate(
+                        template = HighEndDeviceTemplate,
+                        characteristicsOverrides =
+                            mapOf(CameraCharacteristics.FLASH_INFO_AVAILABLE to false),
+                    )
+                )
 
             // Without a flash unit, this Job will complete immediately with a IllegalStateException
             TorchControl(
                     fakeCameraProperties,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                 )
                 .also { it.requestControl = fakeUseCaseCameraRequestControl }
@@ -118,9 +131,12 @@ class TorchControlTest {
         val torchState =
             TorchControl(
                     fakeCameraProperties,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                 )
                 .also { it.requestControl = fakeUseCaseCameraRequestControl }
@@ -138,9 +154,12 @@ class TorchControlTest {
 
             TorchControl(
                     fakeCameraProperties,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                 )
                 .setTorchAsync(true)
@@ -169,9 +188,12 @@ class TorchControlTest {
         val torchControl =
             TorchControl(
                     fakeCameraProperties,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                 )
                 .also {

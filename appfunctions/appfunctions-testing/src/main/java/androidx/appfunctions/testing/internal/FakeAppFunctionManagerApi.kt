@@ -16,41 +16,59 @@
 
 package androidx.appfunctions.testing.internal
 
+import android.app.AppInteractionSession
+import android.app.appfunctions.AppFunctionActivityId
+import android.app.appfunctions.AppFunctionRegistration
 import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.appfunctions.AppFunctionActivityState
 import androidx.appfunctions.AppFunctionFunctionNotFoundException
+import androidx.appfunctions.AppFunctionName
 import androidx.appfunctions.ExecuteAppFunctionRequest
 import androidx.appfunctions.ExecuteAppFunctionResponse
-import androidx.appfunctions.internal.AggregatedAppFunctionInventory
+import androidx.appfunctions.ExperimentalAppFunctionsApi
+import androidx.appfunctions.RegisterAppFunctionRequest
 import androidx.appfunctions.internal.AppFunctionManagerApi
-import androidx.appfunctions.internal.NullTranslatorSelector
-import androidx.appfunctions.internal.findImpl
-import androidx.appfunctions.service.AppFunctionServiceDelegate
-import androidx.appfunctions.service.internal.AggregatedAppFunctionInvoker
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import androidx.appfunctions.metadata.AppFunctionMetadata
 
-@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+@OptIn(ExperimentalAppFunctionsApi::class)
+@RequiresApi(Build.VERSION_CODES.BAKLAVA)
 internal class FakeAppFunctionManagerApi(
     private val context: Context,
     private val appFunctionReader: FakeAppFunctionReader,
+    private val inventory: FakeAppFunctionInventory,
 ) : AppFunctionManagerApi {
-    @OptIn(ExperimentalCoroutinesApi::class)
     override suspend fun executeAppFunction(
-        request: ExecuteAppFunctionRequest
-    ): ExecuteAppFunctionResponse =
-        AppFunctionServiceDelegate(
-                context,
-                Dispatchers.Default,
-                AggregatedAppFunctionInventory::class.java.findImpl(prefix = "$", suffix = "_Impl"),
-                AggregatedAppFunctionInvoker::class.java.findImpl(prefix = "$", suffix = "_Impl"),
-                NullTranslatorSelector(),
-            )
-            .executeFunction(request)
+        request: ExecuteAppFunctionRequest,
+        functionMetadata: AppFunctionMetadata,
+    ): ExecuteAppFunctionResponse {
+        val serviceClassContainingFunction =
+            inventory.getServiceClassForFunction(request.functionIdentifier)
+                ?: throw AppFunctionFunctionNotFoundException(
+                    "No function found with identifier: ${request.functionIdentifier} in package ${request.targetPackageName}"
+                )
+        return AppFunctionServiceUtils.executeFunction(
+            serviceClassContainingFunction,
+            request,
+            functionMetadata,
+        )
+    }
+
+    @RequiresApi(Build.VERSION_CODES_FULL.CINNAMON_BUN_2)
+    override suspend fun executeAppFunction(
+        appInteractionSession: AppInteractionSession,
+        request: ExecuteAppFunctionRequest,
+        functionMetadata: AppFunctionMetadata,
+    ): ExecuteAppFunctionResponse {
+        return executeAppFunction(request, functionMetadata)
+    }
 
     override suspend fun isAppFunctionEnabled(packageName: String, functionId: String): Boolean =
-        appFunctionReader.getAppFunctionMetadata(functionId, packageName)?.isEnabled
+        appFunctionReader
+            .getAppFunctionStates(listOf(AppFunctionName(packageName, functionId)))
+            .singleOrNull()
+            ?.isEnabled
             ?: throw AppFunctionFunctionNotFoundException(
                 "No function found with id: $functionId under package: $packageName"
             )
@@ -60,10 +78,7 @@ internal class FakeAppFunctionManagerApi(
             appFunctionReader.getAppFunctionStaticAndRuntimeMetadata(
                 context.packageName,
                 functionId,
-            )
-                ?: throw AppFunctionFunctionNotFoundException(
-                    "No function found with id: $functionId"
-                )
+            ) ?: throw IllegalArgumentException("Function $functionId does not exist")
 
         appFunctionReader.setAppFunctionStaticAndRuntimeMetadata(
             context.packageName,
@@ -73,6 +88,24 @@ internal class FakeAppFunctionManagerApi(
                         enabled = newEnabledState
                     )
             ),
+        )
+    }
+
+    @RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+    override suspend fun getAppFunctionActivityStates(
+        activityIds: Set<AppFunctionActivityId>
+    ): List<AppFunctionActivityState> {
+        throw UnsupportedOperationException(
+            "Dynamic registration is not supported in testing fake yet"
+        )
+    }
+
+    @RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+    override fun registerAppFunctions(
+        requests: List<RegisterAppFunctionRequest>
+    ): AppFunctionRegistration {
+        throw UnsupportedOperationException(
+            "Dynamic registration is not supported in testing fake yet"
         )
     }
 }

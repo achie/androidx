@@ -20,8 +20,8 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CaptureRequest
 import androidx.annotation.OptIn
 import androidx.camera.camera2.compat.workaround.TemplateParamsOverride
+import androidx.camera.camera2.config.UseCaseCameraContext
 import androidx.camera.camera2.config.UseCaseCameraScope
-import androidx.camera.camera2.config.UseCaseGraphContext
 import androidx.camera.camera2.impl.CAMERAX_TAG_BUNDLE
 import androidx.camera.camera2.impl.Camera2ImplConfig
 import androidx.camera.camera2.impl.CameraCallbackMap
@@ -30,13 +30,14 @@ import androidx.camera.camera2.impl.UseCaseThreads
 import androidx.camera.camera2.impl.toParameters
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.isHardwareLevelLegacy
 import androidx.camera.camera2.pipe.FrameInfo
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.InputRequest
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestFailure
 import androidx.camera.camera2.pipe.RequestMetadata
 import androidx.camera.camera2.pipe.RequestTemplate
 import androidx.camera.camera2.pipe.media.AndroidImage
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.unwrapAs
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.impl.CameraCaptureResults
@@ -54,7 +55,7 @@ public class CaptureConfigAdapter
 @Inject
 constructor(
     cameraProperties: CameraProperties,
-    private val useCaseGraphContext: UseCaseGraphContext,
+    private val useCaseCameraContext: UseCaseCameraContext,
     private val zslControl: ZslControl,
     private val threads: UseCaseThreads,
     private val templateParamsOverride: TemplateParamsOverride,
@@ -65,7 +66,7 @@ constructor(
      * Maps [CaptureConfig] to [Request].
      *
      * @throws IllegalStateException When CaptureConfig does not have any surface or a CaptureConfig
-     *   surface is not recognized in [UseCaseGraphContext.surfaceToStreamMap]
+     *   surface is not recognized in [UseCaseCameraContext.surfaceToStreamMap]
      */
     @OptIn(ExperimentalGetImage::class)
     public fun mapToRequest(
@@ -79,19 +80,11 @@ constructor(
             "Attempted to issue a capture without surfaces using $captureConfig"
         }
 
-        val streamIdList =
-            surfaces.map {
-                checkNotNull(useCaseGraphContext.surfaceToStreamMap[it]) {
-                    "Attempted to issue a capture with an unrecognized surface: $it"
-                }
+        val streamIdList = surfaces.map {
+            checkNotNull(useCaseCameraContext.surfaceToStreamMap[it]) {
+                "Attempted to issue a capture with an unrecognized surface: $it"
             }
-
-        val callbacks =
-            CameraCallbackMap().apply {
-                captureConfig.cameraCaptureCallbacks.forEach { callback ->
-                    addCaptureCallback(callback, threads.sequentialExecutor)
-                }
-            }
+        }
 
         val configOptions = captureConfig.implementationOptions
         val optionBuilder = Camera2ImplConfig.Builder()
@@ -101,6 +94,23 @@ constructor(
         // P2 SessionConfig options
         optionBuilder.insertAllOptions(sessionConfigOptions)
         optionBuilder.insertAllOptions(configOptions)
+
+        val mergedConfig = optionBuilder.build()
+        val stillCaptureCallback =
+            mergedConfig.retrieveOption(Camera2ImplConfig.STILL_CAPTURE_CALLBACK_OPTION, null)
+
+        val callbacks =
+            CameraCallbackMap().apply {
+                captureConfig.cameraCaptureCallbacks.forEach { callback ->
+                    addCaptureCallback(callback, threads.sequentialExecutor)
+                }
+                stillCaptureCallback?.let {
+                    addCaptureCallback(
+                        CameraUseCaseAdapter.CaptureCallbackContainer.create(it),
+                        threads.sequentialExecutor,
+                    )
+                }
+            }
 
         // Add capture options defined in CaptureConfig
         if (configOptions.containsOption(CaptureConfig.OPTION_ROTATION)) {
@@ -125,21 +135,27 @@ constructor(
                 !zslControl.isZslDisabledByFlashMode()
         ) {
             zslControl.dequeueImageFromBuffer()?.let { imageProxy ->
-                CameraCaptureResults.retrieveCameraCaptureResult(imageProxy.imageInfo)?.let {
-                    cameraCaptureResult ->
-                    check(cameraCaptureResult is CaptureResultAdapter) {
-                        "Unexpected capture result type: ${cameraCaptureResult.javaClass}"
-                    }
-                    val imageWrapper = AndroidImage(checkNotNull(imageProxy.image))
-                    val frameInfo = checkNotNull(cameraCaptureResult.unwrapAs(FrameInfo::class))
-                    inputRequest = InputRequest(imageWrapper, frameInfo)
+                try {
+                    CameraCaptureResults.retrieveCameraCaptureResult(imageProxy.imageInfo)?.let {
+                        cameraCaptureResult ->
+                        check(cameraCaptureResult is CaptureResultAdapter) {
+                            "Unexpected capture result type: ${cameraCaptureResult.javaClass}"
+                        }
+                        val imageWrapper = AndroidImage(checkNotNull(imageProxy.image))
+                        val frameInfo = checkNotNull(cameraCaptureResult.unwrapAs<FrameInfo>())
+                        inputRequest = InputRequest(imageWrapper, frameInfo)
 
-                    // It's essential to call ImageProxy#close().
-                    // To ensure the ImageProxy is closed after the image is written to the output
-                    // surface. This is crucial to prevent resource leaks, where images might not
-                    // be closed properly if CameraX fails to propagate close events to its internal
-                    // components.
-                    captureCallback = buildImageClosingRequestListener(imageProxy)
+                        // It's essential to call ImageProxy#close().
+                        // To ensure the ImageProxy is closed after the image is written to the
+                        // output surface. This is crucial to prevent resource leaks, where images
+                        // might not be closed properly if CameraX fails to propagate close events
+                        // to its internal components.
+                        captureCallback = buildImageClosingRequestListener(imageProxy)
+                    }
+                } finally {
+                    if (captureCallback == null) {
+                        imageProxy.close()
+                    }
                 }
             }
         }
@@ -179,7 +195,7 @@ constructor(
         return object : Request.Listener {
             override fun onComplete(
                 requestMetadata: RequestMetadata,
-                frameNumber: FrameNumber,
+                frameNumber: CameraFrameNumber,
                 result: FrameInfo,
             ) {
                 closeImageProxy()
@@ -187,7 +203,7 @@ constructor(
 
             override fun onFailed(
                 requestMetadata: RequestMetadata,
-                frameNumber: FrameNumber,
+                frameNumber: CameraFrameNumber,
                 requestFailure: RequestFailure,
             ) {
                 closeImageProxy()
@@ -197,9 +213,13 @@ constructor(
                 closeImageProxy()
             }
 
+            override fun onRequestSequenceAborted(requestMetadata: RequestMetadata) {
+                closeImageProxy()
+            }
+
             override fun onTotalCaptureResult(
                 requestMetadata: RequestMetadata,
-                frameNumber: FrameNumber,
+                frameNumber: CameraFrameNumber,
                 totalCaptureResult: FrameInfo,
             ) {
                 closeImageProxy()

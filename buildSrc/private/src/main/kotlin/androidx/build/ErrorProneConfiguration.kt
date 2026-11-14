@@ -132,9 +132,11 @@ private fun JavaCompile.configureWithErrorProne() {
     val compilerArgs = this.options.compilerArgs
     compilerArgs +=
         listOf(
+            "--should-stop=ifError=FLOW",
             // Tell error-prone that we are running it on android compatible libraries
             "-XDandroidCompatible=true",
             "-XDcompilePolicy=simple", // Workaround for b/36098770
+            "-XDaddTypeAnnotationsToSymbol=true", // required by Error prone on JDK 21
             listOf(
                     "-Xplugin:ErrorProne",
 
@@ -180,6 +182,15 @@ private fun JavaCompile.configureWithErrorProne() {
                     "-Xep:EnumOrdinal:OFF",
                     "-Xep:ClassInitializationDeadlock:OFF",
                     "-Xep:VoidUsed:OFF",
+                    "-Xep:EffectivelyPrivate:OFF",
+                    "-Xep:StatementSwitchToExpressionSwitch:OFF",
+                    "-Xep:AssignmentExpression:OFF",
+                    "-Xep:DuplicateBranches:OFF",
+                    "-Xep:FormatStringShouldUsePlaceholders:OFF",
+                    "-Xep:RedundantControlFlow:OFF",
+                    "-Xep:CollectionUndefinedEquality:OFF",
+                    "-Xep:JavaDurationGetSecondsToToSeconds:OFF",
+                    "-Xep:BooleanLiteral:OFF",
 
                     // We allow inter library RestrictTo usage.
                     "-Xep:RestrictTo:OFF",
@@ -213,6 +224,10 @@ private fun JavaCompile.configureWithErrorProne() {
                     "-Xep:PrivateConstructorForUtilityClass:OFF",
 
                     // Enforce the following checks.
+                    "-Xep:NotJavadoc:ERROR",
+                    "-Xep:ExposedPrivateType:ERROR",
+                    "-Xep:ListRemoveAmbiguous:ERROR",
+                    "-Xep:PreferThrowsTag:ERROR",
                     "-Xep:JavaTimeDefaultTimeZone:ERROR",
                     "-Xep:ParameterNotNullable:ERROR",
                     "-Xep:MissingOverride:ERROR",
@@ -227,7 +242,9 @@ private fun JavaCompile.configureWithErrorProne() {
                     "-Xep:JavaLangClash:ERROR",
                     "-Xep:TypeParameterUnusedInFormals:ERROR",
                     // "-Xep:StringSplitter:ERROR", // disabled with upgrade to 2.14.0
-                    "-Xep:ReferenceEquality:ERROR",
+                    // ReferenceEquality check is disabled because in the vast majority of cases,
+                    // usage of reference equality is intended
+                    "-Xep:ReferenceEquality:OFF",
                     "-Xep:AssertionFailureIgnored:ERROR",
                     "-Xep:UnnecessaryParentheses:ERROR",
                     "-Xep:EqualsGetClass:ERROR",

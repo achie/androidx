@@ -14,31 +14,35 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalBenchmarkConfigApi::class, ExperimentalPerfettoCaptureApi::class)
+
 package androidx.compose.integration.hero.pokedex.macrobenchmark
 
 import android.content.Intent
+import androidx.benchmark.ExperimentalBenchmarkConfigApi
+import androidx.benchmark.ExperimentalConfig
+import androidx.benchmark.MemoryProfilingConfig
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingGfxInfoMetric
 import androidx.benchmark.macro.MacrobenchmarkScope
 import androidx.benchmark.macro.Metric
 import androidx.benchmark.macro.TraceSectionMetric
-import androidx.benchmark.macro.junit4.MacrobenchmarkRule
+import androidx.benchmark.perfetto.ExperimentalPerfettoCaptureApi
 import androidx.compose.integration.hero.common.macrobenchmark.HeroMacrobenchmarkDefaults
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.Compose.POKEDEX_ENABLE_SHARED_ELEMENT_TRANSITIONS
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.Compose.POKEDEX_ENABLE_SHARED_TRANSITION_SCOPE
 import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.POKEDEX_TARGET_PACKAGE_NAME
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexDatabaseCleanupRule
 import androidx.test.filters.LargeTest
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import androidx.testutils.CpuFrequencyChangeMetric
+import androidx.testutils.byResContains
 import androidx.testutils.createCompilationParams
 import androidx.testutils.defaultComposeScrollingMetrics
-import org.junit.Rule
+import androidx.testutils.defaultMemoryMetrics
+import androidx.testutils.findObjectOrThrow
+import androidx.testutils.waitOrThrow
 import org.junit.Test
-import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
@@ -48,15 +52,7 @@ class PokedexTransitionBenchmark(
     val compilationMode: CompilationMode,
     val enableSharedTransitionScope: Boolean,
     val enableSharedElementTransitions: Boolean,
-) {
-    private val benchmarkRule = MacrobenchmarkRule()
-
-    private val databaseCleanupRule = PokedexDatabaseCleanupRule()
-
-    @get:Rule
-    val pokedexBenchmarkRuleChain: RuleChain =
-        RuleChain.outerRule(databaseCleanupRule).around(benchmarkRule)
-
+) : PokedexBenchmarkBase() {
     private val FirstPokemonToClickOn = "Ablazeon"
     private val SecondPokemonToClickOn = "Amphibyte"
 
@@ -101,27 +97,36 @@ class PokedexTransitionBenchmark(
         enableSharedTransitionScope: Boolean = this.enableSharedTransitionScope,
         enableSharedElementTransitions: Boolean = this.enableSharedElementTransitions,
         iterations: Int = HeroMacrobenchmarkDefaults.ITERATIONS,
-    ) =
+    ) {
+
         benchmarkRule.measureRepeated(
             packageName = POKEDEX_TARGET_PACKAGE_NAME,
             metrics =
                 defaultComposeScrollingMetrics() +
                     FrameTimingGfxInfoMetric() +
-                    transitionDurationMetrics,
+                    transitionDurationMetrics +
+                    CpuFrequencyChangeMetric() +
+                    defaultMemoryMetrics(),
             compilationMode = compilationMode,
             iterations = iterations,
+            experimentalConfig =
+                ExperimentalConfig(
+                    memoryProfilingConfig =
+                        MemoryProfilingConfig(
+                            isSampleArtHeapEnabled = true,
+                            isSampleNativeHeapEnabled = true,
+                        )
+                ),
             setupBlock = {
                 killProcess()
-                setupPokedexBenchmarkTarget()
                 databaseCleanupRule.deleteDatabaseFiles()
-                killProcess()
+                cacheCleanupRule.deleteCacheFiles()
 
                 val intent = Intent()
-                intent.action = action
-                intent.putExtra(POKEDEX_ENABLE_SHARED_TRANSITION_SCOPE, enableSharedTransitionScope)
-                intent.putExtra(
-                    POKEDEX_ENABLE_SHARED_ELEMENT_TRANSITIONS,
-                    enableSharedElementTransitions,
+                intent.configure(
+                    action = action,
+                    enableSharedTransitionScope = enableSharedTransitionScope,
+                    enableSharedElementTransitions = enableSharedElementTransitions,
                 )
                 startActivityAndWait(intent)
 
@@ -133,20 +138,18 @@ class PokedexTransitionBenchmark(
         ) {
             homeToDetailsAndBackAction(
                 FirstPokemonToClickOn,
-                backButtonSelector = byResContains("pokedexDetailsBack"),
                 waitForProgressBarAnimation = waitForProgressBarAnimation,
             )
             device.waitForIdle()
             homeToDetailsAndBackAction(
                 SecondPokemonToClickOn,
-                backButtonSelector = byResContains("pokedexDetailsBack"),
                 waitForProgressBarAnimation = waitForProgressBarAnimation,
             )
         }
+    }
 
     private fun MacrobenchmarkScope.homeToDetailsAndBackAction(
         pokemonName: String,
-        backButtonSelector: BySelector,
         waitForProgressBarAnimation: Boolean,
     ) {
         trace("Home -> Details ($pokemonName)") {
@@ -163,7 +166,7 @@ class PokedexTransitionBenchmark(
             }
             device.waitForIdle()
 
-            device.findObjectOrThrow(backButtonSelector).click()
+            device.pressBack()
 
             device.waitForTransitionStatus("home", active = false, 1500)
             trace("Wait for $pokemonName on home screen") {

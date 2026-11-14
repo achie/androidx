@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.SoftwareType
@@ -34,6 +33,7 @@ dependencies {
     implementation("androidx.annotation:annotation:1.9.0") // OptIn, RestrictTo, etc.
     implementation("androidx.core:core:1.13.1")
     implementation(libs.kotlinCoroutinesCore) // launch, async, etc.
+    implementation(libs.kotlinCoroutinesAndroid) // Dispatchers.Main
     implementation("androidx.lifecycle:lifecycle-service:2.8.1")
     // Test dependencies
     androidTestImplementation(project(":internal-testutils-common"))
@@ -49,11 +49,8 @@ dependencies {
 }
 
 android {
-    compileSdk = 36
-    compileSdkMinor = 1
+    compileSdk { version = release(37) }
     namespace = "androidx.core.telecom"
-    compileSdk = 36
-    compileSdkMinor = 1
     buildFeatures {
         aidl = true
     }

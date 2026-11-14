@@ -16,10 +16,13 @@
 
 package androidx.compose.ui.test
 
+import android.os.Handler
 import android.os.Looper
 import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Runs the given action on the UI thread.
@@ -56,7 +59,60 @@ internal fun <T> runOnUiThread(action: () -> T): T {
     }
 }
 
+/**
+ * Runs the given [action] on the UI thread with a [timeoutMs] limit.
+ *
+ * If called on the UI thread, [action] executes immediately. Otherwise, it posts to the main
+ * [Handler] and blocks until completion or until [timeoutMs] expires.
+ *
+ * @param timeoutMs duration in milliseconds to wait for [action] to complete
+ * @param action block of code to run on the UI thread
+ * @return result of [action]
+ * @throws TimeoutException if execution exceeds [timeoutMs]
+ * @throws Throwable any exception that is thrown during execution of [action].
+ */
+internal fun <T> runOnUiThreadWithTimeout(timeoutMs: Long = 2000L, action: () -> T): T {
+    if (isOnUiThread()) {
+        return action()
+    }
+
+    val task: FutureTask<T> = FutureTask(action)
+    val handler = Handler(Looper.getMainLooper())
+    if (!handler.post(task)) {
+        throw IllegalStateException("Failed to post action to main thread looper")
+    }
+
+    try {
+        return task.get(timeoutMs, TimeUnit.MILLISECONDS)
+    } catch (e: Exception) {
+        handler.removeCallbacks(task)
+        task.cancel(false)
+        throw e
+    }
+}
+
 /** Returns if the call is made on the main thread. */
 internal fun isOnUiThread(): Boolean {
     return Looper.myLooper() == Looper.getMainLooper()
+}
+
+internal const val WindowFocusTimeoutMillis = 5_000L
+
+/**
+ * Polls [condition] on the UI thread every 10 ms until it's true or [timeoutMillis] passes. Unlike
+ * waitUntil, this doesn't advance the main test clock. Returns whether [condition] became true;
+ * returns false right away on Robolectric or when called on the UI thread.
+ */
+@Suppress("BanThreadSleep")
+internal fun pollOnUiThread(
+    timeoutMillis: Long = WindowFocusTimeoutMillis,
+    condition: () -> Boolean,
+): Boolean {
+    if (HasRobolectricFingerprint || isOnUiThread()) return false
+    val deadlineNanos = System.nanoTime() + timeoutMillis * NanoSecondsPerMilliSecond
+    while (!runOnUiThread(condition)) {
+        if (System.nanoTime() > deadlineNanos) return false
+        Thread.sleep(10)
+    }
+    return true
 }

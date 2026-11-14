@@ -17,8 +17,12 @@
 package androidx.build.dackka
 
 import androidx.build.docs.ProjectStructureMetadata
-import com.google.gson.GsonBuilder
+import java.io.BufferedReader
+import java.io.BufferedWriter
 import java.io.File
+import java.io.FileOutputStream
+import java.io.FileReader
+import java.io.FileWriter
 import javax.inject.Inject
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
@@ -27,7 +31,9 @@ import org.gradle.api.file.FileCollection
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Classpath
@@ -60,9 +66,38 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
     // Classpath containing Dackka
     @get:Classpath abstract val dackkaClasspath: ConfigurableFileCollection
 
-    // Classpath containing dependencies of libraries needed to resolve types in docs
+    // Classpath containing dependencies needed to resolve types for the non-KMP source set
     @get:[InputFiles Classpath]
-    abstract val dependenciesClasspath: ConfigurableFileCollection
+    abstract val nonKmpDependenciesClasspath: ConfigurableFileCollection
+
+    /**
+     * A mapping from KMP target name to classpath containing dependencies needed to resolve types
+     * for that target.
+     *
+     * This is [Internal] but [getAllKmpDependencies] lists the dependencies as [InputFiles].
+     */
+    @get:Internal abstract val kmpDependenciesClasspathMap: MapProperty<String, FileCollection>
+
+    /**
+     * The Android jars to be used in the classpath of the non-KMP source set as well as any
+     * android/jvm KMP source sets.
+     */
+    @get:[InputFiles Classpath]
+    abstract val androidJars: ConfigurableFileCollection
+
+    /** File to write trace to. */
+    @get:Internal abstract val traceFile: RegularFileProperty
+
+    /** Lists all classpath files (jars and klibs) from [kmpDependenciesClasspathMap]. */
+    @InputFiles
+    @PathSensitive(PathSensitivity.NONE)
+    fun getAllKmpDependencies(): Provider<FileCollection> {
+        return kmpDependenciesClasspathMap.map {
+            it.values.reduce { allDependencies, sourceSetClasspath ->
+                sourceSetClasspath + allDependencies
+            }
+        }
+    }
 
     // Directory containing the code samples from framework
     @get:[InputFiles PathSensitive(PathSensitivity.RELATIVE)]
@@ -145,6 +180,17 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
     )
     var includeVersionMetadata: Boolean = true
 
+    /**
+     * File to write logged lines from Dackka.
+     *
+     * All instances of [buildDirectoryPath] in the logs are replaced with `$DOCS_DIR` for
+     * consistency between machines.
+     */
+    @get:OutputFile abstract val loggingFile: RegularFileProperty
+
+    /** Project build directory. Used to rewrite logs to make them consistent between machines. */
+    @get:Internal abstract val buildDirectoryPath: Property<String>
+
     private fun sourceSets(): List<DokkaInputModels.SourceSet> {
         fun getSampleSourceFileCollection(): FileCollection {
             // Filter out non-existent directories as Dackka crashes if you pass it in b/332262321
@@ -154,17 +200,10 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
                 }
             return objects.fileCollection().from(dirs)
         }
-        val externalDocs =
-            externalLinks.map { (name, url) ->
-                DokkaInputModels.GlobalDocsLink(
-                    url = url,
-                    packageListUrl =
-                        "file://${
-                            projectListsDirectory.get().asFile.absolutePath
-                        }/$name/package-list",
-                )
-            }
-        val gson = GsonBuilder().create()
+
+        val externalDocs = loadPackageLists(projectListsDirectory.get().asFile)
+
+        val gson = DokkaUtils.createGson()
         val multiplatformSourceSets =
             projectStructureMetadataFile
                 .get()
@@ -177,35 +216,53 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
                     metadata.sourceSets
                         .sortedWith(compareBy({ it.dependencies.size }, { it.name }))
                         .mapNotNull { sourceSet ->
-                            val sourceDir =
-                                multiplatformSourcesDir.get().asFile.resolve(sourceSet.name)
+                            val sourceDir = sourceDirForSourceSet(sourceSet.name)
+                            // The source set metadata includes source sets with no source files,
+                            // skip these ones.
                             if (!sourceDir.exists()) return@mapNotNull null
-                            val analysisPlatform =
-                                DokkaAnalysisPlatform.valueOf(
-                                    sourceSet.analysisPlatform.uppercase()
+
+                            val dependentSourceSets = buildList {
+                                // Only include dependent source sets which have source files (the
+                                // source set metadata includes all possible source sets, and the
+                                // ones without source files are not created as dackka source sets)
+                                addAll(
+                                    sourceSet.dependencies.filter {
+                                        sourceDirForSourceSet(it).exists()
+                                    }
                                 )
+                                // Include a dependency on the main non-KMP source set for jvm
+                                // source sets to make references from these source sets to non
+                                // KMP projects resolve (b/484050995).
+                                if (sourceSet.analysisPlatform.androidOrJvm()) {
+                                    add("main")
+                                }
+                            }
+
                             DokkaInputModels.SourceSet(
                                 id = sourceSetIdForSourceSet(sourceSet.name),
                                 displayName = sourceSet.name,
-                                analysisPlatform = analysisPlatform.jsonName,
+                                analysisPlatform = sourceSet.analysisPlatform,
                                 sourceRoots = objects.fileCollection().from(sourceDir),
-                                // TODO(b/181224204): KMP samples aren't supported, dackka assumes
-                                // all
-                                // samples are in common
+                                // All KMP samples are in the common source set, where they can be
+                                // accessed from other KMP source sets as well.
                                 samples =
-                                    if (analysisPlatform == DokkaAnalysisPlatform.COMMON) {
+                                    if (sourceSet.name == "commonMain") {
                                         getSampleSourceFileCollection()
                                     } else {
                                         objects.fileCollection()
                                     },
                                 includes = objects.fileCollection().from(includesFiles(sourceDir)),
-                                classpath = dependenciesClasspath,
+                                classpath =
+                                    classpathForSourceSet(
+                                        metadata.sourceSetsDependentOn(sourceSet.name).toList(),
+                                        sourceSet.analysisPlatform,
+                                    ),
                                 externalDocumentationLinks = externalDocs,
                                 dependentSourceSets =
-                                    sourceSet.dependencies.map { sourceSetIdForSourceSet(it) },
-                                noJdkLink = !analysisPlatform.androidOrJvm(),
+                                    dependentSourceSets.map { sourceSetIdForSourceSet(it) },
+                                noJdkLink = !sourceSet.analysisPlatform.androidOrJvm(),
                                 noAndroidSdkLink =
-                                    analysisPlatform != DokkaAnalysisPlatform.ANDROID,
+                                    sourceSet.analysisPlatform != DokkaAnalysisPlatform.ANDROID,
                                 noStdlibLink = false,
                                 // Dackka source link configuration doesn't use the Dokka version
                                 sourceLinks = emptyList(),
@@ -216,11 +273,17 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
             DokkaInputModels.SourceSet(
                 id = sourceSetIdForSourceSet("main"),
                 displayName = "main",
-                analysisPlatform = "jvm",
+                analysisPlatform = DokkaAnalysisPlatform.ANDROID,
                 sourceRoots = objects.fileCollection().from(jvmSourcesDir),
-                samples = getSampleSourceFileCollection(),
+                // All samples are assumed to be in the common source set if there is one
+                samples =
+                    if (multiplatformSourceSets.isNotEmpty()) {
+                        objects.fileCollection()
+                    } else {
+                        getSampleSourceFileCollection()
+                    },
                 includes = objects.fileCollection().from(includesFiles(jvmSourcesDir.get().asFile)),
-                classpath = dependenciesClasspath,
+                classpath = nonKmpDependenciesClasspath + androidJars,
                 externalDocumentationLinks = externalDocs,
                 dependentSourceSets = emptyList(),
                 noJdkLink = false,
@@ -230,6 +293,63 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
                 sourceLinks = emptyList(),
             )
         ) + multiplatformSourceSets
+    }
+
+    /**
+     * Returns the source directory for the KMP source set with [name]. The returned directory is
+     * not guaranteed to exist.
+     */
+    private fun sourceDirForSourceSet(name: String): File {
+        return multiplatformSourcesDir.get().asFile.resolve(name)
+    }
+
+    /**
+     * Computes the classpath for a source set based on the [dependentSourceSets] and the
+     * [analysisPlatform].
+     *
+     * The [dependentSourceSets] should be the names of all source sets with a depends on
+     * relationship to this one. All the classpaths for [dependentSourceSets] from
+     * [kmpDependenciesClasspathMap] will be included in this classpath.
+     */
+    private fun classpathForSourceSet(
+        dependentSourceSets: List<String>,
+        analysisPlatform: DokkaAnalysisPlatform,
+    ): FileCollection {
+        // Find the classpaths associated with any targets matching dependentSourceSets.
+        val associatedClasspaths =
+            kmpDependenciesClasspathMap.get().filterKeys { it in dependentSourceSets }
+        // Aggregate all associated classpaths into one file collection.
+        val classpath = associatedClasspaths.values.reduce { acc, files -> acc + files }
+
+        // Also include android jars when the source set could be part of an android compilation.
+        return if (
+            analysisPlatform.androidOrJvm() || analysisPlatform == DokkaAnalysisPlatform.COMMON
+        ) {
+            classpath + androidJars
+        } else {
+            classpath
+        }
+    }
+
+    /**
+     * Creates [DokkaInputModels.GlobalDocsLink]s with the package-list file and URL for each
+     * package-list in the [packageLists] directory.
+     *
+     * It is expected that each subdirectory of [packageLists] contains a `package-list` file and
+     * `url` file, where `url` contains the URL of an external refdocs site and `package-list`
+     * contains the list of packages documented at that site.
+     */
+    private fun loadPackageLists(packageLists: File): List<DokkaInputModels.GlobalDocsLink> {
+        return packageLists.listFiles().mapNotNull { dir ->
+            // Skip non-directory files like the README.
+            if (!dir.isDirectory) return@mapNotNull null
+            val packageList = File(dir, "package-list")
+            val urlFile = File(dir, "url")
+            DokkaInputModels.GlobalDocsLink(
+                url = urlFile.readText().trim(),
+                packageListUrl = "file://${packageList.absolutePath}",
+            )
+        }
     }
 
     // Documentation for Dackka command line usage and arguments can be found at
@@ -276,6 +396,8 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
                                         "versionMetadataFilenames" to getVersionMetadataFiles(),
                                         "validNullabilityAnnotations" to
                                             nullabilityAnnotations.get(),
+                                        "traceFile" to traceFile.get().asFile.absolutePath,
+                                        "unlinkedExternalPackages" to unlinkedExternalPackages,
                                     )
                                 ),
                         )
@@ -310,60 +432,63 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
 
     @TaskAction
     fun generate() {
-        runDackkaWithArgs(
-            classpath = dackkaClasspath,
-            argsFile = computeArguments(),
-            workerExecutor = workerExecutor,
-        )
+        val workQueue = workerExecutor.noIsolation()
+        val argsFile = computeArguments()
+        val tmpLoggingFile = File(temporaryDir, "tmp.log")
+        workQueue.submit(DackkaWorkAction::class.java) { parameters ->
+            parameters.args.set(listOf(argsFile.path, "-loggingLevel", "WARN"))
+            parameters.classpath.set(dackkaClasspath)
+            parameters.loggingFile.set(tmpLoggingFile)
+        }
+
+        // After Dackka has finished, rewrite the logging file to replace machine-specific paths
+        workerExecutor.await()
+        val buildDirectoryPath = buildDirectoryPath.get()
+        BufferedWriter(FileWriter(loggingFile.get().asFile)).use { writer ->
+            BufferedReader(FileReader(tmpLoggingFile)).use { reader ->
+                for (line in reader.lines()) {
+                    writer.write(line.replace(buildDirectoryPath, $$"$DOCS_DIR"))
+                    writer.newLine()
+                }
+            }
+        }
     }
 
     companion object {
-        private val externalLinks =
-            mapOf(
-                "coroutinesCore" to "https://kotlinlang.org/api/kotlinx.coroutines/",
-                "android" to "https://developer.android.com/reference",
-                "guava" to "https://guava.dev/releases/18.0/api/docs/",
-                "kotlin" to "https://kotlinlang.org/api/core/kotlin-stdlib/",
-                "junit" to "https://junit.org/junit4/javadoc/4.12/",
-                "okio" to "https://square.github.io/okio/3.x/okio/",
-                "protobuf" to "https://protobuf.dev/reference/java/api-docs/",
-                "kotlinpoet" to "https://square.github.io/kotlinpoet/1.x/kotlinpoet/",
-                "skiko" to "https://jetbrains.github.io/skiko/",
-                "reactivex" to "https://reactivex.io/RxJava/2.x/javadoc/",
-                "reactivex-rxjava3" to "http://reactivex.io/RxJava/3.x/javadoc/",
-                "grpc" to "https://grpc.github.io/grpc-java/javadoc/",
-                // From developer.android.com/reference/com/google/android/play/core/package-list
-                "play" to "https://developer.android.com/reference/",
-                // From developer.android.com/reference/com/google/android/material/package-list
-                "material" to "https://developer.android.com/reference",
-                "okhttp3" to "https://square.github.io/okhttp/5.x/",
-                "truth" to "https://truth.dev/api/0.41/",
-                // From developer.android.com/reference/android/support/wearable/package-list
-                "wearable" to "https://developer.android.com/reference/",
-                // Filtered to just java.awt and javax packages (base java packages are included in
-                // the android package-list)
-                "javase8" to "https://docs.oracle.com/javase/8/docs/api/",
-                "javaee7" to "https://docs.oracle.com/javaee%2F7%2Fapi%2F%2F",
-                "findbugs" to "https://www.javadoc.io/doc/com.google.code.findbugs/jsr305/latest/",
-                // All package-lists below were created manually
-                "mlkit" to "https://developers.google.com/android/reference/",
-                "dagger" to "https://dagger.dev/api/latest/",
-                "reactivestreams" to
-                    "https://www.reactive-streams.org/reactive-streams-1.0.4-javadoc/",
-                "jetbrains-annotations" to
-                    "https://javadoc.io/doc/org.jetbrains/annotations/latest/",
-                "auto-value" to
-                    "https://www.javadoc.io/doc/com.google.auto.value/auto-value/latest/",
-                "robolectric" to "https://robolectric.org/javadoc/4.11/",
-                "interactive-media" to
-                    "https://developers.google.com/interactive-media-ads/docs/sdks/android/" +
-                        "client-side/api/reference/com/google/ads/interactivemedia/v3",
-                "errorprone" to "https://errorprone.info/api/latest/",
-                "gms" to "https://developers.google.com/android/reference",
-                "checkerframework" to "https://checkerframework.org/api/",
-                "chromium" to
-                    "https://developer.android.com/develop/connectivity/cronet/reference/",
-                "jspecify" to "https://jspecify.dev/docs/api/",
+        private val unlinkedExternalPackages =
+            listOf(
+                // Public docs don't exist
+                "androidx.legacy.content",
+                "androidx.viewbinding",
+                "com.android.adblib",
+                "com.android.extensions.appfunctions",
+                "com.google.android.apps.common.testing.accessibility.framework",
+                "com.google.android.apps.common.testing.accessibility.framework.integrations.espresso",
+                "com.google.android.wearable.input",
+                "com.google.common.util.concurrent.internal",
+                "io.antmedia.rtmp_client",
+                "junit.framework",
+                "kotlin.internal",
+                "org.junit.internal",
+                "platform.CoreGraphics",
+                "platform.Metal",
+                "platform.UIKit",
+                // References to hidden APIs (TODO b/569950872)
+                "androidx.compose.foundation.text.input.internal",
+                "androidx.compose.material.internal",
+                "androidx.compose.material3.internal",
+                "androidx.compose.material3.tokens",
+                "androidx.core",
+                "androidx.core.app.unusedapprestrictions",
+                "androidx.leanback",
+                "androidx.lifecycle.viewmodel.internal",
+                "androidx.media3",
+                "androidx.room3.coroutines",
+                "androidx.slice.view",
+                "androidx.test.internal.runner.hidden",
+                "androidx.test.uiautomator.internal",
+                "androidx.wear.protolayout.proto",
+                "androidx.xr.projected.platform",
             )
     }
 }
@@ -371,14 +496,7 @@ constructor(private val workerExecutor: WorkerExecutor, private val objects: Obj
 interface DackkaParams : WorkParameters {
     val args: ListProperty<String>
     val classpath: SetProperty<File>
-}
-
-fun runDackkaWithArgs(classpath: FileCollection, argsFile: File, workerExecutor: WorkerExecutor) {
-    val workQueue = workerExecutor.noIsolation()
-    workQueue.submit(DackkaWorkAction::class.java) { parameters ->
-        parameters.args.set(listOf(argsFile.path, "-loggingLevel", "WARN"))
-        parameters.classpath.set(classpath)
-    }
+    val loggingFile: RegularFileProperty
 }
 
 abstract class DackkaWorkAction @Inject constructor(private val execOperations: ExecOperations) :
@@ -387,7 +505,10 @@ abstract class DackkaWorkAction @Inject constructor(private val execOperations: 
         execOperations.javaexec {
             it.mainClass.set("org.jetbrains.dokka.MainKt")
             it.args = parameters.args.get()
+            // b/553124184
+            it.jvmArgs = listOf("--sun-misc-unsafe-memory-access=allow")
             it.classpath(parameters.classpath.get())
+            it.standardOutput = FileOutputStream(parameters.loggingFile.get().asFile)
         }
     }
 }

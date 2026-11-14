@@ -31,7 +31,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -50,23 +49,23 @@ fun ConditionalFocusabilityDemo() {
     Column {
         Text(
             """
-             The items here are focusable. Use the
-             keyboard or DPad to move focus among them.
+            The items here are focusable. Use the
+            keyboard or DPad to move focus among them.
 
-             The 1st item is focusable in all modes.
-             Notice that when you touch the screen it
-             does not lose focus like the other items.
+            The 1st item is focusable in all modes.
+            Notice that when you touch the screen it
+            does not lose focus like the other items.
 
-             The 2nd item's focusability can be
-             controlled by using the button next to it.
+            The 2nd item's focusability can be
+            controlled by using the button next to it.
 
-             The 3rd item is not focusable in touch mode.
+            The 3rd item is not focusable in touch mode.
 
-             The 4th item is not focusable in touch mode,
-             but clicking on it will request the system
-             to switch to keyboard mode, and then call
-             request focus.
-             """
+            The 4th item is not focusable in touch mode,
+            but clicking on it will request the system
+            to switch to keyboard mode, and then call
+            request focus.
+            """
                 .trimIndent()
         )
         Text(
@@ -119,9 +118,10 @@ fun ConditionalFocusabilityDemo() {
     }
 }
 
-private fun Modifier.focusAwareBackground() = composed {
+@Composable
+private fun Modifier.focusAwareBackground(): Modifier {
     var color by remember { mutableStateOf(Gray) }
-    Modifier.padding(10.dp).size(150.dp, 50.dp).background(color).onFocusChanged {
+    return this.padding(10.dp).size(150.dp, 50.dp).background(color).onFocusChanged {
         color = if (it.isFocused) Red else Gray
     }
 }

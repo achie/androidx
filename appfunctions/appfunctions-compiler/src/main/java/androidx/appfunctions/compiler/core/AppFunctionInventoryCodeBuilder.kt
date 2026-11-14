@@ -18,6 +18,7 @@ package androidx.appfunctions.compiler.core
 
 import androidx.appfunctions.compiler.core.metadata.AppFunctionAllOfTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionArrayTypeMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionBehaviorHintsMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionBooleanTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionBytesTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionComponentsMetadata
@@ -30,27 +31,32 @@ import androidx.appfunctions.compiler.core.metadata.AppFunctionLongTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionObjectTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionOneOfTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionParameterMetadata
-import androidx.appfunctions.compiler.core.metadata.AppFunctionPendingIntentTypeMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionParcelableTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionReferenceTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionResponseMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionSchemaMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionStringPatternMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionStringTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionUnitTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.CompileTimeAppFunctionMetadata
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.APP_FUNCTION_METADATA_PROPERTY_NAME
+import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.BEHAVIOR_HINTS_METADATA_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.DEPRECATION_METADATA_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.FUNCTION_ID_TO_METADATA_MAP_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.INVENTORY_COMPONENTS_METADATA_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.PARAMETER_METADATA_LIST_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.RESPONSE_METADATA_PROPERTY_NAME
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor.Companion.SCHEMA_METADATA_PROPERTY_NAME
+import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
 import com.squareup.kotlinpoet.asClassName
 import com.squareup.kotlinpoet.buildCodeBlock
+import com.squareup.kotlinpoet.joinToCode
 
 /** The helper class to build AppFunctionInventory class. */
 class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpec.Builder) {
@@ -63,6 +69,16 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
     fun addFunctionMetadataProperties(
         appFunctionMetadataList: List<CompileTimeAppFunctionMetadata>
     ) {
+        if (appFunctionMetadataList.any { it.accessLevel != null }) {
+            inventoryClassBuilder.addAnnotation(
+                AnnotationSpec.builder(IntrospectionHelper.OptInAnnotation.CLASS_NAME)
+                    .addMember(
+                        "%T::class",
+                        IntrospectionHelper.ExperimentalAppFunctionsApiAnnotation.CLASS_NAME,
+                    )
+                    .build()
+            )
+        }
         for (functionMetadata in appFunctionMetadataList) {
             val functionMetadataObjectClassBuilder =
                 TypeSpec.objectBuilder(getFunctionMetadataObjectClassName(functionMetadata.id))
@@ -82,6 +98,10 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
             addDeprecationMetadataPropertyForFunction(
                 functionMetadataObjectClassBuilder,
                 functionMetadata.deprecation,
+            )
+            addBehaviorHintsMetadataPropertyForFunction(
+                functionMetadataObjectClassBuilder,
+                functionMetadata.behaviorHints,
             )
             addPropertyForAppFunctionMetadata(functionMetadataObjectClassBuilder, functionMetadata)
             inventoryClassBuilder.addType(functionMetadataObjectClassBuilder.build())
@@ -120,6 +140,21 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                         add("response = %L,\n", RESPONSE_METADATA_PROPERTY_NAME)
                         if (functionMetadata.deprecation != null) {
                             add("deprecation = %L,\n", DEPRECATION_METADATA_PROPERTY_NAME)
+                        }
+                        if (functionMetadata.accessLevel != null) {
+                            add(
+                                "accessLevel = %L,\n",
+                                functionMetadata.accessLevel,
+                            )
+                        }
+                        if (functionMetadata.isCompatEnforcementEnabled != null) {
+                            add(
+                                "isCompatEnforcementEnabled = %L,\n",
+                                functionMetadata.isCompatEnforcementEnabled,
+                            )
+                        }
+                        if (functionMetadata.behaviorHints != null) {
+                            add("behaviorHints = %L,\n", BEHAVIOR_HINTS_METADATA_PROPERTY_NAME)
                         }
                         unindent()
                         unindent()
@@ -228,8 +263,7 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                 is AppFunctionBytesTypeMetadata,
                 is AppFunctionDoubleTypeMetadata,
                 is AppFunctionFloatTypeMetadata,
-                is AppFunctionUnitTypeMetadata,
-                is AppFunctionPendingIntentTypeMetadata -> {
+                is AppFunctionUnitTypeMetadata -> {
                     val primitiveReturnTypeMetadataPropertyName = "PRIMITIVE_RESPONSE_VALUE_TYPE"
                     addPropertyForPrimitiveTypeMetadata(
                         primitiveReturnTypeMetadataPropertyName,
@@ -274,6 +308,16 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                     )
                     oneOfTypeReturnTypeMetadataPropertyName
                 }
+                is AppFunctionParcelableTypeMetadata -> {
+                    val parcelableTypeReturnTypeMetadataPropertyName =
+                        "PARCELABLE_RESPONSE_VALUE_TYPE"
+                    addPropertyForParcelableTypeMetadata(
+                        parcelableTypeReturnTypeMetadataPropertyName,
+                        functionMetadataObjectClassBuilder,
+                        castDataType,
+                    )
+                    parcelableTypeReturnTypeMetadataPropertyName
+                }
                 else -> {
                     // TODO provide KSNode to improve error message
                     throw ProcessingException(
@@ -301,6 +345,39 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                             IntrospectionHelper.APP_FUNCTION_RESPONSE_METADATA_CLASS,
                             responseMetadataValueTypeName,
                             appFunctionResponseMetadata.description,
+                        )
+                    }
+                )
+                .build()
+        )
+    }
+
+    private fun addPropertyForParcelableTypeMetadata(
+        propertyName: String,
+        functionMetadataObjectClassBuilder: TypeSpec.Builder,
+        parcelableTypeMetadata: AppFunctionParcelableTypeMetadata,
+    ) {
+        functionMetadataObjectClassBuilder.addProperty(
+            PropertySpec.builder(
+                    propertyName,
+                    IntrospectionHelper.APP_FUNCTION_PARCELABLE_TYPE_METADATA_CLASS,
+                )
+                .addModifiers(KModifier.PRIVATE)
+                .initializer(
+                    buildCodeBlock {
+                        addStatement(
+                            """
+                            %T(
+                                qualifiedName = %S,
+                                isNullable = %L,
+                                description = %S
+                            )
+                            """
+                                .trimIndent(),
+                            IntrospectionHelper.APP_FUNCTION_PARCELABLE_TYPE_METADATA_CLASS,
+                            parcelableTypeMetadata.qualifiedName,
+                            parcelableTypeMetadata.isNullable,
+                            parcelableTypeMetadata.description,
                         )
                     }
                 )
@@ -431,8 +508,7 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                 is AppFunctionBytesTypeMetadata,
                 is AppFunctionDoubleTypeMetadata,
                 is AppFunctionFloatTypeMetadata,
-                is AppFunctionUnitTypeMetadata,
-                is AppFunctionPendingIntentTypeMetadata -> {
+                is AppFunctionUnitTypeMetadata -> {
                     val primitiveTypeMetadataPropertyName =
                         getPrimitiveTypeMetadataPropertyNameForParameter(parameterMetadata)
                     addPropertyForPrimitiveTypeMetadata(
@@ -471,6 +547,16 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                         castDataType,
                     )
                     referenceTypeMetadataPropertyName
+                }
+                is AppFunctionParcelableTypeMetadata -> {
+                    val parcelableTypeReturnTypeMetadataPropertyName =
+                        getParcelableTypeMetadataPropertyNameForParameter(parameterMetadata)
+                    addPropertyForParcelableTypeMetadata(
+                        parcelableTypeReturnTypeMetadataPropertyName,
+                        functionMetadataObjectClassBuilder,
+                        castDataType,
+                    )
+                    parcelableTypeReturnTypeMetadataPropertyName
                 }
                 else -> {
                     // TODO provide KSNode to improve error message
@@ -534,12 +620,12 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                         buildCodeBlock {
                             addStatement(
                                 """
-                            %T(
-                                isNullable = %L,
-                                description = %S,
-                                enumValues = %L,
-                            )
-                            """
+                                %T(
+                                    isNullable = %L,
+                                    description = %S,
+                                    enumValues = %L,
+                                )
+                                """
                                     .trimIndent(),
                                 IntrospectionHelper.APP_FUNCTION_INT_TYPE_METADATA_CLASS,
                                 isNullable,
@@ -560,12 +646,14 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                         buildCodeBlock {
                             addStatement(
                                 """
-                            %T(
-                                isNullable = %L,
-                                description = %S,
-                                enumValues = %L,
-                            )
-                            """
+                                %T(
+                                    isNullable = %L,
+                                    description = %S,
+                                    enumValues = %L,
+                                    patternMatchers = %L,
+                                    format = %S,
+                                )
+                                """
                                     .trimIndent(),
                                 IntrospectionHelper.APP_FUNCTION_STRING_TYPE_METADATA_CLASS,
                                 isNullable,
@@ -575,6 +663,8 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                                     postfix = ")",
                                     transform = { "\"$it\"" },
                                 ),
+                                buildPatternMatcherListCodeBlock(patterns),
+                                format,
                             )
                         }
                     )
@@ -587,11 +677,11 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                         buildCodeBlock {
                             addStatement(
                                 """
-                            %T(
-                                isNullable = %L,
-                                description = %S
-                            )
-                            """
+                                %T(
+                                    isNullable = %L,
+                                    description = %S
+                                )
+                                """
                                     .trimIndent(),
                                 toMetadataClassName(),
                                 isNullable,
@@ -601,6 +691,41 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                     )
                     .build()
         }
+    }
+
+    /**
+     * Builds `PatternMatchers.createList("value" to PatternMatcher.PATTERN_X, ...)`, or `null` if
+     * [patterns] is empty.
+     *
+     * Patterns are not validated at compile time, so the generated code throws when the inventory
+     * is loaded if `android.os.PatternMatcher` rejects a pattern.
+     */
+    private fun buildPatternMatcherListCodeBlock(
+        patterns: List<AppFunctionStringPatternMetadata>
+    ): CodeBlock {
+        if (patterns.isEmpty()) return CodeBlock.of("null")
+        val pairs =
+            patterns
+                .map { pattern ->
+                    val typeConstantName = pattern.typeConstantName
+                    if (typeConstantName != null) {
+                        CodeBlock.of(
+                            "%S to %T.%L",
+                            pattern.value,
+                            IntrospectionHelper.PatternMatcherClass.CLASS_NAME,
+                            typeConstantName,
+                        )
+                    } else {
+                        // A type unknown to this library version, e.g. from a newer SDK.
+                        CodeBlock.of("%S to %L", pattern.value, pattern.type)
+                    }
+                }
+                .joinToCode()
+        return CodeBlock.of(
+            "%T.createList(%L)",
+            IntrospectionHelper.PATTERN_MATCHERS_HELPER_CLASS,
+            pairs,
+        )
     }
 
     /**
@@ -625,8 +750,8 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                 IntrospectionHelper.APP_FUNCTION_STRING_TYPE_METADATA_CLASS
             is AppFunctionUnitTypeMetadata ->
                 IntrospectionHelper.APP_FUNCTION_UNIT_TYPE_METADATA_CLASS
-            is AppFunctionPendingIntentTypeMetadata ->
-                IntrospectionHelper.APP_FUNCTION_PENDING_INTENT_TYPE_METADATA_CLASS
+            is AppFunctionParcelableTypeMetadata ->
+                IntrospectionHelper.APP_FUNCTION_PARCELABLE_TYPE_METADATA_CLASS
             else ->
                 throw IllegalArgumentException(
                     "Unsupported or non-primitive type in AppFunctionDataTypeMetadata: ${this::class.simpleName}"
@@ -647,8 +772,7 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                 is AppFunctionBytesTypeMetadata,
                 is AppFunctionDoubleTypeMetadata,
                 is AppFunctionFloatTypeMetadata,
-                is AppFunctionUnitTypeMetadata,
-                is AppFunctionPendingIntentTypeMetadata -> {
+                is AppFunctionUnitTypeMetadata -> {
                     val primitiveItemTypeVariableName = propertyName + "_PRIMITIVE_ITEM_TYPE"
                     addPropertyForPrimitiveTypeMetadata(
                         primitiveItemTypeVariableName,
@@ -675,6 +799,17 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                     )
                     referenceItemTypeVariableName
                 }
+
+                is AppFunctionParcelableTypeMetadata -> {
+                    val parcelableItemTypeVariableName = propertyName + "_PARCELABLE_ITEM_TYPE"
+                    addPropertyForParcelableTypeMetadata(
+                        parcelableItemTypeVariableName,
+                        functionMetadataObjectClassBuilder,
+                        castItemType,
+                    )
+                    parcelableItemTypeVariableName
+                }
+
                 else -> {
                     // TODO provide KSNode to improve error message
                     throw ProcessingException(
@@ -892,8 +1027,7 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                                 is AppFunctionBytesTypeMetadata,
                                 is AppFunctionDoubleTypeMetadata,
                                 is AppFunctionFloatTypeMetadata,
-                                is AppFunctionUnitTypeMetadata,
-                                is AppFunctionPendingIntentTypeMetadata ->
+                                is AppFunctionUnitTypeMetadata ->
                                     addPropertyForPrimitiveTypeMetadata(
                                         dataTypeVariableName,
                                         functionMetadataObjectClassBuilder,
@@ -917,6 +1051,12 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                                         functionMetadataObjectClassBuilder,
                                         objectPropertyTypeMetadata,
                                     )
+                                is AppFunctionParcelableTypeMetadata ->
+                                    addPropertyForParcelableTypeMetadata(
+                                        dataTypeVariableName,
+                                        functionMetadataObjectClassBuilder,
+                                        objectPropertyTypeMetadata,
+                                    )
                                 else -> {
                                     // TODO provide KSNode to improve error message
                                     throw ProcessingException(
@@ -928,8 +1068,8 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
                             }
                             addStatement(
                                 """
-                                    %S to %L,
-                                    """
+                                %S to %L,
+                                """
                                     .trimIndent(),
                                 objectPropertyName,
                                 dataTypeVariableName,
@@ -1131,6 +1271,56 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
         )
     }
 
+    private fun addBehaviorHintsMetadataPropertyForFunction(
+        functionMetadataObjectClassBuilder: TypeSpec.Builder,
+        behaviorHintsMetadata: AppFunctionBehaviorHintsMetadata?,
+    ) {
+        if (behaviorHintsMetadata == null) return
+        functionMetadataObjectClassBuilder.addProperty(
+            PropertySpec.builder(
+                    BEHAVIOR_HINTS_METADATA_PROPERTY_NAME,
+                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass.CLASS_NAME.copy(
+                        nullable = true
+                    ),
+                )
+                .addModifiers(KModifier.PRIVATE)
+                .initializer(
+                    buildCodeBlock {
+                        addNamed(
+                            "%behavior_hints_class:T(" +
+                                "%is_read_only_param:L = %is_read_only:L, " +
+                                "%is_destructive_param:L = %is_destructive:L, " +
+                                "%is_idempotent_param:L = %is_idempotent:L, " +
+                                "%is_open_world_param:L = %is_open_world:L" +
+                                ")\n",
+                            mapOf(
+                                "behavior_hints_class" to
+                                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass
+                                        .CLASS_NAME,
+                                "is_read_only_param" to
+                                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass
+                                        .PROPERTY_IS_READ_ONLY,
+                                "is_read_only" to behaviorHintsMetadata.isReadOnly,
+                                "is_destructive_param" to
+                                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass
+                                        .PROPERTY_IS_DESTRUCTIVE,
+                                "is_destructive" to behaviorHintsMetadata.isDestructive,
+                                "is_idempotent_param" to
+                                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass
+                                        .PROPERTY_IS_IDEMPOTENT,
+                                "is_idempotent" to behaviorHintsMetadata.isIdempotent,
+                                "is_open_world_param" to
+                                    IntrospectionHelper.AppFunctionBehaviorHintsMetadataClass
+                                        .PROPERTY_IS_OPEN_WORLD,
+                                "is_open_world" to behaviorHintsMetadata.isOpenWorld,
+                            ),
+                        )
+                    }
+                )
+                .build()
+        )
+    }
+
     /**
      * Generates the name of the class for the metadata object of a function.
      *
@@ -1191,15 +1381,20 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
         return "PARAMETER_METADATA_${parameterMetadata.name.uppercase()}_REFERENCE_DATA_TYPE"
     }
 
+    private fun getParcelableTypeMetadataPropertyNameForParameter(
+        parameterMetadata: AppFunctionParameterMetadata
+    ): String {
+        return "PARAMETER_METADATA_${parameterMetadata.name.uppercase()}_PARCELABLE_DATA_TYPE"
+    }
+
     /**
      * Generates the name of the property for the object type metadata of a component.
      *
      * @param componentName The name of the component.
      * @return The name of the property.
      */
-    private fun getObjectTypeMetadataPropertyNameForComponent(componentName: String): String {
-        return "${componentName.uppercase().replace(Regex("[.<>$]"), "_").replace("?", "_NULLABLE")}_OBJECT_DATA_TYPE"
-    }
+    private fun getObjectTypeMetadataPropertyNameForComponent(componentName: String): String =
+        "${componentName.uppercase().replace(Regex("[.<>$]"), "_").replace("?", "_NULLABLE")}_OBJECT_DATA_TYPE"
 
     /**
      * Generates the name of the property for the all of type metadata of a component.
@@ -1207,9 +1402,8 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
      * @param componentName The name of the component.
      * @return The name of the property.
      */
-    private fun getAllOfTypeMetadataPropertyNameForComponent(componentName: String): String {
-        return "${componentName.uppercase().replace(Regex("[.<>$]"), "_")}_ALL_OF_DATA_TYPE"
-    }
+    private fun getAllOfTypeMetadataPropertyNameForComponent(componentName: String): String =
+        "${componentName.uppercase().replace(Regex("[.<>$]"), "_")}_ALL_OF_DATA_TYPE"
 
     /**
      * Generates the name of the property for the one of type metadata of a component.
@@ -1217,7 +1411,14 @@ class AppFunctionInventoryCodeBuilder(private val inventoryClassBuilder: TypeSpe
      * @param componentName The name of the component.
      * @return The name of the property.
      */
-    private fun getOneOfTypeMetadataPropertyNameForComponent(componentName: String): String {
-        return "${componentName.uppercase().replace(Regex("[.<>$]"), "_")}_ONE_OF_DATA_TYPE"
+    private fun getOneOfTypeMetadataPropertyNameForComponent(componentName: String): String =
+        "${componentName.uppercase().replace(Regex("[.<>$]"), "_")}_ONE_OF_DATA_TYPE"
+
+    companion object {
+
+        /** Gets the name for generated AppFunctionInventory. */
+        fun getAppFunctionInventoryClassName(functionClassName: String): String {
+            return "$%s_AppFunctionInventory".format(functionClassName)
+        }
     }
 }

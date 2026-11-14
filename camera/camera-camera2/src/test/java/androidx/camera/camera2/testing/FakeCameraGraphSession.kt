@@ -21,10 +21,12 @@ import androidx.camera.camera2.pipe.AeMode
 import androidx.camera.camera2.pipe.AfMode
 import androidx.camera.camera2.pipe.AwbMode
 import androidx.camera.camera2.pipe.CameraGraph
+import androidx.camera.camera2.pipe.ControlMode
+import androidx.camera.camera2.pipe.Converge3ABehavior
+import androidx.camera.camera2.pipe.FlashMode
 import androidx.camera.camera2.pipe.Frame
 import androidx.camera.camera2.pipe.FrameCapture
 import androidx.camera.camera2.pipe.FrameMetadata
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.Lock3ABehavior
 import androidx.camera.camera2.pipe.OutputStatus
 import androidx.camera.camera2.pipe.Request
@@ -35,6 +37,7 @@ import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
 import androidx.camera.camera2.testing.FakeCameraGraphSession.RequestStatus.ABORTED
 import androidx.camera.camera2.testing.FakeCameraGraphSession.RequestStatus.FAILED
 import androidx.camera.camera2.testing.FakeCameraGraphSession.RequestStatus.TOTAL_CAPTURE_DONE
+import androidx.camera.common.CameraFrameNumber
 import java.util.concurrent.Semaphore
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CompletableDeferred
@@ -47,6 +50,7 @@ open class FakeCameraGraphSession : CameraGraph.Session {
     val repeatingRequests = mutableListOf<Request>()
     var repeatingRequestSemaphore = Semaphore(0)
     var stopRepeatingSemaphore = Semaphore(0)
+    override var repeatingRequest = repeatingRequests.lastOrNull()
 
     enum class RequestStatus {
         TOTAL_CAPTURE_DONE,
@@ -57,13 +61,49 @@ open class FakeCameraGraphSession : CameraGraph.Session {
     var startRepeatingSignal = CompletableDeferred(TOTAL_CAPTURE_DONE) // already completed
 
     val submittedRequests = mutableListOf<Request>()
+    var lock3ACallCount = 0
+        private set
+
+    var lock3ASuspendGate: Deferred<Unit>? = null
+    var lock3AResult: Deferred<Result3A> = CompletableDeferred(Result3A(Result3A.Status.OK))
+    var unlock3ACallCount = 0
+        private set
+
+    var unlock3AResult: Deferred<Result3A> = CompletableDeferred(Result3A(Result3A.Status.OK))
+
+    data class Update3ACall(
+        val aeRegions: List<MeteringRectangle>?,
+        val afRegions: List<MeteringRectangle>?,
+        val awbRegions: List<MeteringRectangle>?,
+    )
+
+    val update3ACalls = mutableListOf<Update3ACall>()
+    val callOrder = mutableListOf<String>()
+    var closeCount = 0
+        private set
+
+    var activeCount = 0
+        private set
+
+    var maxActiveCount = 0
+        private set
+
+    internal fun onAcquired() {
+        activeCount++
+        if (activeCount > maxActiveCount) {
+            maxActiveCount = activeCount
+        }
+    }
 
     override fun abort() {
         // No-op
     }
 
     override fun close() {
-        // No-op
+        closeCount++
+        if (activeCount > 0) {
+            activeCount--
+        }
     }
 
     override suspend fun lock3A(
@@ -83,7 +123,10 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         convergedTimeLimitNs: Long,
         lockedTimeLimitNs: Long,
     ): Deferred<Result3A> {
-        throw NotImplementedError("Not used in testing")
+        lock3ACallCount++
+        callOrder.add("lock3A")
+        lock3ASuspendGate?.await()
+        return lock3AResult
     }
 
     override suspend fun lock3AForCapture(
@@ -104,11 +147,11 @@ open class FakeCameraGraphSession : CameraGraph.Session {
     }
 
     override fun setTorchOn(): Deferred<Result3A> {
-        throw NotImplementedError("Not used in testing")
+        return CompletableDeferred(Result3A(Result3A.Status.OK))
     }
 
     override fun setTorchOff(aeMode: AeMode?): Deferred<Result3A> {
-        throw NotImplementedError("Not used in testing")
+        return CompletableDeferred(Result3A(Result3A.Status.OK))
     }
 
     override fun startRepeating(request: Request) {
@@ -136,13 +179,13 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         submittedRequests.addAll(requests)
     }
 
-    override fun capture(request: Request): FrameCapture {
+    fun capture(request: Request): FrameCapture {
         val capture = FakeFrameCapture(request)
         submit(request)
         return capture
     }
 
-    override fun capture(requests: List<Request>): List<FrameCapture> {
+    fun capture(requests: List<Request>): List<FrameCapture> {
         val captures = requests.map { FakeFrameCapture(it) }
         submit(requests)
         return captures
@@ -159,6 +202,20 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         throw NotImplementedError("Not used in testing")
     }
 
+    override fun converge3A(
+        aeRegions: List<MeteringRectangle>?,
+        afRegions: List<MeteringRectangle>?,
+        awbRegions: List<MeteringRectangle>?,
+        aeBehavior: Converge3ABehavior?,
+        afBehavior: Converge3ABehavior?,
+        awbBehavior: Converge3ABehavior?,
+        convergedCondition: ((FrameMetadata) -> Boolean)?,
+        frameLimit: Int?,
+        timeLimitNs: Long?,
+    ): Deferred<Result3A> {
+        throw NotImplementedError("Not used in testing")
+    }
+
     override suspend fun unlock3A(
         ae: Boolean?,
         af: Boolean?,
@@ -167,7 +224,9 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         frameLimit: Int,
         timeLimitNs: Long,
     ): Deferred<Result3A> {
-        throw NotImplementedError("Not used in testing")
+        unlock3ACallCount++
+        callOrder.add("unlock3A")
+        return unlock3AResult
     }
 
     override suspend fun unlock3APostCapture(cancelAf: Boolean): Deferred<Result3A> {
@@ -178,10 +237,15 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         aeMode: AeMode?,
         afMode: AfMode?,
         awbMode: AwbMode?,
+        controlMode: ControlMode?,
+        flashMode: FlashMode?,
         aeRegions: List<MeteringRectangle>?,
         afRegions: List<MeteringRectangle>?,
         awbRegions: List<MeteringRectangle>?,
+        retainLocks: Boolean,
     ): Deferred<Result3A> {
+        update3ACalls.add(Update3ACall(aeRegions, afRegions, awbRegions))
+        callOrder.add("update3A")
         return CompletableDeferred(Result3A(Result3A.Status.OK))
     }
 
@@ -193,12 +257,16 @@ open class FakeCameraGraphSession : CameraGraph.Session {
         last().listeners.forEach { listener ->
             when (status) {
                 TOTAL_CAPTURE_DONE ->
-                    listener.onTotalCaptureResult(requestMetadata, FrameNumber(0), FakeFrameInfo())
+                    listener.onTotalCaptureResult(
+                        requestMetadata,
+                        CameraFrameNumber(0),
+                        FakeFrameInfo(),
+                    )
                 FAILED ->
                     listener.onFailed(
                         requestMetadata,
-                        FrameNumber(0),
-                        FakeRequestFailure(requestMetadata, FrameNumber(0)),
+                        CameraFrameNumber(0),
+                        FakeRequestFailure(requestMetadata, CameraFrameNumber(0)),
                     )
                 ABORTED -> listener.onRequestSequenceAborted(requestMetadata)
             }

@@ -17,9 +17,9 @@
 package androidx.camera.camera2.pipe.testing
 
 import androidx.camera.camera2.pipe.CameraExtensionMetadata
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.compat.Camera2MetadataProvider
+import androidx.camera.common.CameraId
 
 /** Utility class for providing fake metadata for tests. */
 class FakeCamera2MetadataProvider(
@@ -45,4 +45,7 @@ class FakeCamera2MetadataProvider(
 
     override fun getSupportedCameraExtensions(cameraId: CameraId): Set<Int> =
         awaitCameraMetadata(cameraId).supportedExtensions
+
+    override fun isExtensionSupported(cameraId: CameraId, extension: Int): Boolean =
+        awaitCameraMetadata(cameraId).isExtensionSupported(extension)
 }

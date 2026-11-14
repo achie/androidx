@@ -18,28 +18,24 @@ package androidx.xr.scenecore.spatial.core
 
 import android.app.Activity
 import android.content.Context
-import androidx.xr.runtime.math.Matrix4
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.runtime.testing.math.assertPose
 import androidx.xr.runtime.testing.math.assertVector3
-import androidx.xr.scenecore.impl.perception.PerceptionLibrary
-import androidx.xr.scenecore.impl.perception.PerceptionLibraryConstants
-import androidx.xr.scenecore.impl.perception.Session
+import androidx.xr.scenecore.runtime.Dimensions
 import androidx.xr.scenecore.runtime.HitTestResult
+import androidx.xr.scenecore.runtime.InteractableComponent
+import androidx.xr.scenecore.runtime.ResizableComponent
 import androidx.xr.scenecore.runtime.ScenePose
 import androidx.xr.scenecore.runtime.Space
-import androidx.xr.scenecore.runtime.extensions.XrExtensionsProvider
 import androidx.xr.scenecore.testing.FakeScheduledExecutorService
 import com.android.extensions.xr.ShadowXrExtensions
 import com.android.extensions.xr.XrExtensions
 import com.android.extensions.xr.node.Node
 import com.android.extensions.xr.node.Vec3
 import com.google.common.truth.Truth.assertThat
-import com.google.common.util.concurrent.Futures.immediateFuture
 import java.util.concurrent.ScheduledExecutorService
-import kotlin.test.expect
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -48,8 +44,6 @@ import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mockito.Mockito.mock
-import org.mockito.Mockito.`when`
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -57,8 +51,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [Config.TARGET_SDK])
 class EntityTest {
-    private var xrExtensions: XrExtensions? = XrExtensionsProvider.getXrExtensions()
-    private val entityManager = EntityManager()
+    private val xrExtensions = SpatialCoreXrExtensionsHolderProvider.extensionsLegacy
+    private val sceneNodeRegistry = SceneNodeRegistry()
     private val fakeScheduledExecutorService = FakeScheduledExecutorService()
     private val testPose = Pose(Vector3(1f, 2f, 3f), Quaternion.Identity)
 
@@ -70,44 +64,27 @@ class EntityTest {
         context: Context,
         node: Node,
         extensions: XrExtensions,
-        entityManager: EntityManager,
+        sceneNodeRegistry: SceneNodeRegistry,
         executor: ScheduledExecutorService,
-    ) : AndroidXrEntity(context, node, extensions, entityManager, executor)
+    ) : AndroidXrEntity(context, node, extensions, sceneNodeRegistry, executor)
 
     @Before
     fun setUp() {
-        expect(true, "XrExtensions should not be null") { xrExtensions != null }
-
         activity = Robolectric.buildActivity(Activity::class.java).create().start().get()
-
-        val perceptionLibrary = mock(PerceptionLibrary::class.java)
-        ShadowXrExtensions.extract(xrExtensions!!)
-            .setOpenXrWorldSpaceType(PerceptionLibraryConstants.OPEN_XR_SPACE_TYPE_VIEW)
-        `when`(
-                perceptionLibrary.initSession(
-                    activity,
-                    PerceptionLibraryConstants.OPEN_XR_SPACE_TYPE_VIEW,
-                    fakeScheduledExecutorService,
-                )
-            )
-            .thenReturn(immediateFuture(mock(Session::class.java)))
-        `when`(perceptionLibrary.activity).thenReturn(activity)
 
         spatialSceneRuntime =
             SpatialSceneRuntime.create(
                 activity,
                 fakeScheduledExecutorService,
-                xrExtensions!!,
-                entityManager,
-                perceptionLibrary,
-                /* unscaledGravityAlignedActivitySpace= */ false,
+                xrExtensions,
+                sceneNodeRegistry,
             )
         entity =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         entity.parent = spatialSceneRuntime.activitySpace
@@ -116,7 +93,6 @@ class EntityTest {
     @After
     fun tearDown() {
         spatialSceneRuntime.destroy()
-        xrExtensions = null
     }
 
     @Test
@@ -126,32 +102,8 @@ class EntityTest {
     }
 
     @Test
-    fun getPose_parentSpace_returnsParentPose() {
-        val activitySpace = spatialSceneRuntime.activitySpace as ActivitySpaceImpl
-        activitySpace.setOpenXrReferenceSpaceTransform(
-            Matrix4.fromTrs(
-                Vector3(5f, 6f, 7f),
-                Quaternion.fromEulerAngles(22f, 33f, 44f),
-                Vector3(2f, 2f, 2f),
-            )
-        )
-        assertVector3(activitySpace.getScale(Space.REAL_WORLD), Vector3(2f, 2f, 2f))
-
-        entity.setPose(testPose, Space.PARENT)
-        assertPose(entity.getPose(Space.PARENT), testPose)
-    }
-
-    @Test
     fun getPose_activitySpace_returnsActivitySpacePose() {
         val activitySpace = spatialSceneRuntime.activitySpace as ActivitySpaceImpl
-        activitySpace.setOpenXrReferenceSpaceTransform(
-            Matrix4.fromTrs(
-                Vector3(5f, 6f, 7f),
-                Quaternion.fromEulerAngles(22f, 33f, 44f),
-                Vector3(2f, 2f, 2f),
-            )
-        )
-        assertVector3(activitySpace.getScale(Space.REAL_WORLD), Vector3(2f, 2f, 2f))
 
         entity.parent = activitySpace
         entity.setPose(testPose, Space.PARENT)
@@ -185,9 +137,9 @@ class EntityTest {
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.parent = entity
@@ -231,15 +183,12 @@ class EntityTest {
 
     @Test
     fun getScale_worldSpace_returnsWorldSpaceScale() {
-        val activitySpace = spatialSceneRuntime.activitySpace as ActivitySpaceImpl
-        activitySpace.mWorldSpaceScale = Vector3(2.0f, 2.0f, 2.0f)
         val scale = Vector3(1.0f, 2.0f, 3.0f)
         entity.setScale(scale, Space.PARENT)
 
-        assertVector3(
-            entity.getScale(Space.REAL_WORLD),
-            scale.scale(activitySpace.mWorldSpaceScale),
-        )
+        // ActivitySpace scale is ignored (always 1), so world scale is just the entity scale
+        // relative to parent
+        assertVector3(entity.getScale(Space.REAL_WORLD), scale)
     }
 
     @Test
@@ -257,9 +206,9 @@ class EntityTest {
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.parent = entity
@@ -270,168 +219,21 @@ class EntityTest {
 
     @Test
     fun setScale_worldSpace_setsWorldSpaceScale() {
-        val activitySpace = spatialSceneRuntime.activitySpace as ActivitySpaceImpl
-        activitySpace.mWorldSpaceScale = Vector3(2.0f, 2.0f, 2.0f)
         val scale = Vector3(1.0f, 2.0f, 3.0f)
         entity.setScale(scale, Space.PARENT)
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.parent = entity
-        child.setScale(scale.scale(scale.scale(activitySpace.mWorldSpaceScale)), Space.REAL_WORLD)
+        // With ActivitySpace scale 1, we don't need to compensate for it.
+        child.setScale(scale.scale(scale), Space.REAL_WORLD)
 
-        assertVector3(
-            child.getScale(Space.REAL_WORLD),
-            scale.scale(scale.scale(activitySpace.mWorldSpaceScale)),
-        )
-    }
-
-    @Test
-    fun getGravityAlignedPose_returnsGravityAlignedPose() {
-        val translation = Vector3(1f, 2f, 3f)
-        val poseYawOnly = Pose(translation, Quaternion.fromEulerAngles(0f, 30f, 0f))
-        val poseYawPitchRoll = Pose(translation, Quaternion.fromEulerAngles(15f, 30f, 45f))
-
-        // Pitch and roll of rotation will be ignored when the parent's rotation is identity.
-        assertPose(entity.getGravityAlignedPose(poseYawPitchRoll), poseYawOnly)
-
-        val child =
-            TestEntity(
-                activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
-                fakeScheduledExecutorService,
-            )
-        child.parent = entity
-
-        // Rotates the parent entity's YAW only.
-        entity.setPose(poseYawOnly)
-
-        // Pitch and roll of rotation will be ignored when the parent uses YAW rotation only.
-        val gravityAlignedPoseWithYawRotatedParent =
-            Pose(
-                translation,
-                // The local rotation required to make the child upright in world space.
-                Quaternion.fromEulerAngles(0f, 30f, 0f),
-            )
-
-        assertPose(
-            child.getGravityAlignedPose(poseYawPitchRoll),
-            gravityAlignedPoseWithYawRotatedParent,
-        )
-
-        entity.setPose(poseYawPitchRoll)
-
-        val gravityAlignedPoseWithYawPitchRollRotatedParent =
-            Pose(
-                translation,
-                // The local rotation required to make the child upright in world space.
-                // Euler angles are approximately (pitch=12.5, yaw=32.7, roll=-45.6).
-                // Calculation:
-                // 1.Quaternion from EulerAngles(15f, 30f, 45f)
-                //   = [x=0.2146, y=0.1888, z=0.3352, w=0.8977]
-                //
-                // 2.inputWorldRotation = parent world rotation * local rotation
-                //     [0.2146, 0.1888, 0.3352, 0.8977] * [0.2146, 0.1888, 0.3352, 0.8977]
-                //   = [x=0.3854, y=0.3390, z=0.6019, w=0.6117]
-                //
-                // 3.Child's "forward" direction (local +Z) in world space:
-                //   worldForward = inputWorldRotation * Vector3(0f, 0f, 1f)
-                //                = [x=0.8787, y=-0.0634, z=0.4730]
-                //
-                // 4.Project "forward" onto the horizontal (X-Z) ground plane:
-                //   gravityAlignedForward = [x=0.8787, y=0.0, z=0.4730]
-                //
-                // 5.gravityAlignedWorldRotation = fromLookTowards(gravityAlignedForward)
-                //                               = [x=0.0, y=0.5128, z=0.0, w=0.8584]
-                //
-                // 6.finalLocalRotation
-                //   = parentWorldRot.inverse              * gravityAlignedWorldRotation
-                //   = [-0.2146, -0.1888, -0.3352, 0.8977] * [0.0, 0.5128, 0.0, 0.8584]
-                //   = [x=-0.0123, y=0.2982, z=-0.3979, w=0.8675]
-                Quaternion(-0.0123f, 0.298f, -0.398f, 0.867f),
-            )
-
-        assertPose(
-            child.getGravityAlignedPose(poseYawPitchRoll),
-            gravityAlignedPoseWithYawPitchRollRotatedParent,
-        )
-    }
-
-    @Test
-    fun getGravityAlignedPose_entityLookingUp_returnsGravityAlignedPose() {
-        val translation = Vector3(1f, 2f, 3f)
-        // Pose looking straight up (+Y).
-        val poseLookingUp = Pose(translation, Quaternion.fromEulerAngles(-90f, 0f, 0f))
-
-        // When the entity is looking straight up, the projected forward vector is zero.
-        // The gravity-aligned world rotation becomes Identity.
-        // Since the parent is Identity, the local rotation is also Identity.
-        assertPose(
-            entity.getGravityAlignedPose(poseLookingUp),
-            Pose(translation, Quaternion.Identity),
-        )
-
-        val child =
-            TestEntity(
-                activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
-                fakeScheduledExecutorService,
-            )
-        child.parent = entity
-
-        // Rotate the parent entity's YAW only.
-        val parentYawRotation = Quaternion.fromEulerAngles(0f, 30f, 0f)
-        entity.setPose(Pose(Vector3.Zero, parentYawRotation))
-
-        // The gravity-aligned world rotation is still Identity.
-        assertPose(
-            child.getGravityAlignedPose(poseLookingUp),
-            Pose(translation, Quaternion.Identity),
-        )
-    }
-
-    @Test
-    fun getGravityAlignedPose_entityLookingDown_returnsGravityAlignedPose() {
-        val translation = Vector3(1f, 2f, 3f)
-        // Pose looking straight down (-Y).
-        val poseLookingDown = Pose(translation, Quaternion.fromEulerAngles(90f, 0f, 0f))
-
-        // When the entity is looking straight down, the projected forward vector is zero.
-        // The gravity-aligned world rotation becomes Identity.
-        // Since the parent is Identity, the local rotation is also Identity.
-        assertPose(
-            entity.getGravityAlignedPose(poseLookingDown),
-            Pose(translation, Quaternion.Identity),
-        )
-
-        val child =
-            TestEntity(
-                activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
-                fakeScheduledExecutorService,
-            )
-        child.parent = entity
-
-        // Rotate the parent entity's YAW only.
-        val parentYawRotation = Quaternion.fromEulerAngles(0f, 30f, 0f)
-        entity.setPose(Pose(Vector3(), parentYawRotation))
-
-        // The gravity-aligned world rotation is still Identity.
-        assertPose(
-            child.getGravityAlignedPose(poseLookingDown),
-            Pose(translation, Quaternion.Identity),
-        )
+        assertVector3(child.getScale(Space.REAL_WORLD), scale.scale(scale))
     }
 
     @Test
@@ -441,9 +243,9 @@ class EntityTest {
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.setPose(testPose, Space.PARENT)
@@ -452,22 +254,15 @@ class EntityTest {
         val grandchild =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         grandchild.setPose(testPose, Space.PARENT)
         grandchild.parent = child
         val activitySpace = spatialSceneRuntime.activitySpace as ActivitySpaceImpl
-        activitySpace.setOpenXrReferenceSpaceTransform(
-            Matrix4.fromTrs(
-                Vector3(5f, 6f, 7f),
-                Quaternion.fromEulerAngles(22f, 33f, 44f),
-                Vector3(2f, 2f, 2f),
-            )
-        )
-        assertVector3(activitySpace.getScale(Space.REAL_WORLD), Vector3(2f, 2f, 2f))
+        assertVector3(activitySpace.getScale(Space.REAL_WORLD), Vector3.One)
 
         assertPose(entity.getPose(Space.PARENT), testPose)
         assertPose(entity.getPose(Space.ACTIVITY), testPose)
@@ -492,83 +287,64 @@ class EntityTest {
 
     @Test
     fun getAlpha_parentSpace_returnsParentAlpha() {
-        entity.setAlpha(0.5f, Space.PARENT)
+        entity.setAlpha(0.5f)
 
         assertThat(entity.getAlpha(Space.PARENT)).isEqualTo(0.5f)
     }
 
     @Test
     fun getAlpha_activitySpace_returnsActivitySpaceAlpha() {
-        entity.setAlpha(0.5f, Space.PARENT)
+        entity.setAlpha(0.5f)
 
         assertThat(entity.getAlpha(Space.ACTIVITY)).isEqualTo(0.5f)
     }
 
     @Test
     fun getAlpha_worldSpace_returnsWorldSpaceAlpha() {
-        entity.setAlpha(0.5f, Space.REAL_WORLD)
+        entity.setAlpha(0.5f)
 
         assertThat(entity.getAlpha(Space.REAL_WORLD)).isEqualTo(0.5f)
     }
 
     @Test
     fun getAlpha_invalidSpace_throwsException() {
-        entity.setAlpha(0.5f, Space.PARENT)
+        entity.setAlpha(0.5f)
         assertThrows(IllegalArgumentException::class.java) { entity.getAlpha(999) }
     }
 
     @Test
-    fun setAlpha_setsAlpha() {
-        entity.setAlpha(0.5f, Space.PARENT)
-
-        assertThat(entity.getAlpha(Space.PARENT)).isEqualTo(0.5f)
-    }
-
-    @Test
-    fun setAlpha_parentSpace_setsParentAlpha() {
-        entity.setAlpha(0.5f, Space.PARENT)
-
-        assertThat(entity.getAlpha(Space.PARENT)).isEqualTo(0.5f)
-    }
-
-    @Test
     fun setAlpha_activitySpace_setsActivitySpaceAlpha() {
-        entity.setAlpha(0.5f, Space.PARENT)
+        entity.setAlpha(0.5f)
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.parent = entity
-        child.setAlpha(0.5f, Space.PARENT)
+        child.setAlpha(0.5f)
 
         assertThat(child.getAlpha(Space.ACTIVITY)).isEqualTo(0.25f)
     }
 
     @Test
     fun setAlpha_worldSpace_setsWorldSpaceAlpha() {
-        spatialSceneRuntime.activitySpace.setAlpha(4f, Space.PARENT)
-        entity.setAlpha(0.5f, Space.PARENT)
+        spatialSceneRuntime.activitySpace.setAlpha(4f)
+        entity.setAlpha(0.5f)
         val child =
             TestEntity(
                 activity,
-                xrExtensions!!.createNode(),
-                xrExtensions!!,
-                entityManager,
+                xrExtensions.createNode(),
+                xrExtensions,
+                sceneNodeRegistry,
                 fakeScheduledExecutorService,
             )
         child.parent = entity
-        child.setAlpha(0.5f, Space.PARENT)
+        child.setAlpha(0.5f)
 
         assertThat(child.getAlpha(Space.REAL_WORLD)).isEqualTo(0.25f)
-    }
-
-    @Test
-    fun setAlpha_invalidSpace_throwsException() {
-        assertThrows(IllegalArgumentException::class.java) { entity.setAlpha(0.5f, 999) }
     }
 
     @Test
@@ -590,8 +366,7 @@ class EntityTest {
             Pose(Vector3(1f, 1f, 1f), Quaternion.fromEulerAngles(Vector3(90f, 0f, 0f))),
             Space.ACTIVITY,
         )
-        ShadowXrExtensions.extract(xrExtensions!!)
-            .setHitTestResult(activity, extensionsHitTestResult)
+        ShadowXrExtensions.extract(xrExtensions).setHitTestResult(activity, extensionsHitTestResult)
 
         val deferredHitTestResult =
             async(start = CoroutineStart.UNDISPATCHED) {
@@ -607,54 +382,9 @@ class EntityTest {
 
         assertThat(hitTestResult).isNotNull()
         assertThat(hitTestResult.distance).isEqualTo(distance)
-        // Since the entity is rotated 90 degrees about the x axis, the hit position should be
-        // rotated 90 degrees about the x axis.
+        // Since the entity is rotated 90 degrees about the x-axis, the hit position should be
+        // rotated 90 degrees about the x-axis.
         assertVector3(hitTestResult.hitPosition!!, Vector3(0f, 2f, -1f))
-        assertVector3(hitTestResult.surfaceNormal!!, Vector3(0f, 0f, -1f))
-        assertThat(hitTestResult.surfaceType)
-            .isEqualTo(HitTestResult.HitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_PLANE)
-    }
-
-    @Test
-    fun hitTest_withScaledActivitySpace_returnsTransformedHitTest() = runBlocking {
-        val distance = 2.0f
-        val hitPosition = Vec3(0.5f, 1.0f, 1.5f)
-        val surfaceNormal = Vec3(0.0f, 1.0f, 0.0f)
-        val surfaceType = com.android.extensions.xr.space.HitTestResult.SURFACE_PANEL
-        (spatialSceneRuntime.activitySpace as ActivitySpaceImpl).setOpenXrReferenceSpaceTransform(
-            Matrix4.fromScale(2f)
-        )
-        val extensionsHitTestResult =
-            com.android.extensions.xr.space.HitTestResult.Builder(
-                    distance,
-                    hitPosition,
-                    true,
-                    surfaceType,
-                )
-                .setSurfaceNormal(surfaceNormal)
-                .build()
-        entity.setPose(
-            Pose(Vector3(0.5f, 0.5f, 0.5f), Quaternion.fromEulerAngles(Vector3(90f, 0f, 0f))),
-            Space.ACTIVITY,
-        )
-        ShadowXrExtensions.extract(xrExtensions!!)
-            .setHitTestResult(activity, extensionsHitTestResult)
-
-        val deferredHitTestResult =
-            async(start = CoroutineStart.UNDISPATCHED) {
-                entity.hitTest(
-                    Vector3(1f, 1f, 1f),
-                    Vector3(1f, 1f, 1f),
-                    ScenePose.HitTestFilter.SELF_SCENE,
-                )
-            }
-        fakeScheduledExecutorService.runAll()
-        val hitTestResult = deferredHitTestResult.await()
-
-        assertThat(hitTestResult.distance).isEqualTo(distance)
-        // Since the entity is rotated 90 degrees about the x axis, the hit position should be
-        // rotated 90 degrees about the x axis.
-        assertVector3(hitTestResult.hitPosition!!, Vector3(0f, 1f, -0.5f))
         assertVector3(hitTestResult.surfaceNormal!!, Vector3(0f, 0f, -1f))
         assertThat(hitTestResult.surfaceType)
             .isEqualTo(HitTestResult.HitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_PLANE)
@@ -683,5 +413,58 @@ class EntityTest {
     fun getPoseInRealWorldSpace_nullParent_throwsException() {
         entity.parent = null
         assertThrows(IllegalStateException::class.java) { entity.getPose(Space.REAL_WORLD) }
+    }
+
+    @Test
+    fun addComponent_addsComponent() {
+        val resizableComponent =
+            ResizableComponentImpl(
+                fakeScheduledExecutorService,
+                xrExtensions,
+                Dimensions(0f, 0f, 0f),
+                Dimensions(1f, 1f, 1f),
+            )
+        entity.addComponent(resizableComponent)
+
+        assertThat(entity.getComponents()).containsExactly(resizableComponent)
+    }
+
+    @Test
+    fun removeComponent_removesComponent() {
+        val resizableComponent =
+            ResizableComponentImpl(
+                fakeScheduledExecutorService,
+                xrExtensions,
+                Dimensions(0f, 0f, 0f),
+                Dimensions(1f, 1f, 1f),
+            )
+        val interactableComponent: InteractableComponent =
+            InteractableComponentImpl(fakeScheduledExecutorService) {}
+        entity.addComponent(resizableComponent)
+        entity.addComponent(interactableComponent)
+
+        entity.removeComponent(resizableComponent)
+
+        assertThat(entity.getComponents()).containsExactly(interactableComponent)
+    }
+
+    @Test
+    fun getComponentsOfType_getsOnlyComponentOfType() {
+        val resizableComponent =
+            ResizableComponentImpl(
+                fakeScheduledExecutorService,
+                xrExtensions,
+                Dimensions(0f, 0f, 0f),
+                Dimensions(1f, 1f, 1f),
+            )
+        val interactableComponent: InteractableComponent =
+            InteractableComponentImpl(fakeScheduledExecutorService) {}
+        entity.addComponent(resizableComponent)
+        entity.addComponent(interactableComponent)
+
+        assertThat(entity.getComponentsOfType(InteractableComponent::class.java))
+            .containsExactly(interactableComponent)
+        assertThat(entity.getComponentsOfType(ResizableComponent::class.java))
+            .containsExactly(resizableComponent)
     }
 }

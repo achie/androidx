@@ -19,7 +19,6 @@ package androidx.xr.compose.testapp.spatialelevation
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -39,6 +38,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
@@ -64,7 +64,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,12 +75,14 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.platform.LocalSpatialConfiguration
-import androidx.xr.compose.spatial.ContentEdge
 import androidx.xr.compose.spatial.Orbiter
-import androidx.xr.compose.spatial.OrbiterOffsetType
+import androidx.xr.compose.spatial.OrbiterDefaults
+import androidx.xr.compose.spatial.OrbiterPosition
+import androidx.xr.compose.spatial.OrbiterPosition.EdgeAlignment
 import androidx.xr.compose.spatial.SpatialDialog
 import androidx.xr.compose.spatial.SpatialElevation
 import androidx.xr.compose.spatial.SpatialElevationLevel
@@ -93,13 +94,14 @@ import androidx.xr.compose.testapp.ui.components.TopBarWithBackArrow
 import androidx.xr.compose.testapp.ui.theme.IntegrationTestsAppTheme
 import androidx.xr.compose.testapp.ui.theme.Purple40
 import androidx.xr.compose.testapp.ui.theme.Purple80
+import androidx.xr.compose.unit.DpVolumeOffset
 import androidx.xr.scenecore.scene
 import kotlinx.coroutines.launch
 
 class SpatialElevation : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        WindowCompat.enableEdgeToEdge(window)
         setContent { IntegrationTestsAppTheme { SpatialElevationApp() } }
     }
 
@@ -114,9 +116,11 @@ class SpatialElevation : ComponentActivity() {
         var showPopup by remember { mutableStateOf(false) }
 
         Orbiter(
-            position = ContentEdge.Start,
-            offset = 8.dp,
-            offsetType = OrbiterOffsetType.Overlap,
+            position =
+                OrbiterPosition.CenterStart(
+                    EdgeAlignment.Outside,
+                    offset = DpVolumeOffset(x = (0).dp, y = 0.dp, z = OrbiterDefaults.Elevation),
+                )
         ) {
             NavigationRail(
                 modifier =
@@ -158,9 +162,11 @@ class SpatialElevation : ComponentActivity() {
             }
         }
         Orbiter(
-            position = ContentEdge.End,
-            offset = 80.dp,
-            offsetType = OrbiterOffsetType.OuterEdge,
+            position =
+                OrbiterPosition.CenterEnd(
+                    EdgeAlignment.Inside,
+                    offset = DpVolumeOffset(x = 90.dp, y = 0.dp, z = OrbiterDefaults.Elevation),
+                )
         ) {
             Row(
                 modifier = Modifier.animateContentSize(),
@@ -208,29 +214,22 @@ class SpatialElevation : ComponentActivity() {
                 }
             },
             bottomBar = {
-                if (LocalSpatialConfiguration.current.hasXrSpatialFeature) {
-                    val session =
-                        checkNotNull(LocalSession.current) {
-                            "LocalSession.current was null. Session must be available."
+                if (!LocalSpatialConfiguration.current.hasXrSpatialFeature) return@Scaffold
+                val session = LocalSession.current ?: return@Scaffold
+
+                Box(
+                    modifier = Modifier.fillMaxWidth().background(Purple40),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(modifier = Modifier.align(Alignment.Center)) {
+                        if (LocalSpatialCapabilities.current.isSpatialUiEnabled) {
+                            CUJButton("Enter Home Space") { session.scene.requestHomeSpace() }
+                        } else {
+                            CUJButton("Enter Full Space") { session.scene.requestFullSpace() }
                         }
-                    Box(
-                        modifier = Modifier.fillMaxWidth().background(Purple40),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(modifier = Modifier.align(Alignment.Center)) {
-                            if (LocalSpatialCapabilities.current.isSpatialUiEnabled) {
-                                CUJButton("Enter Home Space Mode") {
-                                    session.scene.requestHomeSpaceMode()
-                                }
-                            } else {
-                                CUJButton("Enter Full Space Mode") {
-                                    session.scene.requestFullSpaceMode()
-                                }
-                            }
-                        }
-                        Box(modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
-                            RecreateButton { this@SpatialElevation.recreate() }
-                        }
+                    }
+                    Box(modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
+                        RecreateButton { this@SpatialElevation.recreate() }
                     }
                 }
             },
@@ -336,7 +335,7 @@ class SpatialElevation : ComponentActivity() {
 
     @Composable
     private fun EditItem(index: Int, modifier: Modifier = Modifier) {
-        var text by rememberSaveable { mutableStateOf("Test item $index") }
+        val state = rememberTextFieldState("Test item $index")
         var showEditPopup by remember { mutableStateOf(false) }
 
         Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +343,7 @@ class SpatialElevation : ComponentActivity() {
                 SpatialElevation(SpatialElevationLevel.Level4) {
                     Surface(color = MaterialTheme.colorScheme.primaryContainer) {
                         Row(modifier = Modifier.padding(10.dp)) {
-                            TextField(value = text, onValueChange = { text = it })
+                            TextField(state = state)
                             Spacer(modifier = Modifier.size(10.dp))
                             Button(onClick = { showEditPopup = false }, modifier = Modifier) {
                                 Text("Done")
@@ -353,7 +352,10 @@ class SpatialElevation : ComponentActivity() {
                     }
                 }
             } else {
-                Text(text = text, fontSize = MaterialTheme.typography.headlineLarge.fontSize)
+                Text(
+                    text = state.text.toString(),
+                    fontSize = MaterialTheme.typography.headlineLarge.fontSize,
+                )
                 IconButton(onClick = { showEditPopup = true }) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit")
                 }

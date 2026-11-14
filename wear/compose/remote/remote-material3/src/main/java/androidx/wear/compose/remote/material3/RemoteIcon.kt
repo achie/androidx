@@ -13,52 +13,54 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-@file:Suppress("RestrictedApiAndroidX")
 
 package androidx.wear.compose.remote.material3
 
-import androidx.annotation.RestrictTo
 import androidx.compose.remote.creation.compose.capture.RemoteImageVector
-import androidx.compose.remote.creation.compose.capture.painter.painterRemoteVector
-import androidx.compose.remote.creation.compose.layout.RemoteBox
-import androidx.compose.remote.creation.compose.layout.RemoteCanvas
 import androidx.compose.remote.creation.compose.layout.RemoteComposable
 import androidx.compose.remote.creation.compose.modifier.RemoteModifier
-import androidx.compose.remote.creation.compose.modifier.fillMaxSize
-import androidx.compose.remote.creation.compose.modifier.semantics
-import androidx.compose.remote.creation.compose.modifier.size
 import androidx.compose.remote.creation.compose.state.RemoteColor
 import androidx.compose.remote.creation.compose.state.RemoteString
-import androidx.compose.remote.creation.compose.state.rdp
+import androidx.compose.remote.foundation.icon.RemoteBasicIcon
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 
 /**
- * Composable function that displays an icon using an [RemoteImageVector].
+ * Displays a Material Design icon from a [RemoteImageVector] in a remote layout.
  *
- * This function provides a way to display icons consistently across both local and remote Compose
- * environments.
+ * Sizes the icon to [imageVector]'s intrinsic dimensions, or `24.dp` when unspecified. Unlike
+ * [RemoteBasicIcon], which defaults [tint] to white, [RemoteIcon] defaults [tint] to the ambient
+ * content color provided by the surrounding Wear Material 3 component (or white if none is
+ * provided).
  *
- * @param imageVector The [RemoteImageVector] representing the icon to display.
- * @param modifier The [RemoteModifier] to apply to the icon.
- * @param tint The color to apply to the icon. Defaults to the current content color provided by
- *   [DefaultTint].
+ * Provide a localized [contentDescription] (for example, via
+ * [androidx.compose.ui.res.stringResource]) whenever the icon conveys meaning or represents an
+ * action. Pass `null` only for purely decorative icons, which omits the accessibility content
+ * description so accessibility services ignore it.
+ *
+ * Example of displaying a [RemoteIcon]:
+ *
+ * @sample androidx.wear.compose.remote.material3.samples.RemoteIconSimpleSample
+ * @param imageVector the [RemoteImageVector] to draw inside this icon
+ * @param contentDescription localized text used by accessibility services to describe this icon, or
+ *   `null` if the icon is purely decorative and has no accessibility description
+ * @param modifier the [RemoteModifier] applied to this icon
+ * @param tint color applied to [imageVector] using a color filter with the vector's tint blend mode
+ *   ([androidx.compose.ui.graphics.BlendMode.SrcIn] by default, which replaces the icon's RGB
+ *   colors with [tint] while preserving alpha rather than multiplying RGBA). Defaults to the
+ *   current content color
  */
 @RemoteComposable
 @Composable
 public fun RemoteIcon(
     imageVector: RemoteImageVector,
     contentDescription: RemoteString?,
-    modifier: RemoteModifier = RemoteModifier.size(DefaultIconDimension),
+    modifier: RemoteModifier = RemoteModifier,
     tint: RemoteColor = LocalRemoteContentColor.current,
 ) {
-    RemoteBox(modifier.semantics { this.contentDescription = contentDescription }) {
-        val painter = painterRemoteVector(imageVector, tint)
-        RemoteCanvas(modifier = RemoteModifier.fillMaxSize()) { with(painter) { onDraw() } }
-    }
+    RemoteBasicIcon(
+        imageVector = imageVector,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        tint = tint,
+    )
 }
-
-// Default icon size
-internal val DefaultIconDimension = 24.rdp
-internal val DefaultTint = Color.White

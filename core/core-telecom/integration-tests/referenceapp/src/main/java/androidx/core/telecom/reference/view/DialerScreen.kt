@@ -104,6 +104,7 @@ fun DialerScreen(
         }
 
         // Input field for Display Name
+        @Suppress("DEPRECATION")
         OutlinedTextField(
             value = uiState.displayName,
             onValueChange = { dialerViewModel.updateDisplayName(it) },
@@ -113,6 +114,7 @@ fun DialerScreen(
         )
 
         // Input field for Phone Number
+        @Suppress("DEPRECATION")
         OutlinedTextField(
             value = uiState.phoneNumber,
             onValueChange = { dialerViewModel.updatePhoneNumber(it) },
@@ -173,6 +175,19 @@ fun DialerScreen(
                 Switch(
                     checked = uiState.isInitiallyMuted,
                     onCheckedChange = { dialerViewModel.updateIsInitiallyMuted(it) },
+                )
+            }
+
+            Row(
+                modifier =
+                    Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), // Add some padding
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Can user update Local Silence?")
+                Switch(
+                    checked = uiState.canUserUpdateSilence,
+                    onCheckedChange = { dialerViewModel.updateCanUserUpdateSilence(it) },
                 )
             }
         }

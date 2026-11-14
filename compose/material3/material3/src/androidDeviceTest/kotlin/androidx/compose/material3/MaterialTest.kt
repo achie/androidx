@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.platform.LocalCursorBlinkEnabled
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.platform.testTag
@@ -67,8 +68,12 @@ fun ComposeContentTestRule.setMaterialContent(
 ) {
     setContent {
         MaterialTheme(colorScheme = colorScheme) {
-            Surface(modifier = modifier) {
-                CompositionLocalProvider(LocalWindowInfo provides WindowInfoFocused, composable)
+            // Set any cursor in the content to never blink. This should ensure it does not trigger
+            // UI test flakes.
+            CompositionLocalProvider(LocalCursorBlinkEnabled provides false) {
+                Surface(modifier = modifier) {
+                    CompositionLocalProvider(LocalWindowInfo provides WindowInfoFocused, composable)
+                }
             }
         }
     }
@@ -87,8 +92,8 @@ fun SemanticsNodeInteraction.getFirstBaselinePosition() = getAlignmentLinePositi
 
 fun SemanticsNodeInteraction.getLastBaselinePosition() = getAlignmentLinePosition(LastBaseline)
 
-fun SemanticsNodeInteraction.assertIsSquareWithSize(expectedSize: Dp) =
-    assertWidthIsEqualTo(expectedSize).assertHeightIsEqualTo(expectedSize)
+fun SemanticsNodeInteraction.assertIsSquareWithSize(expectedSize: Dp, tolerance: Dp = 0.5.dp) =
+    assertWidthIsEqualTo(expectedSize, tolerance).assertHeightIsEqualTo(expectedSize, tolerance)
 
 fun ComposeTestRule.rootWidth(): Dp = onRoot().getUnclippedBoundsInRoot().width
 
@@ -106,13 +111,17 @@ fun ComposeContentTestRule.setMaterialContentForSizeAssertions(
 ): SemanticsNodeInteraction {
     setContent {
         MaterialTheme {
-            Surface {
-                Box {
-                    Box(
-                        Modifier.sizeIn(maxWidth = parentMaxWidth, maxHeight = parentMaxHeight)
-                            .testTag("containerForSizeAssertion")
-                    ) {
-                        content()
+            // Set any cursor in the content to never blink. This should ensure it does not trigger
+            // UI test flakes.
+            CompositionLocalProvider(LocalCursorBlinkEnabled provides false) {
+                Surface {
+                    Box {
+                        Box(
+                            Modifier.sizeIn(maxWidth = parentMaxWidth, maxHeight = parentMaxHeight)
+                                .testTag("containerForSizeAssertion")
+                        ) {
+                            content()
+                        }
                     }
                 }
             }

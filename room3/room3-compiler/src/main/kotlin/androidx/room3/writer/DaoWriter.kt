@@ -45,7 +45,8 @@ import androidx.room3.ext.RoomTypeNames.UPSERT_ADAPTER
 import androidx.room3.ext.capitalize
 import androidx.room3.processor.OnConflictProcessor
 import androidx.room3.solver.CodeGenScope
-import androidx.room3.solver.types.getRequiredTypeConverters
+import androidx.room3.solver.types.getRequiredColumnTypeConverters
+import androidx.room3.solver.types.getRequiredDaoReturnTypeConverters
 import androidx.room3.vo.Dao
 import androidx.room3.vo.DeleteOrUpdateShortcutFunction
 import androidx.room3.vo.InsertFunction
@@ -75,7 +76,9 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
     private val companionTypeBuilder = lazy { XTypeSpec.companionObjectBuilder() }
 
     companion object {
-        const val GET_LIST_OF_TYPE_CONVERTERS_FUNCTION = "getRequiredConverters"
+        const val GET_LIST_OF_COLUMN_TYPE_CONVERTERS_FUNCTION = "getRequiredColumnConverters"
+        const val GET_LIST_OF_DAO_RETURN_TYPE_CONVERTERS_FUNCTION =
+            "getRequiredDaoReturnTypeConverters"
 
         const val DB_PROPERTY_NAME = "__db"
 
@@ -108,6 +111,7 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
 
         builder.apply {
             addOriginatingElement(dbElement)
+            addOriginatingElement(dao.element)
             setVisibility(VisibilityModifier.INTERNAL)
             if (dao.element.isInterface()) {
                 addSuperinterface(dao.typeName)
@@ -156,27 +160,40 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
     private fun addConverterListFunction(typeSpecBuilder: XTypeSpec.Builder) {
         // For Kotlin a function in the companion object is created
         companionTypeBuilder.value.applyTo(CodeLanguage.KOTLIN) {
-            addFunction(createConverterListFunction())
+            addFunction(createTypeConverterListFunction())
+            addFunction(createDaoReturnTypeConverterListFunction())
         }
     }
 
-    private fun createConverterListFunction(): XFunSpec {
-        val body = buildCodeBlock { language ->
-            val requiredTypeConverters = getRequiredTypeConverters()
-            if (requiredTypeConverters.isEmpty()) {
+    private fun createTypeConverterListFunction(): XFunSpec =
+        createConverterListFunction(
+            GET_LIST_OF_COLUMN_TYPE_CONVERTERS_FUNCTION,
+            getRequiredColumnTypeConverters(),
+        )
+
+    private fun createDaoReturnTypeConverterListFunction(): XFunSpec =
+        createConverterListFunction(
+            GET_LIST_OF_DAO_RETURN_TYPE_CONVERTERS_FUNCTION,
+            getRequiredDaoReturnTypeConverters(),
+        )
+
+    private fun createConverterListFunction(
+        functionName: String,
+        converters: Set<XClassName>,
+    ): XFunSpec {
+        val body = buildCodeBlock { _ ->
+            if (converters.isEmpty()) {
                 addStatement("return emptyList()")
             } else {
-                val placeholders = requiredTypeConverters.joinToString(",") { "%L" }
+                val placeholders = converters.joinToString(",") { "%L" }
                 val requiredTypeConvertersLiterals =
-                    requiredTypeConverters
-                        .map { XCodeBlock.ofKotlinClassLiteral(it) }
-                        .toTypedArray()
+                    converters.map { XCodeBlock.ofKotlinClassLiteral(it) }.toTypedArray()
                 addStatement("return listOf($placeholders)", *requiredTypeConvertersLiterals)
             }
         }
-        return XFunSpec.builder(GET_LIST_OF_TYPE_CONVERTERS_FUNCTION, VisibilityModifier.PUBLIC)
+        return XFunSpec.builder(functionName, VisibilityModifier.PUBLIC)
             .applyToJavaPoet { addModifiers(javax.lang.model.element.Modifier.STATIC) }
-            .applyTo { language ->
+            .applyTo { _ ->
                 returns(
                     CommonTypeNames.LIST.parametrizedBy(
                         CommonTypeNames.KOTLIN_CLASS.parametrizedBy(XTypeName.ANY_WILDCARD)
@@ -357,14 +374,13 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
             val onConflict = OnConflictProcessor.onConflictText(insertFunction.onConflict)
             val entities = insertFunction.entities
 
-            val fields =
-                entities.mapValues {
-                    val spec = getOrCreateProperty(InsertFunctionProperty(it.value, onConflict))
-                    val impl =
-                        EntityInsertAdapterWriter.create(it.value, onConflict)
-                            .createAnonymous(this@DaoWriter)
-                    spec to impl
-                }
+            val fields = entities.mapValues {
+                val spec = getOrCreateProperty(InsertFunctionProperty(it.value, onConflict))
+                val impl =
+                    EntityInsertAdapterWriter.create(it.value, onConflict)
+                        .createAnonymous(this@DaoWriter)
+                spec to impl
+            }
             val functionImpl =
                 overrideWithoutAnnotations(insertFunction.element, declaredDao)
                     .apply { addCode(createInsertFunctionBody(insertFunction, fields)) }
@@ -422,15 +438,14 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
                     } else {
                         ""
                     }
-                val fields =
-                    entities.mapValues {
-                        val spec =
-                            getOrCreateProperty(
-                                DeleteOrUpdateAdapterProperty(it.value, functionPrefix, onConflict)
-                            )
-                        val impl = implCallback(function, it.value)
-                        spec to impl
-                    }
+                val fields = entities.mapValues {
+                    val spec =
+                        getOrCreateProperty(
+                            DeleteOrUpdateAdapterProperty(it.value, functionPrefix, onConflict)
+                        )
+                    val impl = implCallback(function, it.value)
+                    spec to impl
+                }
                 val functionSpec =
                     overrideWithoutAnnotations(function.element, declaredDao)
                         .apply { addCode(createDeleteOrUpdateFunctionBody(function, fields)) }
@@ -465,14 +480,13 @@ class DaoWriter(val dao: Dao, private val dbElement: XElement, writerContext: Wr
     private fun createUpsertFunctions(): List<PreparedStmtQuery> {
         return dao.upsertFunctions.map { upsertFunctions ->
             val entities = upsertFunctions.entities
-            val fields =
-                entities.mapValues {
-                    val spec = getOrCreateProperty(UpsertAdapterProperty(it.value))
-                    val impl =
-                        EntityUpsertAdapterWriter.create(it.value)
-                            .createConcrete(it.value, this@DaoWriter)
-                    spec to impl
-                }
+            val fields = entities.mapValues {
+                val spec = getOrCreateProperty(UpsertAdapterProperty(it.value))
+                val impl =
+                    EntityUpsertAdapterWriter.create(it.value)
+                        .createConcrete(it.value, this@DaoWriter)
+                spec to impl
+            }
             val functionImpl =
                 overrideWithoutAnnotations(upsertFunctions.element, declaredDao)
                     .apply { addCode(createUpsertFunctionBody(upsertFunctions, fields)) }

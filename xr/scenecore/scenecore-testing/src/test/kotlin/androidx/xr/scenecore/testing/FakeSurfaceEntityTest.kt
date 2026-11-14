@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.xr.scenecore.testing
 
 import android.graphics.ImageFormat
 import android.media.ImageReader
 import androidx.xr.runtime.math.FloatSize2d
-import androidx.xr.scenecore.runtime.PerceivedResolutionResult
-import androidx.xr.scenecore.runtime.PixelDimensions
 import androidx.xr.scenecore.runtime.SurfaceEntity
 import androidx.xr.scenecore.runtime.TextureResource
 import com.google.common.truth.Truth.assertThat
@@ -50,11 +50,7 @@ class FakeSurfaceEntityTest {
 
     @Test
     fun getDefaultValue_returnsDefaultValue() {
-        check(underTest.stereoMode == SurfaceEntity.StereoMode.SIDE_BY_SIDE)
-        check(
-            underTest.getPerceivedResolution().javaClass ==
-                PerceivedResolutionResult.InvalidCameraView::class.java
-        )
+        check(underTest.stereoMode == SurfaceEntity.StereoMode.MONO)
     }
 
     @Test
@@ -86,39 +82,6 @@ class FakeSurfaceEntityTest {
         underTest.setAuxiliaryAlphaMaskTexture(fakeTextureResource)
 
         assertThat(underTest.auxiliaryAlphaMask).isEqualTo(fakeTextureResource)
-    }
-
-    @Test
-    fun getPerceivedResolution_setEntityTooCloseResult_returnsEntityTooClose() {
-        underTest.setPerceivedResolution(PerceivedResolutionResult.EntityTooClose())
-
-        assertThat(underTest.getPerceivedResolution())
-            .isInstanceOf(PerceivedResolutionResult.EntityTooClose::class.java)
-    }
-
-    @Test
-    fun getPerceivedResolution_setSuccessResult_returnsSuccessValue() {
-        underTest.setPerceivedResolution(
-            PerceivedResolutionResult.Success(PixelDimensions(640, 480))
-        )
-
-        assertThat(underTest.getPerceivedResolution())
-            .isInstanceOf(PerceivedResolutionResult.Success::class.java)
-        assertThat(
-                (underTest.getPerceivedResolution() as PerceivedResolutionResult.Success)
-                    .perceivedResolution
-            )
-            .isEqualTo(PixelDimensions(640, 480))
-    }
-
-    @Test
-    fun getContentColorMetadataSet_setContentColorMetadataSet_returnCorrectly() {
-        // Default value
-        check(!underTest.contentColorMetadataSet)
-
-        underTest.mContentColorMetadataSet = true
-
-        assertThat(underTest.contentColorMetadataSet).isTrue()
     }
 
     @Test

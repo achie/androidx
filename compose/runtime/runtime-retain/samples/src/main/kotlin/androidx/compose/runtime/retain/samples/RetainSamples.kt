@@ -33,7 +33,19 @@ import androidx.compose.runtime.retain.RetainedEffect
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.retain.retainManagedRetainedValuesStore
 import androidx.compose.runtime.retain.retainRetainedValuesStoreRegistry
+import androidx.compose.runtime.retain.withLocalRetainedValuesStore
 import androidx.compose.ui.graphics.painter.Painter
+
+@Sampled
+fun retainSample() {
+    @Composable
+    fun retainMediaPlayer(): MediaPlayer {
+        // The returned object will be returned similarly to `remember`.
+        // If the composition hierarchy is destroyed and recreated, the same player instance
+        // will be returned in the new composition, following the documented retention rules.
+        return retain { MediaPlayer() }
+    }
+}
 
 @Sampled
 fun retainedEffectSample() {
@@ -158,6 +170,39 @@ fun retainedValuesStoreRegistrySample() {
         }
     }
 }
+
+@Sampled
+fun withLocalRetainedValuesStoreSample() {
+    @Composable
+    fun Content(presenter: Presenter) {
+        /* ... */
+    }
+
+    /**
+     * Retains a Presenter to compose some [Content] with model-view-presenter patterns. The
+     * Presenter is retained and passed to the content, but is wrapped separately in
+     * [withLocalRetainedValuesStore] to give the presenter and content different retention
+     * lifespans.
+     */
+    @Composable
+    fun PresentedContent(visible: Boolean) {
+        val retainedValuesStore = retainManagedRetainedValuesStore()
+
+        if (visible) {
+            val presenter =
+                withLocalRetainedValuesStore(retainedValuesStore) {
+                    // Retain presenter for future reuse
+                    retain { Presenter() }
+                }
+
+            // Show content from the Presenter, but don't retain values in
+            // the presenter's store
+            Content(presenter)
+        }
+    }
+}
+
+private class Presenter
 
 private fun ContactIconPainter(): Painter = TODO()
 

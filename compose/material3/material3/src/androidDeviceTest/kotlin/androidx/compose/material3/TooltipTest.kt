@@ -38,7 +38,6 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
@@ -48,12 +47,13 @@ import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performTrackpadInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -67,7 +67,6 @@ import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,7 +76,7 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalMaterial3Api::class)
 class TooltipTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun plainTooltip_noContent_size() {
@@ -562,7 +561,6 @@ class TooltipTest {
         assertThat(state.isVisible).isFalse()
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun plainTooltip_escapeKey_dismissesTooltip() {
         lateinit var state: TooltipState
@@ -980,6 +978,52 @@ class TooltipTest {
     }
 
     @Test
+    fun tooltipTrackpadHover_notPersistentState_dismiss() {
+
+        lateinit var state: TooltipState
+        rule.setContent {
+            state = rememberTooltipState()
+            TooltipBox(
+                positionProvider =
+                    TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = {},
+                state = state,
+            ) {
+                Icon(
+                    Icons.Filled.Favorite,
+                    modifier = Modifier.testTag(AnchorTestTag),
+                    contentDescription = null,
+                )
+            }
+        }
+
+        // Test will manually advance the time to check the timeout
+        rule.mainClock.autoAdvance = false
+
+        assertThat(state.isVisible).isFalse()
+
+        val anchorNode = rule.onNodeWithTag(AnchorTestTag, useUnmergedTree = true)
+        anchorNode.performTrackpadInput { moveTo(center) }
+
+        // Advance by the fade in time
+        rule.mainClock.advanceTimeBy(TooltipFadeInDuration)
+
+        assertThat(state.isVisible).isTrue()
+
+        // Even if the tooltip is not persistent, the tooltip should
+        // still be showing if hover is detected after the timeout duration.
+        rule.mainClock.advanceTimeBy(milliseconds = BasicTooltipDefaults.TooltipDuration)
+        assertThat(state.isVisible).isTrue()
+
+        // Move the house out of the bounds of the anchor, essentially triggering exit()
+        anchorNode.performTrackpadInput { moveTo(Offset(-1f, -1f)) }
+
+        // Tooltip should dismiss after hover stops
+        rule.mainClock.advanceTimeBy(milliseconds = TooltipFadeOutDuration)
+        assertThat(state.isVisible).isFalse()
+    }
+
+    @Test
     fun tooltipMouseHover_persistentState_persistent() {
         lateinit var state: TooltipState
         rule.setContent {
@@ -1018,6 +1062,52 @@ class TooltipTest {
 
         // Move the house out of the bounds of the anchor, essentially triggering exit()
         anchorNode.performMouseInput { moveTo(Offset(-1f, -1f)) }
+
+        // Tooltip should be persistent after no longer hover since the tooltip is persistent
+        rule.mainClock.advanceTimeBy(milliseconds = TooltipFadeOutDuration)
+        assertThat(state.isVisible).isTrue()
+    }
+
+    @Test
+    fun tooltipTrackpadHover_persistentState_persistent() {
+
+        lateinit var state: TooltipState
+        rule.setContent {
+            state = rememberTooltipState(isPersistent = true)
+            TooltipBox(
+                positionProvider =
+                    TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = {},
+                state = state,
+            ) {
+                Icon(
+                    Icons.Filled.Favorite,
+                    modifier = Modifier.testTag(AnchorTestTag),
+                    contentDescription = null,
+                )
+            }
+        }
+
+        // Test will manually advance the time to check the timeout
+        rule.mainClock.autoAdvance = false
+
+        assertThat(state.isVisible).isFalse()
+
+        val anchorNode = rule.onNodeWithTag(AnchorTestTag, useUnmergedTree = true)
+        anchorNode.performTrackpadInput { moveTo(center) }
+
+        // Advance by the fade in time
+        rule.mainClock.advanceTimeBy(TooltipFadeInDuration)
+
+        assertThat(state.isVisible).isTrue()
+
+        // Even if the tooltip is not persistent, the tooltip should
+        // still be showing if hover is detected after the timeout duration.
+        rule.mainClock.advanceTimeBy(milliseconds = BasicTooltipDefaults.TooltipDuration)
+        assertThat(state.isVisible).isTrue()
+
+        // Move the house out of the bounds of the anchor, essentially triggering exit()
+        anchorNode.performTrackpadInput { moveTo(Offset(-1f, -1f)) }
 
         // Tooltip should be persistent after no longer hover since the tooltip is persistent
         rule.mainClock.advanceTimeBy(milliseconds = TooltipFadeOutDuration)
@@ -1098,35 +1188,60 @@ class TooltipTest {
 
     @Test
     fun fullWidthTooltipCaret_xPositioning() {
-        val screenWidth = 1080
         val tooltipWidth = 1080f
 
         // Test for when the anchor is near the left side of the screen
         var caretX: Float =
             caretX(
-                screenWidthPx = screenWidth,
                 tooltipWidth = tooltipWidth,
                 anchorBounds = Rect(left = 135f, right = 185f, top = 0f, bottom = 0f),
+                tooltipLeft = 0f,
             )
         assertThat(caretX).isEqualTo(160f)
 
         // Test for when the anchor is in the middle of the screen
         caretX =
             caretX(
-                screenWidthPx = screenWidth,
                 tooltipWidth = tooltipWidth,
                 anchorBounds = Rect(left = 515.5f, right = 565.5f, top = 0f, bottom = 0f),
+                tooltipLeft = 0f,
             )
         assertThat(caretX).isEqualTo(540.5f)
 
         // Test for when the anchor is in the right side of the screen
         caretX =
             caretX(
-                screenWidthPx = screenWidth,
                 tooltipWidth = tooltipWidth,
                 anchorBounds = Rect(left = 920.88f, right = 970.88f, top = 0f, bottom = 0f),
+                tooltipLeft = 0f,
             )
         assertThat(caretX).isEqualTo(945.88f)
+    }
+
+    @Test
+    fun tooltipCaret_xPositioning_nearScreenEdges() {
+        val screenWidth = 1080f
+        val tooltipWidth = 600f
+
+        // Anchor near the left edge (anchorMid = 100f): tooltip is clamped to left=0f,
+        // so caretX should be right over anchorMid (100f).
+        val leftCaretX =
+            caretX(
+                tooltipWidth = tooltipWidth,
+                anchorBounds = Rect(left = 75f, right = 125f, top = 0f, bottom = 0f),
+                tooltipLeft = 0f,
+            )
+        assertThat(leftCaretX).isEqualTo(100f)
+
+        // Anchor near the right edge (anchorMid = 1000f): tooltip is clamped to left=480f,
+        // so caretX should be at 1000f - 480f = 520f (80px from right edge of tooltip).
+        val rightCaretX =
+            caretX(
+                tooltipWidth = tooltipWidth,
+                anchorBounds = Rect(left = 975f, right = 1025f, top = 0f, bottom = 0f),
+                tooltipLeft = screenWidth - tooltipWidth,
+            )
+        assertThat(rightCaretX).isEqualTo(520f)
     }
 }
 

@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-@file:Suppress("NOTHING_TO_INLINE")
-
 package androidx.camera.camera2.pipe
 
 import androidx.annotation.RestrictTo
+import androidx.camera.common.CameraId
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -33,7 +32,10 @@ public interface CameraDevices {
      * availability changes, e.g., an external camera is plugged or unplugged. The flow should also
      * replay the most recent value for each new subscriber.
      */
-    public fun cameraIdsFlow(cameraBackendId: CameraBackendId? = null): Flow<List<CameraId>>
+    public fun cameraIdsFlow(cameraBackendId: CameraBackendId?): Flow<List<CameraId>>
+
+    /** @see [cameraIdsFlow] */
+    public fun cameraIdsFlow(): Flow<List<CameraId>> = cameraIdsFlow(null)
 
     /**
      * Read the list of currently openable [CameraId]s from the provided CameraBackend, suspending
@@ -47,7 +49,10 @@ public interface CameraDevices {
      * thread if needed. By default this will load the list of openable [CameraId]s from the default
      * backend.
      */
-    public fun awaitCameraIds(cameraBackendId: CameraBackendId? = null): List<CameraId>?
+    public fun awaitCameraIds(cameraBackendId: CameraBackendId?): List<CameraId>?
+
+    /** @see [awaitCameraIds] */
+    public fun awaitCameraIds(): List<CameraId>? = awaitCameraIds(null)
 
     /**
      * Read the set of [CameraId] sets that can be operated concurrently from the provided
@@ -63,12 +68,13 @@ public interface CameraDevices {
      * CameraBackend, blocking the thread if needed. By default this will load the set of [CameraId]
      * sets from the default backend.
      */
-    public fun awaitConcurrentCameraIds(
-        cameraBackendId: CameraBackendId? = null
-    ): Set<Set<CameraId>>?
+    public fun awaitConcurrentCameraIds(cameraBackendId: CameraBackendId?): Set<Set<CameraId>>?
+
+    /** @see [awaitConcurrentCameraIds] */
+    public fun awaitConcurrentCameraIds(): Set<Set<CameraId>>? = awaitConcurrentCameraIds(null)
 
     /**
-     * Read metadata for a specific camera id, suspending if needed. By default, this method will
+     * Read metadata for a specific [CameraId], suspending if needed. By default, this method will
      * query metadata from the default backend if one is not specified.
      */
     public suspend fun getCameraMetadata(
@@ -77,22 +83,32 @@ public interface CameraDevices {
     ): CameraMetadata?
 
     /**
-     * Read metadata for a specific camera id, blocking if needed. By default, this method will
+     * Read metadata for a specific [CameraId], blocking if needed. By default, this method will
      * query metadata from the default backend if one is not specified.
      */
     public fun awaitCameraMetadata(
         cameraId: CameraId,
-        cameraBackendId: CameraBackendId? = null,
+        cameraBackendId: CameraBackendId?,
     ): CameraMetadata?
+
+    /** @see [awaitCameraMetadata] */
+    public fun awaitCameraMetadata(cameraId: CameraId): CameraMetadata? =
+        awaitCameraMetadata(cameraId, null)
 
     /**
      * Opens the camera device indicated by the cameraId, so that any subsequent open calls will
      * potentially have a better latency.
      */
-    public fun prewarm(cameraId: CameraId, cameraBackendId: CameraBackendId? = null)
+    public fun prewarm(cameraId: CameraId, cameraBackendId: CameraBackendId?)
+
+    /** @see [prewarm] */
+    public fun prewarm(cameraId: CameraId): Unit = prewarm(cameraId, null)
 
     /** Non blocking operation that disconnects the underlying active Camera. */
-    public fun disconnect(cameraId: CameraId, cameraBackendId: CameraBackendId? = null)
+    public fun disconnect(cameraId: CameraId, cameraBackendId: CameraBackendId?)
+
+    /** @see [disconnect] */
+    public fun disconnect(cameraId: CameraId): Unit = disconnect(cameraId, null)
 
     /**
      * Disconnects the underlying active Camera. Once fully closed, the returned [Deferred] should
@@ -100,18 +116,27 @@ public interface CameraDevices {
      */
     public fun disconnectAsync(
         cameraId: CameraId,
-        cameraBackendId: CameraBackendId? = null,
+        cameraBackendId: CameraBackendId?,
     ): Deferred<Unit>
 
+    /** @see [disconnectAsync] */
+    public fun disconnectAsync(cameraId: CameraId): Deferred<Unit> = disconnectAsync(cameraId, null)
+
     /** Non blocking operation that disconnects all active Cameras. */
-    public fun disconnectAll(cameraBackendId: CameraBackendId? = null)
+    public fun disconnectAll(cameraBackendId: CameraBackendId?)
+
+    /** @see [disconnectAll] */
+    public fun disconnectAll(): Unit = disconnectAll(null)
 
     /**
      * Non blocking operation that disconnects all active Cameras. Once all connections are fully
      * closed, the returned [Deferred] should be completed. It is synchronous with the other
      * operations within this class.
      */
-    public fun disconnectAllAsync(cameraBackendId: CameraBackendId? = null): Deferred<Unit>
+    public fun disconnectAllAsync(cameraBackendId: CameraBackendId?): Deferred<Unit>
+
+    /** @see [disconnectAllAsync] */
+    public fun disconnectAllAsync(): Deferred<Unit> = disconnectAllAsync(null)
 
     /**
      * Iterate and return a list of CameraId's on the device that are capable of being opened. Some
@@ -158,30 +183,6 @@ public interface CameraDevices {
         level = DeprecationLevel.WARNING,
     )
     public fun awaitMetadata(camera: CameraId): CameraMetadata
-}
-
-/** CameraId represents a typed identifier for a camera represented as a non-blank String. */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-@JvmInline
-public value class CameraId(public val value: String) {
-    init {
-        require(value.isNotBlank()) { "CameraId cannot be null or blank!" }
-    }
-
-    public companion object {
-        public inline fun fromCamera2Id(value: String): CameraId = CameraId(value)
-
-        public inline fun fromCamera1Id(value: Int): CameraId = CameraId("$value")
-    }
-
-    /**
-     * Attempt to parse an camera1 id from a camera2 id.
-     *
-     * @return The parsed Camera1 id, or null if the value cannot be parsed as a Camera1 id.
-     */
-    public inline fun toCamera1Id(): Int? = value.toIntOrNull()
-
-    override fun toString(): String = "CameraId-$value"
 }
 
 /**

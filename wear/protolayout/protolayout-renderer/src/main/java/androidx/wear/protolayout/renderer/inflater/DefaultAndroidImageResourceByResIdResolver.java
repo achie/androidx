@@ -19,12 +19,15 @@ package androidx.wear.protolayout.renderer.inflater;
 import android.content.res.Resources;
 import android.content.res.Resources.NotFoundException;
 import android.graphics.drawable.Drawable;
+import android.os.Build.VERSION;
 
 import androidx.wear.protolayout.proto.ResourceProto.AndroidImageResourceByResId;
 import androidx.wear.protolayout.renderer.inflater.ResourceResolvers.AndroidImageResourceByResIdResolver;
 import androidx.wear.protolayout.renderer.inflater.ResourceResolvers.ResourceAccessException;
 
 import org.jspecify.annotations.NonNull;
+
+import java.io.IOException;
 
 /** Resource resolver for Android resources. */
 public class DefaultAndroidImageResourceByResIdResolver
@@ -45,9 +48,14 @@ public class DefaultAndroidImageResourceByResIdResolver
     public @NonNull Drawable getDrawableOrThrow(@NonNull AndroidImageResourceByResId resource)
             throws ResourceAccessException {
         try {
-            return mAndroidResources.getDrawable(resource.getResourceId(), /* theme= */ null);
-        } catch (NotFoundException ex) {
-            throw new ResourceAccessException("ResId is not found in the resources", ex);
+            if (VERSION.SDK_INT >= 28) {
+                return ConstrainedImageDecoder.decodeDrawable(
+                        mAndroidResources, resource.getResourceId());
+            } else {
+                return mAndroidResources.getDrawable(resource.getResourceId(), /* theme= */ null);
+            }
+        } catch (NotFoundException | IOException ex) {
+            throw new ResourceAccessException("Failed to load drawable for ResId", ex);
         }
     }
 }

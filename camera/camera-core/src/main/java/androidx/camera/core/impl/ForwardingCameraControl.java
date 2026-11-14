@@ -18,9 +18,11 @@ package androidx.camera.core.impl;
 
 import androidx.annotation.IntRange;
 import androidx.annotation.VisibleForTesting;
+import androidx.camera.core.CameraControl;
 import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.FocusMeteringResult;
 import androidx.camera.core.ImageCapture;
+import androidx.camera.core.InteropConfigurator;
 import androidx.camera.core.imagecapture.CameraCapturePipeline;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -161,6 +163,17 @@ public class ForwardingCameraControl implements CameraControlInternal {
     }
 
     @Override
+    public @NonNull MutableConfig getInteropMutableConfig() {
+        return mCameraControlInternal.getInteropMutableConfig();
+    }
+
+    @Override
+    public @NonNull ListenableFuture<Void> applyInteropAsync(
+            @NonNull InteropConfigurator<? super CameraControl> configurator) {
+        return mCameraControlInternal.applyInteropAsync(configurator);
+    }
+
+    @Override
     public @NonNull CameraControlInternal getImplementation() {
         return mCameraControlInternal.getImplementation();
     }
@@ -179,5 +192,11 @@ public class ForwardingCameraControl implements CameraControlInternal {
     @Override
     public boolean isInVideoUsage() {
         return mCameraControlInternal.isInVideoUsage();
+    }
+
+    @Override
+    public @NonNull ListenableFuture<Void> setEnabledUseCasesAsync(
+            @NonNull List<androidx.camera.core.@NonNull UseCase> useCases) {
+        return mCameraControlInternal.setEnabledUseCasesAsync(useCases);
     }
 }

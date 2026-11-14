@@ -580,7 +580,7 @@ public abstract class DynamicAnimation<T extends DynamicAnimation<T>>
         }
     }
 
-    /****************Animation Lifecycle Management***************/
+    /* --------------- Animation Lifecycle Management --------------- */
 
     /**
      * Starts an animation. If the animation has already been started, no op. Note that calling
@@ -677,6 +677,9 @@ public abstract class DynamicAnimation<T extends DynamicAnimation<T>>
         }
         long deltaT = frameTime - mLastFrameTime;
         mLastFrameTime = frameTime;
+        if (deltaT < 0) {
+            deltaT = 0;
+        }
         float durationScale = getAnimationHandler().getDurationScale();
         deltaT = durationScale == 0.0f ? Integer.MAX_VALUE : (long) (deltaT / durationScale);
         boolean finished = updateValueAndVelocity(deltaT);
@@ -792,7 +795,7 @@ public abstract class DynamicAnimation<T extends DynamicAnimation<T>>
         mAnimationHandler = new AnimationHandler(scheduler);
     }
 
-    /****************Sub class animations**************/
+    /* ---- Sub class animations ---- */
     /**
      * Returns the acceleration at the given value with the given velocity.
      */

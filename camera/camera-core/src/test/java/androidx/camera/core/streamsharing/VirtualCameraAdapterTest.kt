@@ -29,6 +29,7 @@ import androidx.camera.core.CameraEffect.VIDEO_CAPTURE
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
 import androidx.camera.core.ImageCapture.FLASH_MODE_AUTO
+import androidx.camera.core.MirrorMode.MIRROR_MODE_OFF
 import androidx.camera.core.MirrorMode.MIRROR_MODE_ON
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
@@ -36,10 +37,13 @@ import androidx.camera.core.impl.CameraControlInternal
 import androidx.camera.core.impl.CaptureConfig
 import androidx.camera.core.impl.DeferrableSurface
 import androidx.camera.core.impl.ImageFormatConstants.INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE
+import androidx.camera.core.impl.ImageOutputConfig.OPTION_CUSTOM_ORDERED_RESOLUTIONS
 import androidx.camera.core.impl.ImageOutputConfig.ROTATION_NOT_SPECIFIED
+import androidx.camera.core.impl.MutableOptionsBundle
 import androidx.camera.core.impl.SessionConfig
 import androidx.camera.core.impl.SessionConfig.defaultEmptySessionConfig
 import androidx.camera.core.impl.StreamSpec
+import androidx.camera.core.impl.UseCaseConfig.OPTION_EFFECT_RESOLUTION_VALIDATOR
 import androidx.camera.core.impl.utils.executor.CameraXExecutors.directExecutor
 import androidx.camera.core.impl.utils.futures.Futures
 import androidx.camera.core.processing.SurfaceEdge
@@ -50,7 +54,11 @@ import androidx.camera.testing.impl.FakeCameraCapturePipeline.InvocationType.PRE
 import androidx.camera.testing.impl.fakes.FakeDeferrableSurface
 import androidx.camera.testing.impl.fakes.FakeUseCaseConfig
 import androidx.camera.testing.impl.fakes.FakeUseCaseConfigFactory
+import androidx.camera.video.Recorder
+import androidx.camera.video.VideoCapture
+import androidx.core.util.Predicate
 import com.google.common.truth.Truth.assertThat
+import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import org.junit.After
@@ -78,15 +86,18 @@ class VirtualCameraAdapterTest {
 
         // Arbitrary transform to test that the transform is propagated.
         private val SENSOR_TO_BUFFER = Matrix().apply { setRotate(90F) }
-        private var receivedSessionConfigError: SessionConfig.SessionError? = null
-        private val SESSION_CONFIG_WITH_SURFACE =
-            SessionConfig.Builder()
-                .addSurface(FakeDeferrableSurface(INPUT_SIZE, ImageFormat.PRIVATE))
-                .setErrorListener { _, error -> receivedSessionConfigError = error }
-                .build()
     }
 
+    private var receivedSessionConfigError: SessionConfig.SessionError? = null
+    // Created for each test, since some tests close its Surface.
+    private val sessionConfigWithSurface =
+        SessionConfig.Builder()
+            .addSurface(FakeDeferrableSurface(INPUT_SIZE, ImageFormat.PRIVATE))
+            .setErrorListener { _, error -> receivedSessionConfigError = error }
+            .build()
+
     private val surfaceEdgesToClose = mutableListOf<SurfaceEdge>()
+    private val deferrableSurfacesToClose = mutableListOf<DeferrableSurface>()
     private val parentCamera = FakeCamera()
     private val child1 = FakeUseCaseConfig.Builder().setTargetRotation(Surface.ROTATION_0).build()
     private val child2 = FakeUseCaseConfig.Builder().setMirrorMode(MIRROR_MODE_ON).build()
@@ -101,6 +112,7 @@ class VirtualCameraAdapterTest {
     private val useCaseConfigFactory = FakeUseCaseConfigFactory()
     private lateinit var adapter: VirtualCameraAdapter
     private var snapshotTriggered = false
+    private var updateConfigAndOutputTriggered = false
 
     private enum class Event {
         PRE_CAPTURE,
@@ -112,20 +124,38 @@ class VirtualCameraAdapterTest {
 
     @Before
     fun setUp() {
+        deferrableSurfacesToClose.addAll(sessionConfigWithSurface.surfaces)
         adapter =
-            VirtualCameraAdapter(parentCamera, null, setOf(child1, child2), useCaseConfigFactory) {
-                _,
-                _ ->
-                snapshotTriggered = true
-                events.add(Event.SNAPSHOT)
-                Futures.immediateFuture(null)
-            }
+            VirtualCameraAdapter(
+                parentCamera,
+                null,
+                setOf(child1, child2),
+                useCaseConfigFactory,
+                emptyMap(),
+                object : StreamSharing.Control {
+                    override fun jpegSnapshot(
+                        jpegQuality: Int,
+                        rotationDegrees: Int,
+                    ): ListenableFuture<Void> {
+                        snapshotTriggered = true
+                        events.add(Event.SNAPSHOT)
+                        return Futures.immediateFuture(null)
+                    }
+
+                    override fun updateConfigAndOutput() {
+                        updateConfigAndOutputTriggered = true
+                    }
+                },
+            )
     }
 
     @After
     fun tearDown() {
         for (surfaceEdge in surfaceEdgesToClose) {
             surfaceEdge.close()
+        }
+        for (surface in deferrableSurfacesToClose) {
+            surface.close()
         }
     }
 
@@ -184,7 +214,12 @@ class VirtualCameraAdapterTest {
 
     @Test
     fun getImageCaptureSurface_returnsNonRepeatingSurface() {
-        assertThat(getUseCaseSurface(ImageCapture.Builder().build())).isNotNull()
+        val imageCapture = ImageCapture.Builder().build()
+        try {
+            assertThat(getUseCaseSurface(imageCapture)).isNotNull()
+        } finally {
+            imageCapture.unbindFromCamera(parentCamera)
+        }
     }
 
     @Test
@@ -225,7 +260,7 @@ class VirtualCameraAdapterTest {
         // Arrange.
         adapter.bindChildren()
         adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
-        child1.updateSessionConfigForTesting(SESSION_CONFIG_WITH_SURFACE)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
         // Assert: edge open by default.
         verifyEdge(child1, OPEN, NO_PROVIDER)
         // Set UseCase to active, verify it has provider.
@@ -244,11 +279,11 @@ class VirtualCameraAdapterTest {
         // Arrange.
         adapter.bindChildren()
         adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
-        child1.updateSessionConfigForTesting(SESSION_CONFIG_WITH_SURFACE)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
         child1.notifyActiveForTesting()
 
         // Act: close the child surface.
-        SESSION_CONFIG_WITH_SURFACE.surfaces[0].close()
+        sessionConfigWithSurface.surfaces[0].close()
         adapter.onUseCaseReset(child1)
         shadowOf(getMainLooper()).idle()
 
@@ -258,11 +293,113 @@ class VirtualCameraAdapterTest {
     }
 
     @Test
+    fun resetWithClosedChildSurfaceInUse_invokesErrorListener() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
+        child1.notifyActiveForTesting()
+        val childSurface = sessionConfigWithSurface.surfaces[0]
+
+        // Act: close the child surface while it's still in use, e.g. by the sharing node's output
+        // when the child's SurfaceProvider invalidates its SurfaceRequest.
+        childSurface.incrementUseCount()
+        try {
+            childSurface.close()
+            adapter.onUseCaseReset(child1)
+            shadowOf(getMainLooper()).idle()
+
+            // Assert: the closed surface is not connected, and the error listener is invoked so
+            // the child recreates its pipeline.
+            verifyEdge(child1, OPEN, NO_PROVIDER)
+            assertThat(receivedSessionConfigError)
+                .isEqualTo(SessionConfig.SessionError.SESSION_ERROR_SURFACE_NEEDS_RESET)
+        } finally {
+            childSurface.decrementUseCount()
+        }
+    }
+
+    @Test
+    fun resetWithClosedChildSurface_skipsErrorListenerIfSurfaceIsReplaced() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
+        child1.notifyActiveForTesting()
+        val childSurface = sessionConfigWithSurface.surfaces[0]
+        childSurface.incrementUseCount()
+        try {
+            childSurface.close()
+
+            // Act: reset with the closed surface, and the child replaces it before the posted
+            // error listener call runs.
+            adapter.onUseCaseReset(child1)
+            assertThat(receivedSessionConfigError).isNull()
+            val newSurface = FakeDeferrableSurface(INPUT_SIZE, ImageFormat.PRIVATE)
+            deferrableSurfacesToClose.add(newSurface)
+            child1.updateSessionConfigForTesting(
+                SessionConfig.Builder()
+                    .addSurface(newSurface)
+                    .setErrorListener { _, error -> receivedSessionConfigError = error }
+                    .build()
+            )
+            shadowOf(getMainLooper()).idle()
+
+            // Assert: the error listener is not invoked, since the child already replaced the
+            // closed surface.
+            assertThat(receivedSessionConfigError).isNull()
+        } finally {
+            childSurface.decrementUseCount()
+        }
+    }
+
+    @Test
+    fun resetWithClosedChildSurface_skipsErrorListenerIfUnbound() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
+        child1.notifyActiveForTesting()
+        val childSurface = sessionConfigWithSurface.surfaces[0]
+        childSurface.incrementUseCount()
+        try {
+            childSurface.close()
+
+            // Act: reset with the closed surface, then unbind before the posted callback runs.
+            adapter.onUseCaseReset(child1)
+            adapter.unbindChildren()
+            shadowOf(getMainLooper()).idle()
+
+            // Assert: the error listener is not invoked for an unbound child.
+            assertThat(receivedSessionConfigError).isNull()
+        } finally {
+            childSurface.decrementUseCount()
+        }
+    }
+
+    @Test
+    fun resetWithOpenChildSurface_connectsWithoutError() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
+        child1.notifyActiveForTesting()
+
+        // Act.
+        adapter.onUseCaseReset(child1)
+        shadowOf(getMainLooper()).idle()
+
+        // Assert.
+        verifyEdge(child1, OPEN, HAS_PROVIDER)
+        assertThat(receivedSessionConfigError).isNull()
+    }
+
+    @Test
     fun resetUseCase_edgeInvalidated() {
         // Arrange: setup and get the old DeferrableSurface.
         adapter.bindChildren()
         adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
-        child1.updateSessionConfigForTesting(SESSION_CONFIG_WITH_SURFACE)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
         child1.notifyActiveForTesting()
         val oldSurface = childrenEdges[child1]!!.deferrableSurfaceForTesting
         // Act: notify reset.
@@ -283,7 +420,7 @@ class VirtualCameraAdapterTest {
         verifyEdge(child1, OPEN, NO_PROVIDER)
 
         // Act: set Surface and update
-        child1.updateSessionConfigForTesting(SESSION_CONFIG_WITH_SURFACE)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
         child1.notifyUpdatedForTesting()
         // Assert: edge is connected.
         verifyEdge(child1, OPEN, HAS_PROVIDER)
@@ -293,7 +430,7 @@ class VirtualCameraAdapterTest {
         // Assert: edge is disconnected.
         verifyEdge(child1, CLOSED, NO_PROVIDER)
         // Act: set Surface and update.
-        child1.updateSessionConfigForTesting(SESSION_CONFIG_WITH_SURFACE)
+        child1.updateSessionConfigForTesting(sessionConfigWithSurface)
         child1.notifyUpdatedForTesting()
         // Assert: edge is connected again.
         verifyEdge(child1, OPEN, HAS_PROVIDER)
@@ -332,6 +469,33 @@ class VirtualCameraAdapterTest {
     }
 
     @Test
+    fun mergeChildrenConfigs_removesEffectResolutionValidatorAfterMergingResolutions() {
+        // Arrange: the parent config carries the StreamSharing effect's resolution validator.
+        val preview = Preview.Builder().build()
+        val videoCapture = VideoCapture.Builder(Recorder.Builder().build()).build()
+        adapter =
+            VirtualCameraAdapter(
+                parentCamera,
+                null,
+                setOf(preview, videoCapture),
+                useCaseConfigFactory,
+                emptyMap(),
+            ) { _, _ ->
+                Futures.immediateFuture(null)
+            }
+        val mergedConfig = MutableOptionsBundle.create()
+        mergedConfig.insertOption(OPTION_EFFECT_RESOLUTION_VALIDATOR, Predicate<Size> { true })
+
+        // Act.
+        adapter.mergeChildrenConfigs(mergedConfig)
+
+        // Assert: the merged resolutions are set, and the validator they already reflect is
+        // removed so that the size sorter keeps their order.
+        assertThat(mergedConfig.containsOption(OPTION_CUSTOM_ORDERED_RESOLUTIONS)).isTrue()
+        assertThat(mergedConfig.containsOption(OPTION_EFFECT_RESOLUTION_VALIDATOR)).isFalse()
+    }
+
+    @Test
     fun getChildrenOutConfigs() {
         // Arrange.
         val cropRect = Rect(10, 10, 410, 310)
@@ -343,6 +507,7 @@ class VirtualCameraAdapterTest {
                 null,
                 setOf(preview, child2, imageCapture),
                 useCaseConfigFactory,
+                emptyMap(),
             ) { _, _ ->
                 Futures.immediateFuture(null)
             }
@@ -399,6 +564,130 @@ class VirtualCameraAdapterTest {
         assertThat(child2.viewPortCropRect).isEqualTo(CROP_RECT)
         assertThat(child1.sensorToBufferTransformMatrix).isEqualTo(SENSOR_TO_BUFFER)
         assertThat(child2.sensorToBufferTransformMatrix).isEqualTo(SENSOR_TO_BUFFER)
+    }
+
+    @Test
+    fun activeChildConfigChanged_triggersUpdateConfigAndOutputOnUpdated() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+
+        // Make child2 active.
+        child2.notifyActiveForTesting()
+        assertThat(updateConfigAndOutputTriggered).isFalse()
+
+        // Act: Change config of active child2 and notify update.
+        child2.mirrorMode = MIRROR_MODE_OFF
+        child2.notifyUpdatedForTesting()
+
+        // Assert: It should have triggered updateConfigAndOutput!
+        shadowOf(getMainLooper()).idle()
+        assertThat(updateConfigAndOutputTriggered).isTrue()
+    }
+
+    @Test
+    fun activeChildConfigChanged_triggersUpdateConfigAndOutputOnReset() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+
+        // Make child2 active.
+        child2.notifyActiveForTesting()
+        assertThat(updateConfigAndOutputTriggered).isFalse()
+
+        // Act: Change config of active child2 and notify reset.
+        child2.mirrorMode = MIRROR_MODE_OFF
+        child2.notifyResetForTesting()
+
+        // Assert: It should have triggered updateConfigAndOutput!
+        shadowOf(getMainLooper()).idle()
+        assertThat(updateConfigAndOutputTriggered).isTrue()
+    }
+
+    @Test
+    fun inactiveChildConfigChanged_triggersUpdateConfigAndOutputOnActive() {
+        // Arrange.
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+
+        // Act 1: Change config of inactive child2.
+        child2.mirrorMode = MIRROR_MODE_OFF
+        child2.notifyUpdatedForTesting()
+        // Since child2 is inactive, this should be a no-op and NOT trigger updateConfigAndOutput
+        // yet.
+        assertThat(updateConfigAndOutputTriggered).isFalse()
+
+        // Act 2: Make child2 active.
+        child2.notifyActiveForTesting()
+
+        // Assert: It should have triggered updateConfigAndOutput now because the config changed
+        // while
+        // inactive!
+        shadowOf(getMainLooper()).idle()
+        assertThat(updateConfigAndOutputTriggered).isTrue()
+    }
+
+    @Test
+    fun setChildrenEdgesBeforeSessionStart_connectsSurfaceCreatedOnSessionStart() {
+        // Arrange: child1 is still active with a closed surface from a previous binding.
+        val staleSurface = createFakeDeferrableSurface().apply { close() }
+        child1.notifyActiveForTesting()
+        child1.updateSessionConfigForTesting(createSessionConfig(staleSurface))
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+
+        // Act: child1 creates a new surface when the session starts, like VideoCapture does.
+        val newSurface = createFakeDeferrableSurface()
+        child1.updateSessionConfigForTesting(createSessionConfig(newSurface))
+        adapter.notifySessionStart()
+
+        // Assert: the edge is connected to the new surface.
+        verifyEdgeConnectedTo(child1, newSurface)
+    }
+
+    @Test
+    fun sessionStopAndStart_reconnectsActiveChild() {
+        // Arrange: child1 is active and connected in a session.
+        val oldSurface = createFakeDeferrableSurface()
+        adapter.bindChildren()
+        adapter.setChildrenEdges(childrenEdges, selectedChildSizes)
+        adapter.notifySessionStart()
+        child1.updateSessionConfigForTesting(createSessionConfig(oldSurface))
+        child1.notifyActiveForTesting()
+
+        // Act: stop the session and close the child surface, then start a new session with a new
+        // child surface.
+        adapter.notifySessionStop()
+        oldSurface.close()
+        val newSurface = createFakeDeferrableSurface()
+        child1.updateSessionConfigForTesting(createSessionConfig(newSurface))
+        adapter.notifySessionStart()
+
+        // Assert: the edge is connected to the new surface.
+        verifyEdgeConnectedTo(child1, newSurface)
+    }
+
+    private fun createFakeDeferrableSurface(): FakeDeferrableSurface =
+        FakeDeferrableSurface(INPUT_SIZE, ImageFormat.PRIVATE).also {
+            deferrableSurfacesToClose.add(it)
+        }
+
+    private fun createSessionConfig(surface: DeferrableSurface): SessionConfig =
+        SessionConfig.Builder().addSurface(surface).build()
+
+    private fun verifyEdgeConnectedTo(child: UseCase, childSurface: FakeDeferrableSurface) {
+        val surfaceTexture = SurfaceTexture(0)
+        val surface = Surface(surfaceTexture)
+        try {
+            childSurface.setSurface(surface)
+            shadowOf(getMainLooper()).idle()
+            val edgeSurface = childrenEdges[child]!!.deferrableSurfaceForTesting.surface
+            assertThat(edgeSurface.isDone).isTrue()
+            assertThat(edgeSurface.get()).isSameInstanceAs(surface)
+        } finally {
+            surface.release()
+            surfaceTexture.release()
+        }
     }
 
     private fun createSurfaceEdge(

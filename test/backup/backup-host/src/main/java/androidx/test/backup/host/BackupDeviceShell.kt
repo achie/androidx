@@ -1,0 +1,636 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.test.backup.host
+
+import com.android.adblib.AdbSession
+import com.android.adblib.DeviceSelector
+import com.android.adblib.RemoteFileMode
+import com.android.adblib.ShellCommandOutput
+import com.android.adblib.ShellCommandOutputElement
+import com.android.adblib.deviceProperties
+import com.android.adblib.shellAsLines
+import com.android.adblib.shellAsText
+import java.io.IOException
+import java.nio.file.Path
+import java.time.Duration
+import java.util.Locale
+import java.util.UUID
+import java.util.logging.Level
+import java.util.logging.Logger
+import kotlin.time.Duration as KotlinDuration
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Runs shell commands and file transfers on one device over ADB.
+ *
+ * Every shell command of this library goes through this class. Each method builds one device
+ * command, quotes the values it interpolates, runs it, and interprets its output, so callers never
+ * assemble shell strings themselves.
+ *
+ * @property serialNumber the serial number of the device
+ */
+internal class BackupDeviceShell(private val adbSession: AdbSession, val serialNumber: String) {
+
+    private val device = DeviceSelector.fromSerialNumber(serialNumber)
+
+    private val logger = Logger.getLogger(BackupDeviceShell::class.java.name)
+
+    /** Runs [command] through the device shell and returns its output. */
+    suspend fun exec(command: String): ShellCommandOutput {
+        logCommand(command)
+        @Suppress("AdbDeviceServicesCommand")
+        return adbSession.deviceServices.shellAsText(device, command)
+    }
+
+    /**
+     * Runs [command] through the device shell, closing the shell stream and returning as soon as
+     * stdout prints a line that fully matches [lastLine] (which signals `adbd` to terminate the
+     * remote process). The output holds stdout up to and including that line and stderr up to then,
+     * with exit code 0.
+     *
+     * If no line matches, returns the whole output when the command exits, as the other `exec`
+     * does.
+     */
+    suspend fun exec(command: String, lastLine: Regex): ShellCommandOutput {
+        logCommand(command)
+        val stdout = mutableListOf<String>()
+        val stderr = mutableListOf<String>()
+        var exitCode = 0
+        @Suppress("AdbDeviceServicesCommand")
+        adbSession.deviceServices
+            .shellAsLines(device, command)
+            // Ending the collection closes the shell stream, on which the device signals the
+            // command to end.
+            .takeWhile { output ->
+                when (output) {
+                    is ShellCommandOutputElement.StdoutLine -> {
+                        stdout += output.contents
+                        !lastLine.matches(output.contents)
+                    }
+                    is ShellCommandOutputElement.StderrLine -> {
+                        stderr += output.contents
+                        true
+                    }
+                    is ShellCommandOutputElement.ExitCode -> {
+                        exitCode = output.exitCode
+                        true
+                    }
+                }
+            }
+            .collect()
+        // The last line of each stream is the text after its last line break, even when empty.
+        return ShellCommandOutput(stdout.joinToString("\n"), stderr.joinToString("\n"), exitCode)
+    }
+
+    private fun logCommand(command: String) {
+        if (logger.isLoggable(Level.FINE)) {
+            logger.fine("adb -s $serialNumber shell $command")
+        }
+    }
+
+    /** Copies [devicePath] from the device to [hostPath]. */
+    suspend fun pullFile(devicePath: String, hostPath: Path) {
+        adbSession.channelFactory.createFile(hostPath).use { output ->
+            adbSession.deviceServices.sync(device).use { sync ->
+                sync.recv(devicePath, output, null)
+            }
+        }
+    }
+
+    /**
+     * Copies [hostPath] to [devicePath] on the device, which gets the permission bits [mode]: by
+     * default readable by every user, as the package manager needs for an APK.
+     */
+    suspend fun pushFile(
+        hostPath: Path,
+        devicePath: String,
+        mode: RemoteFileMode = PUSHED_FILE_MODE,
+    ) {
+        adbSession.channelFactory.openFile(hostPath).use { input ->
+            adbSession.deviceServices.sync(device).use { sync ->
+                sync.send(input, devicePath, mode, null, null)
+            }
+        }
+    }
+
+    /** Deletes [devicePath] on the device, if it exists. */
+    suspend fun removeFile(devicePath: String) {
+        exec("rm -f -- ${quote(devicePath)}")
+    }
+
+    /**
+     * Runs the instrumentation [component] with string [args], waits for it to finish, and returns
+     * what it printed.
+     */
+    suspend fun instrument(component: String, args: Map<String, String>): String =
+        exec(instrumentCommand(component, args)).stdout
+
+    /**
+     * Starts an activity and waits for it to launch.
+     *
+     * Targets [component] when it is not null, and otherwise lets the system resolve the intent
+     * within [packageName].
+     *
+     * @throws IOException if the activity does not start
+     */
+    suspend fun startActivity(
+        action: String,
+        category: String?,
+        component: String?,
+        packageName: String,
+        stringExtras: Map<String, String>,
+    ) {
+        val command = buildString {
+            append("am start -W -a ").append(quoteIfNeeded(action))
+            if (category != null) append(" -c ").append(quoteIfNeeded(category))
+            if (component != null) {
+                append(" -n ").append(quote(component))
+            } else {
+                append(" -p ").append(quoteIfNeeded(packageName))
+            }
+            for ((key, value) in stringExtras) {
+                append(" --es ").append(quoteIfNeeded(key)).append(' ').append(quote(value))
+            }
+        }
+        logger.info("Launching app via am start: $command")
+        val output = exec(command)
+        // With -W, `am start` reports an activity that it did not start, such as one that does
+        // not exist, as an "Error" line on stdout, and still exits with 0. Outcomes that leave the
+        // activity running, such as bringing its task to the front, are "Warning" lines.
+        val started =
+            output.exitCode == 0 &&
+                output.stdout.lineSequence().none { it.trim().startsWith("Error") }
+        if (!started) {
+            throw commandFailure(
+                "Failed to start ${component ?: packageName} (exit code ${output.exitCode})",
+                output.stderr,
+                output.stdout,
+            )
+        }
+    }
+
+    /**
+     * Returns the launcher activity of [packageName] as `package/class`, or null if it has none.
+     */
+    suspend fun resolveLauncherActivity(packageName: String): String? {
+        val output =
+            exec(
+                    "cmd package resolve-activity --brief -c $CATEGORY_LAUNCHER " +
+                        quoteIfNeeded(packageName)
+                )
+                .stdout
+        // Matches `package/class`, skipping other fields such as `priority=`. Allows `$` for
+        // nested activity classes.
+        val component = Regex("""\b${Regex.escape(packageName)}/[a-zA-Z0-9._${'$'}]+\b""")
+        return component.find(output)?.value
+    }
+
+    /**
+     * Returns the instrumentations installed for [targetPackage], as `package/class` components
+     * with a fully qualified class.
+     */
+    suspend fun listInstrumentations(targetPackage: String): List<String> =
+        exec("pm list instrumentation ${quoteIfNeeded(targetPackage)}")
+            .stdout
+            .lineSequence()
+            .mapNotNull { INSTRUMENTATION_LINE.matchEntire(it.trim())?.destructured }
+            .filter { (_, _, target) -> target == targetPackage }
+            // pm abbreviates a class inside the instrumentation's package as ".<name>".
+            .map { (pkg, cls, _) -> if (cls.startsWith(".")) "$pkg/$pkg$cls" else "$pkg/$cls" }
+            .toList()
+
+    /**
+     * Returns the installed packages whose name contains [filter], as the sorted lines
+     * `package:<path of the base APK>=<package>` that `pm list packages -f` prints for them.
+     *
+     * The package manager installs each package at a new path, so the lines change whenever one of
+     * the packages is installed again.
+     */
+    suspend fun listPackagePaths(filter: String): List<String> =
+        exec("pm list packages -f ${quoteIfNeeded(filter)}")
+            .stdout
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("package:") }
+            .sorted()
+            .toList()
+
+    /** Returns the version code of the installed package [packageName], or null if it isn't. */
+    suspend fun packageVersionCode(packageName: String): Long? {
+        // pm lists every package whose name contains the filter, as `package:<name>
+        // versionCode:<code>`.
+        val prefix = "package:$packageName versionCode:"
+        return exec("pm list packages --show-versioncode ${quoteIfNeeded(packageName)}")
+            .stdout
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith(prefix) }
+            ?.removePrefix(prefix)
+            ?.toLongOrNull()
+    }
+
+    /** Returns whether [packageName] is installed on the device. */
+    suspend fun isPackageInstalled(packageName: String): Boolean =
+        exec("pm path ${quoteIfNeeded(packageName)}").stdout.isNotBlank()
+
+    /** Returns cached read-only (`ro.*`) system properties of the device. */
+    suspend fun readonlyProperties(): Map<String, String> =
+        adbSession.deviceServices.deviceProperties(device).allReadonly()
+
+    /** Returns the value of the system property [name], or null if it isn't set. */
+    suspend fun getProperty(name: String): String? =
+        exec("getprop ${quoteIfNeeded(name)}").stdout.trim().ifEmpty { null }
+
+    /**
+     * Takes [packageName] out of the stopped state (`FLAG_STOPPED`), if it is in it.
+     *
+     * Freshly installed, cleared or force-stopped packages are stopped, and `BackupManagerService`
+     * skips stopped packages. `pm unstop` takes a package out of the state on the Android versions
+     * that have it. On the others, a broadcast with `--include-stopped-packages` wakes packages
+     * that have receivers or services without touching the UI. Some of those versions only unstop
+     * activity-based apps on an explicit activity start, so the launcher activity, if any, is also
+     * started and then sent to the background once it has had time to initialize.
+     */
+    suspend fun unstopPackage(packageName: String) {
+        if (isPackageStopped(packageName) == false) return
+        val pkg = quoteIfNeeded(packageName)
+        val unstopped =
+            exec("pm unstop $pkg").stdout.lineSequence().any {
+                it.trim() == "Package $packageName new stopped state: false"
+            }
+        if (unstopped) return
+
+        exec("am broadcast -a $ACTION_MAIN -p $pkg --include-stopped-packages")
+
+        val launcher = resolveLauncherActivity(packageName)
+        if (launcher == null) {
+            logger.warning(
+                "No launcher activity found for package $packageName; relied on broadcast wake-up."
+            )
+            return
+        }
+        exec("am start -W -n ${quote(launcher)}")
+        delay(ACTIVITY_SETTLE_DELAY_MS)
+        pressHome()
+    }
+
+    /**
+     * Returns whether [packageName] is in the stopped state for user 0, or null if the package
+     * manager does not report the state in the form that is expected of it.
+     */
+    private suspend fun isPackageStopped(packageName: String): Boolean? {
+        // The package manager dumps the installed package first under `Packages:`, with the state
+        // for each user on a line of its own:
+        //
+        //   Packages:
+        //     Package [com.example.app] (9a8b7c6):
+        //       appId=10190
+        //       ...
+        //       User 0: ceDataInode=131450 installed=true ... stopped=false notLaunched=false ...
+        //
+        // Every line of the entry is empty or indented deeper than its first one. Later sections,
+        // such as the one of a system package that an update replaced, have `User 0:` lines of
+        // their own.
+        val entry =
+            exec("dumpsys package ${quoteIfNeeded(packageName)}")
+                .stdout
+                .lines()
+                .dropWhile { it != "Packages:" }
+                .drop(1)
+        if (entry.firstOrNull()?.startsWith("  Package [$packageName] (") != true) return null
+        return entry
+            .drop(1)
+            .takeWhile { it.isEmpty() || it.startsWith("    ") }
+            .firstNotNullOfOrNull { USER_0_STATE_LINE.matchEntire(it) }
+            ?.groupValues
+            ?.get(1)
+            ?.toBooleanStrict()
+    }
+
+    /** Force-stops [packageName]. */
+    suspend fun forceStop(packageName: String) {
+        logger.info("Force-stopping $packageName...")
+        exec("am force-stop ${quoteIfNeeded(packageName)}")
+    }
+
+    /**
+     * Returns the state of the backup manager for user 0, or null if the backup manager does not
+     * report it in the form that is expected of it.
+     */
+    suspend fun backupManagerState(): BackupManagerState? {
+        // The backup manager dumps user 0 first, with the lines below. For every other user, the
+        // first line and the line above the transports start with `User <id>:`. The transports end
+        // at the next line that is not indented, and the selected one is marked:
+        //
+        //   Backup Manager is enabled / setup complete / not pending init
+        //   ...
+        //   Available transports:
+        //       com.google.android.gms/.backup.BackupTransportService
+        //          destination: Need to set the backup account
+        //     * com.android.localtransport/.LocalTransport
+        //          destination: Backing up to debug-only private cache
+        //   Transport clients created: 2
+        val lines = exec("dumpsys backup").stdout.lines()
+        val enabled =
+            BACKUP_ENABLED_LINE.matchEntire(lines.first())?.groupValues?.get(1) ?: return null
+        val selectedTransport =
+            lines
+                .dropWhile { it != "Available transports:" }
+                .drop(1)
+                .takeWhile { it.startsWith(" ") }
+                .firstNotNullOfOrNull { SELECTED_TRANSPORT_LINE.matchEntire(it) }
+                ?.groupValues
+                ?.get(1) ?: return null
+        return BackupManagerState(enabled == "enabled", selectedTransport)
+    }
+
+    /**
+     * Whether backup is enabled for user 0, and the name of the backup transport that is selected
+     * for it.
+     */
+    data class BackupManagerState(val isEnabled: Boolean, val selectedTransport: String)
+
+    /**
+     * Clears the data of [packageName].
+     *
+     * @throws IOException if the package manager does not report success
+     */
+    suspend fun clearPackageData(packageName: String) {
+        val output = exec("pm clear ${quoteIfNeeded(packageName)}")
+        // `pm clear` prints "Success" on stdout when the data was removed. Otherwise it prints
+        // "Failed", or the exception that stopped it, on stderr with a non-zero exit code.
+        // Continuing after a failed clear would restore onto the seeded data and let verification
+        // pass without a restore having taken place.
+        if (!output.reportsSuccess()) {
+            throw commandFailure(
+                "Failed to clear app data for $packageName (exit code ${output.exitCode})",
+                output.stderr,
+                output.stdout,
+            )
+        }
+    }
+
+    /**
+     * Installs [apkFile] with the package manager [options].
+     *
+     * @throws IOException if the package manager does not report success
+     */
+    suspend fun installPackage(apkFile: Path, options: List<String>) {
+        // A path of its own, so that concurrent installs on the device cannot overwrite or delete
+        // each other's staged APK.
+        val stagedApk = "$STAGING_DIR/backup_test_${UUID.randomUUID()}.apk"
+        withCleanup(cleanup = { removeFile(stagedApk) }) {
+            logger.info("Pushing APK: ${apkFile.toAbsolutePath()} to device staging area...")
+            pushFile(apkFile, stagedApk)
+
+            logger.info("Installing staged APK via pm install...")
+            val flags = options.joinToString(" ") { quoteIfNeeded(it) }
+            val output = exec("pm install $flags ${quote(stagedApk)}")
+            // `pm install` prints "Success" on stdout. It reports a rejected package as
+            // "Failure [<reason>]" on stdout, and an error such as an unreadable APK on stderr with
+            // a non-zero exit code.
+            if (!output.reportsSuccess()) {
+                throw commandFailure(
+                    "Failed to install $apkFile (exit code ${output.exitCode})",
+                    output.stderr,
+                    output.stdout,
+                )
+            }
+        }
+    }
+
+    /**
+     * Uninstalls [packageName], if it is installed.
+     *
+     * @throws IOException if the package manager does not report success
+     */
+    suspend fun uninstallPackage(packageName: String) {
+        if (!isPackageInstalled(packageName)) return
+        val pkg = quoteIfNeeded(packageName)
+        logger.info("Uninstalling $packageName via pm uninstall...")
+        val output = exec("pm uninstall $pkg")
+        if (!output.reportsSuccess()) {
+            throw commandFailure(
+                "Failed to uninstall $packageName (exit code ${output.exitCode})",
+                output.stderr,
+                output.stdout,
+            )
+        }
+    }
+
+    /** Turns the screen on and dismisses the keyguard. */
+    suspend fun wakeAndDismissKeyguard() {
+        exec("input keyevent KEYCODE_WAKEUP")
+        exec("wm dismiss-keyguard")
+    }
+
+    /** Sends the home key event, moving any foreground activity to the background. */
+    suspend fun pressHome() {
+        exec("input keyevent KEYCODE_HOME")
+    }
+
+    /**
+     * Returns the logcat entries logged within the last [duration], as measured by the device
+     * clock.
+     *
+     * @throws IOException if the device clock cannot be read or logcat fails
+     */
+    suspend fun dumpLogcat(duration: Duration): String {
+        val now = timeSinceEpoch()
+        return dumpLogcatSince(now - duration.coerceIn(Duration.ZERO, now))
+    }
+
+    /**
+     * Returns the logcat entries logged since [start], a time since the epoch on the device clock.
+     *
+     * @throws IOException if logcat fails
+     */
+    suspend fun dumpLogcatSince(start: Duration): String {
+        // logcat takes no relative window, only a start time, here as `<epoch seconds>.<millis>`.
+        val startArg = String.format(Locale.ROOT, "%d.%03d", start.seconds, start.nano / 1_000_000)
+        val output = exec("logcat -d -t $startArg")
+        if (output.exitCode != 0) {
+            // stdout is left out of the message, since it can hold entries read before the failure.
+            throw commandFailure("logcat failed (exit code ${output.exitCode})", output.stderr)
+        }
+        return output.stdout
+    }
+
+    /**
+     * Returns the time since the epoch on the device clock, to the second.
+     *
+     * @throws IOException unless `date` prints the number of seconds since the epoch
+     */
+    suspend fun timeSinceEpoch(): Duration {
+        val output = exec("date +%s")
+        val seconds =
+            output.stdout.trim().toLongOrNull()?.takeIf { it >= 0 }
+                ?: throw commandFailure(
+                    "Failed to read the device clock (exit code ${output.exitCode})",
+                    output.stderr,
+                    output.stdout,
+                )
+        return Duration.ofSeconds(seconds)
+    }
+
+    /** Clears the logcat buffer. */
+    suspend fun clearLogcat() {
+        exec("logcat -c")
+    }
+
+    companion object {
+        const val ACTION_MAIN = "android.intent.action.MAIN"
+        const val CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER"
+
+        /** Where APKs are pushed before they are installed, which the package manager can read. */
+        private const val STAGING_DIR = "/data/local/tmp"
+        private const val ACTIVITY_SETTLE_DELAY_MS = 500L
+
+        /** `rwxrwxrwx`, so the package manager can read the staged file. */
+        private val PUSHED_FILE_MODE = RemoteFileMode.fromModeBits(511)
+
+        /** `rw-------`, for a file that only the shell user, which pushes it, reads. */
+        val SHELL_ONLY_FILE_MODE: RemoteFileMode = RemoteFileMode.fromModeBits(384)
+
+        /**
+         * Returns the `am instrument` command that runs the instrumentation [component] with string
+         * [args] and waits for it to finish.
+         */
+        fun instrumentCommand(component: String, args: Map<String, String>): String = buildString {
+            append("am instrument -w")
+            for ((key, value) in args) {
+                append(" -e ").append(quoteIfNeeded(key)).append(' ').append(quote(value))
+            }
+            append(' ').append(quoteIfNeeded(component))
+        }
+
+        /**
+         * A line of `pm list instrumentation`, which reads `instrumentation:<package>/<class>
+         * (target=<package>)`. A class in the instrumentation's own package can be shortened to
+         * `.<name>`.
+         */
+        private val INSTRUMENTATION_LINE =
+            Regex("""instrumentation:([^/\s]+)/(\S+) \(target=([^)\s]+)\)""")
+
+        /**
+         * The line of a package entry of `dumpsys package` with the state of the package for user
+         * 0: `User 0:`, then fields such as `stopped=true`, each after one space.
+         */
+        private val USER_0_STATE_LINE =
+            Regex("""    User 0: (?:\S+ )*stopped=(true|false)(?: \S+)*""")
+
+        /** The first line of `dumpsys backup`, which tells whether backup is enabled for user 0. */
+        private val BACKUP_ENABLED_LINE =
+            Regex(
+                "Backup Manager is (enabled|disabled) / (?:not )?setup complete / " +
+                    "(?:not )?pending init"
+            )
+
+        /** The line of the selected transport among the transports of `dumpsys backup`. */
+        private val SELECTED_TRANSPORT_LINE = Regex("""  \* (\S+)""")
+
+        /**
+         * Returns whether a package manager command succeeded: it exited with 0 and printed a
+         * `Success` line.
+         */
+        private fun ShellCommandOutput.reportsSuccess(): Boolean =
+            exitCode == 0 &&
+                stdout.lineSequence().any { it.trim().equals("Success", ignoreCase = true) }
+
+        /**
+         * Quotes [arg] as a single POSIX shell word, so the shell passes it through unchanged:
+         * without expanding `$`, backticks or backslashes, and without splitting it on spaces.
+         */
+        fun quote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
+
+        /**
+         * Returns [token] unchanged when every character is shell-safe, and [quote]s it otherwise.
+         *
+         * Keeps commands readable for the common case of package names, keys and flags. An empty
+         * token is always quoted, so it still counts as an argument.
+         */
+        fun quoteIfNeeded(token: String): String =
+            if (token.isNotEmpty() && token.all { it.isLetterOrDigit() || it in SHELL_SAFE }) {
+                token
+            } else {
+                quote(token)
+            }
+
+        /** Characters, besides letters and digits, that the shell never interprets in a word. */
+        private const val SHELL_SAFE = "._/:=@%+,-"
+    }
+}
+
+/**
+ * Returns [message], followed by [output]: what a failed command printed, so that the failure
+ * explains itself. Blank and repeated entries of [output] are left out.
+ */
+internal fun commandFailureMessage(message: String, vararg output: String): String {
+    val details = output.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(" ")
+    return if (details.isEmpty()) message else "$message: $details"
+}
+
+/** Returns an [IOException] with the [commandFailureMessage] of [message] and [output]. */
+internal fun commandFailure(message: String, vararg output: String): IOException =
+    IOException(commandFailureMessage(message, *output))
+
+/** Upper bound for a [withCleanup] cleanup, which cannot be cancelled. */
+internal val DEFAULT_CLEANUP_TIMEOUT = 10.seconds
+
+/**
+ * Runs [block], then [cleanup], even when [block] fails or its coroutine is cancelled.
+ *
+ * [cleanup] cannot be cancelled, so it is bounded by [cleanupTimeout] instead: an unresponsive
+ * device must not keep a cancelled or timed-out caller waiting. A cleanup that does not finish in
+ * time fails with an [IOException].
+ *
+ * When both fail, the failure of [block] is thrown with that of [cleanup] suppressed, so a cleanup
+ * that fails for the same underlying reason, such as a disconnected device, never hides the root
+ * cause.
+ */
+internal suspend fun <T> withCleanup(
+    cleanup: suspend () -> Unit,
+    cleanupTimeout: KotlinDuration = DEFAULT_CLEANUP_TIMEOUT,
+    block: suspend () -> T,
+): T {
+    val result =
+        try {
+            block()
+        } catch (e: Throwable) {
+            try {
+                runCleanup(cleanup, cleanupTimeout)
+            } catch (cleanupFailure: Throwable) {
+                e.addSuppressed(cleanupFailure)
+            }
+            throw e
+        }
+    runCleanup(cleanup, cleanupTimeout)
+    return result
+}
+
+private suspend fun runCleanup(cleanup: suspend () -> Unit, timeout: KotlinDuration) {
+    withContext(NonCancellable) {
+        withTimeoutOrNull(timeout) { cleanup() }
+            ?: throw IOException("Cleanup did not finish within $timeout")
+    }
+}

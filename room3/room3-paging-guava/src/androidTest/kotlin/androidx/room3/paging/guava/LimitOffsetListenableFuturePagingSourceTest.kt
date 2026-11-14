@@ -29,13 +29,13 @@ import androidx.room3.Database
 import androidx.room3.Entity
 import androidx.room3.Insert
 import androidx.room3.PrimaryKey
+import androidx.room3.Query
 import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.room3.RoomRawQuery
 import androidx.room3.util.getColumnIndexOrThrow
 import androidx.room3.util.performSuspending
 import androidx.sqlite.driver.AndroidSQLiteDriver
-import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
 import androidx.testutils.FilteringCoroutineContext
@@ -584,9 +584,7 @@ class LimitOffsetListenableFuturePagingSourceTest {
 
     private fun setupAndRun(test: suspend (LimitOffsetTestDb) -> Unit) {
         val db =
-            Room.inMemoryDatabaseBuilder<LimitOffsetTestDb>(
-                    ApplicationProvider.getApplicationContext()
-                )
+            Room.inMemoryDatabaseBuilder<LimitOffsetTestDb>()
                 .setDriver(AndroidSQLiteDriver())
                 .setQueryCoroutineContext(
                     ArchTaskExecutor.getIOThreadExecutor().asCoroutineDispatcher()
@@ -619,9 +617,7 @@ class LimitOffsetListenableFuturePagingSourceTest {
         val queryContext = FilteringCoroutineContext(executorService)
         val queryExecutor = queryContext.executor
         val db =
-            Room.inMemoryDatabaseBuilder<LimitOffsetTestDb>(
-                    ApplicationProvider.getApplicationContext()
-                )
+            Room.inMemoryDatabaseBuilder<LimitOffsetTestDb>()
                 .setDriver(AndroidSQLiteDriver())
                 .setQueryCoroutineContext(queryContext)
                 .build()
@@ -744,7 +740,7 @@ private fun ListenableFuture<LoadResult<Int, TestItem>>.onSuccess(
     addCallback(
         this,
         object : FutureCallback<LoadResult<Int, TestItem>> {
-            override fun onSuccess(result: LoadResult<Int, TestItem>?) {
+            override fun onSuccess(result: LoadResult<Int, TestItem>) {
                 onSuccessCallback(result)
             }
 
@@ -767,7 +763,7 @@ private fun ListenableFuture<LoadResult<Int, TestItem>>.onFailure(
     addCallback(
         this,
         object : FutureCallback<LoadResult<Int, TestItem>> {
-            override fun onSuccess(result: LoadResult<Int, TestItem>?) {
+            override fun onSuccess(result: LoadResult<Int, TestItem>) {
                 assertWithMessage(
                         "Expected onFailure callback instead of onSuccess, " +
                             "received result $result"
@@ -796,4 +792,6 @@ interface TestItemDao {
     @Insert fun addAllItems(testItems: List<TestItem>)
 
     @Insert fun addItem(testItem: TestItem)
+
+    @Query("SELECT * FROM TestItem ORDER BY id ASC") fun getAllItems(): List<TestItem>
 }

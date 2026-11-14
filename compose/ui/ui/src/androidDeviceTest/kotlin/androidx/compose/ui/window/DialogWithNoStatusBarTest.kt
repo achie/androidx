@@ -17,12 +17,14 @@
 package androidx.compose.ui.window
 
 import android.content.pm.ActivityInfo
-import androidx.activity.enableEdgeToEdge
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.Text
@@ -31,12 +33,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.test.TestActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.core.view.WindowCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,17 +51,36 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DialogWithNoStatusBarTest {
 
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
+
+    private var initialOrientation: Int? = null
+
+    @After
+    fun tearDown() {
+        val targetConfigOrientation = initialOrientation ?: return
+        initialOrientation = null
+        rule.restoreOrientationAndWait(targetConfigOrientation)
+    }
 
     @Test
     fun fullScreenDialogPortraitNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                expectedConfigOrientation = Configuration.ORIENTATION_PORTRAIT,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogMatchesContainer()
     }
 
     @Test
     fun fullScreenDialogLandscapeNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                expectedConfigOrientation = Configuration.ORIENTATION_LANDSCAPE,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogMatchesContainer()
     }
 
@@ -197,13 +218,23 @@ class DialogWithNoStatusBarTest {
 
     @Test
     fun fullScreenDialogPortraitInEdgeToEdgeNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                expectedConfigOrientation = Configuration.ORIENTATION_PORTRAIT,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogInEdgeToEdgeMatchesContainerSize()
     }
 
     @Test
     fun fullScreenDialogInEdgeToEdgeLandscapeNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                expectedConfigOrientation = Configuration.ORIENTATION_LANDSCAPE,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogInEdgeToEdgeMatchesContainerSize()
     }
 
@@ -212,12 +243,18 @@ class DialogWithNoStatusBarTest {
         var mainContentHeight = 0
         var dialogWidth = 0
         var dialogHeight = 0
-        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
         rule.activityRule.scenario.onActivity {
+            WindowCompat.enableEdgeToEdge(it.window)
             WindowCompat.setDecorFitsSystemWindows(it.window, false)
         }
         rule.setContent {
-            Box(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+            Box(
+                modifier =
+                    Modifier.fillMaxSize()
+                        .windowInsetsPadding(
+                            WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                        )
+            ) {
                 Box(
                     modifier =
                         Modifier.fillMaxSize().onGloballyPositioned {
@@ -256,7 +293,7 @@ class DialogWithNoStatusBarTest {
         var mainContentHeight = 0
         var dialogWidth = 0
         var dialogHeight = 0
-        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.runOnUiThread { WindowCompat.enableEdgeToEdge(rule.activity.window) }
         rule.activityRule.scenario.onActivity {
             WindowCompat.setDecorFitsSystemWindows(it.window, false)
         }

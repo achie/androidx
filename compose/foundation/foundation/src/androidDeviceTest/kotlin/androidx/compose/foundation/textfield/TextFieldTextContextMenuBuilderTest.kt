@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION") // b/552879150
+
 package androidx.compose.foundation.textfield
 
+import androidx.compose.foundation.contextmenu.LookUpItemOverrideRule
 import androidx.compose.foundation.contextmenu.ProcessTextItemOverrideRule
 import androidx.compose.foundation.internal.toClipEntry
 import androidx.compose.foundation.text.BasicSecureTextField
@@ -25,6 +28,7 @@ import androidx.compose.foundation.text.contextmenu.data.TextContextMenuData
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.AutofillKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.CopyKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.CutKey
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.LookUpKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.PasteKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.SelectAllKey
 import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuDropdownProvider
@@ -43,7 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.rightClick
@@ -57,7 +61,6 @@ import androidx.test.filters.SdkSuppress
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -66,12 +69,14 @@ import org.junit.runner.RunWith
 @RunWith(ContextMenuFlagFlipperRunner::class)
 @ContextMenuFlagSuppress(suppressedFlagValue = false)
 class TextFieldTextContextMenuBuilderTest : FocusedWindowTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val text = "Text Text Text"
     private val textFieldTag = "BTF"
 
     @get:Rule val processTextRule = ProcessTextItemOverrideRule()
+
+    @get:Rule val lookUpRule = LookUpItemOverrideRule()
 
     @Test
     @SdkSuppress(maxSdkVersion = 25)
@@ -368,6 +373,50 @@ class TextFieldTextContextMenuBuilderTest : FocusedWindowTest {
             selectionAmount = SelectionAmount.ALL,
             expectedKeys = listOf(CopyKey),
         )
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun btf2_contextMenu_lookUpAvailable_noSelection_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runBtf2CorrectItemsTest(
+            isEmptyClipboard = false,
+            selectionAmount = SelectionAmount.NONE,
+            expectedKeys = listOf(PasteKey, SelectAllKey, AutofillKey),
+        )
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun btf2_contextMenu_lookUpAvailable_partialSelection_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runBtf2CorrectItemsTest(
+            isEmptyClipboard = false,
+            selectionAmount = SelectionAmount.PARTIAL,
+            expectedKeys = listOf(CutKey, CopyKey, PasteKey, LookUpKey, SelectAllKey),
+        )
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun btf2_contextMenu_lookUpAvailable_fullSelection_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runBtf2CorrectItemsTest(
+            isEmptyClipboard = false,
+            selectionAmount = SelectionAmount.ALL,
+            expectedKeys = listOf(CutKey, CopyKey, PasteKey, LookUpKey),
+        )
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun btf2_contextMenu_lookUpAvailable_password_partialSelection_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runBtf2CorrectItemsTest(
+            isPassword = true,
+            selectionAmount = SelectionAmount.PARTIAL,
+            expectedKeys = listOf(PasteKey, SelectAllKey),
+        )
+    }
 
     private enum class SelectionAmount {
         NONE,

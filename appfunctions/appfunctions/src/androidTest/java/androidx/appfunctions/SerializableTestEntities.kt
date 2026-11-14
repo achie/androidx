@@ -24,7 +24,7 @@ import androidx.appfunctions.internal.AppFunctionSerializableFactory
 import androidx.appfunctions.metadata.AppFunctionAllOfTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionComponentsMetadata
 import androidx.appfunctions.metadata.AppFunctionObjectTypeMetadata
-import androidx.appfunctions.metadata.AppFunctionPendingIntentTypeMetadata
+import androidx.appfunctions.metadata.AppFunctionParcelableTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionReferenceTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionStringTypeMetadata
 
@@ -87,7 +87,10 @@ data class OpenableNote(
                             properties =
                                 mapOf(
                                     "intentToOpen" to
-                                        AppFunctionPendingIntentTypeMetadata(isNullable = false)
+                                        AppFunctionParcelableTypeMetadata(
+                                            qualifiedName = "android.app.PendingIntent",
+                                            isNullable = false,
+                                        )
                                 ),
                             required = listOf("intentToOpen"),
                             qualifiedName = "com.example.AppFunctionOpenable",
@@ -104,8 +107,11 @@ class `$AttachmentFactory` : AppFunctionSerializableFactory<Attachment> {
         return Attachment(checkNotNull(appFunctionData.getString("uri")))
     }
 
-    override fun toAppFunctionData(appFunctionSerializable: Attachment): AppFunctionData {
-        return getAppFunctionDataBuilder("androidx.appfunctions.Attachment")
+    override fun toAppFunctionData(
+        spec: AppFunctionDataSpec?,
+        appFunctionSerializable: Attachment,
+    ): AppFunctionData {
+        return getAppFunctionDataBuilder(spec, "androidx.appfunctions.Attachment")
             .setString("uri", appFunctionSerializable.uri)
             .build()
     }
@@ -122,14 +128,21 @@ class `$NoteFactory` : AppFunctionSerializableFactory<Note> {
         )
     }
 
-    override fun toAppFunctionData(appFunctionSerializable: Note): AppFunctionData {
-        return getAppFunctionDataBuilder("androidx.appfunctions.Note")
+    override fun toAppFunctionData(
+        spec: AppFunctionDataSpec?,
+        appFunctionSerializable: Note,
+    ): AppFunctionData {
+        val attachmentFactory = `$AttachmentFactory`()
+        return getAppFunctionDataBuilder(spec, "androidx.appfunctions.Note")
             .setString("title", appFunctionSerializable.title)
             .setAppFunctionData(
                 "attachment",
-                AppFunctionData.serialize(
+                attachmentFactory.toAppFunctionData(
+                    spec?.getPropertyObjectSpec(
+                        "attachment",
+                        checkNotNull(Attachment::class.java.canonicalName),
+                    ),
                     appFunctionSerializable.attachment,
-                    Attachment::class.java,
                 ),
             )
             .build()
@@ -144,21 +157,28 @@ class `$OpenableNoteFactory` : AppFunctionSerializableFactory<OpenableNote> {
             attachment =
                 checkNotNull(appFunctionData.getAppFunctionData("attachment"))
                     .deserialize(Attachment::class.java),
-            intentToOpen = checkNotNull(appFunctionData.getPendingIntent("intentToOpen")),
+            intentToOpen = checkNotNull(appFunctionData.getParcelable("intentToOpen")),
         )
     }
 
-    override fun toAppFunctionData(appFunctionSerializable: OpenableNote): AppFunctionData {
-        return getAppFunctionDataBuilder("androidx.appfunctions.OpenableNote")
+    override fun toAppFunctionData(
+        spec: AppFunctionDataSpec?,
+        appFunctionSerializable: OpenableNote,
+    ): AppFunctionData {
+        val attachmentFactory = `$AttachmentFactory`()
+        return getAppFunctionDataBuilder(spec, "androidx.appfunctions.OpenableNote")
             .setString("title", appFunctionSerializable.title)
             .setAppFunctionData(
                 "attachment",
-                AppFunctionData.serialize(
+                attachmentFactory.toAppFunctionData(
+                    spec?.getPropertyObjectSpec(
+                        "attachment",
+                        checkNotNull(Attachment::class.java.canonicalName),
+                    ),
                     appFunctionSerializable.attachment,
-                    Attachment::class.java,
                 ),
             )
-            .setPendingIntent("intentToOpen", appFunctionSerializable.intentToOpen)
+            .setParcelable("intentToOpen", appFunctionSerializable.intentToOpen)
             .build()
     }
 }

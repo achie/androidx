@@ -24,12 +24,11 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -57,6 +56,8 @@ open class BaseLazyStaggeredGridWithOrientation(private val orientation: Orienta
         mainAxisSpacing: Dp = 0.dp,
         crossAxisArrangement: Arrangement.HorizontalOrVertical = Arrangement.spacedBy(0.dp),
         overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+        cacheWindow: LazyLayoutCacheWindow =
+            LazyLayoutCacheWindow(aheadFraction = 0.5f, isNonScrollCachingEnabled = false),
         content: LazyStaggeredGridScope.() -> Unit,
     ) {
         LazyStaggeredGrid(
@@ -68,21 +69,10 @@ open class BaseLazyStaggeredGridWithOrientation(private val orientation: Orienta
             crossAxisArrangement,
             reverseLayout,
             overscrollEffect,
+            cacheWindow,
             content,
         )
     }
-
-    internal fun axisSize(crossAxis: Int, mainAxis: Int): IntSize =
-        IntSize(
-            if (orientation == Orientation.Vertical) crossAxis else mainAxis,
-            if (orientation == Orientation.Vertical) mainAxis else crossAxis,
-        )
-
-    internal fun axisOffset(crossAxis: Int, mainAxis: Int): IntOffset =
-        IntOffset(
-            if (orientation == Orientation.Vertical) crossAxis else mainAxis,
-            if (orientation == Orientation.Vertical) mainAxis else crossAxis,
-        )
 
     @Composable
     internal fun LazyStaggeredGrid(
@@ -94,6 +84,8 @@ open class BaseLazyStaggeredGridWithOrientation(private val orientation: Orienta
         crossAxisArrangement: Arrangement.HorizontalOrVertical = Arrangement.spacedBy(0.dp),
         reverseLayout: Boolean = false,
         overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
+        cacheWindow: LazyLayoutCacheWindow =
+            LazyLayoutCacheWindow(aheadFraction = 0.5f, isNonScrollCachingEnabled = false),
         content: LazyStaggeredGridScope.() -> Unit,
     ) {
         if (orientation == Orientation.Vertical) {
@@ -106,6 +98,7 @@ open class BaseLazyStaggeredGridWithOrientation(private val orientation: Orienta
                 state = state,
                 reverseLayout = reverseLayout,
                 overscrollEffect = overscrollEffect,
+                cacheWindow = cacheWindow,
                 content = content,
             )
         } else {
@@ -118,6 +111,7 @@ open class BaseLazyStaggeredGridWithOrientation(private val orientation: Orienta
                 state = state,
                 reverseLayout = reverseLayout,
                 overscrollEffect = overscrollEffect,
+                cacheWindow = cacheWindow,
                 content = content,
             )
         }

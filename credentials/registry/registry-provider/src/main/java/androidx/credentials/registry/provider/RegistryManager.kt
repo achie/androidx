@@ -18,7 +18,6 @@ package androidx.credentials.registry.provider
 
 import android.content.Context
 import android.os.CancellationSignal
-import androidx.annotation.RestrictTo
 import androidx.credentials.CredentialManagerCallback
 import java.util.concurrent.Executor
 import kotlin.coroutines.resume
@@ -71,9 +70,18 @@ public abstract class RegistryManager internal constructor() {
          * [androidx.credentials.provider.PendingIntentHandler.setCreateCredentialResponse] and
          * [androidx.credentials.provider.PendingIntentHandler.setCreateCredentialException] APIs.
          */
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         public const val ACTION_CREATE_CREDENTIAL: String =
             "androidx.credentials.registry.provider.action.CREATE_CREDENTIAL"
+
+        /**
+         * The intent action name that the Credential Manager uses to bind to your background
+         * fulfillment service when silent fulfillment (FULL delegation) is requested.
+         */
+        // Suppressed to meet the length requirement of the action string enforced during
+        // registration.
+        @field:Suppress("ActionValue")
+        public const val ACTION_GET_CREDENTIAL_SERVICE: String =
+            "androidx.credentials.action.GET_CREDENTIAL_SERVICE"
     }
 
     /**
@@ -86,6 +94,7 @@ public abstract class RegistryManager internal constructor() {
      * whether to proceed with the operation.
      *
      * @param request the request containing the credential data to register
+     * @throws RegisterCredentialsException If the request fails
      */
     public suspend fun registerCredentials(
         request: RegisterCredentialsRequest
@@ -134,8 +143,8 @@ public abstract class RegistryManager internal constructor() {
      * with the operation.
      *
      * @param request the request containing the creation options to register
+     * @throws RegisterCreationOptionsException If the request fails
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public suspend fun registerCreationOptions(
         request: RegisterCreationOptionsRequest
     ): RegisterCreationOptionsResponse = suspendCancellableCoroutine { continuation ->
@@ -178,6 +187,7 @@ public abstract class RegistryManager internal constructor() {
      * [registerCredentialsAsync] (Java) API.
      *
      * @param request the request to specify clearing configurations
+     * @throws ClearCredentialRegistryException If the request fails
      */
     public suspend fun clearCredentialRegistry(
         request: ClearCredentialRegistryRequest
@@ -215,8 +225,8 @@ public abstract class RegistryManager internal constructor() {
      * [registerCreationOptionsAsync] (Java) API.
      *
      * @param request the request to specify clearing configurations
+     * @throws ClearCreationOptionsException If the request fails
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public suspend fun clearCreationOptions(
         request: ClearCreationOptionsRequest
     ): ClearCreationOptionsResponse = suspendCancellableCoroutine { continuation ->
@@ -278,17 +288,17 @@ public abstract class RegistryManager internal constructor() {
      * This API uses callbacks instead of Kotlin coroutines.
      *
      * The registries will then be used by the Credential Manager when handling an app calling
-     * request (see [androidx.credentials.CredentialManager]). The Credential Manager will determine
-     * if the registry contains some data qualified as a candidate to fulfill the given request, and
-     * if so it will surface a user selector UI to collect the user decision for whether to proceed
-     * with the operation.
+     * request (see [androidx.credentials.CredentialManager.createCredential] and
+     * [androidx.credentials.CredentialManager.createCredentialAsync]). The Credential Manager will
+     * determine if the registry contains some data qualified as a candidate to fulfill the given
+     * request, and if so it will surface a user selector UI to collect the user decision for
+     * whether to proceed with the operation.
      *
      * @param request the request containing the creation options to register
      * @param cancellationSignal an optional signal that allows for cancelling this call
      * @param executor the callback will take place on this executor
      * @param callback the callback invoked when the request succeeds or fails
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public abstract fun registerCreationOptionsAsync(
         request: RegisterCreationOptionsRequest,
         cancellationSignal: CancellationSignal?,
@@ -330,7 +340,6 @@ public abstract class RegistryManager internal constructor() {
      * @param executor the callback will take place on this executor
      * @param callback the callback invoked when the request succeeds or fails
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public abstract fun clearCreationOptionsAsync(
         request: ClearCreationOptionsRequest,
         executor: Executor,

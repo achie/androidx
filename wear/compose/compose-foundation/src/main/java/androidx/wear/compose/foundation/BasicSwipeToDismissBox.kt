@@ -34,6 +34,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
+import androidx.compose.runtime.annotation.RememberInComposition
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -42,7 +44,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -50,10 +51,15 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.nestedScrollModifierNode
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.SuspendingPointerInputModifierNode
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.node.DelegatingNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.debugInspectorInfo
@@ -325,7 +331,9 @@ public fun BasicSwipeToDismissBox(
  */
 @Stable
 @OptIn(ExperimentalWearFoundationApi::class)
-public class SwipeToDismissBoxState(
+public class SwipeToDismissBoxState
+@RememberInComposition
+constructor(
     animationSpec: AnimationSpec<Float> = SwipeToDismissBoxDefaults.AnimationSpec,
     confirmStateChange: (SwipeToDismissValue) -> Boolean = { true },
 ) {
@@ -356,7 +364,7 @@ public class SwipeToDismissBoxState(
      * The offset shows how far the foreground content was swiped from its original position.
      */
     public val offset: Float
-        get() = swipeableState.offset ?: Float.NaN
+        @FrequentlyChangingValue get() = swipeableState.offset ?: Float.NaN
 
     /** Whether the state is currently animating. */
     public val isAnimationRunning: Boolean
@@ -370,7 +378,7 @@ public class SwipeToDismissBoxState(
      *
      * @throws IllegalStateException If the offset has not been initialized yet
      */
-    public fun requireOffset(): Float = swipeableState.requireOffset()
+    @FrequentlyChangingValue public fun requireOffset(): Float = swipeableState.requireOffset()
 
     internal fun edgeNestedScrollConnection(
         edgeSwipeState: State<EdgeSwipeState>
@@ -384,73 +392,6 @@ public class SwipeToDismissBoxState(
     public suspend fun snapTo(targetValue: SwipeToDismissValue): Unit =
         swipeableState.snapTo(targetValue)
 
-    private companion object {
-        // edgeNestedScrollConnection is used with Modifier.edgeSwipeToDismiss. It implicitly calls
-        // requireDensity() and requireOffset() on SwipeableV2State, so both density and offset must
-        // be non-null to avoid an exception being thrown.
-        //
-        // Density and Offset are set in BasicSwipeToDismissBox. SwipeDismissableNavHost uses
-        // BasicSwipeToDismissBox up to API 35, so is compatible with Modifier.edgeSwipeToDismiss.
-        // For API 36 onwards, SwipeDismissableNavHost uses platform predictive back and so density
-        // and offset would not be set and calling requireDensity() and requireOffset() would throw.
-        private val <T> SwipeableV2State<T>.isSwipeableV2Initialized: Boolean
-            get() = density != null && offset != null
-
-        private fun <T> SwipeableV2State<T>.edgeNestedScrollConnection(
-            edgeSwipeState: State<EdgeSwipeState>
-        ): NestedScrollConnection =
-            object : NestedScrollConnection {
-                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                    val delta = available.x
-                    // If swipeState = SwipeState.SWIPING_TO_DISMISS - perform swipeToDismiss
-                    // drag and consume everything
-                    return if (
-                        (edgeSwipeState.value == EdgeSwipeState.SwipingToDismiss &&
-                            source == NestedScrollSource.UserInput) && isSwipeableV2Initialized
-                    ) {
-                        dispatchRawDelta(delta)
-                        available
-                    } else {
-                        Offset.Zero
-                    }
-                }
-
-                override fun onPostScroll(
-                    consumed: Offset,
-                    available: Offset,
-                    source: NestedScrollSource,
-                ): Offset = Offset.Zero
-
-                override suspend fun onPreFling(available: Velocity): Velocity {
-                    val toFling = available.x
-                    // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
-                    // connected to composable
-                    return if (
-                        (edgeSwipeState.value == EdgeSwipeState.SwipingToDismiss ||
-                            edgeSwipeState.value == EdgeSwipeState.SwipeToDismissInProgress) &&
-                            isSwipeableV2Initialized
-                    ) {
-                        settle(velocity = toFling)
-                        available
-                    } else Velocity.Zero
-                }
-
-                override suspend fun onPostFling(
-                    consumed: Velocity,
-                    available: Velocity,
-                ): Velocity {
-                    // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
-                    // connected to composable
-                    return if (isSwipeableV2Initialized) {
-                        settle(velocity = available.x)
-                        available
-                    } else {
-                        Velocity.Zero
-                    }
-                }
-            }
-    }
-
     internal val swipeableState =
         SwipeableV2State(
             initialValue = SwipeToDismissValue.Default,
@@ -459,6 +400,71 @@ public class SwipeToDismissBoxState(
             positionalThreshold = fractionalPositionalThreshold(SWIPE_THRESHOLD),
         )
 }
+
+// edgeNestedScrollConnection is used with Modifier.edgeSwipeToDismiss. It implicitly calls
+// requireDensity() and requireOffset() on SwipeableV2State, so both density and offset must
+// be non-null to avoid an exception being thrown.
+//
+// Density and Offset are set in BasicSwipeToDismissBox. SwipeDismissableNavHost uses
+// BasicSwipeToDismissBox up to API 35, so is compatible with Modifier.edgeSwipeToDismiss.
+// For API 36 onwards, SwipeDismissableNavHost uses platform predictive back and so density
+// and offset would not be set and calling requireDensity() and requireOffset() would throw.
+private val <T> SwipeableV2State<T>.isSwipeableV2Initialized: Boolean
+    get() = density != null && offset != null
+
+private fun <T> SwipeableV2State<T>.edgeNestedScrollConnection(
+    edgeSwipeState: State<EdgeSwipeState>
+): NestedScrollConnection =
+    object : NestedScrollConnection {
+        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            val delta = available.x
+            // If swipeState = SwipeState.SWIPING_TO_DISMISS - perform swipeToDismiss
+            // drag and consume everything
+            return if (
+                (edgeSwipeState.value == EdgeSwipeState.SwipingToDismiss &&
+                    source == NestedScrollSource.UserInput) && isSwipeableV2Initialized
+            ) {
+                dispatchRawDelta(delta)
+                available
+            } else {
+                Offset.Zero
+            }
+        }
+
+        override fun onPostScroll(
+            consumed: Offset,
+            available: Offset,
+            source: NestedScrollSource,
+        ): Offset = Offset.Zero
+
+        override suspend fun onPreFling(available: Velocity): Velocity {
+            val toFling = available.x
+            // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
+            // connected to composable
+            return if (
+                (edgeSwipeState.value == EdgeSwipeState.SwipingToDismiss ||
+                    edgeSwipeState.value == EdgeSwipeState.SwipeToDismissInProgress) &&
+                    isSwipeableV2Initialized
+            ) {
+                settle(velocity = toFling)
+                available
+            } else Velocity.Zero
+        }
+
+        override suspend fun onPostFling(
+            consumed: Velocity,
+            available: Velocity,
+        ): Velocity {
+            // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
+            // connected to composable
+            return if (isSwipeableV2Initialized) {
+                settle(velocity = available.x)
+                available
+            } else {
+                Velocity.Zero
+            }
+        }
+    }
 
 /**
  * Create a [SwipeToDismissBoxState] and remember it.
@@ -490,7 +496,7 @@ public object SwipeToDismissBoxDefaults {
     public val EdgeWidth: Dp = 30.dp
 }
 
-/** Keys used to persistent state in [BasicSwipeToDismissBox]. */
+/** Keys used to persist state in [BasicSwipeToDismissBox]. */
 public enum class SwipeToDismissKeys {
     /**
      * The default background key to identify the content displayed by the content block when
@@ -548,7 +554,18 @@ public enum class SwipeToDismissValue {
  *   on SwipeToDismissBox.
  * @param edgeWidth Width of the edge zone in which the swipe will be recognised.
  */
+@OptIn(ExperimentalWearFoundationApi::class)
 public fun Modifier.edgeSwipeToDismiss(
+    swipeToDismissBoxState: SwipeToDismissBoxState,
+    edgeWidth: Dp = SwipeToDismissBoxDefaults.EdgeWidth,
+): Modifier =
+    if (WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled) {
+        this then EdgeSwipeToDismissElement(swipeToDismissBoxState, edgeWidth)
+    } else {
+        edgeSwipeToDismissLegacy(swipeToDismissBoxState, edgeWidth)
+    }
+
+private fun Modifier.edgeSwipeToDismissLegacy(
     swipeToDismissBoxState: SwipeToDismissBoxState,
     edgeWidth: Dp = SwipeToDismissBoxDefaults.EdgeWidth,
 ): Modifier =
@@ -611,6 +628,171 @@ public fun Modifier.edgeSwipeToDismiss(
         }
         pointerInput(edgeWidth, nestedPointerInput).nestedScroll(nestedScrollConnection)
     }
+
+private class EdgeSwipeToDismissElement(
+    private val swipeToDismissBoxState: SwipeToDismissBoxState,
+    private val edgeWidth: Dp,
+) : ModifierNodeElement<EdgeSwipeToDismissNode>() {
+    override fun create(): EdgeSwipeToDismissNode =
+        EdgeSwipeToDismissNode(swipeToDismissBoxState, edgeWidth)
+
+    override fun update(node: EdgeSwipeToDismissNode) {
+        node.update(swipeToDismissBoxState, edgeWidth)
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "edgeSwipeToDismiss"
+        properties["swipeToDismissBoxState"] = swipeToDismissBoxState
+        properties["edgeWidth"] = edgeWidth
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is EdgeSwipeToDismissElement) return false
+        if (swipeToDismissBoxState != other.swipeToDismissBoxState) return false
+        if (edgeWidth != other.edgeWidth) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = swipeToDismissBoxState.hashCode()
+        result = 31 * result + edgeWidth.hashCode()
+        return result
+    }
+}
+
+private class EdgeSwipeToDismissNode(
+    private var swipeToDismissBoxState: SwipeToDismissBoxState,
+    private var edgeWidth: Dp,
+) : DelegatingNode() {
+    // Tracks the current swipe status
+    private var edgeSwipeState = EdgeSwipeState.WaitingForTouch
+
+    private val nestedScrollConnection =
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val delta = available.x
+                // If swipeState = SwipeState.SWIPING_TO_DISMISS - perform swipeToDismiss
+                // drag and consume everything
+                return if (
+                    (edgeSwipeState == EdgeSwipeState.SwipingToDismiss &&
+                        source == NestedScrollSource.UserInput) &&
+                        swipeToDismissBoxState.swipeableState.isSwipeableV2Initialized
+                ) {
+                    swipeToDismissBoxState.swipeableState.dispatchRawDelta(delta)
+                    available
+                } else {
+                    Offset.Zero
+                }
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset = Offset.Zero
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val toFling = available.x
+                // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
+                // connected to composable
+                return if (
+                    (edgeSwipeState == EdgeSwipeState.SwipingToDismiss ||
+                        edgeSwipeState == EdgeSwipeState.SwipeToDismissInProgress) &&
+                        swipeToDismissBoxState.swipeableState.isSwipeableV2Initialized
+                ) {
+                    swipeToDismissBoxState.swipeableState.settle(velocity = toFling)
+                    available
+                } else Velocity.Zero
+            }
+
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity,
+            ): Velocity =
+                // Consumes fling by SwipeToDismiss only after swipeableV2State is successfully
+                // connected to composable
+                if (swipeToDismissBoxState.swipeableState.isSwipeableV2Initialized) {
+                    swipeToDismissBoxState.swipeableState.settle(velocity = available.x)
+                    available
+                } else {
+                    Velocity.Zero
+                }
+        }
+
+    private val pointerInputNode =
+        delegate(
+            SuspendingPointerInputModifierNode {
+                coroutineScope {
+                    awaitPointerEventScope {
+                        while (isActive) {
+                            awaitPointerEvent(PointerEventPass.Initial).changes.fastForEach { change
+                                ->
+                                // By default swipeState is WaitingForTouch.
+                                // If it is in this state and a first touch hit an edge area, we
+                                // set swipeState to EdgeClickedWaitingForDirection.
+                                // After that to track which direction the swipe will go, we check
+                                // the next touch. If it lands to the left of the first, we consider
+                                // it as a swipe left and set the state to SwipingToPage. Otherwise,
+                                // set the state to SwipingToDismiss
+                                when (edgeSwipeState) {
+                                    EdgeSwipeState.SwipeToDismissInProgress,
+                                    EdgeSwipeState.WaitingForTouch -> {
+                                        edgeSwipeState =
+                                            if (change.position.x < edgeWidth.toPx())
+                                                EdgeSwipeState.EdgeClickedWaitingForDirection
+                                            else EdgeSwipeState.SwipingToPage
+                                    }
+                                    EdgeSwipeState.EdgeClickedWaitingForDirection -> {
+                                        edgeSwipeState =
+                                            if (change.position.x < change.previousPosition.x)
+                                                EdgeSwipeState.SwipingToPage
+                                            else EdgeSwipeState.SwipingToDismiss
+                                    }
+                                    else -> {} // Do nothing
+                                }
+                                // When finger is up - reset swipeState to WaitingForTouch
+                                // or to SwipeToDismissInProgress if current
+                                // state is SwipingToDismiss
+                                if (change.changedToUp()) {
+                                    edgeSwipeState =
+                                        if (edgeSwipeState == EdgeSwipeState.SwipingToDismiss)
+                                            EdgeSwipeState.SwipeToDismissInProgress
+                                        else EdgeSwipeState.WaitingForTouch
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    init {
+        delegate(nestedScrollModifierNode(nestedScrollConnection, null))
+    }
+
+    override fun onReset() {
+        edgeSwipeState = EdgeSwipeState.WaitingForTouch
+    }
+
+    override fun onDetach() {
+        edgeSwipeState = EdgeSwipeState.WaitingForTouch
+    }
+
+    fun update(
+        swipeToDismissBoxState: SwipeToDismissBoxState,
+        edgeWidth: Dp,
+    ) {
+        val stateChanged = this.swipeToDismissBoxState != swipeToDismissBoxState
+        val widthChanged = this.edgeWidth != edgeWidth
+        this.swipeToDismissBoxState = swipeToDismissBoxState
+        this.edgeWidth = edgeWidth
+        if (stateChanged || widthChanged) {
+            edgeSwipeState = EdgeSwipeState.WaitingForTouch
+            pointerInputNode.resetPointerInputHandler()
+        }
+    }
+}
 
 /** An enum which represents a current state of swipe action. */
 internal enum class EdgeSwipeState {

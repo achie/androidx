@@ -66,12 +66,12 @@ import kotlinx.coroutines.channels.Channel
 
 /** Measure flags for MotionLayout */
 @Deprecated("Unnecessary, MotionLayout remeasures when its content changes.")
-enum class MotionLayoutFlag(@Suppress("UNUSED_PARAMETER") value: Long) {
+public enum class MotionLayoutFlag(@Suppress("UNUSED_PARAMETER") value: Long) {
     Default(0),
     @Suppress("unused") FullMeasure(1),
 }
 
-enum class MotionLayoutDebugFlags {
+public enum class MotionLayoutDebugFlags {
     NONE,
     SHOW_ALL,
     UNKNOWN,
@@ -126,7 +126,7 @@ enum class MotionLayoutDebugFlags {
  */
 @ExperimentalMotionApi
 @Composable
-inline fun MotionLayout(
+public inline fun MotionLayout(
     start: ConstraintSet,
     end: ConstraintSet,
     progress: Float,
@@ -237,7 +237,7 @@ inline fun MotionLayout(
  */
 @ExperimentalMotionApi
 @Composable
-inline fun MotionLayout(
+public inline fun MotionLayout(
     motionScene: MotionScene,
     progress: Float,
     modifier: Modifier = Modifier,
@@ -362,7 +362,7 @@ inline fun MotionLayout(
  */
 @ExperimentalMotionApi
 @Composable
-inline fun MotionLayout(
+public inline fun MotionLayout(
     motionScene: MotionScene,
     constraintSetName: String?,
     animationSpec: AnimationSpec<Float>,
@@ -371,7 +371,7 @@ inline fun MotionLayout(
     debugFlags: DebugFlags = DebugFlags.None,
     optimizationLevel: Int = Optimizer.OPTIMIZATION_STANDARD,
     invalidationStrategy: InvalidationStrategy = InvalidationStrategy.DefaultInvalidationStrategy,
-    @Suppress("HiddenTypeParameter") crossinline content: @Composable (MotionLayoutScope.() -> Unit),
+    crossinline content: @Composable (MotionLayoutScope.() -> Unit),
 ) {
     /**
      * MutableState used to track content recompositions. It's reassigned at the content's
@@ -430,7 +430,7 @@ internal fun MotionLayoutCore(
     contentTracker: MutableState<Unit>,
     compositionSource: Ref<CompositionSource>,
     invalidationStrategy: InvalidationStrategy,
-    @Suppress("HiddenTypeParameter") content: @Composable (MotionLayoutScope.() -> Unit),
+    content: @Composable (MotionLayoutScope.() -> Unit),
 ) {
     val needsUpdate = remember { mutableLongStateOf(0L) }
 
@@ -511,7 +511,7 @@ internal fun MotionLayoutCore(
 @PublishedApi
 @Composable
 internal fun MotionLayoutCore(
-    @Suppress("HiddenTypeParameter") motionScene: MotionScene,
+    motionScene: MotionScene,
     progress: Float,
     transitionName: String,
     optimizationLevel: Int,
@@ -520,7 +520,7 @@ internal fun MotionLayoutCore(
     contentTracker: MutableState<Unit>,
     compositionSource: Ref<CompositionSource>,
     invalidationStrategy: InvalidationStrategy,
-    @Suppress("HiddenTypeParameter") content: @Composable MotionLayoutScope.() -> Unit,
+    content: @Composable MotionLayoutScope.() -> Unit,
 ) {
     val transition =
         remember(motionScene, transitionName) { motionScene.getTransitionInstance(transitionName) }
@@ -574,7 +574,7 @@ internal fun MotionLayoutCore(
     contentTracker: MutableState<Unit>,
     compositionSource: Ref<CompositionSource>,
     invalidationStrategy: InvalidationStrategy,
-    @Suppress("HiddenTypeParameter") content: @Composable MotionLayoutScope.() -> Unit,
+    content: @Composable MotionLayoutScope.() -> Unit,
 ) {
     val motionProgress = createAndUpdateMotionProgress(progress = progress)
     val transitionImpl = (transition as? TransitionImpl) ?: TransitionImpl.EMPTY
@@ -681,7 +681,7 @@ internal fun MotionLayoutCore(
 
 @ExperimentalMotionApi
 @LayoutScopeMarker
-class MotionLayoutScope
+public class MotionLayoutScope
 @Suppress("ShowingMemberInHiddenClass")
 internal constructor(
     private val measurer: MotionMeasurer,
@@ -698,7 +698,7 @@ internal constructor(
      * bounds while ignoring their positioning during animation. Such as when implementing
      * DragAndDrop logic.
      */
-    fun Modifier.onStartEndBoundsChanged(
+    public fun Modifier.onStartEndBoundsChanged(
         layoutId: Any,
         onBoundsChanged: (startBounds: Rect, endBounds: Rect) -> Unit,
     ): Modifier {
@@ -781,13 +781,13 @@ internal constructor(
         }
     }
 
-    inner class CustomProperties internal constructor(private val id: String) {
+    public inner class CustomProperties internal constructor(private val id: String) {
         /**
          * Return the current [Color] value of the custom property [name], of the [id] layout.
          *
          * Returns [Color.Unspecified] if the property does not exist.
          */
-        fun color(name: String): Color {
+        public fun color(name: String): Color {
             return measurer.getCustomColor(id, name, motionProgress.floatValue)
         }
 
@@ -796,7 +796,7 @@ internal constructor(
          *
          * Returns [Color.Unspecified] if the property does not exist.
          */
-        fun float(name: String): Float {
+        public fun float(name: String): Float {
             return measurer.getCustomFloat(id, name, motionProgress.floatValue)
         }
 
@@ -805,7 +805,7 @@ internal constructor(
          *
          * Returns `0` if the property does not exist.
          */
-        fun int(name: String): Int {
+        public fun int(name: String): Int {
             return measurer.getCustomFloat(id, name, motionProgress.floatValue).toInt()
         }
 
@@ -814,7 +814,7 @@ internal constructor(
          *
          * Returns [Dp.Unspecified] if the property does not exist.
          */
-        fun distance(name: String): Dp {
+        public fun distance(name: String): Dp {
             return measurer.getCustomFloat(id, name, motionProgress.floatValue).dp
         }
 
@@ -823,42 +823,42 @@ internal constructor(
          *
          * Returns [TextUnit.Unspecified] if the property does not exist.
          */
-        fun fontSize(name: String): TextUnit {
+        public fun fontSize(name: String): TextUnit {
             return measurer.getCustomFloat(id, name, motionProgress.floatValue).sp
         }
     }
 
     // TODO: Remove for 1.2.0-alphaXX with all dependent functions. Note that MotionCarousel Api
     //  depends on this.
-    inner class MotionProperties internal constructor(id: String, tag: String?) {
+    public inner class MotionProperties internal constructor(id: String, tag: String?) {
         private var myId = id
         private var myTag = tag
 
-        fun id(): String {
+        public fun id(): String {
             return myId
         }
 
-        fun tag(): String? {
+        public fun tag(): String? {
             return myTag
         }
 
-        fun color(name: String): Color {
+        public fun color(name: String): Color {
             return measurer.getCustomColor(myId, name, motionProgress.floatValue)
         }
 
-        fun float(name: String): Float {
+        public fun float(name: String): Float {
             return measurer.getCustomFloat(myId, name, motionProgress.floatValue)
         }
 
-        fun int(name: String): Int {
+        public fun int(name: String): Int {
             return measurer.getCustomFloat(myId, name, motionProgress.floatValue).toInt()
         }
 
-        fun distance(name: String): Dp {
+        public fun distance(name: String): Dp {
             return measurer.getCustomFloat(myId, name, motionProgress.floatValue).dp
         }
 
-        fun fontSize(name: String): TextUnit {
+        public fun fontSize(name: String): TextUnit {
             return measurer.getCustomFloat(myId, name, motionProgress.floatValue).sp
         }
     }
@@ -868,38 +868,38 @@ internal constructor(
         ReplaceWith("customProperties(id)"),
     )
     @Composable
-    fun motionProperties(id: String): State<MotionProperties> =
+    public fun motionProperties(id: String): State<MotionProperties> =
         // TODO: There's no point on returning a [State] object, and probably no point on this being
         //  a Composable
         remember(id) { mutableStateOf(MotionProperties(id, null)) }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customProperties(id)"))
-    fun motionProperties(id: String, tag: String): MotionProperties {
+    public fun motionProperties(id: String, tag: String): MotionProperties {
         return MotionProperties(id, tag)
     }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customColor(id, name)"))
-    fun motionColor(id: String, name: String): Color {
+    public fun motionColor(id: String, name: String): Color {
         return measurer.getCustomColor(id, name, motionProgress.floatValue)
     }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customFloat(id, name)"))
-    fun motionFloat(id: String, name: String): Float {
+    public fun motionFloat(id: String, name: String): Float {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue)
     }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customInt(id, name)"))
-    fun motionInt(id: String, name: String): Int {
+    public fun motionInt(id: String, name: String): Int {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).toInt()
     }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customDistance(id, name)"))
-    fun motionDistance(id: String, name: String): Dp {
+    public fun motionDistance(id: String, name: String): Dp {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).dp
     }
 
     @Deprecated("Deprecated for naming consistency", ReplaceWith("customFontSize(id, name)"))
-    fun motionFontSize(id: String, name: String): TextUnit {
+    public fun motionFontSize(id: String, name: String): TextUnit {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).sp
     }
 
@@ -910,7 +910,7 @@ internal constructor(
      * Note that there are no type guarantees when setting or getting custom properties, so be
      * mindful of the value type used for it in the MotionScene.
      */
-    fun customProperties(id: String): CustomProperties = CustomProperties(id)
+    public fun customProperties(id: String): CustomProperties = CustomProperties(id)
 
     /**
      * Return the current [Color] value of the custom property [name], of the [id] layout.
@@ -919,7 +919,7 @@ internal constructor(
      *
      * This is a short version of: `customProperties(id).color(name)`.
      */
-    fun customColor(id: String, name: String): Color {
+    public fun customColor(id: String, name: String): Color {
         return measurer.getCustomColor(id, name, motionProgress.floatValue)
     }
 
@@ -930,7 +930,7 @@ internal constructor(
      *
      * This is a short version of: `customProperties(id).float(name)`.
      */
-    fun customFloat(id: String, name: String): Float {
+    public fun customFloat(id: String, name: String): Float {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue)
     }
 
@@ -941,7 +941,7 @@ internal constructor(
      *
      * This is a short version of: `customProperties(id).int(name)`.
      */
-    fun customInt(id: String, name: String): Int {
+    public fun customInt(id: String, name: String): Int {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).toInt()
     }
 
@@ -952,7 +952,7 @@ internal constructor(
      *
      * This is a short version of: `customProperties(id).distance(name)`.
      */
-    fun customDistance(id: String, name: String): Dp {
+    public fun customDistance(id: String, name: String): Dp {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).dp
     }
 
@@ -963,7 +963,7 @@ internal constructor(
      *
      * This is a short version of: `customProperties(id).fontSize(name)`.
      */
-    fun customFontSize(id: String, name: String): TextUnit {
+    public fun customFontSize(id: String, name: String): TextUnit {
         return measurer.getCustomFloat(id, name, motionProgress.floatValue).sp
     }
 }
@@ -974,7 +974,7 @@ internal fun motionLayoutMeasurePolicy(
     compositionSource: Ref<CompositionSource>,
     constraintSetStart: ConstraintSet,
     constraintSetEnd: ConstraintSet,
-    @SuppressWarnings("HiddenTypeParameter") transition: TransitionImpl,
+    transition: TransitionImpl,
     motionProgress: MutableFloatState,
     measurer: MotionMeasurer,
     optimizationLevel: Int,
@@ -1068,16 +1068,15 @@ internal fun Modifier.motionDebug(
         debugModifier = debugModifier.scale(scaleFactor)
     }
     if (showBounds || showKeyPositions || showPaths) {
-        debugModifier =
-            debugModifier.drawBehind {
-                with(measurer) {
-                    drawDebug(
-                        drawBounds = showBounds,
-                        drawPaths = showPaths,
-                        drawKeyPositions = showKeyPositions,
-                    )
-                }
+        debugModifier = debugModifier.drawBehind {
+            with(measurer) {
+                drawDebug(
+                    drawBounds = showBounds,
+                    drawPaths = showPaths,
+                    drawKeyPositions = showKeyPositions,
+                )
             }
+        }
     }
     return debugModifier
 }
@@ -1114,7 +1113,7 @@ internal enum class CompositionSource {
  * @see DebugFlags.All
  */
 @JvmInline
-value class DebugFlags internal constructor(private val flags: Int) {
+public value class DebugFlags internal constructor(private val flags: Int) {
     /**
      * @param showBounds Whether to show the bounds of widgets at the start and end of the current
      *   transition.
@@ -1123,7 +1122,7 @@ value class DebugFlags internal constructor(private val flags: Int) {
      * @param showKeyPositions Whether to show a diamond icon representing KeyPositions defined for
      *   each widget along the path.
      */
-    constructor(
+    public constructor(
         showBounds: Boolean = false,
         showPaths: Boolean = false,
         showKeyPositions: Boolean = false,
@@ -1134,18 +1133,18 @@ value class DebugFlags internal constructor(private val flags: Int) {
     )
 
     /** When enabled, shows the bounds of widgets at the start and end of the current transition. */
-    val showBounds: Boolean
+    public val showBounds: Boolean
         get() = flags and BOUNDS_FLAG > 0
 
     /** When enabled, shows the paths each widget will take through the current transition. */
-    val showPaths: Boolean
+    public val showPaths: Boolean
         get() = flags and PATHS_FLAG > 0
 
     /**
      * When enabled, shows a diamond icon representing KeyPositions defined for each widget along
      * the path.
      */
-    val showKeyPositions: Boolean
+    public val showKeyPositions: Boolean
         get() = flags and KEY_POSITIONS_FLAG > 0
 
     override fun toString(): String =
@@ -1155,20 +1154,20 @@ value class DebugFlags internal constructor(private val flags: Int) {
             "showKeyPositions = $showKeyPositions" +
             ")"
 
-    companion object {
+    public companion object {
         private const val BOUNDS_FLAG = 1
         private const val PATHS_FLAG = 1 shl 1
         private const val KEY_POSITIONS_FLAG = 1 shl 2
 
         /** [DebugFlags] instance with all flags disabled. */
-        val None = DebugFlags(0)
+        public val None: DebugFlags = DebugFlags(0)
 
         /**
          * [DebugFlags] instance with all flags enabled.
          *
          * Note that this includes any flags added in the future.
          */
-        val All = DebugFlags(-1)
+        public val All: DebugFlags = DebugFlags(-1)
     }
 }
 
@@ -1206,7 +1205,7 @@ private object Api30Impl {
  * See either [shouldInvalidateOnFixedWidth] or [shouldInvalidateOnFixedHeight] to learn more about
  * the intent behind rate-limiting invalidation.
  */
-class InvalidationStrategySpecification internal constructor() {
+public class InvalidationStrategySpecification internal constructor() {
     private var widthRateCount = 0
 
     /**
@@ -1226,7 +1225,7 @@ class InvalidationStrategySpecification internal constructor() {
      * A good starting point is setting [skipCount] to 3 and [threshold] to 5. You can then adjust
      * based on your expectations of performance and perceived smoothness.
      */
-    fun shouldInvalidateOnFixedWidth(
+    public fun shouldInvalidateOnFixedWidth(
         oldConstraints: Constraints,
         newConstraints: Constraints,
         skipCount: Int,
@@ -1270,7 +1269,7 @@ class InvalidationStrategySpecification internal constructor() {
      * A good starting point is setting [skipCount] to 3 and [threshold] to 5. You can then adjust
      * based on your expectations of performance and perceived smoothness.
      */
-    fun shouldInvalidateOnFixedHeight(
+    public fun shouldInvalidateOnFixedHeight(
         oldConstraints: Constraints,
         newConstraints: Constraints,
         skipCount: Int,
@@ -1577,7 +1576,7 @@ class InvalidationStrategySpecification internal constructor() {
  * @see InvalidationStrategySpecification.shouldInvalidateOnFixedWidth
  * @see InvalidationStrategySpecification.shouldInvalidateOnFixedHeight
  */
-class InvalidationStrategy(
+public class InvalidationStrategy(
     /**
      * Lambda to implement invalidation based on incoming [Constraints].
      *
@@ -1590,7 +1589,7 @@ class InvalidationStrategy(
      * /[shouldInvalidateOnFixedHeight][InvalidationStrategySpecification.shouldInvalidateOnFixedHeight]
      * to learn some strategies on how to improve invalidation due to incoming constraints.
      */
-    val onIncomingConstraints:
+    public val onIncomingConstraints:
         (InvalidationStrategySpecification.(old: Constraints, new: Constraints) -> Boolean)? =
         null,
     /**
@@ -1616,7 +1615,7 @@ class InvalidationStrategy(
      * See [InvalidationStrategy] to learn more about common strategies regarding invalidation on
      * onObservedStateChange.
      */
-    val onObservedStateChange: (() -> Unit)?,
+    public val onObservedStateChange: (() -> Unit)?,
 ) {
     private val scope = InvalidationStrategySpecification()
 
@@ -1626,25 +1625,25 @@ class InvalidationStrategy(
      *
      * Returns null to indicate that there's no user logic to handle this type of invalidation.
      */
-    internal val shouldInvalidate: ShouldInvalidateCallback? =
-        kotlin.run {
-            if (onIncomingConstraints == null) {
-                // Nothing to invalidate with, let MotionMeasurer decide
-                null
-            } else {
-                ShouldInvalidateCallback { old, new ->
-                    onIncomingConstraints.let { lambda -> scope.lambda(old, new) }
-                }
+    internal val shouldInvalidate: ShouldInvalidateCallback? = kotlin.run {
+        if (onIncomingConstraints == null) {
+            // Nothing to invalidate with, let MotionMeasurer decide
+            null
+        } else {
+            ShouldInvalidateCallback { old, new ->
+                onIncomingConstraints.let { lambda -> scope.lambda(old, new) }
             }
         }
+    }
 
-    companion object {
+    public companion object {
         /**
          * Default invalidation strategy for [MotionLayout].
          *
          * This will cause it to invalidate whenever its content recomposes or when it receives
          * different fixed size [Constraints] at the measure pass.
          */
-        val DefaultInvalidationStrategy = InvalidationStrategy(null, null)
+        public val DefaultInvalidationStrategy: InvalidationStrategy =
+            InvalidationStrategy(null, null)
     }
 }

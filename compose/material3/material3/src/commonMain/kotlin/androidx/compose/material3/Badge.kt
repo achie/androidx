@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.internal.ProvideContentColorTextStyle
+import androidx.compose.material3.internal.identityHashCode
 import androidx.compose.material3.tokens.BadgeTokens
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,11 +33,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.HorizontalRuler
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.Ruler
+import androidx.compose.ui.layout.RulerScope
 import androidx.compose.ui.layout.VerticalRuler
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFirst
 
@@ -61,7 +72,7 @@ import androidx.compose.ui.util.fastFirst
  * @param content the anchor to which this badge will be positioned
  */
 @Composable
-fun BadgedBox(
+public fun BadgedBox(
     badge: @Composable BoxScope.() -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
@@ -148,7 +159,7 @@ fun BadgedBox(
  * @param content optional content to be rendered inside this badge
  */
 @Composable
-fun Badge(
+public fun Badge(
     modifier: Modifier = Modifier,
     containerColor: Color = BadgeDefaults.containerColor,
     contentColor: Color = contentColorFor(containerColor),
@@ -189,46 +200,111 @@ fun Badge(
 }
 
 /** Default values used for [Badge] implementations. */
-object BadgeDefaults {
+public object BadgeDefaults {
     /** Default container color for a badge. */
-    val containerColor: Color
+    public val containerColor: Color
         @Composable get() = BadgeTokens.Color.value
 }
 
 /*@VisibleForTesting*/
 // Leading and trailing text padding when a badge is displaying text that is too long to fit in
 // a circular badge, e.g. if badge number is greater than 9.
-internal val BadgeWithContentHorizontalPadding = 4.dp
+internal val BadgeWithContentHorizontalPadding
+    get() = 4.dp
 
 /*@VisibleForTesting*/
 // Offsets for badge when there is short or long content
 // Horizontally align start/end of text badge 12.dp from the top end corner of its anchor
 // Vertical overlap with anchor is 14.dp
-internal val BadgeWithContentHorizontalOffset = 12.dp
-internal val BadgeWithContentVerticalOffset = 14.dp
+internal val BadgeWithContentHorizontalOffset
+    get() = 12.dp
+internal val BadgeWithContentVerticalOffset
+    get() = 14.dp
 
 /*@VisibleForTesting*/
 // Offsets for badge when there is no content
 // Horizontally align start/end of icon only badge 6.dp from the end/start edge of anchor
 // Vertical overlap with anchor is 6.dp
-internal val BadgeOffset = 6.dp
+internal val BadgeOffset
+    get() = 6.dp
 
 internal val BadgeTopRuler = HorizontalRuler()
 internal val BadgeEndRuler = VerticalRuler()
 
-internal fun Modifier.badgeBounds() =
-    this.layout { measurable, constraints ->
+internal fun Modifier.badgeBounds(): Modifier = this then BadgeBoundsElement
+
+private object BadgeBoundsElement : ModifierNodeElement<BadgeBoundsNode>() {
+    override fun create(): BadgeBoundsNode = BadgeBoundsNode()
+
+    override fun update(node: BadgeBoundsNode) {}
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "badgeBounds"
+    }
+
+    override fun hashCode(): Int = identityHashCode(this)
+
+    override fun equals(other: Any?) = (other === this)
+}
+
+private val IsBadgeRulerProvided: (Ruler) -> Boolean = {
+    it === BadgeEndRuler || it === BadgeTopRuler
+}
+
+private class BadgeBoundsNode : Modifier.Node(), LayoutModifierNode {
+    private var lastWidth: Int = -1
+    private var rulerProvider: RulerScope.(Ruler) -> Unit = {
+        BadgeEndRuler provides lastWidth.toFloat()
+        BadgeTopRuler provides 0f
+    }
+
+    override fun onReset() {
+        lastWidth = -1
+    }
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints,
+    ): MeasureResult {
         val placeable = measurable.measure(constraints)
-        layout(
-            width = placeable.width,
-            height = placeable.height,
-            rulers = {
+        if (placeable.width != lastWidth) {
+            val width = placeable.width
+            lastWidth = width
+            val widthFloat = width.toFloat()
+            rulerProvider = {
                 // use provides instead of provideRelative cause we will place relative
                 // in the badge code
-                BadgeEndRuler provides coordinates.size.width.toFloat()
+                BadgeEndRuler provides widthFloat
                 BadgeTopRuler provides 0f
-            },
+            }
+        }
+        return layout(
+            width = placeable.width,
+            height = placeable.height,
+            isRulerProvided = IsBadgeRulerProvided,
+            rulerProvider = rulerProvider,
         ) {
             placeable.place(0, 0)
         }
     }
+
+    override fun IntrinsicMeasureScope.minIntrinsicWidth(
+        measurable: IntrinsicMeasurable,
+        height: Int,
+    ): Int = measurable.minIntrinsicWidth(height)
+
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(
+        measurable: IntrinsicMeasurable,
+        width: Int,
+    ): Int = measurable.minIntrinsicHeight(width)
+
+    override fun IntrinsicMeasureScope.maxIntrinsicWidth(
+        measurable: IntrinsicMeasurable,
+        height: Int,
+    ): Int = measurable.maxIntrinsicWidth(height)
+
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(
+        measurable: IntrinsicMeasurable,
+        width: Int,
+    ): Int = measurable.maxIntrinsicHeight(width)
+}

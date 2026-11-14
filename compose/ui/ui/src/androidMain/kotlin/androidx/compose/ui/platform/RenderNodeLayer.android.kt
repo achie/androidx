@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.ReusableGraphicsLayerScope
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.nativePaint
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.GraphicLayerInfo
 import androidx.compose.ui.node.OwnedLayer
@@ -38,7 +39,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 
 /** RenderNode implementation of OwnedLayer. */
-@RequiresApi(Build.VERSION_CODES.M)
 internal class RenderNodeLayer(
     val ownerView: AndroidComposeView,
     drawBlock: (canvas: Canvas, parentLayer: GraphicsLayer?) -> Unit,
@@ -292,7 +292,7 @@ internal class RenderNodeLayer(
                     (softwareLayerPaint ?: Paint().also { softwareLayerPaint = it }).apply {
                         alpha = renderNode.alpha
                     }
-                androidCanvas.saveLayer(left, top, right, bottom, paint.asFrameworkPaint())
+                androidCanvas.saveLayer(left, top, right, bottom, paint.nativePaint)
             } else {
                 canvas.save()
             }

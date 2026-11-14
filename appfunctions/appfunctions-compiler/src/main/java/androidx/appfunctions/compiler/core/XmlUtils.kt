@@ -16,6 +16,7 @@
 
 package androidx.appfunctions.compiler.core
 
+import androidx.appfunctions.compiler.core.metadata.AppFunctionBehaviorHintsMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionComponentsMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionDataTypeMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionDeprecationMetadataDocument
@@ -23,6 +24,7 @@ import androidx.appfunctions.compiler.core.metadata.AppFunctionMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionNamedDataTypeMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionParameterMetadataDocument
 import androidx.appfunctions.compiler.core.metadata.AppFunctionResponseMetadataDocument
+import androidx.appfunctions.compiler.core.metadata.AppFunctionStringPatternDocument
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 
@@ -33,9 +35,15 @@ internal fun AppFunctionMetadataDocument.toXmlElement(doc: Document, elementName
     doc.createElement(elementName).apply {
         appendChild(doc.createElementWithTextNode("id", id))
 
-        appendChild(
-            doc.createElementWithTextNode("enabledByDefault", isEnabledByDefault.toString())
-        )
+        if (isEnabledByDefault != null) {
+            appendChild(
+                doc.createElementWithTextNode("enabledByDefault", isEnabledByDefault.toString())
+            )
+        }
+
+        if (scope != null) {
+            appendChild(doc.createElementWithTextNode("scope", scope))
+        }
 
         if (description.isNotEmpty()) {
             appendChild(doc.createElementWithTextNode("description", description))
@@ -59,6 +67,23 @@ internal fun AppFunctionMetadataDocument.toXmlElement(doc: Document, elementName
 
         if (deprecation != null) {
             appendChild(deprecation.toXmlElement(doc, "deprecation"))
+        }
+
+        if (accessLevel != null) {
+            appendChild(doc.createElementWithTextNode("accessLevel", accessLevel))
+        }
+
+        if (isCompatEnforcementEnabled != null) {
+            appendChild(
+                doc.createElementWithTextNode(
+                    "isCompatEnforcementEnabled",
+                    isCompatEnforcementEnabled.toString(),
+                )
+            )
+        }
+
+        if (behaviorHints != null) {
+            appendChild(behaviorHints.toXmlElement(doc, "behaviorHints"))
         }
     }
 
@@ -116,7 +141,24 @@ private fun AppFunctionDataTypeMetadataDocument.toXmlElement(
             appendChild(doc.createElementWithTextNode("enumValues", enumValue))
         }
 
+        for (pattern in patterns) {
+            appendChild(pattern.toXmlElement(doc, "patterns"))
+        }
+        if (format != null) {
+            appendChild(doc.createElementWithTextNode("format", format))
+        }
+
         appendChild(doc.createElementWithTextNode("type", type.toString()))
+    }
+
+private fun AppFunctionStringPatternDocument.toXmlElement(
+    doc: Document,
+    elementName: String,
+): Element =
+    doc.createElement(elementName).apply {
+        appendChild(doc.createElementWithTextNode("id", id))
+        appendChild(doc.createElementWithTextNode("type", type.toString()))
+        appendChild(doc.createElementWithTextNode("value", value))
     }
 
 private fun AppFunctionNamedDataTypeMetadataDocument.toXmlElement(
@@ -162,5 +204,18 @@ private fun AppFunctionDeprecationMetadataDocument.toXmlElement(
     return doc.createElement(elementName).apply {
         appendChild(doc.createElementWithTextNode("id", id))
         appendChild(doc.createElementWithTextNode("message", message))
+    }
+}
+
+private fun AppFunctionBehaviorHintsMetadataDocument.toXmlElement(
+    doc: Document,
+    elementName: String,
+): Element {
+    return doc.createElement(elementName).apply {
+        appendChild(doc.createElementWithTextNode("id", id))
+        appendChild(doc.createElementWithTextNode("isReadOnly", isReadOnly.toString()))
+        appendChild(doc.createElementWithTextNode("isDestructive", isDestructive.toString()))
+        appendChild(doc.createElementWithTextNode("isIdempotent", isIdempotent.toString()))
+        appendChild(doc.createElementWithTextNode("isOpenWorld", isOpenWorld.toString()))
     }
 }

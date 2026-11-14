@@ -32,22 +32,23 @@ import androidx.camera.camera2.compat.ZoomCompat
 import androidx.camera.camera2.compat.quirk.CameraQuirks
 import androidx.camera.camera2.compat.workaround.MeteringRegionCorrection
 import androidx.camera.camera2.compat.workaround.NoOpMeteringRegionCorrection
-import androidx.camera.camera2.compat.workaround.OutputSizesCorrector
 import androidx.camera.camera2.impl.CameraProperties
 import androidx.camera.camera2.impl.FocusMeteringControl
 import androidx.camera.camera2.impl.State3AControl
 import androidx.camera.camera2.impl.UseCaseCameraRequestControl
 import androidx.camera.camera2.impl.UseCaseThreads
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
+import androidx.camera.camera2.pipe.CameraGraph.Constants3A.METERING_REGIONS_DEFAULT
 import androidx.camera.camera2.pipe.Lock3ABehavior
 import androidx.camera.camera2.pipe.Result3A
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
 import androidx.camera.camera2.pipe.testing.FakeFrameMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.testing.FakeCameraProperties
 import androidx.camera.camera2.testing.FakeState3AControlCreator
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
 import androidx.camera.camera2.testing.FakeZoomCompat
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraControl
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.FocusMeteringResult
@@ -101,6 +102,7 @@ private const val CAMERA_ID_2 = "2" // 640x480 sensor size, not support AF_AUTO.
 private const val CAMERA_ID_3 = "3" // camera that does not support 3A regions.
 private const val CAMERA_ID_4 = "4" // camera 0 with LENS_FACING_FRONT
 private const val CAMERA_ID_5 = "5" // camera 0 supporting AF regions only
+private const val CAMERA_ID_6 = "6" // camera 0 NOT supporting AE/AWB locking
 
 private const val SENSOR_WIDTH = 640
 private const val SENSOR_HEIGHT = 480
@@ -1042,7 +1044,7 @@ class FocusMeteringControlTest {
 
         // Assert.
         assertFutureFailedWithOperationCancellation(actionResult)
-        assertThat(cancelResult[3, TimeUnit.SECONDS]?.status).isEqualTo(Result3A.Status.OK)
+        assertThat(cancelResult[3, TimeUnit.SECONDS]).isNull()
     }
 
     @Test
@@ -1438,6 +1440,238 @@ class FocusMeteringControlTest {
         }
     }
 
+    @Test
+    fun cancelFocusAndMetering_onlyAfSupported_unsupportedRegionsNotReset() = runTest {
+        // camera 5 supports 3 AF and 0 AE/AWB regions
+        focusMeteringControl = initFocusMeteringControl(cameraId = CAMERA_ID_5)
+
+        focusMeteringControl.cancelFocusAndMeteringAsync().await()
+        advanceUntilIdle()
+
+        with(fakeRequestControl) {
+            assertWithMessage("AF regions should be reset to default")
+                .that(cancelAfRegions)
+                .isEqualTo(METERING_REGIONS_DEFAULT.toList())
+            assertWithMessage("Unsupported AE regions should not be reset")
+                .that(cancelAeRegions)
+                .isNull()
+            assertWithMessage("Unsupported AWB regions should not be reset")
+                .that(cancelAwbRegions)
+                .isNull()
+        }
+    }
+
+    @Test
+    fun cancelFocusAndMetering_no3ARegionsSupported_noRegionsReset() = runTest {
+        // camera 3 supports 0 AF/AE/AWB regions
+        focusMeteringControl = initFocusMeteringControl(cameraId = CAMERA_ID_3)
+
+        focusMeteringControl.cancelFocusAndMeteringAsync().await()
+        advanceUntilIdle()
+
+        with(fakeRequestControl) {
+            assertWithMessage("Unsupported AF regions should not be reset")
+                .that(cancelAfRegions)
+                .isNull()
+            assertWithMessage("Unsupported AE regions should not be reset")
+                .that(cancelAeRegions)
+                .isNull()
+            assertWithMessage("Unsupported AWB regions should not be reset")
+                .that(cancelAwbRegions)
+                .isNull()
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_afterCancelFocusAndMetering_doesNotCancelInFlightUnlockResult() =
+        runTest {
+            val pendingCancelResult = CompletableDeferred<Result3A>()
+            fakeRequestControl.cancelFocusMeteringResult = pendingCancelResult
+
+            focusMeteringControl.cancelFocusAndMeteringAsync()
+            assertThat(pendingCancelResult.isActive).isTrue()
+
+            focusMeteringControl.startFocusAndMetering(FocusMeteringAction.Builder(point1).build())
+
+            assertThat(pendingCancelResult.isCancelled).isFalse()
+        }
+
+    @Test
+    fun startFocusAndMetering_autoCancelTriggered_cancelsInFlightFocusMeteringResult() = runTest {
+        fakeRequestControl.focusMeteringResult = CompletableDeferred()
+        fakeRequestControl.focusAutoCompletesAfterTimeout = false
+
+        val action =
+            FocusMeteringAction.Builder(point1)
+                .setAutoCancelDuration(500, TimeUnit.MILLISECONDS)
+                .build()
+        val future = focusMeteringControl.startFocusAndMetering(action, autoFocusTimeoutMs = 1000L)
+        val inFlightResult = fakeRequestControl.lastFocusMeteringResult!!
+        assertThat(inFlightResult.isActive).isTrue()
+
+        advanceUntilIdle()
+        delay(1000)
+
+        assertFutureFailedWithOperationCancellation(future)
+        assertThat(inFlightResult.isCancelled).isTrue()
+    }
+
+    @Test
+    fun startFocusAndMetering_lockingModeAeAfAwb_focusCallsWithCorrectLockBehaviors() = runTest {
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1)
+                .setLockingMode(
+                    FocusMeteringAction.FLAG_AE or
+                        FocusMeteringAction.FLAG_AF or
+                        FocusMeteringAction.FLAG_AWB
+                )
+                .build()
+        )
+
+        with(fakeRequestControl.focusMeteringCalls.last()) {
+            assertWithMessage("Wrong lock behavior for AE")
+                .that(aeLockBehavior)
+                .isEqualTo(Lock3ABehavior.AFTER_NEW_SCAN)
+            assertWithMessage("Wrong lock behavior for AF")
+                .that(afLockBehavior)
+                .isEqualTo(Lock3ABehavior.AFTER_NEW_SCAN)
+            assertWithMessage("Wrong lock behavior for AWB")
+                .that(awbLockBehavior)
+                .isEqualTo(Lock3ABehavior.AFTER_NEW_SCAN)
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_lockingModeAeAwb_focusCallsWithCorrectLockBehaviors() = runTest {
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1)
+                .setLockingMode(FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB)
+                .build()
+        )
+
+        with(fakeRequestControl.focusMeteringCalls.last()) {
+            assertWithMessage("Wrong lock behavior for AE")
+                .that(aeLockBehavior)
+                .isEqualTo(Lock3ABehavior.AFTER_NEW_SCAN)
+            assertWithMessage("Wrong lock behavior for AF").that(afLockBehavior).isNull()
+            assertWithMessage("Wrong lock behavior for AWB")
+                .that(awbLockBehavior)
+                .isEqualTo(Lock3ABehavior.AFTER_NEW_SCAN)
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_meteringPointAfLockingModeAe_noFocusingButRegionsUpdated() = runTest {
+        // Only add an AF point, but request only AE lock.
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1, FocusMeteringAction.FLAG_AF)
+                .setLockingMode(FocusMeteringAction.FLAG_AE)
+                .build()
+        )
+
+        // Since AE metering point is missing, AE locking request is ignored.
+        // Since AF locking is disabled, focus is not required, only AF region should be updated.
+        with(fakeRequestControl) {
+            assertWithMessage("Focus metering should not be started")
+                .that(focusMeteringCalls)
+                .isEmpty()
+            assertWithMessage("AF regions should be updated")
+                .that(afRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AE regions should be kept to default")
+                .that(aeRegions)
+                .containsExactlyElementsIn(METERING_REGIONS_DEFAULT)
+            assertWithMessage("AWB regions should be kept to default")
+                .that(awbRegions)
+                .containsExactlyElementsIn(METERING_REGIONS_DEFAULT)
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_lockingModeAfAeAwbButAeAwbUnsupported_focusingWithAfLock() = runTest {
+        // Use camera 6 which doesn't support AE/AWB lock
+        focusMeteringControl = initFocusMeteringControl(CAMERA_ID_6)
+
+        // Request AE lock
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1)
+                .setLockingMode(
+                    FocusMeteringAction.FLAG_AE or
+                        FocusMeteringAction.FLAG_AF or
+                        FocusMeteringAction.FLAG_AWB
+                )
+                .build()
+        )
+
+        with(fakeRequestControl.focusMeteringCalls.last()) {
+            assertWithMessage("Wrong lock behavior for AE").that(aeLockBehavior).isNull()
+            assertWithMessage("Wrong lock behavior for AF")
+                .that(afLockBehavior)
+                .isEqualTo(Lock3ABehavior.IMMEDIATE)
+            assertWithMessage("Wrong lock behavior for AWB").that(awbLockBehavior).isNull()
+
+            assertWithMessage("AE regions should be updated")
+                .that(aeRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AF regions should be updated")
+                .that(afRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AWB regions should be updated")
+                .that(awbRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_unsupportedAeLockRequested_noFocusingButRegionsUpdated() = runTest {
+        // Use camera 6 which doesn't support AE/AWB lock
+        focusMeteringControl = initFocusMeteringControl(CAMERA_ID_6)
+
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1).setLockingMode(FocusMeteringAction.FLAG_AE).build()
+        )
+
+        with(fakeRequestControl) {
+            assertWithMessage("Focus metering should not be started")
+                .that(focusMeteringCalls)
+                .isEmpty()
+            assertWithMessage("AE regions should be updated")
+                .that(aeRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AF regions should be updated")
+                .that(afRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AWB regions should be updated")
+                .that(awbRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+        }
+    }
+
+    @Test
+    fun startFocusAndMetering_unsupportedAwbLockRequested_noFocusingButRegionsUpdated() = runTest {
+        // Use camera 6 which doesn't support AE/AWB lock
+        focusMeteringControl = initFocusMeteringControl(CAMERA_ID_6)
+
+        startFocusMeteringAndAwait(
+            FocusMeteringAction.Builder(point1).setLockingMode(FocusMeteringAction.FLAG_AWB).build()
+        )
+
+        with(fakeRequestControl) {
+            assertWithMessage("Focus metering should not be started")
+                .that(focusMeteringCalls)
+                .isEmpty()
+            assertWithMessage("AE regions should be updated")
+                .that(aeRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AF regions should be updated")
+                .that(afRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+            assertWithMessage("AWB regions should be updated")
+                .that(awbRegions?.map { it.rect })
+                .containsExactly(M_RECT_1)
+        }
+    }
+
     private fun TestScope.assertFutureFocusCompleted(
         future: ListenableFuture<FocusMeteringResult>,
         isFocused: Boolean,
@@ -1521,19 +1755,12 @@ class FocusMeteringControlTest {
         zoomCompat: ZoomCompat = FakeZoomCompat(),
     ): FocusMeteringControl {
         runningUseCases.addAll(useCases)
+        val metadata = cameraPropertiesMap[cameraId]!!.metadata
+        val map = StreamConfigurationMapBuilder.newBuilder().build()
         return FocusMeteringControl(
                 cameraPropertiesMap[cameraId]!!,
                 MeteringRegionCorrection.Bindings.provideMeteringRegionCorrection(
-                    CameraQuirks(
-                        cameraPropertiesMap[cameraId]!!.metadata,
-                        StreamConfigurationMapCompat(
-                            StreamConfigurationMapBuilder.newBuilder().build(),
-                            OutputSizesCorrector(
-                                cameraPropertiesMap[cameraId]!!.metadata,
-                                StreamConfigurationMapBuilder.newBuilder().build(),
-                            ),
-                        ),
-                    )
+                    CameraQuirks(metadata, StreamConfigurationMapCompat(map, metadata))
                 ),
                 state3AControl,
                 useCaseThreads,
@@ -1551,7 +1778,11 @@ class FocusMeteringControlTest {
     ): FakeCameraProperties {
         val cameraId = CameraId(cameraIdStr)
         return FakeCameraProperties(
-            FakeCameraMetadata(cameraId = cameraId, characteristics = characteristics),
+            FakeCameraMetadata.fromTemplate(
+                template = HighEndDeviceTemplate,
+                cameraId = cameraId,
+                characteristicsOverrides = characteristics,
+            ),
             cameraId,
         )
     }
@@ -1586,6 +1817,8 @@ class FocusMeteringControlTest {
                 CameraCharacteristics.CONTROL_MAX_REGIONS_AF to 3,
                 CameraCharacteristics.CONTROL_MAX_REGIONS_AE to 3,
                 CameraCharacteristics.CONTROL_MAX_REGIONS_AWB to 1,
+                CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE to true,
+                CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE to true,
             )
 
         cameraPropertiesMap[CAMERA_ID_0] = initCameraProperties(CAMERA_ID_0, characteristics0)
@@ -1651,6 +1884,16 @@ class FocusMeteringControlTest {
                 )
 
         cameraPropertiesMap[CAMERA_ID_5] = initCameraProperties(CAMERA_ID_5, characteristics5)
+
+        // **** Camera 6 characteristics (same as Camera 0, but no AE/AWB lock support) **** //
+        val characteristics6 =
+            characteristics0 +
+                mapOf(
+                    CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE to false,
+                    CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE to false,
+                )
+
+        cameraPropertiesMap[CAMERA_ID_6] = initCameraProperties(CAMERA_ID_6, characteristics6)
     }
 
     private fun createPreview(suggestedStreamSpecResolution: Size) =
@@ -1676,7 +1919,12 @@ class FocusMeteringControlTest {
         cameraId: String = CAMERA_ID_0,
         properties: CameraProperties = cameraPropertiesMap[cameraId]!!,
         requestControl: UseCaseCameraRequestControl = fakeRequestControl,
-    ) = FakeState3AControlCreator.createState3AControl(properties, requestControl)
+    ) =
+        FakeState3AControlCreator.createState3AControl(
+            properties,
+            requestControl,
+            fakeUseCaseThreads,
+        )
 
     private fun FocusMeteringControl.startFocusAndMeteringAndAdvanceTestScope(
         testScope: TestScope,

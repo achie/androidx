@@ -18,6 +18,7 @@ package androidx.wear.compose.material3
 
 import android.annotation.SuppressLint
 import androidx.annotation.FloatRange
+import androidx.annotation.VisibleForTesting
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
@@ -36,6 +37,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
@@ -54,7 +56,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -63,17 +64,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
+import androidx.compose.runtime.annotation.RememberInComposition
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,16 +86,24 @@ import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.invalidateMeasurement
+import androidx.compose.ui.node.invalidatePlacement
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -101,9 +113,9 @@ import androidx.compose.ui.semantics.ScrollAxisRange
 import androidx.compose.ui.semantics.horizontalScrollAxisRange
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.GestureInclusion
@@ -123,10 +135,13 @@ import androidx.wear.compose.material3.SwipeToRevealDefaults.gestureInclusion
 import androidx.wear.compose.material3.tokens.SwipeToRevealTokens
 import androidx.wear.compose.materialcore.CustomTouchSlopProvider
 import androidx.wear.compose.materialcore.screenWidthDp
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -169,33 +184,55 @@ import kotlinx.coroutines.launch
  *
  * @sample androidx.wear.compose.material3.samples.SwipeToRevealSample
  *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * Example of [SwipeToReveal] with a Card composable, it reveals a taller button:
  *
  * @sample androidx.wear.compose.material3.samples.SwipeToRevealSingleActionCardSample
  *
- * Example of [SwipeToReveal] with a [TransformingLazyColumn], including resetting the [RevealState]
- * to [RevealValue.Covered] when scrolling:
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealSingleActionCardSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.TransformingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
  *
  * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithTransformingLazyColumnSample
  *
- * Example of [SwipeToReveal] with a [ScalingLazyColumn], including resetting the [RevealState] to
- * [RevealValue.Covered] when scrolling:
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealWithTransformingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
  *
  * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithScalingLazyColumnSample
  *
- * Example of [SwipeToReveal] with a [ScalingLazyColumn] that only executes the primary action when
- * fully swiped (and does not settle after partially revealing the action) by setting
- * [hasPartiallyRevealedState] = false (so [RevealState] does not need to be reset when scrolling):
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn] that
+ * only executes the primary action when fully swiped (and does not settle after partially revealing
+ * the action) by setting [hasPartiallyRevealedState] = false (so [RevealState] does not need to be
+ * reset when scrolling):
  *
  * @sample androidx.wear.compose.material3.samples.SwipeToRevealNoPartialRevealWithScalingLazyColumnSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealNoPartialRevealWithScalingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param primaryAction The primary action of this component.
  *   [SwipeToRevealScope.PrimaryActionButton] should be used to create a button for this slot. If
  *   [undoPrimaryAction] is provided, the undo button will be displayed after [SwipeToReveal] has
  *   animated to the revealed state and the primary action button has been hidden.
  * @param onSwipePrimaryAction A callback which will be triggered when a full swipe is performed. It
- *   is expected that the same callback is given to [SwipeToRevealScope.PrimaryActionButton]s
+ *   is expected that the same callback is given to [SwipeToRevealScope.PrimaryActionButton]'s
  *   onClick action. If [undoPrimaryAction] is provided, that will be displayed after the swipe
  *   gesture is completed.
+ * @param transformation The transformation for the SwipeToReveal when it's inside a dynamically
+ *   changing container such as [androidx.wear.compose.foundation.lazy.TransformingLazyColumn]. When
+ *   specified, container transformations (e.g. scaling and alpha modulation) are applied to the
+ *   entire component, ensuring revealed action buttons scale uniformly with the content.
  * @param modifier [Modifier] to be applied on the composable.
  * @param secondaryAction Optional secondary action of this component.
  *   [SwipeToRevealScope.SecondaryActionButton] should be used to create a button for this slot. If
@@ -227,15 +264,16 @@ import kotlinx.coroutines.launch
  *   anchors for both directions (see [bidirectionalGestureInclusion]). If it doesn't, then it
  *   allows gestures everywhere, except a zone on the left edge, which is used for swipe-to-dismiss
  *   (see [gestureInclusion]).
+ * @param actionContentSpacing The space between the main content and the actions.
  * @param content The content that will be initially displayed over the other actions provided.
  *   Custom accessibility actions should always be added to the content using [Modifier.semantics] -
  *   examples are shown in the code samples.
- * @see [androidx.wear.compose.foundation.SwipeToReveal]
  */
 @Composable
 public fun SwipeToReveal(
     primaryAction: @Composable SwipeToRevealScope.() -> Unit,
     onSwipePrimaryAction: () -> Unit,
+    transformation: SurfaceTransformation?,
     modifier: Modifier = Modifier,
     secondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
     undoPrimaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
@@ -249,6 +287,7 @@ public fun SwipeToReveal(
         } else {
             gestureInclusion(revealState)
         },
+    actionContentSpacing: Dp = SwipeToRevealDefaults.ActionContentSpacing,
     content: @Composable () -> Unit,
 ) {
     val direction = if (LocalLayoutDirection.current == LayoutDirection.Rtl) -1 else 1
@@ -263,15 +302,15 @@ public fun SwipeToReveal(
 
     val hapticFeedback = LocalHapticFeedback.current
 
-    @SuppressLint("PrimitiveInCollection")
-    val anchors: Set<RevealValue> =
-        if (revealDirection == Bidirectional) {
-            BidirectionalAnchors
-        } else {
-            UnidirectionAnchors
-        }
-
     val coroutineScope = rememberCoroutineScope()
+    DisposableEffect(revealState, coroutineScope) {
+        revealState.coroutineScope = coroutineScope
+        onDispose {
+            if (revealState.coroutineScope === coroutineScope) {
+                revealState.coroutineScope = null
+            }
+        }
+    }
     val swipeToRevealScope =
         remember(
             revealState,
@@ -304,12 +343,22 @@ public fun SwipeToReveal(
             }
         }
 
+    // Check for NoOpSurfaceTransformation because TransformingLazyColumn returns it
+    // when LocalReduceMotion is enabled, avoiding unnecessary graphicsLayer overhead.
+    val transformationModifier =
+        if (transformation != null && transformation != NoOpSurfaceTransformation) {
+            Modifier.graphicsLayer { with(transformation) { applyContainerTransformation() } }
+        } else {
+            Modifier
+        }
+
     CustomTouchSlopProvider(
         newTouchSlop = LocalViewConfiguration.current.touchSlop * CustomTouchSlopMultiplier
     ) {
         Box(
             modifier =
                 modifier
+                    .then(transformationModifier)
                     .fillMaxWidth()
                     .onGloballyPositioned { layoutCoordinates ->
                         globalPosition = layoutCoordinates
@@ -334,48 +383,19 @@ public fun SwipeToReveal(
                             allowSwipe &&
                                 revealState.currentValue != LeftRevealed &&
                                 revealState.currentValue != RightRevealed,
-                        flingBehavior =
-                            anchoredDraggableFlingBehavior(
-                                state = revealState.anchoredDraggableState,
-                                snapAnimationSpec = AnchoredDraggableDefaults.SnapAnimationSpec,
-                                positionalThreshold = AnchoredDraggableDefaults.PositionalThreshold,
-                                density = LocalDensity.current,
-                            ),
+                        flingBehavior = SwipeToRevealDefaults.flingBehavior(revealState),
                     )
-                    .onSizeChanged { size ->
-                        // Update the total width which will be used to calculate the anchors
-                        val width = size.width.toFloat()
-                        val draggableAnchors = DraggableAnchors {
-                            for (anchor in anchors) {
-                                when (anchor) {
-                                    Covered -> 0f
-                                    LeftRevealing,
-                                    RightRevealing -> {
-                                        if (secondaryAction == null && !hasPartiallyRevealedState) {
-                                            null
-                                        } else {
-                                            val result =
-                                                (anchorWidthPx / screenWidthPx) *
-                                                    width *
-                                                    anchorSideMultiplier(anchor, direction)
-
-                                            if (anchor == RightRevealing) {
-                                                revealState.revealThreshold = abs(result)
-                                            }
-
-                                            result
-                                        }
-                                    }
-                                    LeftRevealed,
-                                    RightRevealed -> {
-                                        width * anchorSideMultiplier(anchor, direction)
-                                    }
-                                    else -> null
-                                }?.let { anchor at it }
-                            }
-                        }
-                        revealState.anchoredDraggableState.updateAnchors(draggableAnchors)
-                    }
+                    .then(
+                        SwipeToRevealAnchorsElement(
+                            revealState = revealState,
+                            hasNoSecondaryAction = secondaryAction == null,
+                            hasPartiallyRevealedState = hasPartiallyRevealedState,
+                            revealDirection = revealDirection,
+                            direction = direction,
+                            screenWidthPx = screenWidthPx,
+                            anchorWidthPx = anchorWidthPx,
+                        )
+                    )
                     .then(
                         Modifier.semantics {
                             // Set a fake scroll range axis so that the AndroidComposeView can
@@ -407,13 +427,17 @@ public fun SwipeToReveal(
         ) {
             val canSwipeRight = revealDirection == Bidirectional
 
-            val swipingRight by remember { derivedStateOf { revealState.offset * direction > 0 } }
+            val swipingRight by
+                remember(direction) { derivedStateOf { revealState.offset * direction > 0 } }
 
             // Don't draw actions on the left side if the user cannot swipe right, and they are
             // currently swiping right
-            val shouldDrawActions by remember {
-                derivedStateOf { abs(revealState.offset) > 0 && (canSwipeRight || !swipingRight) }
-            }
+            val shouldDrawActions by
+                remember(canSwipeRight) {
+                    derivedStateOf {
+                        abs(revealState.offset) > 0 && (canSwipeRight || !swipingRight)
+                    }
+                }
 
             // Draw the buttons only when offset is greater than zero.
             if (shouldDrawActions) {
@@ -527,30 +551,43 @@ public fun SwipeToReveal(
                                         ),
                                     label = "RevealedContentAlpha",
                                 )
-                            var revealedContentHeight by remember { mutableIntStateOf(0) }
                             Row(
                                 modifier =
                                     Modifier.graphicsLayer { alpha = revealedContentAlpha.value }
-                                        .onSizeChanged { revealedContentHeight = it.height }
                                         .layout { measurable, constraints ->
+                                            val maxRevealWidth =
+                                                if (hideActions) {
+                                                        revealState.revealThreshold
+                                                    } else {
+                                                        // During lookahead, use the target anchor
+                                                        // position so lookahead measurement is not
+                                                        // invalidated on every animation frame.
+                                                        val rawOffset =
+                                                            if (isLookingAhead) {
+                                                                revealState.positionOf(
+                                                                    revealState.targetValue
+                                                                )
+                                                            } else {
+                                                                revealState.offset
+                                                            }
+                                                        if (rawOffset.isNaN()) 0f
+                                                        else abs(rawOffset)
+                                                    }
+                                                    .roundToInt()
+                                                    .coerceIn(
+                                                        constraints.minWidth,
+                                                        constraints.maxWidth,
+                                                    )
                                             val placeable =
                                                 measurable.measure(
-                                                    constraints.copy(
-                                                        maxWidth =
-                                                            if (hideActions) {
-                                                                    revealState.revealThreshold
-                                                                } else {
-                                                                    abs(revealState.offset)
-                                                                }
-                                                                .roundToInt()
-                                                    )
-                                                )
-                                            val yOffset =
-                                                calculateVerticalOffsetBasedOnScreenPosition(
-                                                    revealedContentHeight,
-                                                    globalPosition,
+                                                    constraints.copy(maxWidth = maxRevealWidth)
                                                 )
                                             layout(placeable.width, placeable.height) {
+                                                val yOffset =
+                                                    calculateVerticalOffsetBasedOnScreenPosition(
+                                                        placeable.height,
+                                                        globalPosition,
+                                                    )
                                                 placeable.placeRelative(0, yOffset)
                                             }
                                         },
@@ -560,18 +597,18 @@ public fun SwipeToReveal(
                                 if (!swipingRight) {
                                     // weight cannot be 0 so remove the composable when weight
                                     // becomes 0
+                                    Spacer(Modifier.size(actionContentSpacing))
                                     if (
                                         secondaryAction != null && secondaryActionWeight.value > 0
                                     ) {
-                                        Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                         ActionSlot(
                                             weight = secondaryActionWeight.value,
                                             opacity = secondaryActionAlpha,
                                         ) {
                                             secondaryAction(swipeToRevealScope)
                                         }
+                                        Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                     }
-                                    Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                     ActionSlot(opacity = primaryActionAlpha) {
                                         primaryAction(swipeToRevealScope)
                                     }
@@ -579,20 +616,20 @@ public fun SwipeToReveal(
                                     ActionSlot(opacity = primaryActionAlpha) {
                                         primaryAction(swipeToRevealScope)
                                     }
-                                    Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                     // weight cannot be 0 so remove the composable when weight
                                     // becomes 0
                                     if (
                                         secondaryAction != null && secondaryActionWeight.value > 0
                                     ) {
+                                        Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                         ActionSlot(
                                             weight = secondaryActionWeight.value,
                                             opacity = secondaryActionAlpha,
                                         ) {
                                             secondaryAction(swipeToRevealScope)
                                         }
-                                        Spacer(Modifier.size(SwipeToRevealDefaults.Padding))
                                     }
+                                    Spacer(Modifier.size(actionContentSpacing))
                                 }
                             }
                         }
@@ -601,44 +638,357 @@ public fun SwipeToReveal(
             }
             Row(
                 modifier =
-                    Modifier.absoluteOffset {
-                        val xOffset = revealState.requireOffset().roundToInt() * direction
-                        IntOffset(
-                            x = if (canSwipeRight) xOffset else xOffset.coerceAtMost(0),
-                            y = 0,
-                        )
-                    }
+                    SwipeToRevealOffsetElement(
+                        revealState = revealState,
+                        direction = direction,
+                        canSwipeRight = canSwipeRight,
+                    )
             ) {
                 content()
             }
-            LaunchedEffect(revealState.currentValue, revealState.lastActionType) {
-                if (revealState.currentValue != Covered) {
-                    revealState.resetLastState(revealState)
-                }
-                if (
-                    (revealState.currentValue == LeftRevealed ||
-                        revealState.currentValue == RightRevealed) &&
-                        revealState.lastActionType == RevealActionType.None
-                ) {
-                    // Full swipe triggers the main action, but does not set the click type.
-                    // Explicitly set the click type as main action when full swipe occurs.
-                    revealState.lastActionType = RevealActionType.PrimaryAction
-                    onSwipePrimaryAction()
+            LaunchedEffect(revealState, revealState.currentValue, revealState.isAnimationRunning) {
+                if (!revealState.isAnimationRunning) {
+                    if (revealState.currentValue == Covered) {
+                        revealState.lastActionType = RevealActionType.None
+                    } else {
+                        if (
+                            (revealState.currentValue == LeftRevealed ||
+                                revealState.currentValue == RightRevealed) &&
+                                revealState.lastActionType == RevealActionType.None
+                        ) {
+                            // Full swipe triggers the main action, but does not set the click type.
+                            // Explicitly set the click type as main action when full swipe occurs.
+                            revealState.lastActionType = RevealActionType.PrimaryAction
+                            onSwipePrimaryAction()
+                        }
+                        revealState.resetLastState(revealState)
+                    }
                 }
             }
             LaunchedEffect(revealState.targetValue) {
-                if (
-                    (revealState.targetValue == LeftRevealed ||
-                        revealState.targetValue == RightRevealed)
+                val target = revealState.targetValue
+                val current = revealState.currentValue
+                val isFullReveal = target == LeftRevealed || target == RightRevealed
+                val isPartialReveal = target == LeftRevealing || target == RightRevealing
+                if (isFullReveal) {
+                    performHapticFeedback(hapticFeedback, revealState)
+                } else if (
+                    isPartialReveal &&
+                        current == Covered &&
+                        abs(revealState.offset) < revealState.revealThreshold
                 ) {
-                    hapticFeedback.performHapticFeedback(
-                        HapticFeedbackType.GestureThresholdActivate
-                    )
+                    if (!revealState.skipPartialHaptic) {
+                        performHapticFeedback(hapticFeedback, revealState)
+                    }
                 }
+                revealState.skipPartialHaptic = false
             }
         }
     }
 }
+
+/**
+ * [SwipeToReveal] Material composable. This adds the option to configure up to two additional
+ * actions on a Composable: a mandatory [primaryAction] and an optional [secondaryAction]. These
+ * actions are initially hidden (unless [RevealState] is created with an initial value other than
+ * [RevealValue.Covered]) and revealed only when the [content] is swiped - the action buttons can
+ * then be clicked. A full swipe of the [content] triggers the [onSwipePrimaryAction] callback,
+ * which is expected to match the [primaryAction]'s onClick callback. Custom accessibility actions
+ * should always be added to the content using [Modifier.semantics] - examples are shown in the code
+ * samples.
+ *
+ * Adding undo actions allows users to undo a primary or secondary action that may have been
+ * performed inadvertently. The corresponding undo action is displayed when the primary or secondary
+ * action is triggered via click or swipe and after [SwipeToReveal] has animated to the revealed
+ * state. After the undo action is clicked, [SwipeToReveal] animates back to the
+ * [RevealValue.Covered] state and the user can then swipe to reveal if they wish to perform another
+ * action.
+ *
+ * For destructive actions like "Delete", consider making this the primary action, and providing the
+ * [undoPrimaryAction].
+ *
+ * When using SwipeToReveal with large content items like [Card]s, it is recommended to set the
+ * height of [SwipeToRevealScope.PrimaryActionButton] and [SwipeToRevealScope.SecondaryActionButton]
+ * to [SwipeToRevealDefaults.LargeActionButtonHeight] using [Modifier.height] - in other cases, the
+ * [Button] displayed by [SwipeToReveal] has height [ButtonDefaults.Height] by default. It is
+ * recommended to always use the default undo button height as created by
+ * [SwipeToRevealScope.UndoActionButton].
+ *
+ * If [hasPartiallyRevealedState] = true, [RevealState] should be reset to [RevealValue.Covered] by
+ * the caller when scrolling occurs. This is because the revealed actions are vertically centered on
+ * the visible part of the content when the actions are revealed and, if the [RevealState] is not
+ * reset to [RevealValue.Covered], actions for tall items would appear off-center when the list is
+ * scrolled. See the code samples for examples.
+ *
+ * If [revealDirection] is set to [RevealDirection.Bidirectional], the actions revealed on swipe are
+ * the same on both sides.
+ *
+ * Example of [SwipeToReveal] with primary and secondary actions and custom accessibility actions:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a Card composable, it reveals a taller button:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealSingleActionCardSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealSingleActionCardSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.TransformingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithTransformingLazyColumnSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealWithTransformingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithScalingLazyColumnSample
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn] that
+ * only executes the primary action when fully swiped (and does not settle after partially revealing
+ * the action) by setting [hasPartiallyRevealedState] = false (so [RevealState] does not need to be
+ * reset when scrolling):
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealNoPartialRevealWithScalingLazyColumnSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealNoPartialRevealWithScalingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * @param primaryAction The primary action of this component.
+ *   [SwipeToRevealScope.PrimaryActionButton] should be used to create a button for this slot. If
+ *   [undoPrimaryAction] is provided, the undo button will be displayed after [SwipeToReveal] has
+ *   animated to the revealed state and the primary action button has been hidden.
+ * @param onSwipePrimaryAction A callback which will be triggered when a full swipe is performed. It
+ *   is expected that the same callback is given to [SwipeToRevealScope.PrimaryActionButton]'s
+ *   onClick action. If [undoPrimaryAction] is provided, that will be displayed after the swipe
+ *   gesture is completed.
+ * @param modifier [Modifier] to be applied on the composable.
+ * @param secondaryAction Optional secondary action of this component.
+ *   [SwipeToRevealScope.SecondaryActionButton] should be used to create a button for this slot. If
+ *   [undoSecondaryAction] is provided, the undo button will be displayed after [SwipeToReveal] has
+ *   animated to the revealed state and the secondary action button has been hidden.
+ * @param undoPrimaryAction Optional undo action for the primary action of this component.
+ *   [SwipeToRevealScope.UndoActionButton] should be used to create a button for this slot.
+ *   Displayed after [SwipeToReveal] has animated to the revealed state and the primary action
+ *   button has been hidden.
+ * @param undoSecondaryAction Optional undo action for the secondary action of this component,
+ *   displayed after [SwipeToReveal] has animated to the revealed state and the secondary action
+ *   button has been hidden. [undoSecondaryAction] is ignored if the secondary action has not been
+ *   specified. [SwipeToRevealScope.UndoActionButton] should be used to create a button for this
+ *   slot.
+ * @param revealState [RevealState] of the [SwipeToReveal].
+ * @param revealDirection The direction from which [SwipeToReveal] can reveal the actions. It is
+ *   strongly recommended to respect the default value of [RightToLeft] to avoid conflicting with
+ *   the system-side swipe-to-dismiss gesture.
+ * @param hasPartiallyRevealedState Determines whether the intermediate states [RightRevealing] and
+ *   [LeftRevealing] are used. These indicate a settled state, where the primary action is partially
+ *   revealed. By default, partially revealed state is allowed for single actions - set to false to
+ *   make actions complete when swiped instead. This flag has no effect if a secondary action is
+ *   provided (when there are two actions, the component always allows the partially revealed
+ *   states).
+ * @param gestureInclusion Provides fine-grained control so that touch gestures can be excluded when
+ *   they start in a certain region. An instance of [GestureInclusion] can be passed in here which
+ *   will determine via [GestureInclusion.ignoreGestureStart] whether the gesture should proceed or
+ *   not. By default, [gestureInclusion] allows gestures everywhere for when [revealState] contains
+ *   anchors for both directions (see [bidirectionalGestureInclusion]). If it doesn't, then it
+ *   allows gestures everywhere, except a zone on the left edge, which is used for swipe-to-dismiss
+ *   (see [gestureInclusion]).
+ * @param content The content that will be initially displayed over the other actions provided.
+ *   Custom accessibility actions should always be added to the content using [Modifier.semantics] -
+ *   examples are shown in the code samples.
+ */
+@Deprecated(
+    message =
+        "This overload is deprecated. Please use the new overload with the actionContentSpacing parameter.",
+    level = DeprecationLevel.HIDDEN,
+)
+@Composable
+public fun SwipeToReveal(
+    primaryAction: @Composable SwipeToRevealScope.() -> Unit,
+    onSwipePrimaryAction: () -> Unit,
+    modifier: Modifier = Modifier,
+    secondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    undoPrimaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    undoSecondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    revealState: RevealState = rememberRevealState(),
+    revealDirection: RevealDirection = RightToLeft,
+    hasPartiallyRevealedState: Boolean = true,
+    gestureInclusion: GestureInclusion =
+        if (revealDirection == Bidirectional) {
+            bidirectionalGestureInclusion
+        } else {
+            gestureInclusion(revealState)
+        },
+    content: @Composable () -> Unit,
+) {
+    SwipeToReveal(
+        primaryAction = primaryAction,
+        onSwipePrimaryAction = onSwipePrimaryAction,
+        modifier = modifier,
+        actionContentSpacing = SwipeToRevealDefaults.ActionContentSpacing,
+        secondaryAction = secondaryAction,
+        undoPrimaryAction = undoSecondaryAction,
+        undoSecondaryAction = undoSecondaryAction,
+        revealState = revealState,
+        revealDirection = revealDirection,
+        hasPartiallyRevealedState = hasPartiallyRevealedState,
+        gestureInclusion = gestureInclusion,
+        content = content,
+    )
+}
+
+/**
+ * [SwipeToReveal] material composable component which allows to reveal hidden actions via swipe
+ * gesture.
+ *
+ * It is recommended to use [SwipeToRevealDefaults.ActionContentSpacing] as spacing between the
+ * actions and the content.
+ *
+ * For actions [SwipeToRevealScope.PrimaryActionButton], [SwipeToRevealScope.SecondaryActionButton]
+ * and [SwipeToRevealScope.UndoActionButton] can be used.
+ *
+ * Example of [SwipeToReveal] with a Card composable, it reveals a taller button:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealSingleActionCardSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealSingleActionCardSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.TransformingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithTransformingLazyColumnSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealWithTransformingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn],
+ * including resetting the [RevealState] to [RevealValue.Covered] when scrolling:
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealWithScalingLazyColumnSample
+ *
+ * Example of [SwipeToReveal] with a [androidx.wear.compose.foundation.lazy.ScalingLazyColumn] that
+ * only executes the primary action when fully swiped (and does not settle after partially revealing
+ * the action) by setting [hasPartiallyRevealedState] = false (so [RevealState] does not need to be
+ * reset when scrolling):
+ *
+ * @sample androidx.wear.compose.material3.samples.SwipeToRevealNoPartialRevealWithScalingLazyColumnSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SwipeToRevealNoPartialRevealWithScalingLazyColumnSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * @param primaryAction The primary action of this component.
+ *   [SwipeToRevealScope.PrimaryActionButton] should be used to create a button for this slot. If
+ *   [undoPrimaryAction] is provided, the undo button will be displayed after [SwipeToReveal] has
+ *   animated to the revealed state and the primary action button has been hidden.
+ * @param onSwipePrimaryAction A callback which will be triggered when a full swipe is performed. It
+ *   is expected that the same callback is given to [SwipeToRevealScope.PrimaryActionButton]'s
+ *   onClick action. If [undoPrimaryAction] is provided, that will be displayed after the swipe
+ *   gesture is completed.
+ * @param modifier [Modifier] to be applied on the composable.
+ * @param secondaryAction Optional secondary action of this component.
+ *   [SwipeToRevealScope.SecondaryActionButton] should be used to create a button for this slot. If
+ *   [undoSecondaryAction] is provided, the undo button will be displayed after [SwipeToReveal] has
+ *   animated to the revealed state and the secondary action button has been hidden.
+ * @param undoPrimaryAction Optional undo action for the primary action of this component.
+ *   [SwipeToRevealScope.UndoActionButton] should be used to create a button for this slot.
+ *   Displayed after [SwipeToReveal] has animated to the revealed state and the primary action
+ *   button has been hidden.
+ * @param undoSecondaryAction Optional undo action for the secondary action of this component,
+ *   displayed after [SwipeToReveal] has animated to the revealed state and the secondary action
+ *   button has been hidden. [undoSecondaryAction] is ignored if the secondary action has not been
+ *   specified. [SwipeToRevealScope.UndoActionButton] should be used to create a button for this
+ *   slot.
+ * @param revealState [RevealState] of the [SwipeToReveal].
+ * @param revealDirection The direction from which [SwipeToReveal] can reveal the actions. It is
+ *   strongly recommended to respect the default value of [RightToLeft] to avoid conflicting with
+ *   the system-side swipe-to-dismiss gesture.
+ * @param hasPartiallyRevealedState Determines whether the intermediate states [RightRevealing] and
+ *   [LeftRevealing] are used. These indicate a settled state, where the primary action is partially
+ *   revealed. By default, partially revealed state is allowed for single actions - set to false to
+ *   make actions complete when swiped instead. This flag has no effect if a secondary action is
+ *   provided (when there are two actions, the component always allows the partially revealed
+ *   states).
+ * @param gestureInclusion Provides fine-grained control so that touch gestures can be excluded when
+ *   they start in a certain region. An instance of [GestureInclusion] can be passed in here which
+ *   will determine via [GestureInclusion.ignoreGestureStart] whether the gesture should proceed or
+ *   not. By default, [gestureInclusion] allows gestures everywhere for when [revealState] contains
+ *   anchors for both directions (see [bidirectionalGestureInclusion]). If it doesn't, then it
+ *   allows gestures everywhere, except a zone on the left edge, which is used for swipe-to-dismiss
+ *   (see [gestureInclusion]).
+ * @param actionContentSpacing The space between the main content and the actions.
+ * @param content The content that will be initially displayed over the other actions provided.
+ *   Custom accessibility actions should always be added to the content using [Modifier.semantics] -
+ *   examples are shown in the code samples.
+ */
+@Composable
+public fun SwipeToReveal(
+    primaryAction: @Composable SwipeToRevealScope.() -> Unit,
+    onSwipePrimaryAction: () -> Unit,
+    modifier: Modifier = Modifier,
+    secondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    undoPrimaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    undoSecondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
+    revealState: RevealState = rememberRevealState(),
+    revealDirection: RevealDirection = RightToLeft,
+    hasPartiallyRevealedState: Boolean = true,
+    gestureInclusion: GestureInclusion =
+        if (revealDirection == Bidirectional) {
+            bidirectionalGestureInclusion
+        } else {
+            gestureInclusion(revealState)
+        },
+    actionContentSpacing: Dp = SwipeToRevealDefaults.ActionContentSpacing,
+    content: @Composable () -> Unit,
+) {
+    SwipeToReveal(
+        primaryAction = primaryAction,
+        onSwipePrimaryAction = onSwipePrimaryAction,
+        transformation = null,
+        modifier = modifier,
+        secondaryAction = secondaryAction,
+        undoPrimaryAction = undoPrimaryAction,
+        undoSecondaryAction = undoSecondaryAction,
+        revealState = revealState,
+        revealDirection = revealDirection,
+        hasPartiallyRevealedState = hasPartiallyRevealedState,
+        gestureInclusion = gestureInclusion,
+        actionContentSpacing = actionContentSpacing,
+        content = content,
+    )
+}
+
+private fun calculateRevealedRatio(
+    hasNoSecondaryAction: Boolean,
+    anchorWidthPx: Float,
+    screenWidthPx: Float,
+    revealThreshold: Float,
+    revealingAnchorPx: Float,
+): Float =
+    if (
+        hasNoSecondaryAction ||
+            screenWidthPx <= revealingAnchorPx ||
+            anchorWidthPx / screenWidthPx == 1f
+    ) {
+        0.5f
+    } else {
+        ((revealThreshold - revealingAnchorPx) / (screenWidthPx - revealingAnchorPx)).coerceAtLeast(
+            0f
+        )
+    }
 
 /**
  * Scope for the actions of a [SwipeToReveal] composable. Used to define the primary, secondary,
@@ -703,8 +1053,8 @@ internal constructor(
      * @param onClick Callback to be executed when the action is performed via a button click.
      * @param icon Icon composable to be displayed for this action.
      * @param modifier [Modifier] to be applied on the composable.
-     * @param containerColor Container color for this action.This can be [Color.Unspecified], and in
-     *   case it is, a default color will be used.
+     * @param containerColor Container color for this action. This can be [Color.Unspecified], and
+     *   in case it is, a default color will be used.
      * @param contentColor Content color for this action. This can be [Color.Unspecified], and in
      *   case it is, a default color will be used.
      */
@@ -780,6 +1130,9 @@ public object SwipeToRevealDefaults {
      */
     public val LeftEdgeZoneFraction: Float = 0.15f
 
+    /** The default space between actions and content. */
+    public val ActionContentSpacing: Dp = 4.dp
+
     /**
      * The default behaviour for when [SwipeToReveal] should handle gestures. In this implementation
      * of [GestureInclusion], swipe events that originate in the left edge of the screen (as
@@ -801,6 +1154,49 @@ public object SwipeToRevealDefaults {
      */
     public val bidirectionalGestureInclusion: GestureInclusion
         get() = BidirectionalGestureInclusion
+
+    /**
+     * Creates and remembers the default fling behavior used by the SwipeToReveal component.
+     *
+     * This specialized behavior handles the physics of the swipe gesture, ensuring compliance with
+     * Wear Compose Material 3 UX guidelines.
+     *
+     * This should be used when building custom gesture modifiers (like nested scrolling) that need
+     * to perform a fling on a [RevealState] while maintaining the exact feel of the native
+     * component.
+     *
+     * @param revealState The [RevealState] associated with the component.
+     * @return A [TargetedFlingBehavior] configured for SwipeToReveal gestures.
+     */
+    @Composable
+    public fun flingBehavior(revealState: RevealState): TargetedFlingBehavior {
+        val density = LocalDensity.current
+
+        return remember(revealState, density) {
+            anchoredDraggableFlingBehavior(
+                state = revealState.anchoredDraggableState,
+                snapAnimationSpec = AnchoredDraggableDefaults.SnapAnimationSpec,
+                positionalThreshold = { distance, isCompleting ->
+                    if (isCompleting) {
+                        distance * revealState.revealedRatio
+                    } else {
+                        AnchoredDraggableDefaults.PositionalThreshold(distance)
+                    }
+                },
+                density = density,
+                onFastFling = {
+                    // Fast fling before user reaches Revealing anchors will skip second haptic
+                    // feedback.
+                    if (
+                        revealState.targetValue == LeftRevealing ||
+                            revealState.targetValue == RightRevealing
+                    ) {
+                        revealState.skipPartialHaptic = true
+                    }
+                },
+            )
+        }
+    }
 
     /** Width that's required to display both actions in a [SwipeToReveal] composable. */
     internal val DoubleActionAnchorWidth: Dp = 130.dp
@@ -1005,7 +1401,7 @@ internal data class SwipeToRevealAction(
 
     /**
      * Icon composable to be displayed for this action. This accepts a scale parameter that should
-     * be used to increase icon icon when an action is fully revealed.
+     * be used to increase icon size when an action is fully revealed.
      */
     val icon: @Composable (() -> Unit)?,
 
@@ -1120,13 +1516,28 @@ public value class RevealDirection private constructor(private val value: Int) {
 }
 
 /**
+ * Scope used for suspending drag blocks. Allows setting [RevealState.offset] to a new value.
+ *
+ * @see [RevealState.drag] to learn how to start the drag and get the access to this scope.
+ */
+public interface SwipeToRevealDragScope {
+    /**
+     * Assign a new value for an offset value for [RevealState].
+     *
+     * @param newOffset new value for [RevealState.offset]. Will be coerced to the boundaries
+     *   defined by the available reveal targets
+     */
+    public fun dragTo(newOffset: Float)
+}
+
+/**
  * A class to keep track of the state of the composable. It can be used to customise the behavior
  * and state of the composable.
  *
  * @param initialValue The initial value of this state.
  * @constructor Create a [RevealState].
  */
-public class RevealState(initialValue: RevealValue) {
+public class RevealState @RememberInComposition constructor(initialValue: RevealValue) {
     /** The current [RevealValue] based on the status of the component. */
     public val currentValue: RevealValue
         get() = anchoredDraggableState.settledValue
@@ -1145,7 +1556,7 @@ public class RevealState(initialValue: RevealValue) {
 
     /** The current amount by which the revealable content has been revealed. */
     public val offset: Float
-        get() = anchoredDraggableState.offset
+        @FrequentlyChangingValue get() = anchoredDraggableState.offset
 
     /**
      * Snaps to the [targetValue] without any animation (if a previous item was already revealed,
@@ -1159,6 +1570,9 @@ public class RevealState(initialValue: RevealValue) {
             resetLastState(this)
         }
         anchoredDraggableState.snapTo(targetValue)
+        if (targetValue == Covered) {
+            lastActionType = RevealActionType.None
+        }
     }
 
     /**
@@ -1183,24 +1597,101 @@ public class RevealState(initialValue: RevealValue) {
         try {
             anchoredDraggableState.animateTo(targetValue)
         } finally {
-            if (targetValue == Covered) {
+            if (targetValue == Covered && currentValue == Covered) {
                 lastActionType = RevealActionType.None
             }
         }
     }
 
+    /**
+     * Drag by the supplied [delta], coerce it in the swipe bounds and return the remaining
+     * available. These bounds are determined by the screen width and the configured
+     * [RevealDirection].
+     *
+     * @param delta The delta (positive or negative) to drag
+     * @return The consumed delta
+     */
+    public fun dispatchRawDelta(delta: Float): Float {
+        return anchoredDraggableState.dispatchRawDelta(delta)
+    }
+
+    /**
+     * Get the offset position for an associated [RevealValue]
+     *
+     * @param revealValue The value to look up
+     * @return The offset position of the revealValue, or [Float.NaN] if the revealValue does not
+     *   exist or not supported by current SwipeToReveal and RevealState instance
+     */
+    public fun positionOf(revealValue: RevealValue): Float {
+        return anchoredDraggableState.anchors.positionOf(revealValue)
+    }
+
+    /**
+     * Call this function to take control of the drag logic and mutate the offset.
+     *
+     * All actions that change the [offset] of this [RevealState] must be performed within a [drag]
+     * block (even if they don't call any other methods on this object) in order to guarantee that
+     * mutual exclusion is enforced. The offset provided to [SwipeToRevealDragScope.dragTo] will be
+     * coerced to the interval of the min/max offset values of [RevealValue].
+     *
+     * If [drag] is called from elsewhere with the [dragPriority] higher or equal to ongoing drag,
+     * the ongoing drag will be cancelled.
+     *
+     * <b>If layout dimensions change while the [block] is being executed, it will be cancelled and
+     * re-executed.</b>
+     *
+     * @param dragPriority of the drag operation
+     * @param block The suspending block where the drag mutations are performed
+     */
+    public suspend fun drag(
+        dragPriority: MutatePriority = MutatePriority.Default,
+        block: suspend SwipeToRevealDragScope.() -> Unit,
+    ) {
+        anchoredDraggableState.anchoredDrag(dragPriority) { anchors ->
+            val swipeToRevealDragScope =
+                object : SwipeToRevealDragScope {
+                    override fun dragTo(newOffset: Float) {
+                        val min = anchors.minPosition()
+                        val max = anchors.maxPosition()
+                        val coercedOffset = newOffset.coerceIn(min, max)
+                        this@anchoredDrag.dragTo(coercedOffset)
+                    }
+                }
+            swipeToRevealDragScope.block()
+        }
+    }
+
     internal val anchoredDraggableState = AnchoredDraggableState(initialValue = initialValue)
+
+    /**
+     * The flag indicates that partial haptics should be skipped when there is fling before swipe
+     * reaches Revealing anchors.
+     */
+    internal var skipPartialHaptic: Boolean = false
+
+    /**
+     * Timestamp of the last haptic feedback, to prevent the case that revealed haptic feedback is
+     * too close to the first one.
+     */
+    internal var lastHapticFeedbackTime: Long = 0
 
     internal var lastActionType: RevealActionType by mutableStateOf(RevealActionType.None)
 
+    internal var coroutineScope: CoroutineScope? = null
+
     /**
-     * The threshold, in pixels, where the revealed actions are fully visible but the existing
-     * content would be left in place if the reveal action was stopped. This threshold is defined by
-     * the [RightRevealing] anchor. If there is no such anchor defined for [RightRevealing], it
-     * returns 0.0f.
+     * The threshold, in pixels, beyond which a full swipe is triggered. This is calculated as a
+     * fraction of the screen width, adjusted for the component's width if it is smaller than the
+     * full screen.
      */
     /* @FloatRange(from = 0.0) */
     internal var revealThreshold: Float by mutableFloatStateOf(0.0f)
+
+    /**
+     * The ratio used to calculate the positional threshold while swiping between Revealing and
+     * Revealed states.
+     */
+    internal var revealedRatio: Float = 0.5f
 
     /**
      * Require the current offset.
@@ -1215,19 +1706,29 @@ public class RevealState(initialValue: RevealValue) {
      * [RightRevealed], the action has been performed and it will not be reset.
      */
     internal suspend fun resetLastState(currentState: RevealState) {
-        val oldState = SingleSwipeCoordinator.lastUpdatedState.getAndSet(currentState)
-        if (currentState != oldState) {
-            oldState?.let {
-                if (it.currentValue == RightRevealing || it.currentValue == LeftRevealing) {
-                    it.animateTo(Covered)
+        if (SingleSwipeCoordinator.lastUpdatedState.get()?.get() === currentState) return
+        val oldState =
+            SingleSwipeCoordinator.lastUpdatedState.getAndSet(WeakReference(currentState))?.get()
+        if (oldState != null && oldState !== currentState) {
+            if (oldState.currentValue == RightRevealing || oldState.currentValue == LeftRevealing) {
+                val scope = oldState.coroutineScope
+                if (scope != null && scope.isActive) {
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        oldState.animateTo(Covered)
+                    }
+                } else {
+                    oldState.snapTo(Covered)
                 }
             }
         }
     }
 
     /** A singleton instance to keep track of the [RevealState] which was modified the last time. */
+    @VisibleForTesting
     internal object SingleSwipeCoordinator {
-        var lastUpdatedState: AtomicReference<RevealState?> = AtomicReference(null)
+        // Weak, so that the last revealed item (and the composition it belongs to) can be
+        // garbage collected once it leaves the composition.
+        val lastUpdatedState: AtomicReference<WeakReference<RevealState>?> = AtomicReference(null)
     }
 }
 
@@ -1419,9 +1920,6 @@ private fun endFadeInFraction(hasSecondaryAction: Boolean) =
         SINGLE_ICON_FADE_IN_END_THRESHOLD_AS_SCREEN_WIDTH_PERCENTAGE
     }
 
-private fun anchorSideMultiplier(anchor: RevealValue, direction: Int) =
-    direction * (if (anchor == RightRevealing || anchor == RightRevealed) -1 else 1)
-
 /**
  * Copy from [androidx.compose.foundation.gestures.anchoredDraggableFlingBehavior], overriding the
  * value passed in `velocityThreshold` to [anchoredDraggableLayoutInfoProvider].
@@ -1429,8 +1927,9 @@ private fun anchorSideMultiplier(anchor: RevealValue, direction: Int) =
 private fun <T> anchoredDraggableFlingBehavior(
     state: AnchoredDraggableState<T>,
     density: Density,
-    positionalThreshold: (totalDistance: Float) -> Float,
+    positionalThreshold: (totalDistance: Float, isCompleting: Boolean) -> Float,
     snapAnimationSpec: AnimationSpec<Float>,
+    onFastFling: () -> Unit,
 ): TargetedFlingBehavior =
     snapFlingBehavior(
         decayAnimationSpec = NoOpDecayAnimationSpec,
@@ -1439,7 +1938,8 @@ private fun <T> anchoredDraggableFlingBehavior(
             anchoredDraggableLayoutInfoProvider(
                 state = state,
                 positionalThreshold = positionalThreshold,
-                velocityThreshold = { with(density) { VelocityThreshold.toPx() } },
+                velocityThreshold = { threshold -> with(density) { threshold.toPx() } },
+                onFastFling = onFastFling,
             ),
     )
 
@@ -1469,8 +1969,9 @@ private val NoOpDecayAnimationSpec: DecayAnimationSpec<Float> =
 /** Exact copy from [androidx.compose.foundation.gestures.AnchoredDraggableLayoutInfoProvider]. */
 private fun <T> anchoredDraggableLayoutInfoProvider(
     state: AnchoredDraggableState<T>,
-    positionalThreshold: (totalDistance: Float) -> Float,
-    velocityThreshold: () -> Float,
+    positionalThreshold: (totalDistance: Float, isCompleting: Boolean) -> Float,
+    velocityThreshold: (threshold: Dp) -> Float,
+    onFastFling: () -> Unit,
 ): SnapLayoutInfoProvider =
     object : SnapLayoutInfoProvider {
 
@@ -1485,6 +1986,7 @@ private fun <T> anchoredDraggableLayoutInfoProvider(
                     velocity = velocity,
                     positionalThreshold = positionalThreshold,
                     velocityThreshold = velocityThreshold,
+                    onFastFling = onFastFling,
                 )
             return state.anchors.positionOf(target) - currentOffset
         }
@@ -1494,8 +1996,9 @@ private fun <T> anchoredDraggableLayoutInfoProvider(
 private fun <T> DraggableAnchors<T>.computeTarget(
     currentOffset: Float,
     velocity: Float,
-    positionalThreshold: (totalDistance: Float) -> Float,
-    velocityThreshold: () -> Float,
+    positionalThreshold: (totalDistance: Float, isCompleting: Boolean) -> Float,
+    velocityThreshold: (threshold: Dp) -> Float,
+    onFastFling: () -> Unit,
 ): T {
     val currentAnchors = this
     require(!currentOffset.isNaN()) { "The offset provided to computeTarget must not be NaN." }
@@ -1504,26 +2007,71 @@ private fun <T> DraggableAnchors<T>.computeTarget(
     // When we're not moving, pick the closest anchor and don't consider directionality
     return if (!isMoving) {
         currentAnchors.closestAnchor(currentOffset)!!
-    } else if (abs(velocity) >= abs(velocityThreshold())) {
-        currentAnchors.closestAnchor(currentOffset, searchUpwards = isMovingForward)!!
+    } else if (abs(velocity) >= abs(velocityThreshold(VelocityNearThreshold))) {
+        if (abs(velocity) >= abs(velocityThreshold(VelocityRevealedThreshold))) {
+            onFastFling()
+            if (velocity < 0) currentAnchors.closestAnchor(currentAnchors.minPosition())!!
+            else currentAnchors.closestAnchor(currentAnchors.maxPosition())!!
+        } else {
+            currentAnchors.closestAnchor(currentOffset, searchUpwards = isMovingForward)!!
+        }
     } else {
         val left = currentAnchors.closestAnchor(currentOffset, false)!!
         val leftAnchorPosition = currentAnchors.positionOf(left)
         val right = currentAnchors.closestAnchor(currentOffset, true)!!
         val rightAnchorPosition = currentAnchors.positionOf(right)
         val distance = abs(leftAnchorPosition - rightAnchorPosition)
-        val relativeThreshold = abs(positionalThreshold(distance))
-        val closestAnchorFromStart =
-            if (isMovingForward) leftAnchorPosition else rightAnchorPosition
+        // isCompleting is true when the swipe is transitioning between a "Revealing" state and
+        // its corresponding "Revealed" state.
+        // This transition uses a custom positional threshold (FULL_SWIPE_THRESHOLD_FRACTION).
+        val isCompleting =
+            (right == LeftRevealed && left == LeftRevealing) ||
+                (left == RightRevealed && right == RightRevealing)
+        val relativeThreshold = abs(positionalThreshold(distance, isCompleting))
+        val isLeft = if (isCompleting) left == LeftRevealing else isMovingForward
+        val closestAnchorFromStart = if (isLeft) leftAnchorPosition else rightAnchorPosition
         val relativePosition = abs(closestAnchorFromStart - currentOffset)
         when (relativePosition >= relativeThreshold) {
-            true -> if (isMovingForward) right else left
-            false -> if (isMovingForward) left else right
+            true -> if (isLeft) right else left
+            false -> if (isLeft) left else right
         }
     }
 }
 
-private val VelocityThreshold = 800.dp
+private fun performHapticFeedback(hapticFeedback: HapticFeedback, revealState: RevealState) {
+    val currentTime = System.currentTimeMillis()
+    if (currentTime > revealState.lastHapticFeedbackTime + HAPTIC_DEBOUNCING_TIME) {
+        revealState.lastHapticFeedbackTime = currentTime
+        // Use GestureThresholdActivate for both haptics, as it triggers
+        // HapticConstant#23
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+    }
+}
+
+/**
+ * The threshold in milliseconds used to debounce haptic feedback during swipe gestures.
+ *
+ * This delay prevents double haptic triggers when a user performs a fast fling that transitions
+ * rapidly from [Covered] through [LeftRevealing]/[RightRevealing] to
+ * [LeftRevealed]/[RightRevealed].
+ *
+ * A value of 500ms ensures that a single continuous motion results in only one tactile
+ * confirmation, while still allowing distinct haptics if the user pauses or swipes deliberately
+ * between stages.
+ */
+private const val HAPTIC_DEBOUNCING_TIME = 500L
+
+/**
+ * The minimum swipe velocity required to snap to the next adjacent anchor. Swipes above this speed,
+ * but below [VelocityRevealedThreshold], will advance the state normally.
+ */
+private val VelocityNearThreshold = 200.dp
+
+/**
+ * The velocity required to trigger a fast fling. Swipes exceeding this speed will bypass
+ * intermediate positional checks and snap directly to the fully revealed end state.
+ */
+private val VelocityRevealedThreshold = 800.dp
 
 internal const val CustomTouchSlopMultiplier = 1.20f
 
@@ -1568,8 +2116,338 @@ private const val DOUBLE_ICON_FADE_IN_END_THRESHOLD_AS_SCREEN_WIDTH_PERCENTAGE =
 
 private const val FULL_SCREEN_PADDING_FRACTION = 0.0625f
 
+private const val FULL_SWIPE_THRESHOLD_FRACTION = 0.75f
+
 @SuppressLint("PrimitiveInCollection")
 private val BidirectionalAnchors: Set<RevealValue> =
     setOf(LeftRevealed, LeftRevealing, Covered, RightRevealing, RightRevealed)
 @SuppressLint("PrimitiveInCollection")
 private val UnidirectionAnchors: Set<RevealValue> = setOf(Covered, RightRevealing, RightRevealed)
+
+/**
+ * Configures [RevealState]'s [DraggableAnchors] during measurement so anchors are initialized
+ * before lookahead placement when subcomposed inside a [androidx.compose.ui.layout.LookaheadScope],
+ * and caches the last anchored width to avoid redundant anchor allocations on approach passes when
+ * the width and configuration are unchanged.
+ */
+private class SwipeToRevealAnchorsElement(
+    private val revealState: RevealState,
+    private val hasNoSecondaryAction: Boolean,
+    private val hasPartiallyRevealedState: Boolean,
+    private val revealDirection: RevealDirection,
+    private val direction: Int,
+    private val screenWidthPx: Float,
+    private val anchorWidthPx: Float,
+) : ModifierNodeElement<SwipeToRevealAnchorsNode>() {
+
+    override fun create() =
+        SwipeToRevealAnchorsNode(
+            revealState = revealState,
+            hasNoSecondaryAction = hasNoSecondaryAction,
+            hasPartiallyRevealedState = hasPartiallyRevealedState,
+            revealDirection = revealDirection,
+            direction = direction,
+            screenWidthPx = screenWidthPx,
+            anchorWidthPx = anchorWidthPx,
+        )
+
+    override fun update(node: SwipeToRevealAnchorsNode) {
+        node.update(
+            revealState = revealState,
+            hasNoSecondaryAction = hasNoSecondaryAction,
+            hasPartiallyRevealedState = hasPartiallyRevealedState,
+            revealDirection = revealDirection,
+            direction = direction,
+            screenWidthPx = screenWidthPx,
+            anchorWidthPx = anchorWidthPx,
+        )
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SwipeToRevealAnchorsElement) return false
+
+        if (revealState != other.revealState) return false
+        if (hasNoSecondaryAction != other.hasNoSecondaryAction) return false
+        if (hasPartiallyRevealedState != other.hasPartiallyRevealedState) return false
+        if (revealDirection != other.revealDirection) return false
+        if (direction != other.direction) return false
+        if (screenWidthPx != other.screenWidthPx) return false
+        if (anchorWidthPx != other.anchorWidthPx) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = revealState.hashCode()
+        result = 31 * result + hasNoSecondaryAction.hashCode()
+        result = 31 * result + hasPartiallyRevealedState.hashCode()
+        result = 31 * result + revealDirection.hashCode()
+        result = 31 * result + direction
+        result = 31 * result + screenWidthPx.hashCode()
+        result = 31 * result + anchorWidthPx.hashCode()
+        return result
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "swipeToRevealAnchors"
+        properties["revealState"] = revealState
+        properties["hasNoSecondaryAction"] = hasNoSecondaryAction
+        properties["hasPartiallyRevealedState"] = hasPartiallyRevealedState
+        properties["revealDirection"] = revealDirection
+        properties["direction"] = direction
+        properties["screenWidthPx"] = screenWidthPx
+        properties["anchorWidthPx"] = anchorWidthPx
+    }
+}
+
+private class SwipeToRevealAnchorsNode(
+    var revealState: RevealState,
+    var hasNoSecondaryAction: Boolean,
+    var hasPartiallyRevealedState: Boolean,
+    var revealDirection: RevealDirection,
+    var direction: Int,
+    var screenWidthPx: Float,
+    var anchorWidthPx: Float,
+) : Modifier.Node(), LayoutModifierNode {
+
+    override val shouldAutoInvalidate: Boolean = false
+
+    private var lastAnchoredWidth: Int = -1
+
+    override fun onReset() {
+        lastAnchoredWidth = -1
+    }
+
+    override fun onDetach() {
+        lastAnchoredWidth = -1
+    }
+
+    fun update(
+        revealState: RevealState,
+        hasNoSecondaryAction: Boolean,
+        hasPartiallyRevealedState: Boolean,
+        revealDirection: RevealDirection,
+        direction: Int,
+        screenWidthPx: Float,
+        anchorWidthPx: Float,
+    ) {
+        val changed =
+            this.revealState != revealState ||
+                this.hasNoSecondaryAction != hasNoSecondaryAction ||
+                this.hasPartiallyRevealedState != hasPartiallyRevealedState ||
+                this.revealDirection != revealDirection ||
+                this.direction != direction ||
+                this.screenWidthPx != screenWidthPx ||
+                this.anchorWidthPx != anchorWidthPx
+        this.revealState = revealState
+        this.hasNoSecondaryAction = hasNoSecondaryAction
+        this.hasPartiallyRevealedState = hasPartiallyRevealedState
+        this.revealDirection = revealDirection
+        this.direction = direction
+        this.screenWidthPx = screenWidthPx
+        this.anchorWidthPx = anchorWidthPx
+        if (changed) {
+            lastAnchoredWidth = -1
+            invalidateMeasurement()
+        }
+    }
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints,
+    ): MeasureResult {
+        // When width is fixed (e.g. from Modifier.fillMaxWidth()), initialize anchors and
+        // revealThreshold before measuring children so that revealed action slots see the
+        // updated threshold during the same measure pass.
+        if (constraints.hasFixedWidth) {
+            updateAnchorsIfNeeded(constraints.maxWidth)
+        }
+        val placeable = measurable.measure(constraints)
+        if (!constraints.hasFixedWidth) {
+            updateAnchorsIfNeeded(placeable.width)
+        }
+        return layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+
+    private fun updateAnchorsIfNeeded(widthPx: Int) {
+        // Avoid recording snapshot reads of revealState.offset / targetValue / revealThreshold
+        // during measure, which would otherwise subscribe Lookahead and Approach measurement of
+        // the root Box to per-frame swipe offset changes.
+        Snapshot.withoutReadObservation {
+            // Only recompute anchors when the laid-out width has changed since the last anchor
+            // calculation or if the offset is still uninitialized.
+            if (widthPx == lastAnchoredWidth && !revealState.offset.isNaN()) return
+
+            lastAnchoredWidth = widthPx
+            val width = widthPx.toFloat()
+            val revealingAnchorPx =
+                if (hasNoSecondaryAction && !hasPartiallyRevealedState) {
+                    null
+                } else if (screenWidthPx > 0f) {
+                    (anchorWidthPx / screenWidthPx) * width
+                } else {
+                    0f
+                }
+
+            if (revealingAnchorPx != null) {
+                val revealThreshold =
+                    FULL_SWIPE_THRESHOLD_FRACTION * screenWidthPx - (screenWidthPx - width) / 2f
+                revealState.revealThreshold = revealThreshold
+
+                revealState.revealedRatio =
+                    calculateRevealedRatio(
+                        hasNoSecondaryAction,
+                        anchorWidthPx,
+                        screenWidthPx,
+                        revealThreshold,
+                        revealingAnchorPx,
+                    )
+            }
+            val draggableAnchors = DraggableAnchors {
+                Covered at 0f
+                RightRevealed at -screenWidthPx * direction
+                if (revealingAnchorPx != null) {
+                    RightRevealing at -revealingAnchorPx * direction
+                }
+                if (revealDirection == Bidirectional) {
+                    LeftRevealed at screenWidthPx * direction
+                    if (revealingAnchorPx != null) {
+                        LeftRevealing at revealingAnchorPx * direction
+                    }
+                }
+            }
+            // Resolve the semantic target value against the existing anchors before replacing
+            // them so large width or configuration changes preserve the current RevealValue.
+            val candidateTarget = revealState.targetValue
+            // Fall back to Covered if the target anchor is not present in the current configuration
+            // (e.g. RightRevealing when hasPartiallyRevealedState is false).
+            val validatedTarget =
+                if (draggableAnchors.hasPositionFor(candidateTarget)) {
+                    candidateTarget
+                } else {
+                    Covered
+                }
+            // AnchoredDraggableState.updateAnchors short-circuits if anchors == newAnchors; clear
+            // first if offset is still NaN so updateAnchors snaps to validatedTarget.
+            if (
+                revealState.anchoredDraggableState.anchors == draggableAnchors &&
+                    revealState.offset.isNaN()
+            ) {
+                revealState.anchoredDraggableState.updateAnchors(
+                    DraggableAnchors {},
+                    validatedTarget,
+                )
+            }
+            revealState.anchoredDraggableState.updateAnchors(draggableAnchors, validatedTarget)
+        }
+    }
+}
+
+/**
+ * Lookahead-aware horizontal offset modifier for the foreground content of [SwipeToReveal]. Uses
+ * [Modifier.Node.shouldAutoInvalidate] = false so parameter updates explicitly invalidate
+ * placement, and places with [androidx.compose.ui.layout.Placeable.PlacementScope.placeWithLayer]
+ * inside [androidx.compose.ui.layout.Placeable.PlacementScope.withMotionFrameOfReferencePlacement].
+ */
+private class SwipeToRevealOffsetElement(
+    private val revealState: RevealState,
+    private val direction: Int,
+    private val canSwipeRight: Boolean,
+) : ModifierNodeElement<SwipeToRevealOffsetNode>() {
+
+    override fun create() =
+        SwipeToRevealOffsetNode(
+            revealState = revealState,
+            direction = direction,
+            canSwipeRight = canSwipeRight,
+        )
+
+    override fun update(node: SwipeToRevealOffsetNode) {
+        node.update(
+            revealState = revealState,
+            direction = direction,
+            canSwipeRight = canSwipeRight,
+        )
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SwipeToRevealOffsetElement) return false
+
+        if (revealState != other.revealState) return false
+        if (direction != other.direction) return false
+        if (canSwipeRight != other.canSwipeRight) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = revealState.hashCode()
+        result = 31 * result + direction
+        result = 31 * result + canSwipeRight.hashCode()
+        return result
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "swipeToRevealOffset"
+        properties["revealState"] = revealState
+        properties["direction"] = direction
+        properties["canSwipeRight"] = canSwipeRight
+    }
+}
+
+private class SwipeToRevealOffsetNode(
+    var revealState: RevealState,
+    var direction: Int,
+    var canSwipeRight: Boolean,
+) : Modifier.Node(), LayoutModifierNode {
+
+    override val shouldAutoInvalidate: Boolean = false
+
+    fun update(revealState: RevealState, direction: Int, canSwipeRight: Boolean) {
+        val changed =
+            this.revealState != revealState ||
+                this.direction != direction ||
+                this.canSwipeRight != canSwipeRight
+        this.revealState = revealState
+        this.direction = direction
+        this.canSwipeRight = canSwipeRight
+        if (changed) {
+            invalidatePlacement()
+        }
+    }
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints,
+    ): MeasureResult {
+        val placeable = measurable.measure(constraints)
+        return layout(placeable.width, placeable.height) {
+            // During lookahead, place at the target anchor position where any ongoing
+            // swipe/animation will settle; during approach, use the live drag offset.
+            val offset =
+                if (isLookingAhead) {
+                    val targetOffset = revealState.positionOf(revealState.targetValue)
+                    if (!targetOffset.isNaN()) {
+                        targetOffset
+                    } else {
+                        revealState.requireOffset()
+                    }
+                } else {
+                    revealState.requireOffset()
+                }
+            val xOffset = offset.roundToInt() * direction
+            // Mark as motion frame of reference placement so LookaheadScope consumers treat
+            // swipe movement as direct motion rather than a structural layout change, and use
+            // placeWithLayer so frame-by-frame offset changes move the hardware layer without
+            // redrawing the content.
+            withMotionFrameOfReferencePlacement {
+                placeable.placeWithLayer(
+                    x = if (canSwipeRight) xOffset else xOffset.coerceAtMost(0),
+                    y = 0,
+                )
+            }
+        }
+    }
+}

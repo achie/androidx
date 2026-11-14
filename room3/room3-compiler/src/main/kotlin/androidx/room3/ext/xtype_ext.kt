@@ -50,6 +50,9 @@ fun XType.isByteBuffer() = asTypeName().equalsIgnoreNullability(CommonTypeNames.
 /** Returns `true` if this represents a `UUID` type. */
 fun XType.isUUID() = asTypeName().equalsIgnoreNullability(CommonTypeNames.UUID)
 
+/** Returns `true` if this represents a `Uuid` type in Kotlin. */
+fun XType.isUuidKt() = asTypeName().equalsIgnoreNullability(KotlinTypeNames.UUID)
+
 /**
  * Checks if the class of the provided type has the equals() and hashCode() functions declared.
  *
@@ -66,7 +69,7 @@ fun XType.implementsEqualsAndHashcode(): Boolean {
         return false
     }
 
-    if (typeElement.isDataClass()) {
+    if (typeElement.isDataClass() || typeElement.isValueClass()) {
         return true
     }
     val hasEquals =
@@ -80,7 +83,7 @@ fun XType.implementsEqualsAndHashcode(): Boolean {
         typeElement.getDeclaredMethods().any {
             it.jvmName == "hashCode" &&
                 it.returnType.asTypeName() == XTypeName.PRIMITIVE_INT &&
-                it.parameters.count() == 0
+                it.parameters.isEmpty()
         }
 
     if (hasEquals && hasHashCode) return true

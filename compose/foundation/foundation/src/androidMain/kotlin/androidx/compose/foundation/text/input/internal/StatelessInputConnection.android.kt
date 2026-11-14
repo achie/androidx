@@ -43,8 +43,10 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputContentInfo
 import android.view.inputmethod.PreviewableHandwritingGesture
+import android.view.inputmethod.TextAttribute
 import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
+import androidx.collection.mutableObjectListOf
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.content.PlatformTransferableContent
 import androidx.compose.foundation.content.TransferableContent
@@ -53,7 +55,6 @@ import androidx.compose.foundation.text.input.TextFieldCharSequence
 import androidx.compose.foundation.text.input.getSelectedText
 import androidx.compose.foundation.text.input.getTextAfterSelection
 import androidx.compose.foundation.text.input.getTextBeforeSelection
-import androidx.compose.runtime.collection.mutableVectorOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.platform.toClipMetadata
@@ -69,6 +70,7 @@ import androidx.core.view.inputmethod.InputConnectionCompat
 import androidx.core.view.inputmethod.InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
 import androidx.core.view.inputmethod.InputConnectionCompat.OnCommitContentListener
 import androidx.core.view.inputmethod.InputContentInfoCompat
+import androidx.core.view.inputmethod.TextAttributeCompat
 import java.util.concurrent.Executor
 import java.util.function.IntConsumer
 
@@ -109,7 +111,7 @@ internal class StatelessInputConnection(
         get() = session.text
 
     /** Recording of editing operations for batch editing */
-    private val editCommands = mutableVectorOf<ImeEditCommandScope.() -> Unit>()
+    private val editCommands = mutableObjectListOf<ImeEditCommandScope.() -> Unit>()
 
     /**
      * Wraps this StatelessInputConnection to halt a possible infinite loop in [commitContent]
@@ -237,6 +239,21 @@ internal class StatelessInputConnection(
         return true
     }
 
+    override fun commitText(
+        text: CharSequence,
+        newCursorPosition: Int,
+        textAttribute: TextAttribute?,
+    ): Boolean {
+        logDebug("commitText(\"$text\", $newCursorPosition, $textAttribute)")
+
+        session.commitText(
+            text = text.toString(),
+            newCursorPosition = newCursorPosition,
+            isTextSuggestionSelected = textAttribute.isTextSuggestionSelected,
+        )
+        return true
+    }
+
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         logDebug("setComposingRegion($start, $end)")
         session.setComposingRegion(start, end)
@@ -250,6 +267,21 @@ internal class StatelessInputConnection(
             text = text.toString(),
             newCursorPosition = newCursorPosition,
             annotations = (text as? Spanned)?.toAnnotationList(),
+        )
+        return true
+    }
+
+    override fun setComposingText(
+        text: CharSequence,
+        newCursorPosition: Int,
+        textAttribute: TextAttribute?,
+    ): Boolean {
+        logDebug("setComposingText(\"$text\", $newCursorPosition, $textAttribute)")
+
+        session.setComposingText(
+            text = text.toString(),
+            newCursorPosition = newCursorPosition,
+            isTextSuggestionSelected = textAttribute.isTextSuggestionSelected,
         )
         return true
     }
@@ -269,7 +301,7 @@ internal class StatelessInputConnection(
     override fun setSelection(start: Int, end: Int): Boolean {
         logDebug("setSelection($start, $end)")
         session.setSelection(start, end)
-        session.updateTouchMode(false)
+        session.updateDirectTouchInteraction(false)
         return true
     }
 
@@ -357,12 +389,14 @@ internal class StatelessInputConnection(
 
     override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText {
         logDebug("getExtractedText($request, $flags)")
-        //        extractedTextMonitorMode = (flags and InputConnection.GET_EXTRACTED_TEXT_MONITOR)
-        // != 0
-        //        if (extractedTextMonitorMode) {
-        //            currentExtractedTextRequestToken = request?.token ?: 0
-        //        }
-        // TODO(halilibo): Implement extracted text monitor
+        val monitorMode = (flags and InputConnection.GET_EXTRACTED_TEXT_MONITOR) != 0
+        if (monitorMode) {
+            // This may look weird that we are ignoring subsequent requests that may want to turn
+            // off the extracted text monitor updates but this is how EditableInputConnection was
+            // implemented. Many IMEs also rely on this behavior. Therefore once the extracted text
+            // monitor is enabled, it remains enabled until the InputConnection gets restarted.
+            session.requestExtractedTextUpdates(request?.token ?: 0)
+        }
         // TODO(b/135556699) should return styled text
         return text.toExtractedText()
     }
@@ -540,7 +574,10 @@ private object Api34PerformHandwritingGestureImpl {
     }
 }
 
-private fun TextFieldCharSequence.toExtractedText(): ExtractedText {
+private inline val TextAttribute?.isTextSuggestionSelected: Boolean
+    get() = TextAttributeCompat.wrap(this)?.isTextSuggestionSelected == true
+
+internal fun TextFieldCharSequence.toExtractedText(): ExtractedText {
     val res = ExtractedText()
     res.text = this
     res.startOffset = 0

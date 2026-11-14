@@ -18,7 +18,7 @@ package androidx.ink.authoring.internal
 import android.graphics.Canvas
 import android.graphics.Matrix
 import androidx.ink.authoring.CompletedShapeRenderer
-import androidx.ink.authoring.ExperimentalCustomShapeWorkflowApi
+import androidx.ink.authoring.ExperimentalInkCustomShapeWorkflowApi
 import androidx.ink.authoring.InProgressShape
 import androidx.ink.authoring.InProgressShapeRenderer
 import androidx.ink.authoring.ShapeWorkflow
@@ -30,7 +30,7 @@ import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.StrokeInputBatch
 
 /** A test-only implementation that implements the [ShapeWorkflow] interface in a trivial way. */
-@ExperimentalCustomShapeWorkflowApi
+@ExperimentalInkCustomShapeWorkflowApi
 internal class FakeShapeWorkflow :
     ShapeWorkflow<FakeShapeSpec, FakeInProgressShape, ImmutableStrokeInputBatch> {
     override fun getShapeType(shapeSpec: FakeShapeSpec): Int {
@@ -60,18 +60,18 @@ internal class FakeShapeWorkflow :
                 canvas: Canvas,
                 shape: ImmutableStrokeInputBatch,
                 strokeToScreenTransform: Matrix,
-                systemElapsedTimeMillis: Long,
+                animatorClockStateMillis: Long,
             ) {}
         }
 }
 
-internal data class FakeShapeSpec(
+internal class FakeShapeSpec(
     val completionAfterFinishDurationMillis: Long = 0,
     val updatesAfterCompletion: Boolean = false,
 )
 
 /** A test-only implementation that implements the [InProgressShape] interface in a trivial way. */
-@ExperimentalCustomShapeWorkflowApi
+@ExperimentalInkCustomShapeWorkflowApi
 internal class FakeInProgressShape : InProgressShape<FakeShapeSpec, ImmutableStrokeInputBatch> {
     private var shapeSpec: FakeShapeSpec? = null
     private var startSystemElapsedTimeMillis = Long.MIN_VALUE
@@ -79,9 +79,13 @@ internal class FakeInProgressShape : InProgressShape<FakeShapeSpec, ImmutableStr
     private val updatedRealInputs = MutableStrokeInputBatch()
     private val pendingRealInputs = MutableStrokeInputBatch()
     internal var lastUpdateSystemElapsedTimeMillis: Long? = null
+    internal var lastUpdateShapeDurationMillis: Long? = null
     private var forcedCompletion = false
     private var finishedTimeMillis: Long? = null
     private var updateSinceLastReset = false
+    private var canceled = false
+
+    override fun isCanceled(): Boolean = canceled
 
     override fun start(shapeSpec: FakeShapeSpec, systemElapsedTimeMillis: Long) {
         this.shapeSpec = shapeSpec
@@ -90,9 +94,11 @@ internal class FakeInProgressShape : InProgressShape<FakeShapeSpec, ImmutableStr
         updatedRealInputs.clear()
         pendingRealInputs.clear()
         lastUpdateSystemElapsedTimeMillis = null
+        lastUpdateShapeDurationMillis = null
         forcedCompletion = false
         finishedTimeMillis = null
         updateSinceLastReset = false
+        canceled = false
     }
 
     override fun enqueueInputs(realInputs: StrokeInputBatch, predictedInputs: StrokeInputBatch) {
@@ -105,8 +111,18 @@ internal class FakeInProgressShape : InProgressShape<FakeShapeSpec, ImmutableStr
         }
 
     override fun update(shapeDurationMillis: Long) {
+        require(shapeDurationMillis >= 0L) {
+            "shapeDurationMillis must be non-negative, got $shapeDurationMillis"
+        }
+        lastUpdateShapeDurationMillis?.let { prevShapeDurationMillis ->
+            require(shapeDurationMillis >= prevShapeDurationMillis) {
+                "shapeDurationMillis must be monotonically non-decreasing, got $shapeDurationMillis " +
+                    "after $prevShapeDurationMillis"
+            }
+        }
         updatedRealInputs.add(pendingRealInputs)
         pendingRealInputs.clear()
+        lastUpdateShapeDurationMillis = shapeDurationMillis
         lastUpdateSystemElapsedTimeMillis = startSystemElapsedTimeMillis + shapeDurationMillis
         updateSinceLastReset = true
     }
@@ -115,7 +131,9 @@ internal class FakeInProgressShape : InProgressShape<FakeShapeSpec, ImmutableStr
         forcedCompletion = true
     }
 
-    override fun cancel() {}
+    override fun cancel() {
+        canceled = true
+    }
 
     override fun getUpdatedRegion(): Box? = if (updateSinceLastReset) FAKE_UPDATE_BOX else null
 

@@ -1,8 +1,9 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=public
 package androidx.arch.core.util {
 
   public interface Function<I, O> {
-    method public O! apply(I!);
+    method public O apply(I);
   }
 
 }

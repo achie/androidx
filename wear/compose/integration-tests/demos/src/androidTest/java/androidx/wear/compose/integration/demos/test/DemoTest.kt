@@ -22,7 +22,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.espresso.Espresso
@@ -33,7 +33,6 @@ import androidx.wear.compose.integration.demos.WearComposeDemos
 import androidx.wear.compose.integration.demos.common.Demo
 import androidx.wear.compose.integration.demos.common.DemoCategory
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -46,13 +45,12 @@ private val ignoredDemos =
 
 // Run this test on a phone emulator.
 // There are issues running on Watch emulators that menu items off screen are not found,
-// given the use of ScalingLAZYColumn.
+// given the use of ScalingLazyColumn.
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class DemoTest {
     // We need to provide the recompose factory first to use new clock.
-    @get:Rule
-    val rule = createAndroidComposeRule<DemoActivity>(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<DemoActivity>()
 
     @Test
     fun demoApp_builds() {
@@ -181,8 +179,9 @@ class DemoTest {
     }
 }
 
-private val AllButIgnoredDemos =
-    WearComposeDemos.filter { path, demo -> demo.navigationTitle(path) !in ignoredDemos }
+private val AllButIgnoredDemos = WearComposeDemos.filter { path, demo ->
+    demo.navigationTitle(path) !in ignoredDemos
+}
 
 private fun Demo.navigationTitle(path: List<DemoCategory>): String {
     return path.plus(this).navigationTitle
@@ -192,7 +191,7 @@ private val List<Demo>.navigationTitle: String
     get() = if (size == 1) first().title else drop(1).joinToString(" > ")
 
 /**
- * Trims the tree of [Demo]s represented by this [DemoCategory] by cutting all leave demos for which
+ * Trims the tree of [Demo]s represented by this [DemoCategory] by cutting all leaf demos for which
  * the [predicate] returns `false` and recursively removing all empty categories as a result.
  */
 private fun DemoCategory.filter(

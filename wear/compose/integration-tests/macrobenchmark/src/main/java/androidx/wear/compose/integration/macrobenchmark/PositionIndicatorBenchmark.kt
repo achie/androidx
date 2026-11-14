@@ -17,12 +17,14 @@
 package androidx.wear.compose.integration.macrobenchmark
 
 import android.content.Intent
+import android.os.Build
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingGfxInfoMetric
 import androidx.benchmark.macro.MemoryUsageMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.filters.LargeTest
+import androidx.test.filters.SdkSuppress
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.testutils.createCompilationParams
@@ -34,8 +36,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
+// Skip API 31 and 32 due to libhwui JankTracker crash (b/200492526).
 @OptIn(ExperimentalMetricApi::class)
 @LargeTest
+@SdkSuppress(excludedSdks = [Build.VERSION_CODES.S, Build.VERSION_CODES.S_V2])
 @RunWith(Parameterized::class)
 class PositionIndicatorBenchmark(private val compilationMode: CompilationMode) {
     @get:Rule val benchmarkRule = MacrobenchmarkRule()
@@ -96,16 +100,15 @@ class PositionIndicatorBenchmark(private val compilationMode: CompilationMode) {
         times: Int,
         delayBetweenClicks: Long,
     ) {
-        val buttonIncrease = device.findObject(By.desc(INCREASE_POSITION))
-        val buttonDecrease = device.findObject(By.desc(DECREASE_POSITION))
-
         repeat(times) {
+            val buttonIncrease = device.findObject(By.desc(INCREASE_POSITION))
             buttonIncrease?.click()
             device.waitForIdle()
             sleep(delayBetweenClicks)
         }
 
         repeat(times) {
+            val buttonDecrease = device.findObject(By.desc(DECREASE_POSITION))
             buttonDecrease?.click()
             device.waitForIdle()
             sleep(delayBetweenClicks)

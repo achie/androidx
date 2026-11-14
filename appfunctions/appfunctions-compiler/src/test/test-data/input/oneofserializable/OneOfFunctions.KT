@@ -16,33 +16,41 @@
 
 package com.testdata.oneofserializable
 
-import androidx.appfunctions.AppFunctionContext
 import androidx.appfunctions.AppFunctionSerializable
-import androidx.appfunctions.service.AppFunction
+import androidx.appfunctions.AppFunctionDeclaration
+import androidx.appfunctions.AppFunctionService
+import androidx.appfunctions.AppFunctionServiceEntryPoint
 
-class OneOfFunctions {
+@AppFunctionServiceEntryPoint("OneOfFunctionsService", "app_functions_v2")
+abstract class OneOfFunctions : AppFunctionService() {
 
-    @AppFunction
+    @AppFunctionDeclaration(isDescribedByKDoc = false)
     fun oneOfSealedParam(
-        appFunctionContext: AppFunctionContext,
         oneOfSealedInterface: OneOfSealedInterface,
+        oneOfSealedInterfaceNullable: OneOfSealedInterface?,
         oneOfSealedInterfaceList: List<OneOfSealedInterface>,
     ) {}
 
-    @AppFunction
-    fun oneOfSealedReturn(appFunctionContext: AppFunctionContext): OneOfSealedClass =
+    @AppFunctionDeclaration(isDescribedByKDoc = false)
+    fun oneOfSealedReturn(): OneOfSealedClass =
         OneOfSealedClass.ASubclass("", "")
 
-    @AppFunction
-    fun oneOfSealedListReturn(appFunctionContext: AppFunctionContext): List<OneOfSealedClass> =
+    @AppFunctionDeclaration(isDescribedByKDoc = false)
+    fun oneOfSealedListReturn(): List<OneOfSealedClass> =
         emptyList()
 
-    @AppFunction
+    @AppFunctionDeclaration(isDescribedByKDoc = false)
     fun oneOfSealedNestedSerializable(
-        appFunctionContext: AppFunctionContext,
         oneOfSealedNestedSerializable: OneOfSealedNestedSerializable,
     ) = OneOfSealedNestedSerializable(BSubclass("", 0))
+
+    @AppFunctionDeclaration(isDescribedByKDoc = false)
+    fun oneOfNonSealedOneOfSerializableParam(
+        nonSealedOneOfSerializable: NonSealedOneOfSerializable,
+        nonSealedOneOfSerializableNullable: NonSealedOneOfSerializable?,
+        nonSealedOneOfSerializableList: List<NonSealedOneOfSerializable>,
+    ) {}
 }
 
-@AppFunctionSerializable
+@AppFunctionSerializable(isDescribedByKDoc = false)
 data class OneOfSealedNestedSerializable(val sealedInterface: OneOfSealedInterface)

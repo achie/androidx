@@ -1,0 +1,127 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.build.aswb
+
+import androidx.build.BuildEnvironment
+import androidx.build.ProjectLayoutType
+import androidx.build.getSdkPath
+import androidx.build.getSupportRootFolder
+import androidx.build.getVersionByName
+import androidx.build.ide.IdePlugin
+import androidx.build.ide.ManagedIdeTask
+import androidx.build.ide.installIntellijPlugins
+import androidx.build.ide.registerWriteIdeaPropertiesTask
+import androidx.build.ide.writeAndroidSdkPath
+import java.io.File
+import org.gradle.api.GradleException
+import org.gradle.api.Project
+import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.tasks.WriteProperties
+
+/** Folder in your home dir for ASwB's config and system files. */
+private const val ASWB_DIR_NAME = ".AndroidStudioWithBlazeAndroidX"
+
+fun Project.configureASWBTask(
+    task: ManagedIdeTask,
+    writeIdeaProperties: TaskProvider<WriteProperties>,
+) {
+    task.ideName.convention("ASwB")
+
+    // We don't want people to have to accept the terms of service for ASwB (b/574544210)
+    task.acceptTos.convention(true)
+
+    val aswbVersion = getVersionByName("aswbBuildId")
+
+    val gcsSubDir = if (task.osName == "linux") "glinux" else "mac"
+    val packageExtension = if (task.osName == "linux") "deb" else "burrito"
+    task.archiveUrl.convention(
+        "gs://androidx-aswb-binaries/${gcsSubDir}/android-studio-with-blaze-canary-$aswbVersion.$packageExtension"
+    )
+
+    task.licenseAgreementPath.convention(
+        if (task.osName == "linux") "LICENSE.txt" else "Contents/Resources/LICENSE.txt"
+    )
+
+    task.ideBinaryRelativePath.convention(
+        if (task.osName == "linux") "bin/studio" else "Contents/MacOS/studio"
+    )
+
+    task.ideArchiveName.convention(
+        "android-studio-with-blaze-canary-$aswbVersion.$packageExtension"
+    )
+
+    task.environmentFiles.put(
+        "STUDIO_PROPERTIES",
+        writeIdeaProperties.flatMap { it.destinationFile },
+    )
+    task.environmentFiles.put(
+        "STUDIO_VM_OPTIONS",
+        layout.projectDirectory.file("development/aswb/studio.vmoptions"),
+    )
+
+    val configBaseDir =
+        layout.dir(providers.environmentVariable("HOME").map { File(it, "$ASWB_DIR_NAME/config") })
+    val relativeSdkPath = getSdkPath().relativeTo(project.getSupportRootFolder())
+
+    val studioKtfmtPluginVersion = getVersionByName("ktfmtIdeaPlugin")
+    val ktfmtPlugin =
+        IdePlugin(
+            downloadUrl =
+                "https://downloads.marketplace.jetbrains.com/files/14912/1084943/ktfmt_idea_plugin-$studioKtfmtPluginVersion.zip",
+            checksum = "bc6d1d3efe40ef117bac8ba920d55dc2a1b7e879b86f464d85aeb34fb548eaef",
+            zipName = "ktfmt-$studioKtfmtPluginVersion.zip",
+            targetDirectoryName = "ktfmt_idea_plugin",
+        )
+
+    task.provisionAction.set {
+        val configBaseDirFile = configBaseDir.get().asFile
+        it.writeAndroidSdkPath(configBaseDirFile, relativeSdkPath)
+        it.installIntellijPlugins(configBaseDirFile, listOf(ktfmtPlugin))
+        BuildEnvironment.setupSymlinksIfNeeded(relativeSdkPath)
+        it.checkIntellijExtInstalled()
+    }
+}
+
+/** Verifies that `intellij-ext`, a system-level dependency of ASwB, is installed. */
+private fun ManagedIdeTask.checkIntellijExtInstalled() {
+    val isLinux = osName == "linux"
+    val binary =
+        if (isLinux) File("/opt/intellij-ext/intellij-ext")
+        else File("/Library/Application Support/ASwB/intellij-ext")
+    if (binary.exists()) return
+
+    val installInstructions =
+        if (isLinux) "Install it with: sudo apt install intellij-ext"
+        else "Install it with: sudo mule install intellij-ext"
+    val message =
+        """
+        |intellij-ext is not installed (expected at ${binary.absolutePath}).
+        |ASwB depends on it, but this task only installs the IDE itself, not its package dependencies.
+        |$installInstructions
+        """
+            .trimMargin()
+
+    throw GradleException("$message\nWithout it, ASwB may hang on the splash screen.")
+}
+
+fun Project.registerASWBTask() {
+    if (ProjectLayoutType.from(this) == ProjectLayoutType.PLAYGROUND) return
+    val writeIdeaProperties = registerWriteIdeaPropertiesTask("Aswb", provider { ASWB_DIR_NAME })
+    tasks.register("aswb", ManagedIdeTask::class.java) { task ->
+        configureASWBTask(task, writeIdeaProperties)
+    }
+}

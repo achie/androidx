@@ -18,81 +18,152 @@ package androidx.wear.compose.remote.material3
 
 import android.annotation.SuppressLint
 import android.content.Context
-import androidx.compose.remote.creation.CreationDisplayInfo
-import androidx.compose.remote.creation.compose.capture.painter.painterRemoteBitmap
-import androidx.compose.remote.creation.compose.capture.shapes.RemoteCircleShape
-import androidx.compose.remote.creation.compose.layout.RemoteAlignment
-import androidx.compose.remote.creation.compose.layout.RemoteArrangement
-import androidx.compose.remote.creation.compose.layout.RemoteBox
-import androidx.compose.remote.creation.compose.layout.RemoteComposable
+import androidx.collection.buildObjectIntMap
+import androidx.compose.remote.creation.compose.action.hostAction
+import androidx.compose.remote.creation.compose.capture.RemoteCreationDisplayInfo
+import androidx.compose.remote.creation.compose.capture.RemoteDensity
+import androidx.compose.remote.creation.compose.layout.RemoteDrawScope
+import androidx.compose.remote.creation.compose.layout.RemoteLayoutDirection
+import androidx.compose.remote.creation.compose.layout.RemoteOffset
 import androidx.compose.remote.creation.compose.layout.RemotePaddingValues
+import androidx.compose.remote.creation.compose.layout.RemoteSize
 import androidx.compose.remote.creation.compose.modifier.RemoteModifier
-import androidx.compose.remote.creation.compose.modifier.fillMaxSize
 import androidx.compose.remote.creation.compose.modifier.size
-import androidx.compose.remote.creation.compose.state.RemoteBoolean
+import androidx.compose.remote.creation.compose.painter.RemotePainter
+import androidx.compose.remote.creation.compose.shapes.RemoteCircleShape
+import androidx.compose.remote.creation.compose.shapes.RemoteOutline
+import androidx.compose.remote.creation.compose.shapes.RemoteRoundedCornerShape
+import androidx.compose.remote.creation.compose.shapes.RemoteShape
 import androidx.compose.remote.creation.compose.state.RemoteColor
-import androidx.compose.remote.creation.compose.state.RemoteString
+import androidx.compose.remote.creation.compose.state.RemoteImageBitmap
+import androidx.compose.remote.creation.compose.state.RemotePaint
+import androidx.compose.remote.creation.compose.state.createNamedRemoteImageBitmap
+import androidx.compose.remote.creation.compose.state.rb
 import androidx.compose.remote.creation.compose.state.rdp
-import androidx.compose.remote.creation.compose.state.rememberRemoteBitmapValue
-import androidx.compose.remote.player.compose.test.utils.screenshot.TargetPlayer
-import androidx.compose.remote.player.compose.test.utils.screenshot.rule.RemoteComposeScreenshotTestRule
-import androidx.compose.runtime.Composable
+import androidx.compose.remote.creation.compose.state.rf
+import androidx.compose.remote.creation.compose.state.rs
+import androidx.compose.remote.player.compose.test.utils.ComposableWrappers
+import androidx.compose.remote.player.compose.test.utils.RemoteScreenshotTestRule
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
-import androidx.wear.compose.remote.material3.Material3ImageTest.Companion.createImage
-import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
+import androidx.wear.compose.remote.material3.previews.RemoteButtonChildColors
+import androidx.wear.compose.remote.material3.previews.RemoteButtonChildColorsDisabled
+import androidx.wear.compose.remote.material3.previews.RemoteButtonCustomConfig
+import androidx.wear.compose.remote.material3.previews.RemoteButtonEnabled
+import androidx.wear.compose.remote.material3.previews.RemoteButtonTwoLineText
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithBorder
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithIcon
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithIconAndLongLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithIconAndSecondaryLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithIconAndSecondaryLabelDisabled
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithLongLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithMultilineLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithSecondaryLabel
+import androidx.wear.compose.remote.material3.previews.RemoteButtonWithSmallImageBackground
+import androidx.wear.compose.remote.material3.previews.utils.createImage
+import androidx.wear.compose.remote.material3.util.ComponentContainer
+import androidx.wear.compose.remote.material3.util.PathClip
+import androidx.wear.compose.remote.material3.util.SCREENSHOT_GOLDEN_DIRECTORY
+import androidx.wear.compose.remote.material3.util.TestProfiles
+import androidx.wear.compose.remote.material3.util.withPathClip
+import com.google.testing.junit.testparameterinjector.TestParameter
+import com.google.testing.junit.testparameterinjector.TestParameterInjector
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.junit.runners.JUnit4
 
 @MediumTest
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 @SuppressLint("UnrememberedMutableState")
-@RunWith(JUnit4::class)
+@RunWith(TestParameterInjector::class)
 class RemoteButtonTest {
     @get:Rule
     val remoteComposeTestRule =
-        RemoteComposeScreenshotTestRule(
+        RemoteScreenshotTestRule(
             moduleDirectory = SCREENSHOT_GOLDEN_DIRECTORY,
-            targetPlayer = TargetPlayer.View,
+            context = ApplicationProvider.getApplicationContext(),
         )
+
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     private val creationDisplayInfo =
-        CreationDisplayInfo(500, 500, context.resources.displayMetrics.densityDpi)
+        RemoteCreationDisplayInfo(
+            500,
+            500,
+            context.resources.displayMetrics.densityDpi,
+            context.resources.configuration.fontScale,
+        )
 
     @Test
     fun button_enabled() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteButton(
-                    modifier = RemoteModifier.buttonSizeModifier(),
-                    enabled = RemoteBoolean(true),
-                    content = { RemoteText(RemoteString("button_enabled")) },
-                )
-            }
+            ComponentContainer { RemoteButtonEnabled() }
+        }
+    }
+
+    @Test
+    fun button_with_custom_config() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonCustomConfig() }
+        }
+    }
+
+    @Test
+    fun button_two_lined_text() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonTwoLineText() }
+        }
+    }
+
+    @Test
+    fun button_with_icon_and_label_and_secondary_label_rtl() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+            creationComposableWrapper = ComposableWrappers.rtl,
+        ) {
+            ComponentContainer { RemoteButtonWithIconAndSecondaryLabel() }
+        }
+    }
+
+    @Test
+    fun button_with_icon_and_secondary_label_disabled() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithIconAndSecondaryLabelDisabled() }
         }
     }
 
     @Test
     fun button_disabled() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
-                    enabled = RemoteBoolean(false),
+                    enabled = false.rb,
                 ) {
-                    RemoteText(RemoteString("button_disabled"))
+                    RemoteText("button_disabled".rs)
                 }
             }
         }
@@ -101,27 +172,27 @@ class RemoteButtonTest {
     @Test
     fun button_overrides_colors() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
             val colors =
                 RemoteButtonColors(
-                    containerColor = RemoteColor(Color.Yellow),
-                    contentColor = RemoteColor(Color.Cyan),
-                    secondaryContentColor = RemoteColor(Color.Black),
-                    iconColor = RemoteColor(Color.Black),
-                    disabledContainerColor = RemoteColor(Color.Black),
-                    disabledContentColor = RemoteColor(Color.Black),
-                    disabledSecondaryContentColor = RemoteColor(Color.Black),
-                    disabledIconColor = RemoteColor(Color.Black),
+                    containerColor = RemoteColor.Yellow,
+                    contentColor = RemoteColor.Cyan,
+                    secondaryContentColor = RemoteColor.Black,
+                    iconColor = RemoteColor.Black,
+                    disabledContainerColor = RemoteColor.Black,
+                    disabledContentColor = RemoteColor.Black,
+                    disabledSecondaryContentColor = RemoteColor.Black,
+                    disabledIconColor = RemoteColor.Black,
                 )
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
-                    contentPadding = RemotePaddingValues(40.rdp),
                     colors = colors,
                 ) {
-                    RemoteText(RemoteString("button_overrides_colors"))
+                    RemoteText("button_overrides_colors".rs)
                 }
             }
         }
@@ -130,15 +201,16 @@ class RemoteButtonTest {
     @Test
     fun button_overrides_padding() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
-                    contentPadding = RemotePaddingValues(150.rdp),
+                    contentPadding = RemotePaddingValues(50.rdp),
                 ) {
-                    RemoteText(RemoteString("button_overrides_padding"))
+                    RemoteText("button_overrides_padding".rs)
                 }
             }
         }
@@ -147,15 +219,16 @@ class RemoteButtonTest {
     @Test
     fun button_overrides_size() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.size(180.rdp, 100.rdp),
                     contentPadding = RemotePaddingValues(0.rdp),
                 ) {
-                    RemoteText(RemoteString("button_overrides_size"))
+                    RemoteText("button_overrides_size".rs)
                 }
             }
         }
@@ -164,19 +237,19 @@ class RemoteButtonTest {
     @Test
     fun button_overrides_textStyle() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
                     contentPadding = RemotePaddingValues(0.rdp),
                 ) {
                     RemoteText(
-                        RemoteString("button_overrides_textStyle"),
+                        "button_overrides_textStyle".rs,
                         color = null,
-                        style =
-                            RemoteMaterialTheme.typography.typography.labelSmall.copy(Color.Cyan),
+                        style = RemoteMaterialTheme.typography.labelSmall.copy(RemoteColor.Cyan),
                     )
                 }
             }
@@ -186,35 +259,67 @@ class RemoteButtonTest {
     @Test
     fun button_with_border() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteButton(
-                    modifier = RemoteModifier.buttonSizeModifier(),
-                    border = 8.rdp,
-                    borderColor = RemoteColor(Color.Green),
-                ) {
-                    RemoteText(RemoteString("button_with_border"))
-                }
-            }
+            ComponentContainer { RemoteButtonWithBorder() }
         }
     }
 
     @Test
     fun button_with_circle_shape() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
+            ComponentContainer {
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.size(150.rdp),
-                    border = 8.rdp,
-                    borderColor = RemoteColor(Color.Green),
+                    border = RemoteBorderStroke(width = 8.rdp, color = RemoteColor.Green),
                     shape = RemoteCircleShape,
                 ) {
-                    RemoteText(RemoteString("button_with_circle_shape"))
+                    RemoteText("button_with_circle_shape".rs)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun button_with_border_and_large_corner_radius_scaling() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgets,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer {
+                RemoteButton(
+                    onClick = testAction,
+                    modifier = RemoteModifier.size(120.rdp, 50.rdp),
+                    border = RemoteBorderStroke(width = 4.rdp, color = RemoteColor.Green),
+                    shape = RemoteRoundedCornerShape(topStart = 80.rdp, bottomStart = 80.rdp),
+                ) {
+                    RemoteText("scale".rs)
+                }
+            }
+        }
+    }
+
+    // Tests that the corner radius is clamped to 0f when half the stroke (4.rdp)
+    // exceeds the corner size (2.rdp), preventing negative radius values.
+    @Test
+    fun button_with_thick_border_clamping_corner_radius() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgets,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer {
+                RemoteButton(
+                    onClick = testAction,
+                    modifier = RemoteModifier.size(120.rdp, 50.rdp),
+                    border = RemoteBorderStroke(width = 8.rdp, color = RemoteColor.Green),
+                    shape = RemoteRoundedCornerShape(2.rdp),
+                ) {
+                    RemoteText("clamp".rs)
                 }
             }
         }
@@ -223,19 +328,23 @@ class RemoteButtonTest {
     @Test
     fun button_enabled_container_background_image() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            val backgroundImage =
-                rememberRemoteBitmapValue(name = "backgroundImage") { createImage(200, 200) }
-            Center(RemoteModifier.fillMaxSize()) {
-                val containerPainter =
-                    RemoteButtonDefaults.containerPainter(painterRemoteBitmap(backgroundImage))
+            val backgroundImage = remember {
+                RemoteImageBitmap.createNamedRemoteImageBitmap(
+                    name = "backgroundImage",
+                    defaultValue = createImage(200, 200).asImageBitmap(),
+                )
+            }
+            ComponentContainer {
+                val containerPainter = RemoteButtonDefaults.containerPainter(backgroundImage)
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
                     containerPainter = containerPainter,
                 ) {
-                    RemoteText(RemoteString("image_background"))
+                    RemoteText("image_background".rs)
                 }
             }
         }
@@ -244,23 +353,25 @@ class RemoteButtonTest {
     @Test
     fun button_disabled_container_background_image() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            val backgroundImage =
-                rememberRemoteBitmapValue(name = "button_disabled_container_background_image") {
-                    createImage(200, 200)
-                }
-            Center(RemoteModifier.fillMaxSize()) {
-                val enabled = RemoteBoolean(false)
-                val containerPainter =
-                    RemoteButtonDefaults.containerPainter(painterRemoteBitmap(backgroundImage))
+            val backgroundImage = remember {
+                RemoteImageBitmap.createNamedRemoteImageBitmap(
+                    name = "button_disabled_container_background_image",
+                    defaultValue = createImage(200, 200).asImageBitmap(),
+                )
+            }
+            ComponentContainer {
+                val enabled = false.rb
+                val containerPainter = RemoteButtonDefaults.containerPainter(backgroundImage)
                 RemoteButton(
+                    onClick = testAction,
                     modifier = RemoteModifier.buttonSizeModifier(),
                     enabled = enabled,
                     containerPainter = containerPainter,
                 ) {
-                    RemoteText(RemoteString("disable_image_background"))
+                    RemoteText("disable_image_background".rs)
                 }
             }
         }
@@ -269,145 +380,240 @@ class RemoteButtonTest {
     @Test
     fun button_with_icon_and_label_and_secondary_label() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteButton(
-                    modifier = RemoteModifier.buttonSizeModifier(),
-                    icon = {
-                        RemoteIcon(
-                            imageVector = TestImageVectors.VolumeUp,
-                            contentDescription = null,
-                            tint = RemoteButtonDefaults.buttonColors().iconColor,
-                        )
-                    },
-                    secondaryLabel = { RemoteText(RemoteString("secondaryLabel")) },
-                    label = { RemoteText(RemoteString("label")) },
-                )
-            }
+            ComponentContainer { RemoteButtonWithIconAndSecondaryLabel() }
         }
     }
 
     @Test
     fun button_with_icon_and_label() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteButton(
-                    modifier = RemoteModifier.buttonSizeModifier(),
-                    icon = {
-                        RemoteIcon(
-                            imageVector = TestImageVectors.VolumeUp,
-                            contentDescription = null,
-                            tint = RemoteButtonDefaults.buttonColors().iconColor,
-                        )
-                    },
-                    label = { RemoteText(RemoteString("label")) },
-                )
-            }
+            ComponentContainer { RemoteButtonWithIcon() }
+        }
+    }
+
+    @Test
+    fun button_with_label() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithLabel() }
+        }
+    }
+
+    @Test
+    fun button_with_multiline_label() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithMultilineLabel() }
+        }
+    }
+
+    @Test
+    fun button_with_long_label() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithLongLabel() }
+        }
+    }
+
+    @Test
+    fun button_with_icon_and_long_label() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithIconAndLongLabel() }
         }
     }
 
     @Test
     fun button_with_label_and_secondary_label() {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteButton(
-                    modifier = RemoteModifier.buttonSizeModifier(),
-                    secondaryLabel = { RemoteText(RemoteString("secondaryLabel")) },
-                    label = { RemoteText(RemoteString("label")) },
+            ComponentContainer { RemoteButtonWithSecondaryLabel() }
+        }
+    }
+
+    @Test
+    fun button_dynamic_color() {
+        val colorOverrides = buildObjectIntMap {
+            put("WearM3.primary", Color(0xFFB8D0A0).toArgb())
+            put("WearM3.onPrimary", Color(0xFF24361A).toArgb())
+            put("WearM3.surfaceContainer", Color(0xFF1C1D1A).toArgb())
+            put("WearM3.onSurface", Color(0xFFE2E3DC).toArgb())
+        }
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+            update = { player ->
+                colorOverrides.forEach { name, colorInt ->
+                    player.setUserLocalColor(name, colorInt)
+                }
+            },
+        ) {
+            ComponentContainer { RemoteButtonEnabled() }
+        }
+    }
+
+    @Test
+    fun button_child_colors() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonChildColors() }
+        }
+    }
+
+    @Test
+    fun button_child_colors_disabled() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonChildColorsDisabled() }
+        }
+    }
+
+    @Test
+    fun button_container_background_small_image_with_scrim() {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer { RemoteButtonWithSmallImageBackground() }
+        }
+    }
+
+    @Test
+    fun button_enabled_container_background_image_ab(@TestParameter pathClip: PathClip) {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText.withPathClip(pathClip),
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            val backgroundImage = remember {
+                RemoteImageBitmap.createNamedRemoteImageBitmap(
+                    name = "backgroundImage",
+                    defaultValue = createImage(200, 200).asImageBitmap(),
                 )
+            }
+            ComponentContainer {
+                val containerPainter = RemoteButtonDefaults.containerPainter(backgroundImage)
+                RemoteButton(
+                    onClick = testAction,
+                    modifier = RemoteModifier.buttonSizeModifier(),
+                    containerPainter = containerPainter,
+                ) {
+                    RemoteText("image_background".rs)
+                }
             }
         }
     }
 
+    /**
+     * A hexagon shape can only be clipped with a path clip. Without one, [RemoteModifier.clip]
+     * falls back to a rectangle so the container image fills the full button bounds.
+     */
     @Test
-    fun button_enabled_click_modifier_is_added() {
-        val expectedContent =
-            """
-DATA_TEXT<42> = "button_enabled"
-ROOT [-2:-1] = [0.0, 0.0, 0.0, 0.0] VISIBLE
-  ROW [-3:-1] = [0.0, 0.0, 28.0, 12.0] VISIBLE
-    MODIFIERS
-      HEIGHT_IN = [52.0, 3.4028235E38]
-      WIDTH_IN = [12.0, 3.4028235E38]
-      DRAW_CONTENT
-      CLICK_MODIFIER
-      SEMANTICS = SEMANTICS BUTTON
-      PADDING = [14.0, 6.0, 14.0, 6.0]
-    TEXT_LAYOUT [-5:-1] = [0.0, 0.0, 0.0, 0.0] VISIBLE (42:"null")
-      MODIFIERS"""
-                .trimIndent()
-        runBlocking {
-            val document =
-                remoteComposeTestRule.captureDocument(context = context) {
-                    RemoteButton(
-                        modifier = RemoteModifier.buttonSizeModifier(),
-                        enabled = RemoteBoolean(true),
-                    ) {
-                        RemoteText(RemoteString("button_enabled"))
-                    }
+    fun button_hexagon_shape_container_background_image_ab(@TestParameter pathClip: PathClip) {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText.withPathClip(pathClip),
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            val backgroundImage = remember {
+                RemoteImageBitmap.createNamedRemoteImageBitmap(
+                    name = "backgroundImage",
+                    defaultValue = createImage(200, 200).asImageBitmap(),
+                )
+            }
+            ComponentContainer {
+                RemoteButton(
+                    onClick = testAction,
+                    modifier = RemoteModifier.buttonSizeModifier(),
+                    containerPainter = RemoteButtonDefaults.containerPainter(backgroundImage),
+                    shape = HexagonShape,
+                ) {
+                    RemoteText("hexagon".rs)
                 }
-            val actualContent = document.displayHierarchy()
-
-            assertEquals(expectedContent.normalizeWhiteSpace(), actualContent.normalizeWhiteSpace())
+            }
         }
     }
 
+    /**
+     * The container painter draws over the full rectangular bounds, including the corners outside
+     * the default stadium shape. These corners are clipped away both by the rounded rectangle clip
+     * of [RemoteModifier.clip] and by the path clip, so both variants should match.
+     */
     @Test
-    fun button_disabled_click_modifier_is_not_added() {
-        val expectedContent =
-            """
-DATA_TEXT<42> = "button_disabled"
-ROOT [-2:-1] = [0.0, 0.0, 0.0, 0.0] VISIBLE
-  ROW [-3:-1] = [0.0, 0.0, 28.0, 12.0] VISIBLE
-    MODIFIERS
-      HEIGHT_IN = [52.0, 3.4028235E38]
-      WIDTH_IN = [12.0, 3.4028235E38]
-      DRAW_CONTENT
-      SEMANTICS = SEMANTICS BUTTON disabled
-      PADDING = [14.0, 6.0, 14.0, 6.0]
-    TEXT_LAYOUT [-5:-1] = [0.0, 0.0, 0.0, 0.0] VISIBLE (42:"null")
-      MODIFIERS"""
-                .trimIndent()
-
-        runBlocking {
-            val document =
-                remoteComposeTestRule.captureDocument(context = context) {
-                    RemoteButton(
-                        modifier = RemoteModifier.buttonSizeModifier(),
-                        enabled = RemoteBoolean(false),
-                    ) {
-                        RemoteText(RemoteString("button_disabled"))
-                    }
+    fun button_container_painter_draws_in_corners_ab(@TestParameter pathClip: PathClip) {
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgetsWithCoreText.withPathClip(pathClip),
+            remoteCreationDisplayInfo = creationDisplayInfo,
+        ) {
+            ComponentContainer {
+                RemoteButton(
+                    onClick = testAction,
+                    modifier = RemoteModifier.buttonSizeModifier(),
+                    containerPainter = CornerMarkersPainter,
+                ) {
+                    RemoteText("corners".rs)
                 }
-            val actualContent = document.displayHierarchy()
-
-            assertEquals(expectedContent.normalizeWhiteSpace(), actualContent.normalizeWhiteSpace())
+            }
         }
     }
 
-    // Replace all sequences of whitespace (including newlines, tabs) with a single space. Then
-    // trim leading/trailing spaces from the whole string
-    private fun String.normalizeWhiteSpace() = this.replace(Regex("``s+"), " ").trim()
+    private val testAction = hostAction("testAction".rs, 1.rf)
+}
 
-    @Composable
-    @RemoteComposable
-    private fun Center(
-        modifier: RemoteModifier,
-        content: @Composable @RemoteComposable () -> Unit,
-    ) {
-        RemoteBox(
-            modifier,
-            horizontalAlignment = RemoteAlignment.CenterHorizontally,
-            verticalArrangement = RemoteArrangement.Center,
-            content = content,
-        )
+/** A hexagon with points at the start and end, which can't be expressed as a rounded rectangle. */
+private object HexagonShape : RemoteShape {
+    override fun createOutline(
+        size: RemoteSize,
+        layoutDirection: RemoteLayoutDirection,
+        density: RemoteDensity,
+    ): RemoteOutline {
+        val w = size.width
+        val h = size.height
+        val inset = h / 2f.rf
+        return RemoteOutline.Generic {
+            moveTo(0f.rf, h / 2f.rf)
+            lineTo(inset, 0f.rf)
+            lineTo(w - inset, 0f.rf)
+            lineTo(w, h / 2f.rf)
+            lineTo(w - inset, h)
+            lineTo(inset, h)
+            close()
+        }
+    }
+}
+
+/**
+ * Fills the full bounds and draws a marker in each corner, so drawing outside of a rounded shape is
+ * visible.
+ */
+private object CornerMarkersPainter : RemotePainter() {
+    override val intrinsicSize: RemoteSize? = null
+
+    override fun RemoteDrawScope.onDraw() {
+        drawRect(RemotePaint { color = RemoteColor.Blue })
+        val marker = RemoteSize(height / 3f.rf, height / 3f.rf)
+        val markerPaint = RemotePaint { color = RemoteColor.Yellow }
+        drawRect(markerPaint, RemoteOffset(0f.rf, 0f.rf), marker)
+        drawRect(markerPaint, RemoteOffset(width - marker.width, 0f.rf), marker)
+        drawRect(markerPaint, RemoteOffset(0f.rf, height - marker.height), marker)
+        drawRect(markerPaint, RemoteOffset(width - marker.width, height - marker.height), marker)
     }
 }

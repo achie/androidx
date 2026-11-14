@@ -38,14 +38,26 @@ class SavedStateHandleProviderTest {
             called = true
             Bundle().apply { putString("state", "saved") }
         }
+        assertThat(handle.contains("provider")).isFalse()
 
         // Now save the state
-        val savedState = handle.savedStateProvider().saveState()
+        val savedState = handle.asContainer().saveState()
         assertWithMessage("SavedStateProvider should be called").that(called).isTrue()
+        assertThat(handle.contains("provider")).isTrue()
         val newHandle = SavedStateHandle.createHandle(savedState, null)
+        assertThat(newHandle.contains("provider")).isTrue()
         val savedBundle = newHandle.get<Bundle?>("provider")
         assertThat(savedBundle).isNotNull()
         assertThat(savedBundle?.getString("state")).isEqualTo("saved")
+
+        newHandle.setSavedStateProvider("provider") {
+            Bundle().apply { putString("state", "saved2") }
+        }
+        assertThat(newHandle.contains("provider")).isTrue()
+        assertThat(newHandle.get<Bundle?>("provider")?.getString("state")).isEqualTo("saved")
+        newHandle.clearSavedStateProvider("provider")
+        assertThat(newHandle.contains("provider")).isTrue()
+        assertThat(newHandle.get<Bundle?>("provider")?.getString("state")).isEqualTo("saved")
     }
 
     @UiThreadTest
@@ -61,7 +73,7 @@ class SavedStateHandleProviderTest {
         handle.clearSavedStateProvider("provider")
 
         // Now save the state
-        handle.savedStateProvider().saveState()
+        handle.asContainer().saveState()
         assertWithMessage("SavedStateProvider should not be called").that(called).isFalse()
     }
 }

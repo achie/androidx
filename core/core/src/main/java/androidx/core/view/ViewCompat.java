@@ -49,6 +49,7 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.ViewStructure;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -649,7 +650,7 @@ public class ViewCompat {
      * <p>
      * <b>Note:</b> This method should only be used with {@link AccessibilityRecord#getText()}.
      * Avoid mutating other event state in this method. Instead, follow the practices described in
-     * {@link #dispatchPopulateAccessibilityEvent(AccessibilityEvent)}. In general, put UI
+     * {@link View#dispatchPopulateAccessibilityEvent(AccessibilityEvent)}. In general, put UI
      * metadata in the node for services to easily query, than in events.
      * <p>
      * Example: Adding formatted date string to an accessibility event in addition
@@ -968,9 +969,9 @@ public class ViewCompat {
      * Gets the unique, logical identifier of this view in the activity, for autofill purposes.
      *
      * <p>The autofill id is created on demand, unless it is explicitly set by
-     * {@link #setAutofillId(AutofillId)}.
+     * {@link #setAutofillId(View, AutofillIdCompat)}.
      *
-     * <p>See {@link #setAutofillId(AutofillId)} for more info.
+     * <p>See {@link #setAutofillId(View, AutofillIdCompat)} for more info.
      *
      * Compatibility behavior:
      * <ul>
@@ -992,7 +993,7 @@ public class ViewCompat {
      * Sets the unique, logical identifier of this view in the activity, for autofill purposes.
      *
      * <p>The autofill id is created on demand, and this method should only be called when a view is
-     * reused after {@link #dispatchProvideAutofillStructure(ViewStructure, int)} is called, as
+     * reused after {@link View#dispatchProvideAutofillStructure(ViewStructure, int)} is called, as
      * that method creates a snapshot of the view that is passed along to the autofill service.
      *
      * <p>This method is typically used when view subtrees are recycled to represent different
@@ -1034,11 +1035,11 @@ public class ViewCompat {
      * @param v The View against which to invoke the method.
      * @param id an autofill ID that is unique in the {@link android.app.Activity} hosting the view,
      * or {@code null} to reset it. Usually it's an id previously allocated to another view (and
-     * obtained through {@link #getAutofillId()}), or a new value obtained through
-     * {@link AutofillManager#getNextAutofillId()}.
+     * obtained through {@link #getAutofillId(View)}), or a new value obtained through
+     * {@link android.view.autofill.AutofillManager#getNextAutofillId()}.
      *
-     * @throws IllegalStateException if the view is already {@link #isAttachedToWindow() attached to
-     * a window}.
+     * @throws IllegalStateException if the view is already {@link #isAttachedToWindow(View)
+     * attached to a window}.
      *
      * @throws IllegalArgumentException if the id is an autofill id associated with a virtual view.
      */
@@ -1079,8 +1080,8 @@ public class ViewCompat {
     /**
      * Gets the mode for determining whether this view is important for content capture.
      *
-     * <p>See {@link #setImportantForContentCapture(int)} and
-     * {@link #isImportantForContentCapture()} for more info about this mode.
+     * <p>See {@link #setImportantForContentCapture(View, int)} and
+     * {@link #isImportantForContentCapture(View)} for more info about this mode.
      *
      * Compatibility behavior:
      * <ul>
@@ -1090,7 +1091,7 @@ public class ViewCompat {
      *
      * @param v The View against which to invoke the method.
      * @return {@link #IMPORTANT_FOR_CONTENT_CAPTURE_AUTO} by default, or value passed to
-     * {@link #setImportantForContentCapture(int)}.
+     * {@link #setImportantForContentCapture(View, int)}.
      *
      * @attr ref android.R.styleable#View_importantForContentCapture
      */
@@ -1103,10 +1104,11 @@ public class ViewCompat {
 
     /**
      * Hints the Android System whether this view is considered important for content capture, based
-     * on the value explicitly set by {@link #setImportantForContentCapture(int)} and heuristics
-     * when it's {@link #IMPORTANT_FOR_CONTENT_CAPTURE_AUTO}.
+     * on the value explicitly set by {@link #setImportantForContentCapture(View, int)} and
+     * heuristics when it's {@link #IMPORTANT_FOR_CONTENT_CAPTURE_AUTO}.
      *
-     * <p>See {@link ContentCaptureManager} for more info about content capture.
+     * <p>See {@link android.view.contentcapture.ContentCaptureManager} for more info about content
+     * capture.
      *
      * Compatibility behavior:
      * <ul>
@@ -1141,7 +1143,8 @@ public class ViewCompat {
      * </ul>
      *
      * @param v The View against which to invoke the method.
-     * @return session explicitly set by {@link #setContentCaptureSession(ContentCaptureSession)},
+     * @return session explicitly set by
+     * {@link #setContentCaptureSession(View, ContentCaptureSessionCompat)},
      * inherited by ancestors, default session or {@code null} if content capture is disabled for
      * this view.
      */
@@ -1159,9 +1162,9 @@ public class ViewCompat {
     /**
      * Sets the (optional) {@link ContentCaptureSession} associated with this view.
      *
-     * <p>This method should be called when you need to associate a {@link ContentCaptureContext} to
-     * the content capture events associated with this view or its view hierarchy (if it's a
-     * {@link ViewGroup}).
+     * <p>This method should be called when you need to associate a
+     * {@link android.view.contentcapture.ContentCaptureContext} to the content capture events
+     * associated with this view or its view hierarchy (if it's a {@link ViewGroup}).
      *
      * <p>For example, if your activity is associated with a web domain, first you would need to
      * set the context for the main DOM:
@@ -1751,6 +1754,70 @@ public class ViewCompat {
         return stateDescriptionProperty().get(view);
     }
 
+    /**
+     * Sets the {@link View}'s supplemental description.
+     * <p>
+     * A supplemental description provides
+     * brief supplemental information for this node, such as the purpose of the node when
+     * that purpose is not conveyed within its textual representation. For example, if a
+     * dropdown select has a purpose of setting font family, the supplemental description
+     * could be "font family". If this node has children, its supplemental description serves
+     * as additional information and is not intended to replace any existing information
+     * in the subtree. This is different from the {@link View#setContentDescription(CharSequence)}
+     * in that this description is purely supplemental while a content description may be used
+     * to replace a description for a node or its subtree that an assistive technology
+     * would otherwise compute based on other properties of the node and its descendants.
+     *
+     * <p>
+     * This should omit role or state. Role refers to the kind of user-interface element the View
+     * is, such as a Button or Checkbox. State refers to a frequently changing property of the
+     * View, such as an On/Off state of a button or the audio level of a volume slider.
+     *
+     * <p>
+     * <strong>Note:</strong> On Android 16 (API 36) and Android 17 (API 37), calling
+     * {@link View#setSupplementalDescription(CharSequence)} directly or setting
+     * {@code android:supplementalDescription} in XML does not populate
+     * {@link AccessibilityNodeInfo#getSupplementalDescription()}. Use this method (or populate the
+     * node in an {@link AccessibilityDelegateCompat}) to ensure the supplemental description is
+     * exposed to accessibility services on those releases.
+     *
+     * @param view The view for which to set the supplemental description.
+     * @param supplementalDescription The supplemental description.
+     * @see ViewCompat#getSupplementalDescription(View)
+     * @see View#setSupplementalDescription(CharSequence)
+     * @see View#setContentDescription(CharSequence)
+     * @see ViewCompat#setStateDescription(View, CharSequence) for state changes.
+     */
+    @UiThread
+    public static void setSupplementalDescription(@NonNull View view,
+            @Nullable CharSequence supplementalDescription) {
+        supplementalDescriptionProperty().set(view, supplementalDescription);
+    }
+
+    /**
+     * Returns the {@link View}'s supplemental description.
+     * <p>
+     * A supplemental description provides
+     * brief supplemental information for this node, such as the purpose of the node when
+     * that purpose is not conveyed within its textual representation. For example, if a
+     * dropdown select has a purpose of setting font family, the supplemental description
+     * could be "font family". If this node has children, its supplemental description serves
+     * as additional information and is not intended to replace any existing information
+     * in the subtree. This is different from the {@link View#getContentDescription()} in that
+     * this description is purely supplemental while a content description may be used
+     * to replace a description for a node or its subtree that an assistive technology
+     * would otherwise compute based on other properties of the node and its descendants.
+     *
+     * @param view The view for which to get the supplemental description.
+     * @return the supplemental description
+     * @see ViewCompat#setSupplementalDescription(View, CharSequence)
+     * @see View#getSupplementalDescription()
+     * @see View#getContentDescription()
+     */
+    @UiThread
+    public static @Nullable CharSequence getSupplementalDescription(@NonNull View view) {
+        return supplementalDescriptionProperty().get(view);
+    }
 
     /**
      * Allow accessibility services to find and activate clickable spans in the application.
@@ -2979,7 +3046,7 @@ public class ViewCompat {
      * Sets a list of areas within this view's post-layout coordinate space where the system
      * should not intercept touch or other pointing device gestures. <em>This method should
      * be called by {@link View#onLayout(boolean, int, int, int, int)} or
-     * {@link View#onDraw(Canvas)}.</em>
+     * {@link View#onDraw(android.graphics.Canvas)}.</em>
      * <p>
      * On devices running API 28 and below, this method has no effect.
      *
@@ -4580,6 +4647,37 @@ public class ViewCompat {
         };
     }
 
+    private static AccessibilityViewProperty<CharSequence> supplementalDescriptionProperty() {
+        return new AccessibilityViewProperty<CharSequence>(
+                R.id.tag_supplemental_description,
+                CharSequence.class,
+                AccessibilityEvent.CONTENT_CHANGE_TYPE_SUPPLEMENTAL_DESCRIPTION,
+                36) {
+
+            @RequiresApi(36)
+            @Override
+            CharSequence frameworkGet(View view) {
+                return Api36Impl.getSupplementalDescription(view);
+            }
+
+            @RequiresApi(36)
+            @Override
+            void frameworkSet(View view, CharSequence value) {
+                Api36Impl.setSupplementalDescription(view, value);
+                // Work around b/583176410 where View#onInitializeAccessibilityNodeInfoInternal
+                // did not populate AccessibilityNodeInfo#setSupplementalDescription.
+                if (!TextUtils.isEmpty(value)) {
+                    ensureAccessibilityDelegateCompat(view);
+                }
+            }
+
+            @Override
+            boolean shouldUpdate(CharSequence oldValue, CharSequence newValue) {
+                return !TextUtils.equals(oldValue, newValue);
+            }
+        };
+    }
+
     /**
      * Gets whether this view is a heading for accessibility purposes.
      *
@@ -5157,6 +5255,21 @@ public class ViewCompat {
 
         static void transformMatrixToGlobal(View view, Matrix matrix) {
             view.transformMatrixToGlobal(matrix);
+        }
+    }
+
+    @RequiresApi(36)
+    private static class Api36Impl {
+        private Api36Impl() {
+            // This class is not instantiable.
+        }
+
+        static void setSupplementalDescription(View view, CharSequence supplementalDescription) {
+            view.setSupplementalDescription(supplementalDescription);
+        }
+
+        static CharSequence getSupplementalDescription(View view) {
+            return view.getSupplementalDescription();
         }
     }
 

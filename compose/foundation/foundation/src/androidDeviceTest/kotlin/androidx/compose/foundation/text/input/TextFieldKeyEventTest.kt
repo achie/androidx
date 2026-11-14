@@ -47,9 +47,8 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.KeyInjectionScope
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
@@ -68,7 +67,6 @@ import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -76,9 +74,8 @@ import org.junit.runner.RunWith
 
 @MediumTest
 @RunWith(AndroidJUnit4::class)
-@OptIn(ExperimentalTestApi::class)
 class TextFieldKeyEventTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val tag = "TextFieldTestTag"
 
@@ -920,6 +917,7 @@ class TextFieldKeyEventTest {
     }
 
     @Test
+    @Suppress("DEPRECATION") // b/552879150
     fun textField_keyEvent_functionReference() {
         val state = mutableIntStateOf(0)
         var handled = -1
@@ -936,7 +934,8 @@ class TextFieldKeyEventTest {
             BasicTextField(
                 value = "text",
                 onValueChange = {},
-                modifier = Modifier.focusRequester(focusRequester).testTag(tag).onKeyEvent(::handle),
+                modifier =
+                    Modifier.focusRequester(focusRequester).testTag(tag).onKeyEvent(::handle),
             )
         }
 
@@ -951,7 +950,6 @@ class TextFieldKeyEventTest {
         rule.runOnIdle { assertThat(handled).isEqualTo(1) }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun singleLineTextField_enterIsNotConsumed_withDefaultKeyboardAction() {
         var keyDownReceived = false
@@ -983,6 +981,21 @@ class TextFieldKeyEventTest {
 
         assertTrue(keyDownReceived)
         assertTrue(keyUpReceived)
+    }
+
+    @Test
+    fun textField_ctrlBackspace() {
+        keysSequenceTest(
+            initText = "hello world",
+            initSelection = TextRange("hello world".length),
+        ) {
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.Backspace) }
+            expectedText("hello ")
+
+            // ctrl-shift-backspace should also delete previous word
+            withKeysDown(Key.CtrlLeft + Key.ShiftLeft) { pressKey(Key.Backspace) }
+            expectedText("")
+        }
     }
 
     private inner class SequenceScope(

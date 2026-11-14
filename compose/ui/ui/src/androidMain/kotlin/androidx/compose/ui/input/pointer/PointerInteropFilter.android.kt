@@ -20,6 +20,9 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.MotionEvent.ACTION_CANCEL
 import android.view.MotionEvent.ACTION_DOWN
+import android.view.MotionEvent.ACTION_HOVER_ENTER
+import android.view.MotionEvent.ACTION_HOVER_EXIT
+import android.view.MotionEvent.ACTION_HOVER_MOVE
 import android.view.MotionEvent.ACTION_MOVE
 import android.view.MotionEvent.ACTION_OUTSIDE
 import android.view.MotionEvent.ACTION_POINTER_DOWN
@@ -29,10 +32,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewParent
 import androidx.compose.runtime.remember
+import androidx.compose.ui.AndroidComposeUiFlags
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.NodeCoordinator
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.platform.AndroidComposeView
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.debugInspectorInfo
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.util.fastAll
@@ -63,11 +72,19 @@ import androidx.compose.ui.viewinterop.AndroidViewHolder
  * @see [View.onTouchEvent]
  * @see [ViewParent.requestDisallowInterceptTouchEvent]
  */
-fun Modifier.pointerInteropFilter(
+@OptIn(ExperimentalComposeUiApi::class)
+public fun Modifier.pointerInteropFilter(
     requestDisallowInterceptTouchEvent: (RequestDisallowInterceptTouchEvent)? = null,
     onTouchEvent: (MotionEvent) -> Boolean,
-): Modifier =
-    composed(
+): Modifier {
+    if (AndroidComposeUiFlags.isPointerInteropFilterNodeEnabled) {
+        return this then
+            PointerInteropFilterElement(
+                requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent,
+                onTouchEvent = onTouchEvent,
+            )
+    }
+    return composed(
         inspectorInfo =
             debugInspectorInfo {
                 name = "pointerInteropFilter"
@@ -81,15 +98,109 @@ fun Modifier.pointerInteropFilter(
         filter.requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent
         filter
     }
+}
+
+private class PointerInteropFilterElement(
+    private val requestDisallowInterceptTouchEvent: RequestDisallowInterceptTouchEvent?,
+    private val onTouchEvent: (MotionEvent) -> Boolean,
+) : ModifierNodeElement<PointerInteropFilterNode>() {
+    override fun create(): PointerInteropFilterNode =
+        PointerInteropFilterNode(
+            requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent,
+            onTouchEvent = onTouchEvent,
+        )
+
+    override fun update(node: PointerInteropFilterNode) {
+        node.update(
+            requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent,
+            onTouchEvent = onTouchEvent,
+        )
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "pointerInteropFilter"
+        properties["requestDisallowInterceptTouchEvent"] = requestDisallowInterceptTouchEvent
+        properties["onTouchEvent"] = onTouchEvent
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PointerInteropFilterElement) return false
+        if (requestDisallowInterceptTouchEvent != other.requestDisallowInterceptTouchEvent) {
+            return false
+        }
+        if (onTouchEvent !== other.onTouchEvent) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = requestDisallowInterceptTouchEvent?.hashCode() ?: 0
+        result = 31 * result + onTouchEvent.hashCode()
+        return result
+    }
+}
+
+private class PointerInteropFilterNode(
+    private var requestDisallowInterceptTouchEvent: RequestDisallowInterceptTouchEvent?,
+    onTouchEvent: (MotionEvent) -> Boolean,
+) : Modifier.Node(), PointerInputModifierNode {
+    private val filter =
+        PointerInteropFilter().also {
+            it.onTouchEvent = onTouchEvent
+            it.requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent
+        }
+
+    override val shouldAutoInvalidate: Boolean
+        get() = false
+
+    fun update(
+        requestDisallowInterceptTouchEvent: RequestDisallowInterceptTouchEvent?,
+        onTouchEvent: (MotionEvent) -> Boolean,
+    ) {
+        this.requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent
+        filter.onTouchEvent = onTouchEvent
+        filter.requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent
+    }
+
+    override fun updateCoordinator(coordinator: NodeCoordinator?) {
+        super.updateCoordinator(coordinator)
+        filter.pointerInputFilter.layoutCoordinates = coordinator
+    }
+
+    override fun onAttach() {
+        filter.pointerInputFilter.layoutCoordinates = coordinator
+        filter.requestDisallowInterceptTouchEvent = requestDisallowInterceptTouchEvent
+    }
+
+    override fun onDetach() {
+        filter.pointerInputFilter.layoutCoordinates = null
+        filter.requestDisallowInterceptTouchEvent = null
+    }
+
+    override fun sharePointerInputWithSiblings(): Boolean =
+        filter.pointerInputFilter.shareWithSiblings
+
+    override fun onPointerEvent(
+        pointerEvent: PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+    ) {
+        filter.pointerInputFilter.onPointerEvent(pointerEvent, pass, bounds)
+    }
+
+    override fun onCancelPointerInput() {
+        filter.pointerInputFilter.onCancel()
+    }
+}
 
 /**
  * Function that can be passed to [pointerInteropFilter] and then later invoked which provides an
  * analog to [ViewParent.requestDisallowInterceptTouchEvent].
  */
-class RequestDisallowInterceptTouchEvent : (Boolean) -> Unit {
+public class RequestDisallowInterceptTouchEvent : (Boolean) -> Unit {
     internal var pointerInteropFilter: PointerInteropFilter? = null
 
-    override fun invoke(disallowIntercept: Boolean) {
+    public override fun invoke(disallowIntercept: Boolean) {
         pointerInteropFilter?.disallowIntercept = disallowIntercept
     }
 }
@@ -109,9 +220,24 @@ internal fun Modifier.pointerInteropFilter(view: AndroidViewHolder): Modifier {
             ACTION_POINTER_UP,
             ACTION_OUTSIDE,
             ACTION_CANCEL -> view.dispatchTouchEvent(motionEvent)
-            // ACTION_HOVER_ENTER,
-            // ACTION_HOVER_MOVE,
-            // ACTION_HOVER_EXIT,
+            ACTION_HOVER_ENTER,
+            ACTION_HOVER_MOVE,
+            ACTION_HOVER_EXIT -> {
+                val owner = view.layoutNode.owner as? AndroidComposeView
+                // In AndroidComposeView.dispatchHoverEvent(), all hover MotionEvents (including
+                // finger touch exploration and hardware mouse/stylus hover) are first sent to
+                // AndroidComposeViewAccessibilityDelegateCompat.dispatchHoverEvent(). When touch
+                // exploration is active, the accessibility delegate acts as the sole dispatcher of
+                // hover events to androidViewsHandler: it forwards hover to uncovered interop views
+                // and blocks hover when covered by Compose semantics nodes. Returning false here
+                // avoids bypassing non-pointer-input Compose semantics overlays (e.g. Text) and
+                // prevents duplicate hover dispatches to uncovered interop views.
+                if (owner?.isTouchExplorationEnabled == true) {
+                    false
+                } else {
+                    view.dispatchGenericMotionEvent(motionEvent)
+                }
+            }
             // ACTION_BUTTON_PRESS,
             // ACTION_BUTTON_RELEASE,
             else -> view.dispatchGenericMotionEvent(motionEvent)
@@ -212,17 +338,57 @@ internal class PointerInteropFilter : PointerInputModifier {
              */
             private var lastEventDispatchedToInitialPass: PointerEvent? = null
 
+            /**
+             * Tracks whether a synthetic [PointerEventType.Exit] occurred during an active trackpad
+             * pan gesture.
+             *
+             * When a pan gesture exits a node's bounds, [HitPathTracker] first dispatches a
+             * synthetic [PointerEventType.Exit] across all three passes (`Initial`, `Main`,
+             * `Final`), immediately followed in the same frame by the [PointerEventType.PanMove]
+             * event across all three passes, and then prunes the pointer from the node after
+             * `PanMove`'s `Final` pass (meaning this filter will never receive
+             * [PointerEventType.PanEnd]).
+             *
+             * We must wait until the `Final` pass of that [PointerEventType.PanMove] event (rather
+             * than resetting during the `Final` pass of the preceding [PointerEventType.Exit]) to
+             * call [stopDispatching] and [reset]; otherwise, resetting `state` to
+             * [DispatchToViewState.Unknown] during `Exit` would cause the immediately following
+             * `PanMove` to re-enter [dispatchToView], dispatching `ACTION_MOVE` after
+             * `ACTION_CANCEL` and leaving `state` stuck after the node is pruned.
+             */
+            private var panExitedBounds = false
+
             override fun onPointerEvent(
                 pointerEvent: PointerEvent,
                 pass: PointerEventPass,
                 bounds: IntSize,
             ) {
+                // Ignore synthetic Enter/Exit events generated during a pan gesture, as the
+                // underlying MotionEvent (ACTION_DOWN/MOVE/UP) will be dispatched by the actual
+                // Pan events and dispatching synthetic hover events would result in duplicate
+                // MotionEvent dispatches and improper state changes.
+                if (
+                    pointerEvent.internalPointerEvent?.activeGesture == PointerClassification.Pan &&
+                        (pointerEvent.type == PointerEventType.Enter ||
+                            pointerEvent.type == PointerEventType.Exit)
+                ) {
+                    if (pointerEvent.type == PointerEventType.Exit) {
+                        panExitedBounds = true
+                    }
+                    return
+                }
+
                 val changes = pointerEvent.changes
 
+                val isPanStartOrEnd =
+                    pointerEvent.type == PointerEventType.PanStart ||
+                        pointerEvent.type == PointerEventType.PanEnd
+
                 val isMoveEvent =
-                    changes.fastAll {
-                        !it.changedToDownIgnoreConsumed() && !it.changedToUpIgnoreConsumed()
-                    }
+                    !isPanStartOrEnd &&
+                        changes.fastAll {
+                            !it.changedToDownIgnoreConsumed() && !it.changedToUpIgnoreConsumed()
+                        }
 
                 val hasUnconsumedMove = isMoveEvent && changes.fastAll { !it.isConsumed }
 
@@ -232,6 +398,7 @@ internal class PointerInteropFilter : PointerInputModifier {
                 // intercept due to movement.
                 val dispatchDuringInitialTunnel =
                     disallowIntercept ||
+                        isPanStartOrEnd ||
                         changes.fastAny {
                             it.changedToDownIgnoreConsumed() || it.changedToUpIgnoreConsumed()
                         } ||
@@ -265,9 +432,27 @@ internal class PointerInteropFilter : PointerInputModifier {
                     }
                 }
                 if (pass == PointerEventPass.Final) {
-                    // If all of the changes were up changes, then the "event stream" has ended
-                    // and we reset.
-                    if (changes.fastAll { it.changedToUpIgnoreConsumed() }) {
+                    // If a trackpad pan gesture exited the node's bounds, HitPathTracker will prune
+                    // this node after the Final pass without delivering PanEnd. Cancel any active
+                    // view dispatch and reset state now so neither the View nor this filter gets
+                    // stuck in an active/suppressed gesture state.
+                    if (panExitedBounds && pointerEvent.type != PointerEventType.PanEnd) {
+                        if (state === DispatchToViewState.Dispatching) {
+                            stopDispatching(pointerEvent)
+                        }
+                        reset()
+                    } else if (
+                        // If all of the changes were up changes, or if a trackpad pan gesture has
+                        // ended, then the "event stream" has ended and we reset.
+                        //
+                        // Note: Trackpad pan gestures maintain pressed = false across the entire
+                        // stream in MotionEventAdapter, which prevents changedToUpIgnoreConsumed()
+                        // from returning true on ACTION_UP. Checking for PointerEventType.PanEnd is
+                        // therefore required to properly reset the dispatching state when a pan
+                        // gesture concludes.
+                        changes.fastAll { it.changedToUpIgnoreConsumed() } ||
+                            pointerEvent.type == PointerEventType.PanEnd
+                    ) {
                         reset()
                     }
 
@@ -291,8 +476,8 @@ internal class PointerInteropFilter : PointerInputModifier {
                     emptyCancelMotionEventScope(SystemClock.uptimeMillis()) { motionEvent ->
                         onTouchEvent(motionEvent)
                     }
-                    reset()
                 }
+                reset()
             }
 
             /** Resets all of our state to be ready for a "new event stream". */
@@ -300,6 +485,7 @@ internal class PointerInteropFilter : PointerInputModifier {
                 state = DispatchToViewState.Unknown
                 disallowIntercept = false
                 lastEventDispatchedToInitialPass = null
+                panExitedBounds = false
             }
 
             /**
@@ -381,7 +567,7 @@ internal class PointerInteropFilter : PointerInputModifier {
  *
  * If you need to handle and consume [MotionEvent]s, use [pointerInteropFilter].
  */
-fun Modifier.motionEventSpy(watcher: (motionEvent: MotionEvent) -> Unit): Modifier =
+public fun Modifier.motionEventSpy(watcher: (motionEvent: MotionEvent) -> Unit): Modifier =
     this.pointerInput(watcher) {
         interceptOutOfBoundsChildEvents = true
         awaitPointerEventScope {

@@ -1,0 +1,180 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.car.app.sample.showcase.common.screens.mapdemos.mapwithcontent
+
+import androidx.annotation.OptIn
+import androidx.car.app.CarContext
+import androidx.car.app.Screen
+import androidx.car.app.annotations.ExperimentalCarApi
+import androidx.car.app.model.Action
+import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarIconStyle
+import androidx.car.app.model.CarProgressBar
+import androidx.car.app.model.GridSection
+import androidx.car.app.model.Header
+import androidx.car.app.model.RowSection
+import androidx.car.app.model.SectionedItemTemplate
+import androidx.car.app.model.Template
+import androidx.car.app.model.Toggle
+import androidx.car.app.navigation.model.MapController
+import androidx.car.app.navigation.model.MapWithContentTemplate
+import androidx.car.app.sample.showcase.common.R
+import androidx.car.app.sample.showcase.common.screens.navigationdemos.RoutingDemoModelFactory
+import androidx.car.app.sample.showcase.common.utils.CarContextAware
+import androidx.car.app.sample.showcase.common.utils.createAction
+import androidx.car.app.sample.showcase.common.utils.createBadge
+import androidx.car.app.sample.showcase.common.utils.createGridItem
+import androidx.car.app.sample.showcase.common.utils.createGridSection
+import androidx.car.app.sample.showcase.common.utils.createRow
+import androidx.car.app.sample.showcase.common.utils.withApiGuard
+import androidx.car.app.versioning.CarAppApiLevels
+
+/** Demonstrates how to present a [MapWithContentTemplate] alongside a [SectionedItemTemplate]. */
+@OptIn(ExperimentalCarApi::class)
+class MapWithSectionedItemsDemoScreen(carContext: CarContext) :
+    Screen(carContext), CarContextAware {
+    private val routingDemoModelFactory = RoutingDemoModelFactory(carContext)
+    private var isHovEnabled = true
+    private val navigateTitle = getString(R.string.navigate)
+    private val icMenu = getCarIcon(R.drawable.ic_fastfood_white_48dp)
+    private val icPhotos = getCarIcon(R.drawable.patio, CarIconStyle.ORIGINAL)
+    private val icAndroid = getCarIcon(R.drawable.test_android_media, CarIconStyle.ORIGINAL)
+    private val icSquare = getCarIcon(R.drawable.test_image_square, CarIconStyle.ORIGINAL)
+    private val icNavigate = getCarIcon(R.drawable.ic_explore_white_24dp)
+    private val icRoute = getCarIcon(R.drawable.arrow_right_turn)
+    private val icRefresh = getCarIcon(R.drawable.baseline_refresh_24)
+    private val icInfo = getCarIcon(R.drawable.outline_info_24)
+    private val icBug = getCarIcon(R.drawable.ic_bug_report_24px)
+
+    override fun onGetTemplate(): Template {
+        val sectionedTemplate =
+            with(SectionedItemTemplate.Builder()) {
+                setHeader(makeHeader())
+                carContext.withApiGuard(CarAppApiLevels.LEVEL_9) {
+                    setActions(makeStickyActionsSection())
+                }
+                addSection(makeGridSection())
+                addSection(makeListSection())
+                build()
+            }
+
+        return MapWithContentTemplate.Builder()
+            .setContentTemplate(sectionedTemplate)
+            .setActionStrip(makeActionStrip())
+            .setMapController(makeMapController())
+            .build()
+    }
+
+    private fun makeHeader(): Header {
+        return Header.Builder()
+            .setTitle(getString(R.string.map_with_sectioned_items_demo_title))
+            .setStartHeaderAction(Action.BACK)
+            .build()
+    }
+
+    private fun makeListSection(): RowSection {
+        val hovToggle =
+            Toggle.Builder { checked -> isHovEnabled = checked }.setChecked(isHovEnabled).build()
+
+        return RowSection.Builder()
+            .setTitle("List Items Section")
+            .addItem(createRow(title = "HOV", toggle = hovToggle))
+            .addItem(createRow(title = "Last visit 5 days", image = icRefresh))
+            .addItem(createRow(title = "(555) 555-0123", image = icInfo))
+            .build()
+    }
+
+    private fun makeStickyActionsSection(): List<Action> {
+        val primaryAction =
+            createAction(
+                title = navigateTitle,
+                icon = icNavigate,
+                flags = Action.FLAG_PRIMARY,
+                clickListener = { makeToast("Clicked Primary Action!").show() },
+            )
+        val secondaryAction =
+            createAction(
+                icon = icRoute,
+                clickListener = { makeToast("Clicked Secondary Action!").show() },
+            )
+        return listOf(primaryAction, secondaryAction)
+    }
+
+    private fun makeGridSection(): GridSection {
+        val redDotBadge = createBadge()
+        val iconBadge = createBadge(icon = icInfo)
+        val progressBar = CarProgressBar.Builder(0.6f).build()
+
+        return createGridSection(
+            title = "Grid Items Section",
+            itemSize = GridSection.ITEM_SIZE_MEDIUM,
+            items =
+                listOf(
+                    createGridItem(
+                        title = "Standard",
+                        text = "With click listener",
+                        image = icMenu,
+                        clickListener = { makeToast("Clicked Grid Item!").show() },
+                    ),
+                    createGridItem(
+                        title = "Simple Icon",
+                        text = "inst. of Image",
+                        image = icNavigate,
+                        clickListener = {},
+                    ),
+                    createGridItem(
+                        title = "Dot Badge",
+                        text = "Unread notification",
+                        image = icPhotos,
+                        badge = redDotBadge,
+                        clickListener = {},
+                    ),
+                    createGridItem(
+                        title = "Icon Badge",
+                        text = "Additional context",
+                        image = icPhotos,
+                        badge = iconBadge,
+                        clickListener = {},
+                    ),
+                    createGridItem(
+                        title = "Progress Bar",
+                        image = icAndroid,
+                        progressBar = progressBar,
+                        clickListener = {},
+                    ),
+                    createGridItem(
+                        title = "Non-indexable",
+                        text = "Skipped in indexed lists",
+                        image = icSquare,
+                        isIndexable = false,
+                        clickListener = {},
+                    ),
+                ),
+        )
+    }
+
+    private fun makeActionStrip(): ActionStrip {
+        val bugAction = createAction(title = null, icon = icBug, clickListener = {})
+        return ActionStrip.Builder().addAction(bugAction).build()
+    }
+
+    private fun makeMapController(): MapController {
+        return MapController.Builder()
+            .setMapActionStrip(routingDemoModelFactory.mapActionStrip)
+            .build()
+    }
+}

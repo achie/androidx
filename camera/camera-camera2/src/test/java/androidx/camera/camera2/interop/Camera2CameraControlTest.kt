@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.camera.camera2.interop
 
 import android.hardware.camera2.CaptureRequest
@@ -26,12 +28,13 @@ import androidx.camera.camera2.impl.ComboRequestListener
 import androidx.camera.camera2.impl.UseCaseCameraRequestControl
 import androidx.camera.camera2.impl.UseCaseThreads
 import androidx.camera.camera2.impl.toParameters
-import androidx.camera.camera2.pipe.FrameNumber
+import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestNumber
 import androidx.camera.camera2.pipe.testing.FakeFrameInfo
 import androidx.camera.camera2.pipe.testing.FakeFrameMetadata
 import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
+import androidx.camera.common.CameraFrameNumber
 import androidx.camera.core.impl.CameraControlInternal
 import androidx.camera.core.impl.MutableTagBundle
 import androidx.testutils.assertThrows
@@ -73,7 +76,6 @@ class Camera2CameraControlTest {
         camera2CameraControl =
             Camera2CameraControl.create(
                 compat = camera2CameraControlCompatImpl,
-                threads = fakeUseCaseThreads,
                 requestListener = comboRequestListener,
             )
         camera2CameraControl.requestControl = fakeRequestControl
@@ -104,7 +106,7 @@ class Camera2CameraControlTest {
             fakeRequestControl.setConfigCalls
                 .filter { it.type == UseCaseCameraRequestControl.Type.CAMERA2_CAMERA_CONTROL }
                 .onEach { request ->
-                    comboRequestListener.simulateRepeatingResult(
+                    request.listeners.simulateRepeatingResult(
                         requests = request.config?.toParameters() ?: emptyMap(),
                         tags = request.tags,
                     )
@@ -150,7 +152,7 @@ class Camera2CameraControlTest {
             fakeRequestControl.setConfigCalls
                 .filter { it.type == UseCaseCameraRequestControl.Type.CAMERA2_CAMERA_CONTROL }
                 .onEach { request ->
-                    comboRequestListener.simulateRepeatingResult(
+                    request.listeners.simulateRepeatingResult(
                         requests = request.config?.toParameters() ?: emptyMap(),
                         tags = request.tags,
                     )
@@ -163,17 +165,49 @@ class Camera2CameraControlTest {
         assertThat(resultFuture2.get(3, TimeUnit.SECONDS)).isNull()
     }
 
+    @Test
+    fun globalComboRequestListener_doesNotPrematurelyCompleteInteropFuture(): Unit = runBlocking {
+        val resultFuture =
+            camera2CameraControl.setCaptureRequestOptions(
+                CaptureRequestOptions.Builder()
+                    .setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_OFF,
+                    )
+                    .build()
+            )
+
+        val interopRequest =
+            fakeRequestControl.setConfigCalls.last {
+                it.type == UseCaseCameraRequestControl.Type.CAMERA2_CAMERA_CONTROL
+            }
+        val params = interopRequest.config?.toParameters() ?: emptyMap()
+
+        // Firing the global default ComboRequestListener alone (e.g. before per-request
+        // repeating callbacks run) must not complete the interop future.
+        setOf<Request.Listener>(comboRequestListener)
+            .simulateRepeatingResult(requests = params, tags = interopRequest.tags)
+        assertThat(resultFuture.isDone).isFalse()
+
+        // Firing the per-request listeners attached via updateCamera2ConfigAsync completes it.
+        interopRequest.listeners.simulateRepeatingResult(
+            requests = params,
+            tags = interopRequest.tags,
+        )
+        assertThat(resultFuture.get(3, TimeUnit.SECONDS)).isNull()
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun fromCameraControlThrows_whenNotCamera2Impl() {
         val wrongCameraControl = CameraControlInternal.DEFAULT_EMPTY_INSTANCE
         Camera2CameraControl.from(wrongCameraControl)
     }
 
-    private fun ComboRequestListener.simulateRepeatingResult(
+    private fun Set<Request.Listener>.simulateRepeatingResult(
         requests: Map<CaptureRequest.Key<*>, Any> = emptyMap(),
         tags: Map<String, Any> = emptyMap(),
         results: Map<CaptureResult.Key<*>, Any> = emptyMap(),
-        frameNumber: FrameNumber = FrameNumber(101L),
+        frameNumber: CameraFrameNumber = CameraFrameNumber(101L),
     ) {
         val requestMetadata =
             FakeRequestMetadata(
@@ -190,12 +224,9 @@ class Camera2CameraControlTest {
                 requestNumber = RequestNumber(1),
             )
         val resultMetaData = FakeFrameMetadata(resultMetadata = results, frameNumber = frameNumber)
+        val frameInfo = FakeFrameInfo(metadata = resultMetaData, requestMetadata = requestMetadata)
         fakeUseCaseThreads.sequentialExecutor.execute {
-            onComplete(
-                requestMetadata,
-                frameNumber,
-                FakeFrameInfo(metadata = resultMetaData, requestMetadata = requestMetadata),
-            )
+            forEach { listener -> listener.onComplete(requestMetadata, frameNumber, frameInfo) }
         }
     }
 }

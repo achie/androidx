@@ -53,7 +53,7 @@ public class FakeStreamSpecsCalculator : StreamSpecsCalculator {
         sessionType: Int,
         targetFrameRate: Range<Int>,
         isFeatureComboInvocation: Boolean,
-        findMaxSupportedFrameRate: Boolean,
+        findSupportedFrameRateRanges: Boolean,
     ): StreamSpecQueryResult {
         Logger.d(TAG, "calculateSuggestedStreamSpecs: supportedStreamSpecs = $supportedStreamSpecs")
 
@@ -62,34 +62,30 @@ public class FakeStreamSpecsCalculator : StreamSpecsCalculator {
         (attachedUseCases + newUseCases).forEach { useCase ->
             val useCaseConfig = useCase.mergeConfigs(cameraInfoInternal, null, null)
 
-            val supportedSpec =
-                supportedStreamSpecs.find { streamSpec ->
-                    if (streamSpec.dynamicRange != useCaseConfig.dynamicRange) {
-                        return@find false
-                    }
-
-                    if (
-                        streamSpec.expectedFrameRateRange !=
-                            useCaseConfig.getTargetFrameRate(FRAME_RATE_RANGE_UNSPECIFIED)
-                    ) {
-                        return@find false
-                    }
-
-                    if (streamSpec.imageFormat != useCaseConfig.inputFormat) {
-                        return@find false
-                    }
-
-                    if (
-                        streamSpec.previewStabilizationMode !=
-                            useCaseConfig.previewStabilizationMode
-                    ) {
-                        return@find false
-                    }
-
-                    // TODO: Check other options like zslDisabled, implementationOptions etc.
-
-                    return@find true
+            val supportedSpec = supportedStreamSpecs.find { streamSpec ->
+                if (streamSpec.dynamicRange != useCaseConfig.dynamicRange) {
+                    return@find false
                 }
+
+                if (
+                    streamSpec.expectedFrameRateRange !=
+                        useCaseConfig.getTargetFrameRate(FRAME_RATE_RANGE_UNSPECIFIED)
+                ) {
+                    return@find false
+                }
+
+                if (streamSpec.imageFormat != useCaseConfig.inputFormat) {
+                    return@find false
+                }
+
+                if (streamSpec.previewStabilizationMode != useCaseConfig.previewStabilizationMode) {
+                    return@find false
+                }
+
+                // TODO: Check other options like zslDisabled, implementationOptions etc.
+
+                return@find true
+            }
 
             if (supportedSpec == null) {
                 val logMsg =
@@ -107,7 +103,7 @@ public class FakeStreamSpecsCalculator : StreamSpecsCalculator {
             }
         }
 
-        return StreamSpecQueryResult(streamSpecs, MAX_SUPPORTED_FRAME_RATE)
+        return StreamSpecQueryResult(streamSpecs)
     }
 
     /**
@@ -174,6 +170,5 @@ public class FakeStreamSpecsCalculator : StreamSpecsCalculator {
 
     public companion object {
         private const val TAG = "FakeStreamSpecsCalculator"
-        private const val MAX_SUPPORTED_FRAME_RATE = Int.MAX_VALUE
     }
 }

@@ -19,10 +19,16 @@ package androidx.compose.material3
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.SnapSpec
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -37,8 +43,14 @@ import androidx.compose.material3.tokens.SwitchTokens.TrackOutlineWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,9 +64,13 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateMeasurement
 import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -88,7 +104,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 @Suppress("ComposableLambdaParameterNaming", "ComposableLambdaParameterPosition")
-fun Switch(
+public fun Switch(
     checked: Boolean,
     onCheckedChange: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
@@ -97,10 +113,73 @@ fun Switch(
     colors: SwitchColors = SwitchDefaults.colors(),
     interactionSource: MutableInteractionSource? = null,
 ) {
+    SwitchImpl(
+        modifier = modifier,
+        onCheckedChange = onCheckedChange,
+        checked = checked,
+        enabled = enabled,
+        thumbContent = thumbContent,
+        thumbShape = SwitchTokens.HandleShape.value,
+        trackShape = SwitchTokens.TrackShape.value,
+        thumbColor = colors.thumbColor(enabled, checked),
+        iconColor = colors.iconColor(enabled, checked),
+        trackColor = colors.trackColor(enabled, checked),
+        borderColor = colors.borderColor(enabled, checked),
+        interactionSource = interactionSource,
+    )
+}
+
+@Composable
+@Suppress("ComposableLambdaParameterNaming", "ComposableLambdaParameterPosition")
+private fun SwitchImpl(
+    modifier: Modifier,
+    onCheckedChange: ((Boolean) -> Unit)?,
+    checked: Boolean,
+    enabled: Boolean,
+    thumbContent: (@Composable () -> Unit)?,
+    thumbShape: Shape,
+    trackShape: Shape,
+    thumbColor: Color,
+    iconColor: Color,
+    trackColor: Color,
+    borderColor: Color,
+    interactionSource: MutableInteractionSource?,
+) {
     @Suppress("NAME_SHADOWING")
     val interactionSource = interactionSource ?: remember { MutableInteractionSource() }
 
-    // TODO: Add Swipeable modifier b/223797571
+    // TODO Load the motionScheme tokens from the component tokens file
+    val animationSpec = MotionSchemeKeyTokens.FastSpatial.value<Float>()
+    val thumbTravelPx = with(LocalDensity.current) { (SwitchWidth - SwitchHeight).toPx() }
+    var forceAnimationCheck by remember { mutableStateOf(false) }
+    val anchoredDraggableState =
+        remember(thumbTravelPx) {
+            AnchoredDraggableState(
+                initialValue = checked,
+                anchors =
+                    DraggableAnchors {
+                        false at 0f
+                        true at thumbTravelPx
+                    },
+            )
+        }
+    val currentOnCheckedChange by rememberUpdatedState(onCheckedChange)
+    val currentChecked by rememberUpdatedState(checked)
+    LaunchedEffect(anchoredDraggableState) {
+        snapshotFlow { anchoredDraggableState.settledValue }
+            .collectLatest { newValue ->
+                if (currentChecked != newValue) {
+                    currentOnCheckedChange?.invoke(newValue)
+                    forceAnimationCheck = !forceAnimationCheck
+                }
+            }
+    }
+    LaunchedEffect(checked, forceAnimationCheck) {
+        if (checked != anchoredDraggableState.settledValue) {
+            anchoredDraggableState.animateTo(checked, animationSpec)
+        }
+    }
+
     val toggleableModifier =
         if (onCheckedChange != null) {
             Modifier.minimumInteractiveComponentSize()
@@ -116,40 +195,51 @@ fun Switch(
             Modifier
         }
 
-    SwitchImpl(
-        modifier =
-            modifier
-                .then(toggleableModifier)
-                .wrapContentSize(Alignment.Center)
-                .requiredSize(SwitchWidth, SwitchHeight),
-        checked = checked,
-        enabled = enabled,
-        colors = colors,
-        interactionSource = interactionSource,
-        thumbShape = SwitchTokens.HandleShape.value,
-        thumbContent = thumbContent,
-    )
-}
+    val dragModifier =
+        if (onCheckedChange != null) {
+            Modifier.anchoredDraggable(
+                state = anchoredDraggableState,
+                orientation = Orientation.Horizontal,
+                enabled = enabled,
+                interactionSource = interactionSource,
+                flingBehavior =
+                    AnchoredDraggableDefaults.flingBehavior(
+                        state = anchoredDraggableState,
+                        animationSpec = animationSpec,
+                    ),
+            )
+        } else {
+            Modifier
+        }
 
-@Composable
-@Suppress("ComposableLambdaParameterNaming", "ComposableLambdaParameterPosition")
-private fun SwitchImpl(
-    modifier: Modifier,
-    checked: Boolean,
-    enabled: Boolean,
-    colors: SwitchColors,
-    thumbContent: (@Composable () -> Unit)?,
-    interactionSource: InteractionSource,
-    thumbShape: Shape,
-) {
-    val trackColor = colors.trackColor(enabled, checked)
-    val resolvedThumbColor = colors.thumbColor(enabled, checked)
-    val trackShape = SwitchTokens.TrackShape.value
+    val useInsetRing =
+        LocalRippleThemeConfiguration.current.focus is RippleThemeConfiguration.Focus.InsetRing
+    val focusRingModifier =
+        if (useInsetRing) {
+            Modifier.indication(
+                interactionSource = interactionSource,
+                indication =
+                    ripple(
+                        focusRingShape = trackShape,
+                        enablePressIndication = false,
+                        enableFocusIndication = true,
+                        enableDragIndication = false,
+                        enableHoverIndication = false,
+                    ),
+            )
+        } else {
+            Modifier
+        }
 
     Box(
         modifier
-            .border(TrackOutlineWidth, colors.borderColor(enabled, checked), trackShape)
+            .then(toggleableModifier)
+            .then(dragModifier)
+            .wrapContentSize(Alignment.Center)
+            .requiredSize(SwitchWidth, SwitchHeight)
+            .border(TrackOutlineWidth, borderColor, trackShape)
             .background(trackColor, trackShape)
+            .then(focusRingModifier)
     ) {
         Box(
             modifier =
@@ -158,20 +248,23 @@ private fun SwitchImpl(
                         ThumbElement(
                             interactionSource = interactionSource,
                             checked = checked,
-                            // TODO Load the motionScheme tokens from the component tokens file
-                            animationSpec = MotionSchemeKeyTokens.FastSpatial.value(),
+                            anchoredDraggableState = anchoredDraggableState,
+                            animationSpec = animationSpec,
                         )
                     )
                     .indication(
                         interactionSource = interactionSource,
                         indication =
-                            ripple(bounded = false, radius = SwitchTokens.StateLayerSize / 2),
+                            ripple(
+                                bounded = false,
+                                radius = SwitchTokens.StateLayerSize / 2,
+                                enableFocusIndication = !useInsetRing,
+                            ),
                     )
-                    .background(resolvedThumbColor, thumbShape),
+                    .background(thumbColor, thumbShape),
             contentAlignment = Alignment.Center,
         ) {
             if (thumbContent != null) {
-                val iconColor = colors.iconColor(enabled, checked)
                 CompositionLocalProvider(
                     LocalContentColor provides iconColor,
                     content = thumbContent,
@@ -184,16 +277,23 @@ private fun SwitchImpl(
 private data class ThumbElement(
     val interactionSource: InteractionSource,
     val checked: Boolean,
+    val anchoredDraggableState: AnchoredDraggableState<Boolean>,
     val animationSpec: FiniteAnimationSpec<Float>,
 ) : ModifierNodeElement<ThumbNode>() {
-    override fun create() = ThumbNode(interactionSource, checked, animationSpec)
+    override fun create() =
+        ThumbNode(interactionSource, checked, anchoredDraggableState, animationSpec)
 
     override fun update(node: ThumbNode) {
+        val interactionSourceChanged = node.interactionSource != interactionSource
         node.interactionSource = interactionSource
-        if (node.checked != checked) {
+        if (interactionSourceChanged) {
+            node.restartInteractionCollection()
+        }
+        if (node.checked != checked || node.anchoredDraggableState != anchoredDraggableState) {
             node.invalidateMeasurement()
         }
         node.checked = checked
+        node.anchoredDraggableState = anchoredDraggableState
         node.animationSpec = animationSpec
         node.update()
     }
@@ -209,6 +309,7 @@ private data class ThumbElement(
 private class ThumbNode(
     var interactionSource: InteractionSource,
     var checked: Boolean,
+    var anchoredDraggableState: AnchoredDraggableState<Boolean>,
     var animationSpec: FiniteAnimationSpec<Float>,
 ) : Modifier.Node(), LayoutModifierNode {
 
@@ -216,23 +317,43 @@ private class ThumbNode(
         get() = false
 
     private var isPressed = false
-    private var offsetAnim: Animatable<Float, AnimationVector1D>? = null
+    private var isDragged = false
+    private var interactionCollectionJob: Job? = null
     private var sizeAnim: Animatable<Float, AnimationVector1D>? = null
-    private var initialOffset: Float = Float.NaN
     private var initialSize: Float = Float.NaN
 
     override fun onAttach() {
-        coroutineScope.launch {
+        restartInteractionCollection()
+    }
+
+    override fun onDetach() {
+        super.onDetach()
+        isPressed = false
+        isDragged = false
+    }
+
+    fun restartInteractionCollection() {
+        interactionCollectionJob?.cancel()
+        isPressed = false
+        isDragged = false
+        if (!isAttached) return
+        interactionCollectionJob = coroutineScope.launch {
             var pressCount = 0
+            var dragCount = 0
             interactionSource.interactions.collect { interaction ->
                 when (interaction) {
                     is PressInteraction.Press -> pressCount++
                     is PressInteraction.Release -> pressCount--
                     is PressInteraction.Cancel -> pressCount--
+                    is DragInteraction.Start -> dragCount++
+                    is DragInteraction.Stop -> dragCount--
+                    is DragInteraction.Cancel -> dragCount--
                 }
                 val pressed = pressCount > 0
-                if (isPressed != pressed) {
+                val dragged = dragCount > 0
+                if (isPressed != pressed || isDragged != dragged) {
                     isPressed = pressed
+                    isDragged = dragged
                     invalidateMeasurement()
                 }
             }
@@ -241,10 +362,10 @@ private class ThumbNode(
 
     override fun onReset() {
         super.onReset()
-        offsetAnim = null
         sizeAnim = null
         initialSize = Float.NaN
-        initialOffset = Float.NaN
+        isPressed = false
+        isDragged = false
     }
 
     override fun MeasureScope.measure(
@@ -256,44 +377,38 @@ private class ThumbNode(
                 measurable.maxIntrinsicWidth(constraints.maxHeight) != 0
         val size =
             when {
-                isPressed -> SwitchTokens.PressedHandleWidth
+                isPressed || isDragged -> SwitchTokens.PressedHandleWidth
                 hasContent || checked -> ThumbDiameter
                 else -> UncheckedThumbDiameter
             }.toPx()
 
-        val actualSize = (sizeAnim?.value ?: size).toInt()
+        if (sizeAnim == null && !initialSize.isNaN()) {
+            sizeAnim = Animatable(initialSize)
+        }
+        val actualSize = (sizeAnim?.value ?: size).toInt().coerceAtLeast(0)
         val placeable = measurable.measure(Constraints.fixed(actualSize, actualSize))
-        val thumbPaddingStart = (SwitchHeight - size.toDp()) / 2f
-        val minBound = thumbPaddingStart.toPx()
-        val thumbPathLength = (SwitchWidth - ThumbDiameter) - ThumbPadding
-        val maxBound = thumbPathLength.toPx()
-        val offset =
-            when {
-                isPressed && checked -> maxBound - TrackOutlineWidth.toPx()
-                isPressed && !checked -> TrackOutlineWidth.toPx()
-                checked -> maxBound
-                else -> minBound
-            }
 
         if (sizeAnim?.targetValue != size) {
-            coroutineScope.launch {
-                sizeAnim?.animateTo(size, if (isPressed) SnapSpec else animationSpec)
-            }
+            coroutineScope.launch { sizeAnim?.animateTo(size, animationSpec) }
         }
 
-        if (offsetAnim?.targetValue != offset) {
-            coroutineScope.launch {
-                offsetAnim?.animateTo(offset, if (isPressed) SnapSpec else animationSpec)
-            }
-        }
-
-        if (initialSize.isNaN() && initialOffset.isNaN()) {
+        if (initialSize.isNaN()) {
             initialSize = size
-            initialOffset = offset
         }
+
+        val minCenterX = (SwitchHeight / 2f).toPx()
+        val fallbackTravel = (SwitchWidth - SwitchHeight).toPx()
 
         return layout(actualSize, actualSize) {
-            placeable.placeRelative(offsetAnim?.value?.toInt() ?: offset.toInt(), 0)
+            val dragOffset =
+                if (!anchoredDraggableState.offset.isNaN()) {
+                    anchoredDraggableState.offset
+                } else {
+                    if (checked) fallbackTravel else 0f
+                }
+            val currentThumbSize = sizeAnim?.value ?: size
+            val leftOffset = minCenterX + dragOffset - currentThumbSize / 2f
+            placeable.placeRelative(leftOffset.toInt(), 0)
         }
     }
 
@@ -301,18 +416,16 @@ private class ThumbNode(
         if (sizeAnim == null && !initialSize.isNaN()) {
             sizeAnim = Animatable(initialSize)
         }
-
-        if (offsetAnim == null && !initialOffset.isNaN()) offsetAnim = Animatable(initialOffset)
     }
 }
 
 /** Contains the default values used by [Switch] */
-object SwitchDefaults {
+public object SwitchDefaults {
     /**
      * Creates a [SwitchColors] that represents the different colors used in a [Switch] in different
      * states.
      */
-    @Composable fun colors() = MaterialTheme.colorScheme.defaultSwitchColors
+    @Composable public fun colors(): SwitchColors = MaterialTheme.colorScheme.defaultSwitchColors
 
     /**
      * Creates a [SwitchColors] that represents the different colors used in a [Switch] in different
@@ -336,7 +449,7 @@ object SwitchDefaults {
      * @param disabledUncheckedIconColor the color used for the icon when disabled and unchecked
      */
     @Composable
-    fun colors(
+    public fun colors(
         checkedThumbColor: Color = SwitchTokens.SelectedHandleColor.value,
         checkedTrackColor: Color = SwitchTokens.SelectedTrackColor.value,
         checkedBorderColor: Color = Color.Transparent,
@@ -441,7 +554,7 @@ object SwitchDefaults {
         }
 
     /** Icon size to use for `thumbContent` */
-    val IconSize = 16.dp
+    public val IconSize: Dp = 16.dp
 }
 
 /**
@@ -467,30 +580,30 @@ object SwitchDefaults {
  *   default implementation that follows Material specifications.
  */
 @Immutable
-class SwitchColors
-constructor(
-    val checkedThumbColor: Color,
-    val checkedTrackColor: Color,
-    val checkedBorderColor: Color,
-    val checkedIconColor: Color,
-    val uncheckedThumbColor: Color,
-    val uncheckedTrackColor: Color,
-    val uncheckedBorderColor: Color,
-    val uncheckedIconColor: Color,
-    val disabledCheckedThumbColor: Color,
-    val disabledCheckedTrackColor: Color,
-    val disabledCheckedBorderColor: Color,
-    val disabledCheckedIconColor: Color,
-    val disabledUncheckedThumbColor: Color,
-    val disabledUncheckedTrackColor: Color,
-    val disabledUncheckedBorderColor: Color,
-    val disabledUncheckedIconColor: Color,
+public class SwitchColors
+public constructor(
+    public val checkedThumbColor: Color,
+    public val checkedTrackColor: Color,
+    public val checkedBorderColor: Color,
+    public val checkedIconColor: Color,
+    public val uncheckedThumbColor: Color,
+    public val uncheckedTrackColor: Color,
+    public val uncheckedBorderColor: Color,
+    public val uncheckedIconColor: Color,
+    public val disabledCheckedThumbColor: Color,
+    public val disabledCheckedTrackColor: Color,
+    public val disabledCheckedBorderColor: Color,
+    public val disabledCheckedIconColor: Color,
+    public val disabledUncheckedThumbColor: Color,
+    public val disabledUncheckedTrackColor: Color,
+    public val disabledUncheckedBorderColor: Color,
+    public val disabledUncheckedIconColor: Color,
 ) {
     /**
      * Returns a copy of this SwitchColors, optionally overriding some of the values. This uses the
      * Color.Unspecified to mean “use the value from the source”
      */
-    fun copy(
+    public fun copy(
         checkedThumbColor: Color = this.checkedThumbColor,
         checkedTrackColor: Color = this.checkedTrackColor,
         checkedBorderColor: Color = this.checkedBorderColor,
@@ -507,7 +620,7 @@ constructor(
         disabledUncheckedTrackColor: Color = this.disabledUncheckedTrackColor,
         disabledUncheckedBorderColor: Color = this.disabledUncheckedBorderColor,
         disabledUncheckedIconColor: Color = this.disabledUncheckedIconColor,
-    ) =
+    ): SwitchColors =
         SwitchColors(
             checkedThumbColor.takeOrElse { this.checkedThumbColor },
             checkedTrackColor.takeOrElse { this.checkedTrackColor },
@@ -629,10 +742,12 @@ constructor(
 }
 
 /* @VisibleForTesting */
-internal val ThumbDiameter = SwitchTokens.SelectedHandleWidth
-internal val UncheckedThumbDiameter = SwitchTokens.UnselectedHandleWidth
+internal val ThumbDiameter
+    get() = SwitchTokens.SelectedHandleWidth
+internal val UncheckedThumbDiameter
+    get() = SwitchTokens.UnselectedHandleWidth
 
-private val SwitchWidth = SwitchTokens.TrackWidth
-private val SwitchHeight = SwitchTokens.TrackHeight
-private val ThumbPadding = (SwitchHeight - ThumbDiameter) / 2
-private val SnapSpec = SnapSpec<Float>()
+private val SwitchWidth
+    get() = SwitchTokens.TrackWidth
+private val SwitchHeight
+    get() = SwitchTokens.TrackHeight

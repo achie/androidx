@@ -16,6 +16,7 @@
 
 package androidx.compose.foundation.text.input.internal.selection
 
+import android.os.Build
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -37,7 +38,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
@@ -46,10 +47,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
+import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -59,7 +61,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TextFieldTripleTapTest : FocusedWindowTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
     @get:Rule val platformSelectionBehaviorsRule = PlatformSelectionBehaviorsRule()
 
     private val TAG = "BasicTextField"
@@ -191,8 +193,13 @@ class TextFieldTripleTapTest : FocusedWindowTest {
         assertThat(state.selection).isEqualTo(TextRange(0, 11))
     }
 
+    @SdkSuppress(minSdkVersion = 25) // b/538602770
     @Test
     fun tripleTapThen_dragDown_selectsFromCurrentToTargetParagraph_ltr() {
+        assumeFalse(
+            "Test fails on cuttlefish b/467124919",
+            Build.MODEL.contains("Cuttlefish", ignoreCase = true),
+        )
         val state = TextFieldState("abc def\nabc def\nabc def")
         rule.setTextFieldTestContent {
             BasicTextField(

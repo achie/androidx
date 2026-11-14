@@ -1,1 +1,6 @@
 // Baseline format: 1.0
+[iosX64]: Target was removed
+[macosX64]: Target was removed
+[tvosX64]: Target was removed
+[watchosX64]: Target was removed
+[watchosArm32]: Target was removed

@@ -1,4 +1,5 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=restricted-atomic-group
 package androidx.sqlite.driver.bundled {
 
   public final class BundledSQLite {
@@ -30,7 +31,7 @@ package androidx.sqlite.driver.bundled {
     method public androidx.sqlite.SQLiteConnection open(String fileName);
     method public androidx.sqlite.SQLiteConnection open(String fileName, int flags);
     property public boolean hasConnectionPool;
-    property @RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX) public int threadingMode;
+    property @RestrictTo({androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX}) public int threadingMode;
   }
 
 }

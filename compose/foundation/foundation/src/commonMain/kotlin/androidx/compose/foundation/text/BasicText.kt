@@ -45,11 +45,14 @@ import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.LocalLocaleList
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextStyleScope
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Constraints.Companion.fitPrioritizingWidth
@@ -61,35 +64,31 @@ import androidx.compose.ui.util.fastRoundToInt
 import kotlin.math.floor
 
 /**
- * Basic element that displays text and provides semantics / accessibility information. Typically
- * you will instead want to use [androidx.compose.material.Text], which is a higher level Text
- * element that contains semantics and consumes style information from a theme.
+ * Displays text with semantics and accessibility information.
  *
- * @param text The text to be displayed.
- * @param modifier [Modifier] to apply to this layout node.
- * @param style Style configuration for the text such as color, font, line height etc.
- * @param onTextLayout Callback that is executed when a new text layout is calculated. A
- *   [TextLayoutResult] object that callback provides contains paragraph information, size of the
- *   text, baselines and other details. The callback can be used to add additional decoration or
- *   functionality to the text. For example, to draw selection around the text.
- * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
- * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
- *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
- *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
- * @param minLines The minimum height in terms of minimum number of visible lines. It is required
- *   that 1 <= [minLines] <= [maxLines].
- * @param color Overrides the text color provided in [style]
- * @param autoSize Enable auto sizing for this text composable. Finds the biggest font size that
- *   fits in the available space and lays the text out with this size. This performs multiple layout
- *   passes and can be slower than using a fixed font size. This takes precedence over sizes defined
- *   through [style]. See [TextAutoSize] and
- *   [androidx.compose.foundation.samples.TextAutoSizeBasicTextSample].
+ * For theme integration, use Material [androidx.compose.material3.Text].
+ *
+ * @param text text to display
+ * @param modifier for this layout
+ * @param style configuration
+ * @param onTextLayout callback run when a new text layout is calculated. The [TextLayoutResult]
+ *   parameter contains paragraph information, size, baselines, and other details. Use this callback
+ *   to add decoration or functionality, such as drawing selection
+ * @param overflow handling visual overflow
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow]
+ * @param maxLines maximum number of visible lines. If the text exceeds this value, it is truncated
+ *   according to [overflow] and [softWrap]. Requires 1 <= [minLines] <= [maxLines]
+ * @param minLines minimum number of visible lines. Requires 1 <= [minLines] <= [maxLines]
+ * @param color to override style color
+ * @param autoSize configuration for automatic font size adjustment to fit available space. Warning:
+ *   Auto-sizing runs multiple layout passes and may affect performance. Takes precedence over sizes
+ *   defined in [style]
+ * @sample androidx.compose.foundation.samples.TextAutoSizeBasicTextSample
  */
 @Composable
-fun BasicText(
+public fun BasicText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -111,15 +110,26 @@ fun BasicText(
                     selectionRegistrar.nextSelectableId()
                 }
             remember(selectableId, selectionRegistrar, backgroundSelectionColor) {
-                SelectionController(selectableId, selectionRegistrar, backgroundSelectionColor)
+                SelectionController(
+                    selectableId = selectableId,
+                    selectionRegistrar = selectionRegistrar,
+                    backgroundSelectionColor = backgroundSelectionColor,
+                )
             }
         } else {
             null
         }
 
     val fontFamilyResolver = LocalFontFamilyResolver.current
+    val localeList = LocalLocaleList.current
 
-    BackgroundTextMeasurement(text = text, style = style, fontFamilyResolver = fontFamilyResolver)
+    BackgroundTextMeasurement(
+        text = text,
+        style = style,
+        fontFamilyResolver = fontFamilyResolver,
+        defaultLocaleList = localeList,
+        softWrap = softWrap,
+    )
 
     val finalModifier =
         if (selectionController != null || onTextLayout != null || autoSize != null) {
@@ -131,7 +141,8 @@ fun BasicText(
                 softWrap = softWrap,
                 maxLines = maxLines,
                 minLines = minLines,
-                fontFamilyResolver = LocalFontFamilyResolver.current,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = localeList,
                 placeholders = null,
                 onPlaceholderLayout = null,
                 selectionController = selectionController,
@@ -145,6 +156,7 @@ fun BasicText(
                     text = text,
                     style = style,
                     fontFamilyResolver = fontFamilyResolver,
+                    defaultLocaleList = localeList,
                     overflow = overflow,
                     softWrap = softWrap,
                     maxLines = maxLines,
@@ -156,37 +168,33 @@ fun BasicText(
 }
 
 /**
- * Basic element that displays text and provides semantics / accessibility information. Typically
- * you will instead want to use [androidx.compose.material.Text], which is a higher level Text
- * element that contains semantics and consumes style information from a theme.
+ * Displays text with semantics and accessibility information.
  *
- * @param text The text to be displayed.
- * @param modifier [Modifier] to apply to this layout node.
- * @param style Style configuration for the text such as color, font, line height etc.
- * @param onTextLayout Callback that is executed when a new text layout is calculated. A
- *   [TextLayoutResult] object that callback provides contains paragraph information, size of the
- *   text, baselines and other details. The callback can be used to add additional decoration or
- *   functionality to the text. For example, to draw selection around the text.
- * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
- * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
- *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
- *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
- * @param minLines The minimum height in terms of minimum number of visible lines. It is required
- *   that 1 <= [minLines] <= [maxLines].
- * @param inlineContent A map store composables that replaces certain ranges of the text. It's used
- *   to insert composables into text layout. Check [InlineTextContent] for more information.
- * @param color Overrides the text color provided in [style]
- * @param autoSize Enable auto sizing for this text composable. Finds the biggest font size that
- *   fits in the available space and lays the text out with this size. This performs multiple layout
- *   passes and can be slower than using a fixed font size. This takes precedence over sizes defined
- *   through [style]. See [TextAutoSize] and
- *   [androidx.compose.foundation.samples.TextAutoSizeBasicTextSample].
+ * For theme integration, use Material [androidx.compose.material3.Text].
+ *
+ * @param text text to display
+ * @param modifier for this layout
+ * @param style configuration
+ * @param onTextLayout callback run when a new text layout is calculated. The [TextLayoutResult]
+ *   parameter contains paragraph information, size, baselines, and other details. Use this callback
+ *   to add decoration or functionality, such as drawing selection
+ * @param overflow handling visual overflow
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow]
+ * @param maxLines maximum number of visible lines. If the text exceeds this value, it is truncated
+ *   according to [overflow] and [softWrap]. Requires 1 <= [minLines] <= [maxLines]
+ * @param minLines minimum number of visible lines. Requires 1 <= [minLines] <= [maxLines]
+ * @param inlineContent map storing [InlineTextContent] composables that replace specified ranges of
+ *   text, embedding them in the layout
+ * @param color to override style color
+ * @param autoSize configuration for automatic font size adjustment to fit available space. Warning:
+ *   Auto-sizing runs multiple layout passes and may affect performance. Takes precedence over sizes
+ *   defined in [style]
+ * @sample androidx.compose.foundation.samples.TextAutoSizeBasicTextSample
  */
 @Composable
-fun BasicText(
+public fun BasicText(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -209,7 +217,11 @@ fun BasicText(
                     selectionRegistrar.nextSelectableId()
                 }
             remember(selectableId, selectionRegistrar, backgroundSelectionColor) {
-                SelectionController(selectableId, selectionRegistrar, backgroundSelectionColor)
+                SelectionController(
+                    selectableId = selectableId,
+                    selectionRegistrar = selectionRegistrar,
+                    backgroundSelectionColor = backgroundSelectionColor,
+                )
             }
         } else {
             null
@@ -218,13 +230,16 @@ fun BasicText(
     val hasLinks = text.hasLinks()
 
     val fontFamilyResolver = LocalFontFamilyResolver.current
+    val localeList = LocalLocaleList.current
 
     if (!hasInlineContent && !hasLinks) {
         BackgroundTextMeasurement(
             text = text,
             style = style,
             fontFamilyResolver = fontFamilyResolver,
+            defaultLocaleList = localeList,
             placeholders = null,
+            softWrap = softWrap,
         )
 
         // this is the same as text: String, use all the early exits
@@ -239,6 +254,7 @@ fun BasicText(
                     maxLines = maxLines,
                     minLines = minLines,
                     fontFamilyResolver = fontFamilyResolver,
+                    defaultLocaleList = localeList,
                     placeholders = null,
                     onPlaceholderLayout = null,
                     selectionController = selectionController,
@@ -265,8 +281,234 @@ fun BasicText(
             maxLines = maxLines,
             minLines = minLines,
             fontFamilyResolver = fontFamilyResolver,
+            defaultLocaleList = localeList,
             selectionController = selectionController,
             color = color,
+            onShowTranslation = { substitutionValue ->
+                displayedText =
+                    if (substitutionValue.isShowingSubstitution) {
+                        substitutionValue.substitution
+                    } else {
+                        substitutionValue.original
+                    }
+            },
+            autoSize = autoSize,
+        )
+    }
+}
+
+/**
+ * Displays text with style resolved dynamically from a lambda.
+ *
+ * For theme integration, use Material [androidx.compose.material3.Text].
+ *
+ * Use this overload when style depends on state and changes frequently. Using a lambda prevents
+ * full recomposition when the style changes, deferring evaluation to the layout phase:
+ * - State reads within [styleProvider] are observed during measurement and trigger a measure pass
+ *   when invalidated, skipping recomposition.
+ * - Changes to layout-affecting attributes recalculate text layout and invalidate drawing, whereas
+ *   changes to draw-only attributes reuse the cached text layout and invalidate drawing.
+ *
+ * @param text text to display
+ * @param styleProvider lambda with [TextStyleScope] receiver configuring text attributes
+ * @param modifier for this layout
+ * @param onTextLayout callback run when a new text layout is calculated. The [TextLayoutResult]
+ *   parameter contains paragraph information, size, baselines, and other details. Use this callback
+ *   to add decoration or functionality, such as drawing selection. Note that when using this
+ *   overload, [TextLayoutResult.layoutInput]'s [TextStyle] is not guaranteed to contain the real
+ *   draw attributes configured in [styleProvider]
+ * @param overflow handling visual overflow
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow]
+ * @param maxLines maximum number of visible lines. If the text exceeds this value, it is truncated
+ *   according to [overflow] and [softWrap]. Requires 1 <= [minLines] <= [maxLines]
+ * @param minLines minimum number of visible lines. Requires 1 <= [minLines] <= [maxLines]
+ * @param autoSize configuration for automatic font size adjustment to fit available space. Warning:
+ *   Auto-sizing runs multiple layout passes and may affect performance. Takes precedence over sizes
+ *   defined in [styleProvider]
+ */
+@Composable
+public fun BasicText(
+    text: String,
+    styleProvider: TextStyleScope.() -> Unit,
+    modifier: Modifier = Modifier,
+    onTextLayout: ((TextLayoutResult) -> Unit)? = null,
+    overflow: TextOverflow = TextOverflow.Clip,
+    softWrap: Boolean = true,
+    maxLines: Int = Int.MAX_VALUE,
+    minLines: Int = 1,
+    autoSize: TextAutoSize? = null,
+) {
+    validateMinMaxLines(minLines = minLines, maxLines = maxLines)
+    val selectionRegistrar = LocalSelectionRegistrar.current
+    val selectionController =
+        if (selectionRegistrar != null) {
+            val backgroundSelectionColor = LocalTextSelectionColors.current.backgroundColor
+            val selectableId =
+                rememberSaveable(selectionRegistrar, saver = selectionIdSaver(selectionRegistrar)) {
+                    selectionRegistrar.nextSelectableId()
+                }
+            remember(selectableId, selectionRegistrar, backgroundSelectionColor) {
+                SelectionController(
+                    selectableId = selectableId,
+                    selectionRegistrar = selectionRegistrar,
+                    backgroundSelectionColor = backgroundSelectionColor,
+                )
+            }
+        } else {
+            null
+        }
+
+    val fontFamilyResolver = LocalFontFamilyResolver.current
+    val localeList = LocalLocaleList.current
+
+    val finalModifier =
+        if (selectionController != null || onTextLayout != null || autoSize != null) {
+            modifier.textModifier(
+                AnnotatedString(text = text),
+                styleProvider = styleProvider,
+                onTextLayout = onTextLayout,
+                overflow = overflow,
+                softWrap = softWrap,
+                maxLines = maxLines,
+                minLines = minLines,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = localeList,
+                placeholders = null,
+                onPlaceholderLayout = null,
+                selectionController = selectionController,
+                onShowTranslation = null,
+                autoSize = autoSize,
+            )
+        } else {
+            modifier then
+                TextStringSimpleElement(
+                    text = text,
+                    styleProvider = styleProvider,
+                    fontFamilyResolver = fontFamilyResolver,
+                    defaultLocaleList = localeList,
+                    overflow = overflow,
+                    softWrap = softWrap,
+                    maxLines = maxLines,
+                    minLines = minLines,
+                )
+        }
+    Layout(finalModifier, EmptyMeasurePolicy)
+}
+
+/**
+ * Displays text with style resolved dynamically from a lambda.
+ *
+ * For theme integration, use Material [androidx.compose.material3.Text].
+ *
+ * Use this overload when style depends on state and changes frequently. Using a lambda prevents
+ * full recomposition when the style changes, deferring evaluation to the layout phase:
+ * - State reads within [styleProvider] are observed during measurement and trigger a measure pass
+ *   when invalidated, skipping recomposition.
+ * - Changes to layout-affecting attributes recalculate text layout and invalidate drawing, whereas
+ *   changes to draw-only attributes reuse the cached text layout and invalidate drawing.
+ *
+ * @param text text to display
+ * @param styleProvider lambda with [TextStyleScope] receiver configuring text attributes
+ * @param modifier for this layout
+ * @param onTextLayout callback run when a new text layout is calculated. The [TextLayoutResult]
+ *   parameter contains paragraph information, size, baselines, and other details. Use this callback
+ *   to add decoration or functionality, such as drawing selection. Note that when using this
+ *   overload, [TextLayoutResult.layoutInput]'s [TextStyle] is not guaranteed to contain the real
+ *   draw attributes configured in [styleProvider]
+ * @param overflow handling visual overflow
+ * @param softWrap whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow]
+ * @param maxLines maximum number of visible lines. If the text exceeds this value, it is truncated
+ *   according to [overflow] and [softWrap]. Requires 1 <= [minLines] <= [maxLines]
+ * @param minLines minimum number of visible lines. Requires 1 <= [minLines] <= [maxLines]
+ * @param inlineContent map storing [InlineTextContent] composables that replace specified ranges of
+ *   text, embedding them in the layout
+ * @param autoSize configuration for automatic font size adjustment to fit available space. Warning:
+ *   Auto-sizing runs multiple layout passes and may affect performance. Takes precedence over sizes
+ *   defined in [styleProvider]
+ */
+@Composable
+public fun BasicText(
+    text: AnnotatedString,
+    styleProvider: TextStyleScope.() -> Unit,
+    modifier: Modifier = Modifier,
+    onTextLayout: ((TextLayoutResult) -> Unit)? = null,
+    overflow: TextOverflow = TextOverflow.Clip,
+    softWrap: Boolean = true,
+    maxLines: Int = Int.MAX_VALUE,
+    minLines: Int = 1,
+    inlineContent: Map<String, InlineTextContent> = mapOf(),
+    autoSize: TextAutoSize? = null,
+) {
+    validateMinMaxLines(minLines = minLines, maxLines = maxLines)
+    val selectionRegistrar = LocalSelectionRegistrar.current
+    val selectionController =
+        if (selectionRegistrar != null) {
+            val backgroundSelectionColor = LocalTextSelectionColors.current.backgroundColor
+            val selectableId =
+                rememberSaveable(selectionRegistrar, saver = selectionIdSaver(selectionRegistrar)) {
+                    selectionRegistrar.nextSelectableId()
+                }
+            remember(selectableId, selectionRegistrar, backgroundSelectionColor) {
+                SelectionController(
+                    selectableId = selectableId,
+                    selectionRegistrar = selectionRegistrar,
+                    backgroundSelectionColor = backgroundSelectionColor,
+                )
+            }
+        } else {
+            null
+        }
+    val hasInlineContent = text.hasInlineContent()
+    val hasLinks = text.hasLinks()
+
+    val fontFamilyResolver = LocalFontFamilyResolver.current
+    val localeList = LocalLocaleList.current
+
+    if (!hasInlineContent && !hasLinks) {
+        // this is the same as text: String, use all the early exits
+        Layout(
+            modifier =
+                modifier.textModifier(
+                    text = text,
+                    styleProvider = styleProvider,
+                    onTextLayout = onTextLayout,
+                    overflow = overflow,
+                    softWrap = softWrap,
+                    maxLines = maxLines,
+                    minLines = minLines,
+                    fontFamilyResolver = fontFamilyResolver,
+                    defaultLocaleList = localeList,
+                    placeholders = null,
+                    onPlaceholderLayout = null,
+                    selectionController = selectionController,
+                    onShowTranslation = null,
+                    autoSize = autoSize,
+                ),
+            EmptyMeasurePolicy,
+        )
+    } else {
+        // takes into account text substitution (for translation) that is happening inside the
+        // TextAnnotatedStringNode
+        var displayedText by remember(text) { mutableStateOf(text) }
+
+        LayoutWithLinksAndInlineContent(
+            modifier = modifier,
+            text = displayedText,
+            onTextLayout = onTextLayout,
+            hasInlineContent = hasInlineContent,
+            inlineContent = inlineContent,
+            styleProvider = styleProvider,
+            overflow = overflow,
+            softWrap = softWrap,
+            maxLines = maxLines,
+            minLines = minLines,
+            fontFamilyResolver = fontFamilyResolver,
+            defaultLocaleList = localeList,
+            selectionController = selectionController,
             onShowTranslation = { substitutionValue ->
                 displayedText =
                     if (substitutionValue.isShowingSubstitution) {
@@ -293,9 +535,9 @@ fun BasicText(
  *   text, baselines and other details. The callback can be used to add additional decoration or
  *   functionality to the text. For example, to draw selection around the text.
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
@@ -305,7 +547,7 @@ fun BasicText(
  */
 @Deprecated("Maintained for binary compatibility", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -332,9 +574,9 @@ fun BasicText(
  *   text, baselines and other details. The callback can be used to add additional decoration or
  *   functionality to the text. For example, to draw selection around the text.
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
@@ -346,7 +588,7 @@ fun BasicText(
  */
 @Deprecated("Maintained for binary compatibility", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -374,7 +616,7 @@ fun BasicText(
 
 @Deprecated("Maintained for binary compatibility", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -397,7 +639,7 @@ fun BasicText(
 
 @Deprecated("Maintained for binary compatibility", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -422,7 +664,7 @@ fun BasicText(
 
 @Deprecated("Maintained for binary compat", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -431,11 +673,11 @@ fun BasicText(
     softWrap: Boolean = true,
     maxLines: Int = Int.MAX_VALUE,
     minLines: Int = 1,
-) = BasicText(text, modifier, style, onTextLayout, overflow, softWrap, maxLines, minLines)
+): Unit = BasicText(text, modifier, style, onTextLayout, overflow, softWrap, maxLines, minLines)
 
 @Deprecated("Maintained for binary compat", level = DeprecationLevel.HIDDEN)
 @Composable
-fun BasicText(
+public fun BasicText(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle.Default,
@@ -445,7 +687,7 @@ fun BasicText(
     maxLines: Int = Int.MAX_VALUE,
     minLines: Int = 1,
     inlineContent: Map<String, InlineTextContent> = mapOf(),
-) =
+): Unit =
     BasicText(
         text = text,
         modifier = modifier,
@@ -486,8 +728,9 @@ private class TextMeasurePolicy(
         constraints: Constraints,
     ): MeasureResult {
         // inline content
-        val inlineContentMeasurables =
-            measurables.fastFilter { it.parentData !is TextRangeLayoutModifier }
+        val inlineContentMeasurables = measurables.fastFilter {
+            it.parentData !is TextRangeLayoutParentData
+        }
         val inlineContentToPlace =
             placements()?.fastMapIndexedNotNull { index, rect ->
                 // PlaceholderRect will be null if it's ellipsized. In that case, the corresponding
@@ -506,7 +749,7 @@ private class TextMeasurePolicy(
             }
 
         // links
-        val linksMeasurables = measurables.fastFilter { it.parentData is TextRangeLayoutModifier }
+        val linksMeasurables = measurables.fastFilter { it.parentData is TextRangeLayoutParentData }
         val linksToPlace =
             measureWithTextRangeMeasureConstraints(
                 measurables = linksMeasurables,
@@ -552,7 +795,7 @@ private fun measureWithTextRangeMeasureConstraints(
         val textRangeLayoutMeasureScope = TextRangeLayoutMeasureScope()
         measurables.fastMapIndexedNotNull { _, measurable ->
             val rangeMeasurePolicy =
-                (measurable.parentData as TextRangeLayoutModifier).measurePolicy
+                (measurable.parentData as TextRangeLayoutParentData).measurePolicy
             val rangeMeasureResult =
                 with(rangeMeasurePolicy) { textRangeLayoutMeasureScope.measure() }
             val placeable =
@@ -573,55 +816,61 @@ private fun measureWithTextRangeMeasureConstraints(
 
 private fun Modifier.textModifier(
     text: AnnotatedString,
-    style: TextStyle,
+    style: TextStyle? = null,
+    styleProvider: (TextStyleScope.() -> Unit)? = null,
     onTextLayout: ((TextLayoutResult) -> Unit)?,
     overflow: TextOverflow,
     softWrap: Boolean,
     maxLines: Int,
     minLines: Int,
     fontFamilyResolver: FontFamily.Resolver,
+    defaultLocaleList: LocaleList,
     placeholders: List<AnnotatedString.Range<Placeholder>>?,
     onPlaceholderLayout: ((List<Rect?>) -> Unit)?,
     selectionController: SelectionController?,
-    color: ColorProducer?,
+    color: ColorProducer? = null,
     onShowTranslation: ((TextAnnotatedStringNode.TextSubstitutionValue) -> Unit)?,
     autoSize: TextAutoSize?,
 ): Modifier {
     if (selectionController == null) {
         val staticTextModifier =
             TextAnnotatedStringElement(
-                text,
-                style,
-                fontFamilyResolver,
-                onTextLayout,
-                overflow,
-                softWrap,
-                maxLines,
-                minLines,
-                placeholders,
-                onPlaceholderLayout,
-                null,
-                color,
-                autoSize,
-                onShowTranslation,
+                text = text,
+                style = style,
+                styleProvider = styleProvider,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                onTextLayout = onTextLayout,
+                overflow = overflow,
+                softWrap = softWrap,
+                maxLines = maxLines,
+                minLines = minLines,
+                placeholders = placeholders,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = null,
+                color = color,
+                autoSize = autoSize,
+                onShowTranslation = onShowTranslation,
             )
         return this then Modifier /* selection position */ then staticTextModifier
     } else {
         val selectableTextModifier =
             SelectableTextAnnotatedStringElement(
-                text,
-                style,
-                fontFamilyResolver,
-                onTextLayout,
-                overflow,
-                softWrap,
-                maxLines,
-                minLines,
-                placeholders,
-                onPlaceholderLayout,
-                selectionController,
-                color,
-                autoSize,
+                text = text,
+                style = style,
+                styleProvider = styleProvider,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                onTextLayout = onTextLayout,
+                overflow = overflow,
+                softWrap = softWrap,
+                maxLines = maxLines,
+                minLines = minLines,
+                placeholders = placeholders,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = selectionController,
+                color = color,
+                autoSize = autoSize,
             )
         return this then selectionController.modifier then selectableTextModifier
     }
@@ -634,18 +883,19 @@ private fun LayoutWithLinksAndInlineContent(
     onTextLayout: ((TextLayoutResult) -> Unit)?,
     hasInlineContent: Boolean,
     inlineContent: Map<String, InlineTextContent> = mapOf(),
-    style: TextStyle,
+    style: TextStyle? = null,
+    styleProvider: (TextStyleScope.() -> Unit)? = null,
     overflow: TextOverflow,
     softWrap: Boolean,
     maxLines: Int,
     minLines: Int,
     fontFamilyResolver: FontFamily.Resolver,
+    defaultLocaleList: LocaleList,
     selectionController: SelectionController?,
-    color: ColorProducer?,
+    color: ColorProducer? = null,
     onShowTranslation: ((TextAnnotatedStringNode.TextSubstitutionValue) -> Unit)?,
     autoSize: TextAutoSize?,
 ) {
-
     val textScope =
         if (text.hasLinks()) {
             remember(text) { TextLinkScope(text) }
@@ -676,12 +926,16 @@ private fun LayoutWithLinksAndInlineContent(
             { measuredPlaceholderPositions?.value = it }
         } else null
 
-    BackgroundTextMeasurement(
-        text = text,
-        style = style,
-        fontFamilyResolver = fontFamilyResolver,
-        placeholders = placeholders,
-    )
+    if (style != null) {
+        BackgroundTextMeasurement(
+            text = text,
+            style = style,
+            fontFamilyResolver = fontFamilyResolver,
+            defaultLocaleList = defaultLocaleList,
+            placeholders = placeholders,
+            softWrap = softWrap,
+        )
+    }
 
     Layout(
         content = {
@@ -692,6 +946,7 @@ private fun LayoutWithLinksAndInlineContent(
             modifier.textModifier(
                 text = styledText(),
                 style = style,
+                styleProvider = styleProvider,
                 onTextLayout = {
                     textScope?.textLayoutResult = it
                     onTextLayout?.invoke(it)
@@ -701,6 +956,7 @@ private fun LayoutWithLinksAndInlineContent(
                 maxLines = maxLines,
                 minLines = minLines,
                 fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
                 placeholders = placeholders,
                 onPlaceholderLayout = onPlaceholderLayout,
                 selectionController = selectionController,
@@ -732,6 +988,8 @@ internal expect fun BackgroundTextMeasurement(
     text: String,
     style: TextStyle,
     fontFamilyResolver: FontFamily.Resolver,
+    defaultLocaleList: LocaleList,
+    softWrap: Boolean,
 )
 
 /**
@@ -744,5 +1002,7 @@ internal expect fun BackgroundTextMeasurement(
     text: AnnotatedString,
     style: TextStyle,
     fontFamilyResolver: FontFamily.Resolver,
+    defaultLocaleList: LocaleList,
     placeholders: List<AnnotatedString.Range<Placeholder>>?,
+    softWrap: Boolean,
 )

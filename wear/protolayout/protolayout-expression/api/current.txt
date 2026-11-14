@@ -1,4 +1,5 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=public
 package androidx.wear.protolayout.expression {
 
   public final class AnimationParameterBuilders {
@@ -79,13 +80,13 @@ package androidx.wear.protolayout.expression {
   }
 
   public static class ConditionScopes.ConditionScope<T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType, RawT> {
-    method public androidx.wear.protolayout.expression.ConditionScopes.IfTrueScope<T!,RawT!> use(RawT!);
-    method public androidx.wear.protolayout.expression.ConditionScopes.IfTrueScope<T!,RawT!> use(T!);
+    method public androidx.wear.protolayout.expression.ConditionScopes.IfTrueScope<T,RawT> use(RawT);
+    method public androidx.wear.protolayout.expression.ConditionScopes.IfTrueScope<T,RawT> use(T);
   }
 
   public static class ConditionScopes.IfTrueScope<T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType, RawT> {
-    method public T! elseUse(RawT!);
-    method public T! elseUse(T!);
+    method public T elseUse(RawT);
+    method public T elseUse(T);
   }
 
   public final class DynamicBuilders {
@@ -413,19 +414,19 @@ package androidx.wear.protolayout.expression {
     method public operator <T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> void set(androidx.wear.protolayout.expression.DynamicDataKey<T> key, androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<T> value);
   }
 
-  public final class PlatformDataKey<T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> extends androidx.wear.protolayout.expression.DynamicDataKey<T!> {
+  public final class PlatformDataKey<T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> extends androidx.wear.protolayout.expression.DynamicDataKey<T> {
     ctor public PlatformDataKey(String, String);
   }
 
   public final class PlatformDataValues {
     method public java.util.Map<androidx.wear.protolayout.expression.PlatformDataKey<? extends java.lang.Object!>!,androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<? extends java.lang.Object!>!> getAll();
-    method public static <T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> androidx.wear.protolayout.expression.PlatformDataValues of(androidx.wear.protolayout.expression.PlatformDataKey<T!>, androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<T!>);
+    method public static <T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> androidx.wear.protolayout.expression.PlatformDataValues of(androidx.wear.protolayout.expression.PlatformDataKey<T>, androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<T>);
   }
 
   public static final class PlatformDataValues.Builder {
     ctor public PlatformDataValues.Builder();
     method public androidx.wear.protolayout.expression.PlatformDataValues build();
-    method public <T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> androidx.wear.protolayout.expression.PlatformDataValues.Builder put(androidx.wear.protolayout.expression.PlatformDataKey<T!>, androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<T!>);
+    method public <T extends androidx.wear.protolayout.expression.DynamicBuilders.DynamicType> androidx.wear.protolayout.expression.PlatformDataValues.Builder put(androidx.wear.protolayout.expression.PlatformDataKey<T>, androidx.wear.protolayout.expression.DynamicDataBuilders.DynamicDataValue<T>);
     method public androidx.wear.protolayout.expression.PlatformDataValues.Builder putAll(androidx.wear.protolayout.expression.DynamicDataMap);
     method public androidx.wear.protolayout.expression.PlatformDataValues.Builder putAll(androidx.wear.protolayout.expression.PlatformDataValues);
   }
@@ -469,8 +470,8 @@ package androidx.wear.protolayout.expression {
     method @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat dailyDistanceMeters();
     method @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat dailyFloors();
     method @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.DynamicBuilders.DynamicInt32 dailySteps();
-    method @RequiresPermission(android.Manifest.permission.BODY_SENSORS) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.PlatformHealthSources.DynamicHeartRateAccuracy heartRateAccuracy();
-    method @RequiresPermission(android.Manifest.permission.BODY_SENSORS) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat heartRateBpm();
+    method @RequiresPermission(anyOf={android.Manifest.permission.BODY_SENSORS, android.health.connect.HealthPermissions.READ_HEART_RATE}) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.PlatformHealthSources.DynamicHeartRateAccuracy heartRateAccuracy();
+    method @RequiresPermission(anyOf={android.Manifest.permission.BODY_SENSORS, android.health.connect.HealthPermissions.READ_HEART_RATE}) @androidx.wear.protolayout.expression.RequiresSchemaVersion(major=1, minor=200) public static androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat heartRateBpm();
     field public static final int HEART_RATE_ACCURACY_HIGH = 5; // 0x5
     field public static final int HEART_RATE_ACCURACY_LOW = 3; // 0x3
     field public static final int HEART_RATE_ACCURACY_MEDIUM = 4; // 0x4
@@ -489,8 +490,8 @@ package androidx.wear.protolayout.expression {
     field @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat!> DAILY_DISTANCE_METERS;
     field @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat!> DAILY_FLOORS;
     field @RequiresPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.DynamicBuilders.DynamicInt32!> DAILY_STEPS;
-    field @RequiresPermission(android.Manifest.permission.BODY_SENSORS) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.PlatformHealthSources.DynamicHeartRateAccuracy!> HEART_RATE_ACCURACY;
-    field @RequiresPermission(android.Manifest.permission.BODY_SENSORS) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat!> HEART_RATE_BPM;
+    field @RequiresPermission(anyOf={android.Manifest.permission.BODY_SENSORS, android.health.connect.HealthPermissions.READ_HEART_RATE}) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.PlatformHealthSources.DynamicHeartRateAccuracy!> HEART_RATE_ACCURACY;
+    field @RequiresPermission(anyOf={android.Manifest.permission.BODY_SENSORS, android.health.connect.HealthPermissions.READ_HEART_RATE}) public static final androidx.wear.protolayout.expression.PlatformDataKey<androidx.wear.protolayout.expression.DynamicBuilders.DynamicFloat!> HEART_RATE_BPM;
   }
 
   @SuppressCompatibility @RequiresOptIn(level=androidx.annotation.RequiresOptIn.Level.ERROR) @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.CLASS) @java.lang.annotation.Target({java.lang.annotation.ElementType.METHOD, java.lang.annotation.ElementType.TYPE, java.lang.annotation.ElementType.FIELD}) public @interface ProtoLayoutExperimental {

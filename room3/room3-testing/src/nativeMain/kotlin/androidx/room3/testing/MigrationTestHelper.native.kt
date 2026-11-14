@@ -18,6 +18,7 @@ package androidx.room3.testing
 
 import androidx.room3.DatabaseConfiguration
 import androidx.room3.RoomDatabase
+import androidx.room3.SingleConnection
 import androidx.room3.migration.AutoMigrationSpec
 import androidx.room3.migration.Migration
 import androidx.room3.migration.bundle.SchemaBundle
@@ -26,6 +27,7 @@ import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteDriver
 import kotlin.reflect.KClass
 import kotlin.reflect.cast
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import okio.FileSystem
@@ -120,7 +122,7 @@ public actual class MigrationTestHelper(
      * @return A database connection of the newly created database.
      * @throws IllegalStateException If a new database was not created.
      */
-    public actual fun createDatabase(version: Int): SQLiteConnection {
+    public actual suspend fun createDatabase(version: Int): SQLiteConnection {
         val schemaBundle = loadSchema(version)
         val connection =
             createDatabaseCommon(
@@ -147,7 +149,7 @@ public actual class MigrationTestHelper(
      * @param migrations The list of migrations used to attempt the database migration.
      * @throws IllegalStateException If the schema validation fails.
      */
-    public actual fun runMigrationsAndValidate(
+    public actual suspend fun runMigrationsAndValidate(
         version: Int,
         migrations: List<Migration>,
     ): SQLiteConnection {
@@ -179,15 +181,19 @@ public actual class MigrationTestHelper(
         DatabaseConfiguration(
             name = fileName,
             migrationContainer = container,
-            callbacks = null,
+            callbacks = emptyList(),
             journalMode = RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING,
-            requireMigration = true,
+            isMigrationRequired = true,
             allowDestructiveMigrationOnDowngrade = false,
             migrationNotRequiredFrom = null,
-            typeConverters = emptyList(),
+            columnTypeConverters = emptyList(),
+            daoReturnTypeConverters = emptyList(),
             autoMigrationSpecs = emptyList(),
             allowDestructiveMigrationForAllTables = false,
             sqliteDriver = driver,
             queryCoroutineContext = Dispatchers.IO,
+            connectionPoolConfiguration = SingleConnection,
+            connectionPoolTimeout = 30.seconds,
+            allowDataLossOnRecovery = false,
         )
 }

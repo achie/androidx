@@ -16,18 +16,17 @@
 
 package androidx.appfunctions.compiler
 
-import androidx.appfunctions.compiler.core.AnnotatedAppFunctions
+import androidx.appfunctions.compiler.core.AnnotatedAppFunctionServiceEntryPoint
 import androidx.appfunctions.compiler.core.AppFunctionSymbolResolver
 import androidx.appfunctions.compiler.core.ProcessingException
 import androidx.appfunctions.compiler.core.SymbolNotReadyException
 import androidx.appfunctions.compiler.core.logException
-import androidx.appfunctions.compiler.processors.AppFunctionAggregateProcessor
 import androidx.appfunctions.compiler.processors.AppFunctionComponentRegistryProcessor
-import androidx.appfunctions.compiler.processors.AppFunctionIdProcessor
 import androidx.appfunctions.compiler.processors.AppFunctionInventoryProcessor
-import androidx.appfunctions.compiler.processors.AppFunctionInvokerProcessor
 import androidx.appfunctions.compiler.processors.AppFunctionSchemaInventoryProcessor
 import androidx.appfunctions.compiler.processors.AppFunctionSerializableProcessor
+import androidx.appfunctions.compiler.processors.AppFunctionServiceEntryPointProcessor
+import androidx.appfunctions.compiler.processors.AppFunctionSignatureProcessor
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.processing.SymbolProcessor
@@ -71,14 +70,31 @@ class AppFunctionCompiler(
      */
     private fun shouldDeferAllProcessing(resolver: Resolver): List<KSAnnotated> {
         val appFunctionSymbolResolver = AppFunctionSymbolResolver(resolver)
-        val annotatedAppFunctions =
-            appFunctionSymbolResolver.resolveUnvalidatedAnnotatedAppFunctions()
-        for (annotatedAppFunction in annotatedAppFunctions) {
+        val annotatedServiceEntryPoints =
+            appFunctionSymbolResolver.resolveUnvalidatedAnnotatedAppFunctionServiceEntryPoints()
+        val annotatedSignatures =
+            appFunctionSymbolResolver.resolveUnvalidatedAnnotatedAppFunctionSignatures()
+
+        val allSymbolsToDefer =
+            annotatedServiceEntryPoints.flatMap(
+                AnnotatedAppFunctionServiceEntryPoint::getAllAnnotated
+            ) + annotatedSignatures.map { it.classDeclaration }
+
+        for (annotatedServiceEntryPoint in annotatedServiceEntryPoints) {
             try {
-                annotatedAppFunction.validate()
+                annotatedServiceEntryPoint.validate()
             } catch (e: SymbolNotReadyException) {
                 logger.logging(e.message.toString(), e.node)
-                return annotatedAppFunctions.flatMap(AnnotatedAppFunctions::getAllAnnotated)
+                return allSymbolsToDefer
+            }
+        }
+
+        for (annotatedSignature in annotatedSignatures) {
+            try {
+                annotatedSignature.validate()
+            } catch (e: SymbolNotReadyException) {
+                logger.logging(e.message.toString(), e.node)
+                return allSymbolsToDefer
             }
         }
         return emptyList()
@@ -91,24 +107,31 @@ class AppFunctionCompiler(
 
             val functionRegistryProcessor =
                 AppFunctionComponentRegistryProcessor(environment.codeGenerator)
-            val idProcessor = AppFunctionIdProcessor(environment.codeGenerator)
             val inventoryProcessor = AppFunctionInventoryProcessor(environment.codeGenerator)
-            val invokerProcessor = AppFunctionInvokerProcessor(environment.codeGenerator)
+            val signatureProcessor =
+                AppFunctionSignatureProcessor(
+                    options,
+                    environment.codeGenerator,
+                    environment.logger,
+                )
             val entityProcessor =
                 AppFunctionSerializableProcessor(environment.codeGenerator, environment.logger)
-            val aggregateProcessor =
-                AppFunctionAggregateProcessor(options, environment.codeGenerator)
             val schemaInventoryProcessor =
                 AppFunctionSchemaInventoryProcessor(environment.codeGenerator, options)
+            val entryPointProcessor =
+                AppFunctionServiceEntryPointProcessor(
+                    options,
+                    environment.codeGenerator,
+                    environment.logger,
+                )
             return AppFunctionCompiler(
                 listOf(
                     functionRegistryProcessor,
-                    idProcessor,
                     inventoryProcessor,
-                    invokerProcessor,
+                    signatureProcessor,
                     entityProcessor,
-                    aggregateProcessor,
                     schemaInventoryProcessor,
+                    entryPointProcessor,
                 ),
                 environment.logger,
             )

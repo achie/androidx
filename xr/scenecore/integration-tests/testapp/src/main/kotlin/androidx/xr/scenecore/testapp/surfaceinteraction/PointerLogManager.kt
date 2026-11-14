@@ -25,6 +25,7 @@ import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.InputEvent
 import androidx.xr.scenecore.PanelEntity
+import androidx.xr.scenecore.scene
 import androidx.xr.scenecore.testapp.R
 import androidx.xr.scenecore.testapp.common.DebugTextLinearView
 
@@ -59,7 +60,8 @@ class PointerLogManager(context: Context, session: Session) {
             InputEvent.Pointer.DEFAULT to
                 PointerStateImpl(context, session, InputEvent.Pointer.DEFAULT),
             InputEvent.Pointer.LEFT to PointerStateImpl(context, session, InputEvent.Pointer.LEFT),
-            InputEvent.Pointer.RIGHT to PointerStateImpl(context, session, InputEvent.Pointer.RIGHT),
+            InputEvent.Pointer.RIGHT to
+                PointerStateImpl(context, session, InputEvent.Pointer.RIGHT),
         )
 
     fun update(inputEvent: InputEvent) {
@@ -143,6 +145,7 @@ class PointerLogManager(context: Context, session: Session) {
                         view = panelView!!,
                         pixelDimensions = IntSize2d(800, 360),
                         name = "DebugPanel$pointerTypeStr",
+                        parent = session.scene.activitySpace,
                     )
                 panelEntity!!.setScale(0.05f)
             }

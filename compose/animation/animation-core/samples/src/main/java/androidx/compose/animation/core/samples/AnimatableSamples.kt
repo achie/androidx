@@ -21,7 +21,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationEndReason
 import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.DeferredTargetAnimation
-import androidx.compose.animation.core.ExperimentalAnimatableApi
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.calculateTargetValue
@@ -53,7 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -66,6 +65,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
@@ -116,10 +116,11 @@ fun AnimatableDecayAndAnimateToSample() {
      * In this example, we create a swipe-to-dismiss modifier that dismisses the child via a
      * vertical swipe-up.
      */
-    fun Modifier.swipeToDismiss(): Modifier = composed {
+    @Composable
+    fun Modifier.swipeToDismiss(): Modifier {
         // Creates a Float type `Animatable` and `remember`s it
         val animatedOffsetY = remember { Animatable(0f) }
-        this.pointerInput(Unit) {
+        return this.pointerInput(Unit) {
                 coroutineScope {
                     while (true) {
                         val pointerId = awaitPointerEventScope { awaitFirstDown().id }
@@ -209,7 +210,8 @@ fun AnimatableAnimationResultSample() {
 
 @Sampled
 fun AnimatableFadeIn() {
-    fun Modifier.fadeIn(): Modifier = composed {
+    @Composable
+    fun Modifier.fadeIn(): Modifier {
         // Creates an `Animatable` and remembers it.
         val alphaAnimation = remember { Animatable(0f) }
         // Launches a coroutine for the animation when entering the composition.
@@ -224,11 +226,11 @@ fun AnimatableFadeIn() {
                 animationSpec = tween(500),
             )
         }
-        this.graphicsLayer(alpha = alphaAnimation.value)
+        // Reads the animated value in the draw phase to avoid recomposing on every frame.
+        return this.graphicsLayer { alpha = alphaAnimation.value }
     }
 }
 
-@OptIn(ExperimentalAnimatableApi::class)
 @Sampled
 @Composable
 fun DeferredTargetAnimationSample() {
@@ -281,5 +283,45 @@ fun DeferredTargetAnimationSample() {
     ) {
         Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xffff6f69)))
         Box(Modifier.weight(2f).fillMaxHeight().background(Color(0xffffcc5c)))
+    }
+}
+
+@Sampled
+@Composable
+fun DeferredTargetAnimationPresentInDrawSample() {
+    // In this sample, we animate the size of a layout using DeferredTargetAnimation,
+    // and also draw a circle behind the content whose radius is determined by the
+    // current animated size of the layout.
+    // Reading sizeAnimation.value in the draw phase allows us to avoid creating
+    // another snapshot state to store the size.
+    val sizeAnimation = remember { DeferredTargetAnimation(IntSize.VectorConverter) }
+    val coroutineScope = rememberCoroutineScope()
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Box(Modifier.fillMaxSize().clickable { isExpanded = !isExpanded }) {
+        Box(
+            Modifier.align(Alignment.Center)
+                .approachLayout(
+                    isMeasurementApproachInProgress = { lookaheadSize ->
+                        sizeAnimation.updateTarget(lookaheadSize, coroutineScope)
+                        !sizeAnimation.isIdle
+                    }
+                ) { measurable, _ ->
+                    val (width, height) = sizeAnimation.updateTarget(lookaheadSize, coroutineScope)
+                    val animatedConstraints = Constraints.fixed(width, height)
+                    val placeable = measurable.measure(animatedConstraints)
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                }
+                .drawBehind {
+                    // Read the current animated size in the draw phase.
+                    // If the animation is not initialized yet, fallback to the draw size.
+                    val currentAnimatedSize = sizeAnimation.value?.toSize() ?: size
+                    drawCircle(
+                        color = Color(0xffff6f69),
+                        radius = currentAnimatedSize.minDimension / 2f,
+                    )
+                }
+                .size(if (isExpanded) 200.dp else 100.dp)
+        )
     }
 }

@@ -25,17 +25,18 @@ plugins {
 
 android {
     namespace = "androidx.wear.tiles.samples"
-    compileSdk = 35
+    compileSdk { version = release(35) }
 
     defaultConfig {
         applicationId = "androidx.wear.tiles.samples"
-        minSdk = 30
+        minSdk { version = release(30) }
     }
 
     buildTypes {
         release {
-            minifyEnabled = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            optimization {
+                enable = true
+            }
         }
     }
 
@@ -56,6 +57,10 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation(libs.guavaListenableFuture)
     implementation(libs.guava)
+
+    // Older versions of lifecycle-runtime and animation-core lint checks use deleted lint APIs
+    implementation("androidx.lifecycle:lifecycle-runtime:2.10.0")
+    implementation("androidx.compose.animation:animation-core:1.6.8")
 }
 
 androidx {
@@ -63,5 +68,5 @@ androidx {
     type = SoftwareType.SAMPLES
     inceptionYear = "2024"
     description = "Contains the sample code and demo for Tiles using ProtoLayout."
-    kotlinTarget = KotlinTarget.KOTLIN_2_2
+    kotlinTarget = KotlinTarget.KOTLIN_2_4
 }

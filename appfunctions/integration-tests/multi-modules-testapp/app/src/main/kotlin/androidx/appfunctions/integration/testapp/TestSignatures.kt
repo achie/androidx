@@ -1,0 +1,151 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:OptIn(ExperimentalAppFunctionsApi::class)
+
+package androidx.appfunctions.integration.testapp
+
+import android.annotation.SuppressLint
+import androidx.appfunctions.AppFunctionAccessLevel
+import androidx.appfunctions.AppFunctionBehaviorHints
+import androidx.appfunctions.AppFunctionSerializable
+import androidx.appfunctions.AppFunctionSignature
+import androidx.appfunctions.ExperimentalAppFunctionsApi
+import androidx.appfunctions.metadata.AppFunctionMetadata
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+fun interface DynamicAllPrimitivesInputsSignature {
+    suspend fun processPrimitives(
+        intValue: Int,
+        longValue: Long,
+        floatValue: Float,
+        doubleValue: Double,
+        booleanValue: Boolean,
+        stringValue: String,
+        intArrayValue: IntArray,
+        longArrayValue: LongArray,
+        floatArrayValue: FloatArray,
+        doubleArrayValue: DoubleArray,
+        booleanArrayValue: BooleanArray,
+        byteArrayValue: ByteArray,
+        stringListValue: List<String>,
+    ): Boolean
+}
+
+@AppFunctionSerializable(isDescribedByKDoc = false)
+data class InnerComplexData(val id: String, val scores: IntArray, val optionalTag: String? = null)
+
+@AppFunctionSerializable(isDescribedByKDoc = false)
+data class OuterComplexData(
+    val title: String,
+    val primaryInner: InnerComplexData,
+    val innerList: List<InnerComplexData>,
+    val optionalMetadata: String? = null,
+)
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+fun interface DynamicComplexSerializableSignature {
+    suspend fun processComplex(input: OuterComplexData): OuterComplexData
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+fun interface DynamicVoidReturnSignature {
+    suspend fun processVoid(message: String)
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_ACTIVITY,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+fun interface DynamicActivityScopeSignature {
+    suspend fun processVoid(message: String)
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+fun interface DynamicThrowingSignature {
+    suspend fun processAndThrow(exceptionType: String): String
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+@AppFunctionAccessLevel(
+    level = AppFunctionMetadata.ACCESS_LEVEL_SELF,
+    isCompatEnforcementEnabled = true,
+)
+fun interface DynamicSelfAccessSignature {
+    suspend fun executeSelf(message: String): String
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+@AppFunctionAccessLevel(
+    level = AppFunctionMetadata.ACCESS_LEVEL_SELF,
+    isCompatEnforcementEnabled = false,
+)
+fun interface DynamicSelfAccessDisabledCompatSignature {
+    suspend fun executeSelfDisabledCompat(): String
+}
+
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+@AppFunctionAccessLevel(
+    level = AppFunctionMetadata.ACCESS_LEVEL_SYSTEM,
+    isCompatEnforcementEnabled = true,
+)
+fun interface DynamicSystemAccessSignature {
+    suspend fun executeSystem(): String
+}
+
+@SuppressLint("RestrictedApiAndroidX")
+@AppFunctionSignature(
+    scope = AppFunctionMetadata.SCOPE_GLOBAL,
+    appFunctionXmlFileName = "dynamic_signature_definitions",
+    isDescribedByKDoc = false,
+)
+@AppFunctionBehaviorHints(
+    isDestructive = true,
+    isIdempotent = true,
+    isOpenWorld = false,
+)
+fun interface DynamicBehaviorHintsSignature {
+    suspend fun executeWithBehaviorHints(): String
+}

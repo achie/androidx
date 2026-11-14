@@ -30,18 +30,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
 class PlaceholderTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun placeholder_initially_shows_when_lambda_true() {
@@ -215,7 +214,7 @@ class PlaceholderTest {
             PlaceholderStage.ShowPlaceholder,
         )
 
-        // The placeholder shimmer effect is faint and largely transparent gradiant, but it should
+        // The placeholder shimmer effect is faint and largely transparent gradient, but it should
         // reduce the amount of the normal color.
         rule
             .onNodeWithTag(TEST_TAG)

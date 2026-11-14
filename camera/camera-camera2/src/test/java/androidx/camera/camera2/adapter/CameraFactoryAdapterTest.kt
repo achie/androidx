@@ -19,6 +19,7 @@ package androidx.camera.camera2.adapter
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraMetadata
 import android.os.Build
 import android.os.Handler
@@ -28,15 +29,17 @@ import androidx.camera.camera2.impl.CameraInteropStateCallbackRepository
 import androidx.camera.camera2.pipe.CameraBackendId
 import androidx.camera.camera2.pipe.CameraDevices
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.testing.FakeCameraBackend
 import androidx.camera.camera2.pipe.testing.FakeCameraDevices
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.testing.FakeCameraGraph
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.impl.CameraThreadConfig
+import androidx.camera.core.impl.SessionConfig
 import androidx.camera.core.impl.utils.executor.CameraXExecutors
 import androidx.camera.core.internal.StreamSpecsCalculator.Companion.NO_OP_STREAM_SPECS_CALCULATOR
 import androidx.test.core.app.ApplicationProvider
@@ -51,6 +54,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.internal.DoNotInstrument
 import org.robolectric.shadows.StreamConfigurationMapBuilder
@@ -115,30 +119,28 @@ class CameraFactoryAdapterTest {
     }
 
     @Test
-    fun constructor_initializesWithAllCompatibleCameras_whenNoSelector() =
-        testScope.runTest {
-            // Arrange
-            setFingerprint("fake-fingerprint") // Trigger backward compatibility filter
+    fun constructor_initializesWithAllCompatibleCameras_whenNoSelector() = testScope.runTest {
+        // Arrange
+        setFingerprint("fake-fingerprint") // Trigger backward compatibility filter
 
-            // Act
-            val factory = createCameraFactoryAdapter(null)
+        // Act
+        val factory = createCameraFactoryAdapter(null)
 
-            // Assert
-            assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
-        }
+        // Assert
+        assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
+    }
 
     @Test
-    fun constructor_initializesWithFilteredCameras_whenSelectorIsUsed() =
-        testScope.runTest {
-            // Arrange
-            setFingerprint("fake-fingerprint") // Trigger backward compatibility filter
+    fun constructor_initializesWithFilteredCameras_whenSelectorIsUsed() = testScope.runTest {
+        // Arrange
+        setFingerprint("fake-fingerprint") // Trigger backward compatibility filter
 
-            // Act
-            val factory = createCameraFactoryAdapter(CameraSelector.DEFAULT_BACK_CAMERA)
+        // Act
+        val factory = createCameraFactoryAdapter(CameraSelector.DEFAULT_BACK_CAMERA)
 
-            // Assert
-            assertThat(factory.availableCameraIds).containsExactly("0", "2")
-        }
+        // Assert
+        assertThat(factory.availableCameraIds).containsExactly("0", "2")
+    }
 
     @Test
     fun constructor_notFilterIncompatibleCameras_whenBuildFingerprintIsRobolectric() =
@@ -154,84 +156,150 @@ class CameraFactoryAdapterTest {
         }
 
     @Test
-    fun onCameraIdsUpdated_refreshesAndFiltersList() =
-        testScope.runTest {
-            // Arrange
-            setFingerprint("fake-fingerprint")
-            val factory = createCameraFactoryAdapter(null)
+    fun onCameraIdsUpdated_refreshesAndFiltersList() = testScope.runTest {
+        // Arrange
+        setFingerprint("fake-fingerprint")
+        val factory = createCameraFactoryAdapter(null)
 
-            // Assert initial state
-            assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
+        // Assert initial state
+        assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
 
-            // Act: Simulate camera "1" being removed from the system
-            factory.onCameraIdsUpdated(listOf("0", "2", "3"))
+        // Act: Simulate camera "1" being removed from the system
+        factory.onCameraIdsUpdated(listOf("0", "2", "3"))
 
-            // Assert: The list should be re-filtered. "3" is incompatible, "1" is gone.
-            assertThat(factory.availableCameraIds).containsExactly("0", "2")
-        }
+        // Assert: The list should be re-filtered. "3" is incompatible, "1" is gone.
+        assertThat(factory.availableCameraIds).containsExactly("0", "2")
+    }
 
     @Test
-    fun onCameraIdsUpdated_appliesCameraSelectorToNewList() =
-        testScope.runTest {
-            // Arrange
-            setFingerprint("fake-fingerprint")
-            val factory = createCameraFactoryAdapter(CameraSelector.DEFAULT_BACK_CAMERA)
+    fun onCameraIdsUpdated_appliesCameraSelectorToNewList() = testScope.runTest {
+        // Arrange
+        setFingerprint("fake-fingerprint")
+        val factory = createCameraFactoryAdapter(CameraSelector.DEFAULT_BACK_CAMERA)
 
-            // Assert initial state is correct (filters by selector AND compatibility)
-            assertThat(factory.availableCameraIds).containsExactly("0", "2")
+        // Assert initial state is correct (filters by selector AND compatibility)
+        assertThat(factory.availableCameraIds).containsExactly("0", "2")
 
-            // Act: Simulate a new compatible BACK camera ("4") being added, while "1" (FRONT) is
-            // removed.
-            val metadata4 = createFakeMetadata("4", CameraCharacteristics.LENS_FACING_BACK, true)
-            fakeCameraDevices.addMetadata(metadata4) // Make the backend aware of the new camera
-            // Simulates a new list to trigger the update.
-            factory.onCameraIdsUpdated(
-                listOf(metadata0.camera, metadata2.camera, metadata3.camera, metadata4.camera).map {
-                    it.value
+        // Act: Simulate a new compatible BACK camera ("4") being added, while "1" (FRONT) is
+        // removed.
+        val metadata4 = createFakeMetadata("4", CameraCharacteristics.LENS_FACING_BACK, true)
+        fakeCameraDevices.addMetadata(metadata4) // Make the backend aware of the new camera
+        // Simulates a new list to trigger the update.
+        factory.onCameraIdsUpdated(
+            listOf(metadata0.camera, metadata2.camera, metadata3.camera, metadata4.camera).map {
+                it.value
+            }
+        )
+
+        // Assert: The selector is re-applied. "3" is filtered out for compat.
+        assertThat(factory.availableCameraIds).containsExactly("0", "2", "4")
+    }
+
+    @Test
+    fun getAvailableCameraIds_previewsResult_withoutChangingState() = testScope.runTest {
+        // Arrange
+        setFingerprint("fake-fingerprint")
+        val factory = createCameraFactoryAdapter(null)
+
+        // Assert initial state
+        assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
+
+        // Act: Preview a new list where camera "1" is removed.
+        val previewedIds = factory.getAvailableCameraIds(listOf("0", "2", "3"))
+
+        // Assert: The previewed list is correct.
+        assertThat(previewedIds).containsExactly("0", "2")
+        // Assert: The factory's internal state has NOT changed.
+        assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
+    }
+
+    @Test
+    fun shutdown_callsShutdownOnDependencies() = testScope.runTest {
+        // Arrange
+        var isShutdown = false
+        val cameraPipe =
+            object : CameraPipe by fakeCameraPipe {
+                override fun shutdown() {
+                    isShutdown = true
                 }
-            )
+            }
 
-            // Assert: The selector is re-applied. "3" is filtered out for compat.
-            assertThat(factory.availableCameraIds).containsExactly("0", "2", "4")
-        }
+        val factory = createCameraFactoryAdapter(null, cameraPipe)
 
-    fun getAvailableCameraIds_previewsResult_withoutChangingState() =
-        testScope.runTest {
-            // Arrange
-            setFingerprint("fake-fingerprint")
-            val factory = createCameraFactoryAdapter(null)
+        // Act
+        factory.shutdown()
 
-            // Assert initial state
-            assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
-
-            // Act: Preview a new list where camera "1" is removed.
-            val previewedIds = factory.getAvailableCameraIds(listOf("0", "2", "3"))
-
-            // Assert: The previewed list is correct.
-            assertThat(previewedIds).containsExactly("0", "2")
-            // Assert: The factory's internal state has NOT changed.
-            assertThat(factory.availableCameraIds).containsExactly("0", "1", "2")
-        }
+        // Assert
+        assertThat(isShutdown).isTrue()
+    }
 
     @Test
-    fun shutdown_callsShutdownOnDependencies() =
+    fun shutdown_deliversCloseDuringCameraPipeShutdownBeforeClearingCallbacks() =
         testScope.runTest {
-            // Arrange
-            var isShutdown = false
+            val repository = CameraInteropStateCallbackRepository()
+            var closedCount = 0
+            val deviceCallback =
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {}
+
+                    override fun onClosed(camera: CameraDevice) {
+                        closedCount++
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {}
+
+                    override fun onError(camera: CameraDevice, error: Int) {}
+                }
+            val sessionConfig =
+                SessionConfig.Builder().apply { addDeviceStateCallback(deviceCallback) }.build()
+            val mockDevice: CameraDevice =
+                mock<CameraDevice>().also { whenever(it.id).thenReturn("0") }
+            val stillOpenDevice: CameraDevice =
+                mock<CameraDevice>().also { whenever(it.id).thenReturn("1") }
+            repository.updateCallbacks(sessionConfig, CameraId("0"))
+            repository.updateCallbacks(sessionConfig, CameraId("1"))
+            repository.deviceStateCallback.onOpened(mockDevice)
+            repository.deviceStateCallback.onOpened(stillOpenDevice)
+
+            val queuedTasks = ArrayDeque<Runnable>()
+            val queuedThreadConfig =
+                CameraThreadConfig.create(
+                    { runnable -> queuedTasks.addLast(runnable) },
+                    Handler(Looper.getMainLooper()),
+                )
             val cameraPipe =
                 object : CameraPipe by fakeCameraPipe {
                     override fun shutdown() {
-                        isShutdown = true
+                        // Simulate CameraDevice.onClosed being queued onto cameraExecutor during
+                        // CameraDevice.close() before shutdown() returns.
+                        queuedThreadConfig.cameraExecutor.execute {
+                            repository.deviceStateCallback.onClosed(mockDevice)
+                        }
                     }
                 }
+            val factory =
+                CameraFactoryAdapter(
+                    lazyOf(cameraPipe),
+                    ApplicationProvider.getApplicationContext(),
+                    queuedThreadConfig,
+                    repository,
+                    null,
+                    NO_OP_STREAM_SPECS_CALCULATOR,
+                    CameraXConfig.Builder().build(),
+                )
 
-            val factory = createCameraFactoryAdapter(null, cameraPipe)
+            // Ensure lazyCameraPipe is initialized
+            assertThat(factory.getCamera("0")).isNotNull()
 
-            // Act
             factory.shutdown()
+            while (queuedTasks.isNotEmpty()) {
+                queuedTasks.removeFirst().run()
+            }
 
-            // Assert
-            assertThat(isShutdown).isTrue()
+            assertThat(closedCount).isEqualTo(1)
+            // After shutdown and executor drain complete, even still-open devices are cleared
+            repository.deviceStateCallback.onClosed(stillOpenDevice)
+            assertThat(closedCount).isEqualTo(1)
         }
 
     private fun setFingerprint(fingerprint: String) {
@@ -250,13 +318,12 @@ class CameraFactoryAdapterTest {
             } else {
                 intArrayOf()
             }
-        return FakeCameraMetadata(
+        return FakeCameraMetadata.fromTemplate(
+            template = HighEndDeviceTemplate,
             cameraId = CameraId(cameraId),
-            characteristics =
+            lensFacing = lensFacing,
+            characteristicsOverrides =
                 mapOf(
-                    CameraCharacteristics.LENS_FACING to lensFacing,
-                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL to
-                        CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL,
                     CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES to capabilities,
                     CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE to Rect(0, 0, 10, 10),
                     CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP to
@@ -278,12 +345,14 @@ class CameraFactoryAdapterTest {
     private fun createCameraFactoryAdapter(
         availableCameraSelector: CameraSelector?,
         cameraPipe: CameraPipe = fakeCameraPipe,
+        interopCallbacks: CameraInteropStateCallbackRepository =
+            CameraInteropStateCallbackRepository(),
     ) =
         CameraFactoryAdapter(
             lazyOf(cameraPipe),
             ApplicationProvider.getApplicationContext(),
             threadConfig,
-            CameraInteropStateCallbackRepository(),
+            interopCallbacks,
             availableCameraSelector,
             NO_OP_STREAM_SPECS_CALCULATOR,
             CameraXConfig.Builder().build(),
@@ -337,5 +406,7 @@ class CameraFactoryAdapterTest {
         ): androidx.camera.camera2.pipe.CameraMetadata? {
             return dynamicMetadataMap[cameraId]
         }
+
+        override fun awaitCameraMetadata(cameraId: CameraId) = awaitCameraMetadata(cameraId, null)
     }
 }

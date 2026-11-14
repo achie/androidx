@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,15 +18,10 @@ package androidx.xr.scenecore.spatial.rendering
 
 import android.app.Activity
 import androidx.xr.runtime.math.FloatSize2d
-import androidx.xr.runtime.math.Pose
-import androidx.xr.runtime.math.Quaternion
-import androidx.xr.runtime.math.Vector3
-import androidx.xr.scenecore.impl.impress.FakeImpressApiImpl
-import androidx.xr.scenecore.impl.impress.ImpressApi
-import androidx.xr.scenecore.runtime.CameraViewScenePose
-import androidx.xr.scenecore.runtime.PixelDimensions
 import androidx.xr.scenecore.runtime.SurfaceEntity
-import androidx.xr.scenecore.runtime.extensions.XrExtensionsProvider
+import androidx.xr.scenecore.spatial.rendering.impress.FakeImpressApiImpl
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressApi
+import com.android.extensions.xr.XrExtensions
 import com.google.androidxr.splitengine.SplitEngineSubspaceManager
 import com.google.androidxr.splitengine.SubspaceNode
 import com.google.common.truth.Truth.assertThat
@@ -36,6 +31,7 @@ import org.junit.Before
 import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.ArgumentMatchers.anyBoolean
 import org.mockito.ArgumentMatchers.anyInt
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.mock
@@ -54,7 +50,7 @@ class SurfaceFeatureImplTest {
     //       updated.
     private lateinit var impressApi: ImpressApi
     private val fakeImpressApi = FakeImpressApiImpl()
-    private val xrExtensions = XrExtensionsProvider.getXrExtensions()!!
+    private val xrExtensions = XrExtensions()
     private val splitEngineSubspaceManager = mock(SplitEngineSubspaceManager::class.java)
 
     @Before
@@ -64,6 +60,8 @@ class SurfaceFeatureImplTest {
 
         impressApi = mock(ImpressApi::class.java)
         `when`(impressApi.createImpressNode()).thenReturn(fakeImpressApi.createImpressNode())
+        `when`(impressApi.createStereoSurface(anyInt(), anyInt(), anyInt(), anyBoolean()))
+            .thenReturn(fakeImpressApi.createImpressNode())
 
         Assert.assertNotNull(xrExtensions)
         val node = xrExtensions.createNode()
@@ -72,7 +70,7 @@ class SurfaceFeatureImplTest {
         `when`(splitEngineSubspaceManager.createSubspace(anyString(), anyInt()))
             .thenReturn(expectedSubspaceNode)
 
-        createDefaultSurfaceFeature(SurfaceEntity.Shape.Quad(FloatSize2d(1f, 1f)))
+        createDefaultSurfaceFeature(SurfaceEntity.Shape.Quad(FloatSize2d(1f, 1f), 0.0f))
     }
 
     @After
@@ -87,6 +85,7 @@ class SurfaceFeatureImplTest {
         shape: SurfaceEntity.Shape,
     ): SurfaceFeatureImpl {
         val stereoMode = SurfaceEntity.StereoMode.MONO
+        val mediaBlendingMode = SurfaceEntity.MediaBlendingMode.TRANSPARENT
         val useSuperSampling = 0
 
         return SurfaceFeatureImpl(
@@ -94,6 +93,7 @@ class SurfaceFeatureImplTest {
             splitEngineSubspaceManager,
             xrExtensions,
             stereoMode,
+            mediaBlendingMode,
             shape,
             surfaceProtection,
             useSuperSampling,
@@ -105,36 +105,18 @@ class SurfaceFeatureImplTest {
         return surfaceFeature
     }
 
-    private fun setupDefaultMockCameraView(): CameraViewScenePose {
-        val cameraView = mock(CameraViewScenePose::class.java)
-        `when`(cameraView.cameraType)
-            .thenReturn(CameraViewScenePose.CameraType.CAMERA_TYPE_LEFT_EYE)
-        `when`(cameraView.activitySpacePose)
-            .thenReturn(Pose(Vector3(0f, 0f, 0f), Quaternion.Identity))
-
-        val fov =
-            CameraViewScenePose.Fov(
-                Math.atan(1.0).toFloat(),
-                Math.atan(1.0).toFloat(),
-                Math.atan(1.0).toFloat(),
-                Math.atan(1.0).toFloat(),
-            )
-        `when`(cameraView.fov).thenReturn(fov)
-        `when`(cameraView.displayResolutionInPixels).thenReturn(PixelDimensions(1000, 1000))
-        return cameraView
-    }
-
     @Ignore // b/428211243 this test currently leaks android.view.Surface
     @Test
     fun setShape_setsShape() {
-        var expectedShape: SurfaceEntity.Shape = SurfaceEntity.Shape.Quad(FloatSize2d(12f, 12f))
+        var expectedShape: SurfaceEntity.Shape =
+            SurfaceEntity.Shape.Quad(FloatSize2d(12f, 12f), 0.0f)
         surfaceFeature.shape = expectedShape
         var shape = surfaceFeature.shape
 
         assertThat(shape.javaClass).isEqualTo(expectedShape.javaClass)
         assertThat(shape.dimensions).isEqualTo(expectedShape.dimensions)
         verify(impressApi)
-            .setStereoSurfaceEntityCanvasShapeQuad(surfaceFeature.entityImpressNode, 12f, 12f)
+            .setStereoSurfaceEntityCanvasShapeQuad(surfaceFeature.entityImpressNode, 12f, 12f, 0.0f)
 
         expectedShape = SurfaceEntity.Shape.Sphere(11f)
         surfaceFeature.shape = expectedShape
@@ -178,7 +160,7 @@ class SurfaceFeatureImplTest {
     @Ignore // b/428211243 this test currently leaks android.view.Surface
     @Test
     fun dispose_supports_reentry() {
-        val quadShape = SurfaceEntity.Shape.Quad(FloatSize2d(1.0f, 1.0f)) // 1m x 1m local
+        val quadShape = SurfaceEntity.Shape.Quad(FloatSize2d(1.0f, 1.0f), 0.0f) // 1m x 1m local
         surfaceFeature = createDefaultSurfaceFeature(quadShape)
 
         // Note that we don't test that dispose prevents manipulating other properties because that
@@ -244,7 +226,8 @@ class SurfaceFeatureImplTest {
                 splitEngineSubspaceManager,
                 xrExtensions,
                 SurfaceEntity.StereoMode.SIDE_BY_SIDE,
-                SurfaceEntity.Shape.Quad(FloatSize2d(kTestWidth, kTestHeight)),
+                SurfaceEntity.MediaBlendingMode.TRANSPARENT,
+                SurfaceEntity.Shape.Quad(FloatSize2d(kTestWidth, kTestHeight), 0.0f),
                 SurfaceEntity.SurfaceProtection.NONE,
                 SurfaceEntity.SuperSampling.DEFAULT,
             )
@@ -257,6 +240,7 @@ class SurfaceFeatureImplTest {
                 splitEngineSubspaceManager,
                 xrExtensions,
                 SurfaceEntity.StereoMode.TOP_BOTTOM,
+                SurfaceEntity.MediaBlendingMode.TRANSPARENT,
                 SurfaceEntity.Shape.Sphere(kTestSphereRadius),
                 SurfaceEntity.SurfaceProtection.NONE,
                 SurfaceEntity.SuperSampling.DEFAULT,
@@ -270,6 +254,7 @@ class SurfaceFeatureImplTest {
                 splitEngineSubspaceManager,
                 xrExtensions,
                 SurfaceEntity.StereoMode.MONO,
+                SurfaceEntity.MediaBlendingMode.TRANSPARENT,
                 SurfaceEntity.Shape.Hemisphere(kTestHemisphereRadius),
                 SurfaceEntity.SurfaceProtection.NONE,
                 SurfaceEntity.SuperSampling.DEFAULT,
@@ -281,6 +266,8 @@ class SurfaceFeatureImplTest {
 
         // TODO: b/366588688 - Move these into tests for SurfaceEntityImpl
         assertThat(quadData.stereoMode).isEqualTo(SurfaceEntity.StereoMode.SIDE_BY_SIDE)
+        assertThat(quadData.mediaBlendingMode)
+            .isEqualTo(SurfaceEntity.MediaBlendingMode.TRANSPARENT)
         assertThat(quadData.canvasShape)
             .isEqualTo(FakeImpressApiImpl.StereoSurfaceEntityData.CanvasShape.QUAD)
         assertThat(sphereData.stereoMode).isEqualTo(SurfaceEntity.StereoMode.TOP_BOTTOM)
@@ -336,7 +323,7 @@ class SurfaceFeatureImplTest {
         val protectedSurfaceFeature =
             createSurfaceFeature(
                 SurfaceEntity.SurfaceProtection.PROTECTED,
-                SurfaceEntity.Shape.Quad(FloatSize2d(1f, 1f)),
+                SurfaceEntity.Shape.Quad(FloatSize2d(1f, 1f), 0.0f),
             )
         var exceptionThrown = false
         try {

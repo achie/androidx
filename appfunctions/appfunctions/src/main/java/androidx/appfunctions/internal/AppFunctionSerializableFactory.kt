@@ -16,12 +16,11 @@
 
 package androidx.appfunctions.internal
 
-import android.app.PendingIntent
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.annotation.RestrictTo
 import androidx.appfunctions.AppFunctionData
-import androidx.appfunctions.metadata.AppFunctionAllOfTypeMetadata
+import androidx.appfunctions.AppFunctionDataSpec
 import androidx.appfunctions.metadata.AppFunctionComponentsMetadata
 import androidx.appfunctions.metadata.AppFunctionObjectTypeMetadata
 
@@ -45,36 +44,28 @@ public interface AppFunctionSerializableFactory<T : Any> {
     public fun fromAppFunctionData(appFunctionData: AppFunctionData): T
 
     /** Serializes the given class into an [AppFunctionData]. */
-    public fun toAppFunctionData(appFunctionSerializable: T): AppFunctionData
+    public fun toAppFunctionData(
+        spec: AppFunctionDataSpec?,
+        appFunctionSerializable: T,
+    ): AppFunctionData
 
     // TODO: b/442726462 - Consider decoupling Serializable metadata generation from inventories.
     private fun getAppFunctionComponentsMetadata(): AppFunctionComponentsMetadata =
-        Dependencies.appFunctionInventory?.componentsMetadata ?: AppFunctionComponentsMetadata()
+        AppFunctionComponentsMetadata()
 
     /**
      * Returns an [AppFunctionData.Builder] instance with validation for the serializable specified
      * by [qualifiedName], if the metadata for the serializable is available.
      */
-    public fun getAppFunctionDataBuilder(qualifiedName: String): AppFunctionData.Builder {
-        val componentsMetadata = getAppFunctionComponentsMetadata()
-
-        val dataTypeMetadata = componentsMetadata.dataTypes[qualifiedName]
-
-        // TODO(b/447302747): Remove after resolving affected tests.
-        if (dataTypeMetadata == null) return AppFunctionData.Builder(qualifiedName)
-
-        return when (dataTypeMetadata) {
-            is AppFunctionObjectTypeMetadata -> {
-                AppFunctionData.Builder(dataTypeMetadata, componentsMetadata)
-            }
-            is AppFunctionAllOfTypeMetadata -> {
-                AppFunctionData.Builder(dataTypeMetadata, componentsMetadata)
-            }
-            else -> {
-                throw IllegalStateException(
-                    "Unable to serialize $qualifiedName with $dataTypeMetadata"
-                )
-            }
+    public fun getAppFunctionDataBuilder(
+        spec: AppFunctionDataSpec?,
+        qualifiedName: String,
+    ): AppFunctionData.Builder {
+        return if (spec != null) {
+            AppFunctionData.Builder(spec)
+        } else {
+            // TODO(b/446606781): Make spec a requirement
+            AppFunctionData.Builder(qualifiedName)
         }
     }
 
@@ -137,8 +128,6 @@ public interface AppFunctionSerializableFactory<T : Any> {
                     Double::class.java -> appFunctionDataBuilder.setDouble(key, value as Double)
                     Boolean::class.java -> appFunctionDataBuilder.setBoolean(key, value as Boolean)
                     String::class.java -> appFunctionDataBuilder.setString(key, value as String)
-                    PendingIntent::class.java ->
-                        appFunctionDataBuilder.setPendingIntent(key, value as PendingIntent)
                     IntArray::class.java ->
                         appFunctionDataBuilder.setIntArray(key, value as IntArray)
                     LongArray::class.java ->
@@ -165,7 +154,6 @@ public interface AppFunctionSerializableFactory<T : Any> {
                     Double::class.java -> appFunctionData.getDouble(key)
                     Boolean::class.java -> appFunctionData.getBoolean(key)
                     String::class.java -> appFunctionData.getString(key)
-                    PendingIntent::class.java -> appFunctionData.getPendingIntent(key)
 
                     IntArray::class.java -> appFunctionData.getIntArray(key)
                     LongArray::class.java -> appFunctionData.getLongArray(key)
@@ -198,11 +186,6 @@ public interface AppFunctionSerializableFactory<T : Any> {
                 when (itemClazz) {
                     String::class.java ->
                         appFunctionDataBuilder.setStringList(key, value as List<String>)
-                    PendingIntent::class.java ->
-                        appFunctionDataBuilder.setPendingIntentList(
-                            key,
-                            value as List<PendingIntent>,
-                        )
                     else ->
                         throw IllegalStateException(
                             "Unsupported item type for primitive list: $itemClazz."
@@ -215,7 +198,6 @@ public interface AppFunctionSerializableFactory<T : Any> {
             override fun getFromAppFunctionData(appFunctionData: AppFunctionData, key: String): T =
                 when (itemClazz) {
                     String::class.java -> appFunctionData.getStringList(key)
-                    PendingIntent::class.java -> appFunctionData.getPendingIntentList(key)
                     else ->
                         throw IllegalStateException(
                             "Unsupported item type for primitive list: $itemClazz."
@@ -239,9 +221,10 @@ public interface AppFunctionSerializableFactory<T : Any> {
             ) {
                 if (value == null) return
 
+                // TODO(b/446606781): Support generic type validation
                 appFunctionDataBuilder.setAppFunctionData(
                     key,
-                    serializableFactory.toAppFunctionData(value),
+                    serializableFactory.toAppFunctionData(null, value),
                 )
             }
 
@@ -269,9 +252,10 @@ public interface AppFunctionSerializableFactory<T : Any> {
             ) {
                 if (value == null) return
 
+                // TODO(b/446606781): Support generic type validation
                 appFunctionDataBuilder.setAppFunctionDataList(
                     key,
-                    value.map { serializableFactory.toAppFunctionData(it as I) },
+                    value.map { serializableFactory.toAppFunctionData(null, it as I) },
                 )
             }
 

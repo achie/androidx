@@ -48,6 +48,8 @@ internal class TransformingLazyColumnMeasureResult(
     val coroutineScope: CoroutineScope,
     /** Layout information for the visible items. */
     override val visibleItems: List<TransformingLazyColumnVisibleItemInfo>,
+    /** All items positioned during measurement pass, including extra pinned items. */
+    val positionedItems: List<TransformingLazyColumnVisibleItemInfo>,
     /** see [TransformingLazyColumnLayoutInfo.totalItemsCount] */
     override val totalItemsCount: Int,
     /** The spacing between items in the direction of scrolling. */
@@ -64,6 +66,8 @@ internal class TransformingLazyColumnMeasureResult(
     var canScrollBackward: Boolean,
     /** True if the direction of scrolling and layout is reversed. */
     override val reverseLayout: Boolean,
+    /** The amount of scroll consumed during the measure pass. */
+    val consumedScroll: Float,
 ) : TransformingLazyColumnLayoutInfo, MeasureResult by measureResult {
     /** see [TransformingLazyColumnLayoutInfo.viewportSize] */
     override val viewportSize: IntSize
@@ -93,13 +97,13 @@ internal fun TransformingLazyColumnMeasureResult.checkLayoutIsCorrect() {
 
     with(visibleItems.fastMapToFloatList { it.scrollProgress.topOffsetFraction }) {
         check(isDistinct() && isMonotonicallyIncreasing()) {
-            "Incorrect layout: scrollProgress top offset fraction should be increating $this"
+            "Incorrect layout: scrollProgress top offset fraction should be increasing $this"
         }
     }
 
     with(visibleItems.fastMapToFloatList { it.scrollProgress.bottomOffsetFraction }) {
         check(isDistinct() && isMonotonicallyIncreasing()) {
-            "Incorrect layout: scrollProgress bottom offset fraction should be increating $this"
+            "Incorrect layout: scrollProgress bottom offset fraction should be increasing $this"
         }
     }
 }
@@ -118,8 +122,10 @@ private fun FloatList.isDistinct(): Boolean =
 private fun FloatList.isMonotonicallyIncreasing(): Boolean =
     (1 until size).all { this[it] >= this[it - 1] }
 
-// Confirms that the values array consists of two monotonic functions.
+// Confirms that the values are monotonically non-decreasing followed by monotonically
+// non-increasing.
 private fun FloatList.hasMonotonicIncreaseAndDecrease(): Boolean {
     val firstDownIndex = (1 until size).firstOrNull { this[it] < this[it - 1] }
-    return firstDownIndex == null || (firstDownIndex + 1 until size).all { this[it] < this[it - 1] }
+    return firstDownIndex == null ||
+        (firstDownIndex + 1 until size).all { this[it] <= this[it - 1] }
 }

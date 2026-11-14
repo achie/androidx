@@ -16,7 +16,6 @@
 
 package androidx.camera.camera2.pipe
 
-import Camera2StreamConfigurationMap
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL
 import android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
@@ -33,6 +32,10 @@ import androidx.camera.camera2.pipe.compat.Api34Compat
 import androidx.camera.camera2.pipe.compat.Api35Compat
 import androidx.camera.camera2.pipe.compat.Camera2ColorSpaceProfiles
 import androidx.camera.camera2.pipe.compat.Camera2MultiResolutionStreamConfigurationMap
+import androidx.camera.camera2.pipe.compat.Camera2StreamConfigurationMap
+import androidx.camera.common.CameraCharacteristicsWrapper
+import androidx.camera.common.CameraId
+import androidx.camera.common.Metadata
 
 /**
  * [CameraMetadata] is a compatibility wrapper around [CameraCharacteristics].
@@ -44,23 +47,58 @@ import androidx.camera.camera2.pipe.compat.Camera2MultiResolutionStreamConfigura
  * makes behavior that depends on [CameraMetadata] easier to test and reason about.
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-public interface CameraMetadata : Metadata, UnsafeWrapper {
-    public operator fun <T> get(key: CameraCharacteristics.Key<T>): T?
-
-    public fun <T> getOrDefault(key: CameraCharacteristics.Key<T>, default: T): T
-
+public interface CameraMetadata : CameraCharacteristicsWrapper {
     public val camera: CameraId
+
+    @Suppress("INAPPLICABLE_JVM_NAME")
+    @get:JvmName("getCameraId")
+    @get:Suppress("ValueClassUsageWithoutJvmName")
+    override val cameraId: CameraId
+        get() = camera
+
     public val isRedacted: Boolean
 
-    public val keys: Set<CameraCharacteristics.Key<*>>
-    public val requestKeys: Set<CaptureRequest.Key<*>>
-    public val resultKeys: Set<CaptureResult.Key<*>>
-    public val sessionKeys: Set<CaptureRequest.Key<*>>
-    public val sessionCharacteristicsKeys: Set<CameraCharacteristics.Key<*>>
+    override val isRestricted: Boolean
+        get() = isRedacted
 
-    public val physicalCameraIds: Set<CameraId>
+    override val keys: Set<CameraCharacteristics.Key<*>>
+    public val requestKeys: Set<CaptureRequest.Key<*>>
+    override val captureRequestKeys: Set<CaptureRequest.Key<*>>
+        get() = requestKeys
+
+    public val resultKeys: Set<CaptureResult.Key<*>>
+    override val captureResultKeys: Set<CaptureResult.Key<*>>
+        get() = resultKeys
+
+    override val sessionKeys: Set<CameraCharacteristics.Key<*>>
+        get() = sessionCharacteristicsKeys
+
+    public val sessionCharacteristicsKeys: Set<CameraCharacteristics.Key<*>>
+    override val sessionCaptureRequestKeys: Set<CaptureRequest.Key<*>>
+
+    override val restrictedKeys: Set<CameraCharacteristics.Key<*>>
+        get() = emptySet()
+
+    override val dynamicKeys: Set<CameraCharacteristics.Key<*>>
+        get() = emptySet()
+
+    override val physicalCameraIds: Set<CameraId>
     public val physicalRequestKeys: Set<CaptureRequest.Key<*>>
+    override val physicalCaptureRequestKeys: Set<CaptureRequest.Key<*>>
+        get() = physicalRequestKeys
+
     public val supportedExtensions: Set<Int>
+
+    /**
+     * Check if a specific extension mode is supported.
+     *
+     * On API 37+, this delegates to
+     * [android.hardware.camera2.CameraExtensionCharacteristics.isExtensionSupported]. On API levels
+     * below 37, this checks if the extension is present in [supportedExtensions].
+     *
+     * The default implementation checks if the extension is present in [supportedExtensions].
+     */
+    public fun isExtensionSupported(extension: Int): Boolean = extension in supportedExtensions
 
     public suspend fun getPhysicalMetadata(cameraId: CameraId): CameraMetadata
 
@@ -80,7 +118,7 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
          */
         @JvmStatic
         public val CAMERA_STREAM_CONFIGURATION_MAP: Metadata.Key<CameraStreamConfigurationMap> =
-            Metadata.Key.create("androidx.camera.camera2.pipe.scalar.streamConfigurationMap")
+            Metadata.Key("androidx.camera.camera2.pipe.scalar.streamConfigurationMap")
 
         /**
          * Replacement for [CameraCharacteristics.SCALER_MULTI_RESOLUTION_STREAM_CONFIGURATION_MAP]
@@ -93,7 +131,7 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
         @JvmStatic
         public val CAMERA_MULTI_RESOLUTION_STREAM_CONFIGURATION_MAP:
             Metadata.Key<CameraMultiResolutionStreamConfigurationMap> =
-            Metadata.Key.create(
+            Metadata.Key(
                 "androidx.camera.camera2.pipe.scalar.multiResolutionStreamConfigurationMap"
             )
 
@@ -105,9 +143,7 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
          */
         @JvmStatic
         public val CAMERA_AVAILABLE_COLOR_SPACE_PROFILES: Metadata.Key<CameraColorSpaceProfiles> =
-            Metadata.Key.create(
-                "androidx.camera.camera2.pipe.request.availableColorSpaceProfilesMap"
-            )
+            Metadata.Key("androidx.camera.camera2.pipe.request.availableColorSpaceProfilesMap")
 
         /**
          * Extension properties for querying the available capabilities of a camera device across
@@ -145,6 +181,22 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
             get() =
                 this[CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES]
                     ?: EMPTY_INT_ARRAY
+
+        public val CameraMetadata.availableAeModes: IntArray
+            @JvmStatic
+            get() = this[CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES] ?: EMPTY_INT_ARRAY
+
+        public val CameraMetadata.availableAfModes: IntArray
+            @JvmStatic
+            get() = this[CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES] ?: EMPTY_INT_ARRAY
+
+        public val CameraMetadata.availableAwbModes: IntArray
+            @JvmStatic
+            get() = this[CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES] ?: EMPTY_INT_ARRAY
+
+        public val CameraMetadata.availableControlModes: IntArray
+            @JvmStatic
+            get() = this[CameraCharacteristics.CONTROL_AVAILABLE_MODES] ?: EMPTY_INT_ARRAY
 
         public val CameraMetadata.isHardwareLevelExternal: Boolean
             @JvmStatic
@@ -283,6 +335,22 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
                     availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             }
 
+        public val CameraMetadata.supportsAeLock: Boolean
+            @JvmStatic get() = this[CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE] ?: false
+
+        public val CameraMetadata.supportsAwbLock: Boolean
+            @JvmStatic get() = this[CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE] ?: false
+
+        /**
+         * Returns `true` if the camera device has a flash unit, otherwise `false`.
+         *
+         * When this is `false`, [CaptureRequest.FLASH_MODE] settings are ignored by the camera
+         * device and the torch cannot be turned on. See
+         * [CameraCharacteristics.FLASH_INFO_AVAILABLE].
+         */
+        public val CameraMetadata.hasFlashUnit: Boolean
+            @JvmStatic get() = this[CameraCharacteristics.FLASH_INFO_AVAILABLE] ?: false
+
         /**
          * Returns `true` if overriding zoom settings is supported on the device, otherwise `false`.
          */
@@ -335,6 +403,61 @@ public interface CameraMetadata : Metadata, UnsafeWrapper {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM)
                     Api35Compat.getDefaultTorchStrengthLevel(this)
                 else 1
+
+        /**
+         * Returns `true` if the given [AeMode] is supported by the camera device, otherwise
+         * `false`.
+         *
+         * See [CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES].
+         */
+        public fun CameraMetadata.isSupported(aeMode: AeMode): Boolean =
+            this.availableAeModes.contains(aeMode.value)
+
+        /**
+         * Returns `true` if the given [AfMode] is supported by the camera device, otherwise
+         * `false`.
+         *
+         * See [CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES].
+         */
+        public fun CameraMetadata.isSupported(afMode: AfMode): Boolean =
+            this.availableAfModes.contains(afMode.value)
+
+        /**
+         * Returns `true` if the given [AwbMode] is supported by the camera device, otherwise
+         * `false`.
+         *
+         * See [CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES].
+         */
+        public fun CameraMetadata.isSupported(awbMode: AwbMode): Boolean =
+            this.availableAwbModes.contains(awbMode.value)
+
+        /**
+         * Returns `true` if the given [ControlMode] is supported by the camera device, otherwise
+         * `false`.
+         *
+         * See [CameraCharacteristics.CONTROL_AVAILABLE_MODES].
+         */
+        public fun CameraMetadata.isSupported(controlMode: ControlMode): Boolean =
+            this.availableControlModes.contains(controlMode.value)
+
+        /**
+         * Returns `true` if the given [FlashMode] is supported by the camera device, otherwise
+         * `false`.
+         *
+         * Only standard Camera2 flash modes ([FlashMode.OFF], [FlashMode.SINGLE], and
+         * [FlashMode.TORCH]) can be verified via [CameraCharacteristics.FLASH_INFO_AVAILABLE].
+         * [FlashMode.OFF] is always supported, [FlashMode.SINGLE] and [FlashMode.TORCH] are
+         * supported when [hasFlashUnit] is `true`, and non-standard or vendor [FlashMode] values
+         * return `false`. See [CameraCharacteristics.FLASH_INFO_AVAILABLE] and
+         * [CaptureRequest.FLASH_MODE].
+         */
+        public fun CameraMetadata.isSupported(flashMode: FlashMode): Boolean =
+            when (flashMode) {
+                FlashMode.OFF -> true
+                FlashMode.SINGLE,
+                FlashMode.TORCH -> hasFlashUnit
+                else -> false
+            }
 
         public val CameraMetadata.supportsLowLightBoost: Boolean
             @JvmStatic

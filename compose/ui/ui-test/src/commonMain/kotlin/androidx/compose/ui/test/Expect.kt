@@ -16,6 +16,8 @@
 
 package androidx.compose.ui.test
 
+import androidx.compose.ui.semantics.SemanticsNode
+
 /**
  * Returns the hash code for the given object that is unique across all currently allocated objects.
  * The hash code for the null reference is zero.
@@ -33,3 +35,12 @@ package androidx.compose.ui.test
  * ```
  */
 internal expect fun identityHashCode(instance: Any?): Int
+
+/** Returns a boolean if a node has both focus and is within a window that also has focus. */
+internal expect val SemanticsNode.hasFocusAndWindowFocus: Boolean
+
+/**
+ * Waits for a root with focus to also gain window focus if window focus delivery from the platform
+ * is still pending. Returns `true` if window focus was gained and roots should be re-checked.
+ */
+internal expect fun TestContext.waitForWindowFocus(roots: List<SemanticsNode>): Boolean

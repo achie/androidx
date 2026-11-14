@@ -27,6 +27,7 @@ dependencies {
 
     implementation(project(":appcompat:appcompat"))
     implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.core:core-ktx:1.17.0")
     implementation(project(":compose:foundation:foundation"))
     implementation(project(":compose:foundation:foundation-layout"))
     implementation(project(":compose:material3:material3"))
@@ -36,9 +37,9 @@ dependencies {
     implementation(project(":compose:ui:ui-tooling-preview"))
 
     // Adaptive (CAMAL) dependencies
-    implementation("androidx.compose.material3.adaptive:adaptive:1.2.0-alpha10")
-    implementation("androidx.compose.material3.adaptive:adaptive-layout:1.2.0-alpha10")
-    implementation("androidx.compose.material3.adaptive:adaptive-navigation:1.2.0-alpha10")
+    implementation("androidx.compose.material3.adaptive:adaptive:1.2.0")
+    implementation("androidx.compose.material3.adaptive:adaptive-layout:1.2.0")
+    implementation("androidx.compose.material3.adaptive:adaptive-navigation:1.2.0")
     implementation(project(":compose:material3:material3-adaptive-navigation-suite"))
 
     // XR Adaptive integration library
@@ -47,22 +48,19 @@ dependencies {
     implementation(project(":xr:scenecore:scenecore"))
     implementation(project(":xr:scenecore:scenecore-spatial-core"))
 
-    compileOnly("com.android.extensions.xr:extensions-xr:1.1.0")
+    compileOnly(libs.androidExtensionsXr)
 
     // TODO(b/374796755): Write unit-tests for this test app
 }
 
 android {
-    compileSdk = 35
-    defaultConfig {
-        minSdk = 24
-    }
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
     namespace = "androidx.xr.compose.material3.integration.testapp"
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            optimization {
+                enable = true
+            }
         }
     }
 }

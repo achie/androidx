@@ -16,10 +16,12 @@
 
 package androidx.pdf.utils
 
+import android.graphics.Bitmap
 import android.graphics.Matrix
 import androidx.annotation.RestrictTo
+import androidx.pdf.ExperimentalPdfApi
+import androidx.pdf.RenderParams
 
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 /**
  * Calculates a transformation matrix for scaling and translating content.
  *
@@ -36,6 +38,7 @@ import androidx.annotation.RestrictTo
  * @return The calculated transformation matrix.
  * @throws IllegalArgumentException If `pageWidth` or `pageHeight` is less than or equal to 0.
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public fun getTransformationMatrix(
     left: Int,
     top: Int,
@@ -51,3 +54,15 @@ public fun getTransformationMatrix(
         postTranslate(-left.toFloat(), -top.toFloat())
     }
 }
+
+/**
+ * Returns the [Bitmap.Config] specified by [RenderParams.bitmapConfig] if supported by the platform
+ * apis, falling back to [Bitmap.Config.ARGB_8888].
+ */
+@OptIn(ExperimentalPdfApi::class)
+internal fun RenderParams.toBitmapConfig(): Bitmap.Config =
+    if (isRgb565RenderingAvailable() && bitmapConfig == RenderParams.BITMAP_CONFIG_RGB_565) {
+        Bitmap.Config.RGB_565
+    } else {
+        Bitmap.Config.ARGB_8888
+    }

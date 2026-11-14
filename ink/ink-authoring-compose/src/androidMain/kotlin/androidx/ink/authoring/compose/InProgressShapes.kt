@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.setFrom
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUp
@@ -46,7 +47,8 @@ import androidx.compose.ui.util.fastAny
 import androidx.compose.ui.util.fastFirstOrNull
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.ink.authoring.ExperimentalCustomShapeWorkflowApi
+import androidx.ink.authoring.ExperimentalInkCustomShapeWorkflowApi
+import androidx.ink.authoring.ExperimentalInkHandoffApi
 import androidx.ink.authoring.InProgressShape
 import androidx.ink.authoring.InProgressShapesCompletedListener
 import androidx.ink.authoring.InProgressShapesView
@@ -82,7 +84,7 @@ import java.util.concurrent.TimeUnit
  * [androidx.ink.rendering.android.canvas.CanvasStrokeRenderer].
  *
  * @param customShapeWorkflow A [ShapeWorkflow] to be used as an alternative to the standard Ink
- *   behavior provided by [InProgressStrokesView].
+ *   behavior provided by [androidx.ink.authoring.InProgressStrokesView].
  * @param defaultShapeSpec Specification for the shape being started. If this is `null`, nothing
  *   will be drawn, but the internal rendering resources will be preserved to avoid paying the cost
  *   for reinitialization when drawing is needed again. If different [ShapeSpecT] values are needed
@@ -132,7 +134,7 @@ import java.util.concurrent.TimeUnit
  *   from producer to consumer, and even if the final consumer is on the UI thread, it may not be in
  *   the same UI thread run loop and lead to a flicker.
  */
-@ExperimentalCustomShapeWorkflowApi
+@ExperimentalInkCustomShapeWorkflowApi
 @Composable
 public fun <
     ShapeSpecT : Any,
@@ -158,7 +160,7 @@ public fun <
     )
 }
 
-@OptIn(ExperimentalCustomShapeWorkflowApi::class)
+@OptIn(ExperimentalInkCustomShapeWorkflowApi::class, ExperimentalInkHandoffApi::class)
 @VisibleForTesting
 @Composable
 internal fun <
@@ -190,6 +192,7 @@ internal fun <
             Modifier.fillMaxSize()
                 .pointerInput(nextPointerEventToWorldTransform, nextShapeToWorldTransform) {
                     awaitEachGesture {
+                        var activeDeviceId: Int? = null
                         do {
                             val ipsv =
                                 checkNotNull(inProgressShapesView) {
@@ -202,10 +205,22 @@ internal fun <
 
                             val event = awaitPointerEvent()
 
+                            event.motionEvent?.deviceId?.let {
+                                if (activeDeviceId != null && activeDeviceId != it) {
+                                    cancelAllPointers(
+                                        inProgressShapesView,
+                                        inProgressPointers,
+                                        changeIdsToMotionEventPointerIds,
+                                    )
+                                    activeDeviceId = null
+                                }
+                            }
+
                             // Ignore hover events, but don't prevent up events from being
                             // processed.
                             if (
                                 changeIdsToMotionEventPointerIds.isEmpty() &&
+                                    inProgressPointers.isEmpty() &&
                                     !event.changes.fastAny { it.pressed }
                             ) {
                                 return@awaitEachGesture
@@ -225,18 +240,36 @@ internal fun <
                                 // that in a
                                 // MotionEvent (and therefore a PointerEvent on Android), only one
                                 // pointer can go
-                                // down per event.
-                                event.changes.fastForEach { change ->
-                                    if (change.changedToDownIgnoreConsumed()) {
-                                        val motionEventPointerId =
-                                            nonLocalCoordinatesMotionEvent.getPointerId(
-                                                nonLocalCoordinatesMotionEvent.actionIndex
-                                            )
-                                        changeIdsToMotionEventPointerIds[change.id] =
-                                            motionEventPointerId
-                                        // Only one pointer can go down per event.
-                                        return@fastForEach
+                                // down per event. If multiple changes transition to down in the
+                                // same event (e.g.
+                                // after a synthetic cancel while another pointer remained held
+                                // down), do not map
+                                // them as their pointer IDs are ambiguous.
+                                var singleDownChange: PointerInputChange? = null
+                                // Use `run` so `return@run` breaks out of the loop
+                                // (`return@fastForEach` only
+                                // continues to the next element, which would re-assign
+                                // `singleDownChange` on a 3rd
+                                // down change).
+                                run {
+                                    event.changes.fastForEach { change ->
+                                        if (change.changedToDownIgnoreConsumed()) {
+                                            if (singleDownChange == null) {
+                                                singleDownChange = change
+                                            } else {
+                                                singleDownChange = null
+                                                return@run
+                                            }
+                                        }
                                     }
+                                }
+                                singleDownChange?.let {
+                                    activeDeviceId = nonLocalCoordinatesMotionEvent.deviceId
+                                    val motionEventPointerId =
+                                        nonLocalCoordinatesMotionEvent.getPointerId(
+                                            nonLocalCoordinatesMotionEvent.actionIndex
+                                        )
+                                    changeIdsToMotionEventPointerIds[it.id] = motionEventPointerId
                                 }
                             }
 
@@ -273,75 +306,127 @@ internal fun <
                             try {
                                 event.changes.fastForEach { change ->
                                     val currentPointer = inProgressPointers[change.id]
-                                    if (currentPointer != null && change.isConsumed) {
-                                        ipsv.cancelShape(currentPointer.shapeId)
-                                        inProgressPointers.remove(change.id)
-                                    } else if (
+                                    when {
+                                        currentPointer != null && change.isConsumed -> {
+                                            // Cancel an in-progress shape if its pointer input was
+                                            // consumed upstream.
+                                            ipsv.cancelShape(currentPointer.shapeId)
+                                            inProgressPointers.remove(change.id)
+                                        }
                                         currentPointer == null &&
                                             change.changedToDown() &&
-                                            localCoordinatesMotionEvent != null
-                                    ) {
-                                        val motionEventPointerId =
-                                            changeIdsToMotionEventPointerIds[change.id]
-                                        checkNotNull(motionEventPointerId) {
-                                            "changeId ${change.id} not mapped to a pointerId."
+                                            localCoordinatesMotionEvent != null -> {
+                                            // Start a new shape when a mapped pointer goes down.
+                                            val motionEventPointerId =
+                                                changeIdsToMotionEventPointerIds[change.id]
+                                            if (
+                                                motionEventPointerId == null ||
+                                                    !localCoordinatesMotionEvent.hasPointerId(
+                                                        motionEventPointerId
+                                                    )
+                                            ) {
+                                                return@fastForEach
+                                            }
+                                            val shapeSpec = nextShapeSpec()
+                                            if (shapeSpec != null) {
+                                                val shapeId =
+                                                    ipsv.startShape(
+                                                        event = localCoordinatesMotionEvent,
+                                                        pointerId = motionEventPointerId,
+                                                        shapeSpec = shapeSpec,
+                                                        motionEventToWorldTransform =
+                                                            android.graphics.Matrix().apply {
+                                                                setFrom(
+                                                                    nextPointerEventToWorldTransform()
+                                                                )
+                                                            },
+                                                        shapeToWorldTransform =
+                                                            android.graphics.Matrix().apply {
+                                                                setFrom(nextShapeToWorldTransform())
+                                                            },
+                                                    )
+                                                inProgressPointers[change.id] =
+                                                    InProgressPointer(
+                                                        shapeId = shapeId,
+                                                        motionEventPointerId = motionEventPointerId,
+                                                    )
+                                                change.consume()
+                                            }
                                         }
-                                        val shapeSpec = nextShapeSpec()
-                                        if (shapeSpec != null) {
-                                            val shapeId =
-                                                ipsv.startShape(
-                                                    event = localCoordinatesMotionEvent,
-                                                    pointerId = motionEventPointerId,
-                                                    shapeSpec = shapeSpec,
-                                                    motionEventToWorldTransform =
-                                                        android.graphics.Matrix().apply {
-                                                            setFrom(
-                                                                nextPointerEventToWorldTransform()
-                                                            )
-                                                        },
-                                                    shapeToWorldTransform =
-                                                        android.graphics.Matrix().apply {
-                                                            setFrom(nextShapeToWorldTransform())
-                                                        },
-                                                )
-                                            inProgressPointers[change.id] =
-                                                InProgressPointer(
-                                                    shapeId = shapeId,
-                                                    motionEventPointerId = motionEventPointerId,
-                                                )
-                                            change.consume()
-                                        }
-                                    } else if (
                                         currentPointer != null &&
                                             change.changedToUp() &&
-                                            localCoordinatesMotionEvent != null
-                                    ) {
-                                        inProgressPointers.remove(change.id)
-                                        ipsv.finishShape(
-                                            localCoordinatesMotionEvent,
-                                            currentPointer.motionEventPointerId,
-                                            currentPointer.shapeId,
-                                        )
-                                        change.consume()
-                                    } else if (
+                                            localCoordinatesMotionEvent != null -> {
+                                            // Finish an in-progress shape when its pointer goes up
+                                            // (or cancel if its
+                                            // pointer ID is missing from the MotionEvent).
+                                            inProgressPointers.remove(change.id)
+                                            if (
+                                                localCoordinatesMotionEvent.hasPointerId(
+                                                    currentPointer.motionEventPointerId
+                                                )
+                                            ) {
+                                                ipsv.finishShape(
+                                                    localCoordinatesMotionEvent,
+                                                    currentPointer.motionEventPointerId,
+                                                    currentPointer.shapeId,
+                                                )
+                                                change.consume()
+                                            } else {
+                                                ipsv.cancelShape(currentPointer.shapeId)
+                                            }
+                                        }
                                         currentPointer != null &&
                                             change.positionChanged() &&
-                                            localCoordinatesMotionEvent != null
-                                    ) {
-                                        ipsv.addToShape(
-                                            localCoordinatesMotionEvent,
-                                            currentPointer.motionEventPointerId,
-                                            currentPointer.shapeId,
-                                            predictedMotionEvent,
-                                        )
-                                        change.consume()
+                                            localCoordinatesMotionEvent != null -> {
+                                            // Update an in-progress shape when its pointer moves
+                                            // (or cancel if its
+                                            // pointer ID is missing from the MotionEvent).
+                                            if (
+                                                localCoordinatesMotionEvent.hasPointerId(
+                                                    currentPointer.motionEventPointerId
+                                                )
+                                            ) {
+                                                ipsv.addToShape(
+                                                    localCoordinatesMotionEvent,
+                                                    currentPointer.motionEventPointerId,
+                                                    currentPointer.shapeId,
+                                                    predictedMotionEvent,
+                                                )
+                                                change.consume()
+                                            } else {
+                                                inProgressPointers.remove(change.id)
+                                                ipsv.cancelShape(currentPointer.shapeId)
+                                            }
+                                        }
                                     }
+                                }
+                                val inProgressPointersIter = inProgressPointers.iterator()
+                                for (entry in inProgressPointersIter) {
+                                    if (
+                                        !event.changes.fastAny { change ->
+                                            change.id == entry.key && change.pressed
+                                        }
+                                    ) {
+                                        inProgressPointersIter.remove()
+                                        ipsv.cancelShape(entry.value.shapeId)
+                                    }
+                                }
+                                if (
+                                    inProgressPointers.isEmpty() &&
+                                        changeIdsToMotionEventPointerIds.isEmpty()
+                                ) {
+                                    activeDeviceId = null
                                 }
                             } finally {
                                 localCoordinatesMotionEvent?.recycle()
                                 predictedMotionEvent?.recycle()
                             }
                         } while (event.changes.fastAny { it.pressed })
+                        cancelAllPointers(
+                            inProgressShapesView,
+                            inProgressPointers,
+                            changeIdsToMotionEventPointerIds,
+                        )
                     }
                 }
                 // Use MotionEvent/View interop APIs to configure ASAP delivery of input events.
@@ -411,6 +496,23 @@ private class InProgressPointer(
     val motionEventPointerId: Int,
 )
 
+@OptIn(ExperimentalInkCustomShapeWorkflowApi::class)
+private fun cancelAllPointers(
+    inProgressShapesView: InProgressShapesView<*, *, *>?,
+    @Suppress("PrimitiveInCollection") inProgressPointers: MutableMap<PointerId, InProgressPointer>,
+    @Suppress("PrimitiveInCollection") changeIdsToMotionEventPointerIds: MutableMap<PointerId, Int>,
+) {
+    if (inProgressShapesView != null) {
+        for (pointer in inProgressPointers.values) {
+            inProgressShapesView.cancelShape(pointer.shapeId)
+        }
+    }
+    inProgressPointers.clear()
+    changeIdsToMotionEventPointerIds.clear()
+}
+
+private fun MotionEvent.hasPointerId(pointerId: Int) = findPointerIndex(pointerId) >= 0
+
 // When there are more than this many active pointers, instances of PointerProperties and
 // PointerCoords, and the arrays that they go in, will be allocated with each input and potentially
 // make drawing latency higher and less consistent. Many apps only tend to support 1 inking pointer
@@ -474,9 +576,9 @@ private fun PointerEvent.obtainLocalMotionEvent(
     val pointerCoords = obtainPointerCoordsArray(pointerCount)
 
     for (pointerIndex in 0 until pointerCount) {
-        // Copy most of the data, including pressure/tilt/orientation, from the nonLocalMotionEvent,
-        // but
-        // then replace the position data with local positions from PointerInputChange below.
+        // Copy most of the data, including pressure/tilt/orientation/twist, from the
+        // nonLocalMotionEvent, but then replace the position data with local positions from
+        // PointerInputChange below.
         nonLocalMotionEvent.getPointerProperties(pointerIndex, pointerProperties[pointerIndex])
         nonLocalMotionEvent.getPointerCoords(pointerIndex, pointerCoords[pointerIndex])
 
@@ -530,10 +632,9 @@ private fun PointerEvent.obtainLocalMotionEvent(
         // Re-use same array of PointerCoords - copied into native memory during obtain and
         // addBatch.
         for (pointerIndex in 0 until pointerCount) {
-            // Copy most of the data, including pressure/tilt/orientation, from the
-            // nonLocalMotionEvent,
-            // but then replace the position data with local positions from PointerInputChange
-            // below.
+            // Copy most of the data, including pressure/tilt/orientation/twist, from the
+            // nonLocalMotionEvent, but then replace the position data with local positions from
+            // PointerInputChange below.
             nonLocalMotionEvent.getHistoricalPointerCoords(
                 pointerIndex,
                 historicalIndex,
@@ -551,8 +652,9 @@ private fun PointerEvent.obtainLocalMotionEvent(
             pointerCoords[pointerIndex].apply {
                 // The PointerCoords already is full of data from nonLocalMotionEvent, including
                 // pressure,
-                // tilt, and orientation, so only the position needs to be updated to be in local
-                // coordinates.
+                // tilt, orientation, and barrel twist, so only the position needs to be updated to
+                // be in
+                // local coordinates.
                 x = historicalChange.position.x
                 y = historicalChange.position.y
             }

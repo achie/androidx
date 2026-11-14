@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.wear.compose.foundation.lazy.MeasurementDirection
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScrollProgress
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnParentData
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -86,7 +87,7 @@ internal class LazyLayoutItemAnimation(
     var rawOffset: IntOffset = NotInitialized
 
     /**
-     * The final offset the placeable associated with this animations was placed at. Unlike
+     * The final offset the placeable associated with this animation was placed at. Unlike
      * [rawOffset] it takes into account things like reverse layout and content padding.
      */
     var finalOffset: IntOffset = IntOffset.Zero
@@ -114,8 +115,8 @@ internal class LazyLayoutItemAnimation(
         private set
 
     /**
-     * When there is an animation going, this represent the scroll progress of the item. If there is
-     * no animation going, this is null. Note that this uses [placementDelta], which is a state
+     * When there is an animation going, this represents the scroll progress of the item. If there
+     * is no animation going, this is null. Note that this uses [placementDelta], which is a state
      * variable, so clients reading this will subscribe to be updated during the animation.
      */
     val animatedScrollProgress: TransformingLazyColumnItemScrollProgress
@@ -306,8 +307,10 @@ internal class LazyLayoutAnimationSpecsNode(
     var placementSpec: FiniteAnimationSpec<IntOffset>?,
     var fadeOutSpec: FiniteAnimationSpec<Float>?,
 ) : Modifier.Node(), ParentDataModifierNode {
-
-    override fun Density.modifyParentData(parentData: Any?): Any = this@LazyLayoutAnimationSpecsNode
+    override fun Density.modifyParentData(parentData: Any?): Any =
+        (parentData as? TransformingLazyColumnParentData)?.copy(
+            animationSpecs = this@LazyLayoutAnimationSpecsNode
+        ) ?: TransformingLazyColumnParentData(animationSpecs = this@LazyLayoutAnimationSpecsNode)
 }
 
 /** We switch to this spec when a duration based animation is being interrupted. */

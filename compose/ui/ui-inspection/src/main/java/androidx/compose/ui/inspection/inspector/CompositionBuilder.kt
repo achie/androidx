@@ -28,14 +28,12 @@ import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.inspection.util.AnchorMap
 import androidx.compose.ui.inspection.util.NO_ANCHOR_ID
-import androidx.compose.ui.inspection.util.isPrimitiveClass
 import androidx.compose.ui.layout.GraphicLayerInfo
 import androidx.compose.ui.layout.LayoutInfo
 import androidx.compose.ui.layout.view
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.InteroperableComposeUiNode
 import androidx.compose.ui.tooling.data.ContextCache
-import androidx.compose.ui.tooling.data.ParameterInformation
 import androidx.compose.ui.tooling.data.SourceContext
 import androidx.compose.ui.tooling.data.SourceLocation
 import androidx.compose.ui.tooling.data.UiToolingDataApi
@@ -207,6 +205,7 @@ internal class CompositionBuilder(
                 if (withSemantics) {
                     node.mergedSemantics.clear()
                     node.unmergedSemantics.clear()
+                    node.semanticsIds.clear()
                 }
             }
             if (node.bounds != null && parentNode.box == node.box) {
@@ -214,6 +213,7 @@ internal class CompositionBuilder(
             }
             parentNode.mergedSemantics.addAll(node.mergedSemantics)
             parentNode.unmergedSemantics.addAll(node.unmergedSemantics)
+            parentNode.semanticsIds.addAll(node.semanticsIds)
             release(node)
         }
         val nodeId = id
@@ -279,7 +279,7 @@ internal class CompositionBuilder(
         checkCapturingSubCompositions(node, children)
 
         val layoutInfo = group.node as? LayoutInfo
-        if (layoutInfo != null) {
+        if (layoutInfo != null && !layoutInfo.isVirtual) {
             return parseLayoutInfo(layoutInfo, context, node)
         }
 
@@ -310,7 +310,7 @@ internal class CompositionBuilder(
         if (isHiddenSystemNode(node)) {
             return node.markUnwanted()
         }
-        node.anchorId = anchorMap[group.identity]
+        node.anchorId = anchorMap[group.identity, node.key]
         node.id = syntheticId(node.anchorId)
         if (includeAllParameters) {
             addParameters(context, node)
@@ -434,7 +434,7 @@ internal class CompositionBuilder(
         val size = box.size.toSize()
         val coordinates = layoutInfo.coordinates
         var bounds: QuadBounds? = null
-        if (!layoutInfo.isAttached || !coordinates.isAttached || !layoutInfo.isPlaced) {
+        if (!layoutInfo.isAttached || !coordinates.isAttached) {
             // This could happen for extra items generated for reusable content like the
             // items in a LazyColumn. Mark these nodes unwanted i.e. filter them out.
             node.unknownLocation = true
@@ -476,12 +476,16 @@ internal class CompositionBuilder(
         node.layoutNodes.add(layoutInfo)
         val modifierInfo = layoutInfo.getModifierInfo()
 
-        val unmergedSemantics = unmergedSemanticsMap[layoutInfo.semanticsId]
+        val semanticsId = layoutInfo.semanticsId
+        val unmergedSemantics = unmergedSemanticsMap[semanticsId]
         if (unmergedSemantics != null) {
             node.unmergedSemantics.addAll(unmergedSemantics)
+            // Every LayoutNode has a semanticsId, but only the ones in the unmerged semantics tree
+            // are semantics nodes. The merged semantics tree is a subset of the unmerged tree.
+            node.semanticsIds.add(semanticsId)
         }
 
-        val mergedSemantics = semanticsMap[layoutInfo.semanticsId]
+        val mergedSemantics = semanticsMap[semanticsId]
         if (mergedSemantics != null) {
             node.mergedSemantics.addAll(mergedSemantics)
         }
@@ -532,16 +536,7 @@ internal class CompositionBuilder(
     }
 
     private fun addParameters(context: SourceContext, node: MutableInspectorNode) {
-        context.parameters.forEach {
-            val castedValue = castValue(it)
-            node.parameters.add(RawParameter(it.name, castedValue))
-        }
-    }
-
-    private fun castValue(parameter: ParameterInformation): Any? {
-        val value = parameter.value ?: return null
-        if (parameter.inlineClass == null || !value.javaClass.isPrimitiveClass()) return value
-        return inlineClassConverter.castParameterValue(parameter.inlineClass, value)
+        context.parameters.mapTo(node.parameters) { inlineClassConverter.toRawParameter(it) }
     }
 
     private fun isHiddenSystemNode(node: MutableInspectorNode): Boolean =

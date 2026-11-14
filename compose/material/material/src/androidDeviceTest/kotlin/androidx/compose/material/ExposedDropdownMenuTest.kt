@@ -47,7 +47,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -57,11 +57,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assume
 import org.junit.Ignore
 import org.junit.Rule
@@ -73,7 +73,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExposedDropdownMenuTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val EDMBoxTag = "ExposedDropdownMenuBoxTag"
     private val TFTag = "TextFieldTag"
@@ -109,6 +109,7 @@ class ExposedDropdownMenuTest {
         rule.onNodeWithTag(MenuItemTag).assertDoesNotExist()
     }
 
+    @SdkSuppress(maxSdkVersion = 35) // b/454429920
     @Test
     fun expandedBehaviour_dismissesOnBackPress() {
         rule.setMaterialContent {

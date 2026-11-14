@@ -20,7 +20,7 @@ import androidx.compose.testutils.expectError
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.cancel
 import androidx.compose.ui.test.down
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.partialgesturescope.Common.partialGesture
 import androidx.compose.ui.test.up
@@ -31,7 +31,6 @@ import androidx.compose.ui.test.util.assertNoTouchGestureInProgress
 import androidx.compose.ui.test.util.assertTimestampsAreIncreasing
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -44,7 +43,7 @@ class SendCancelTest {
         private val downPosition2 = Offset(20f, 20f)
     }
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val recorder = MultiPointerInputRecorder()
 

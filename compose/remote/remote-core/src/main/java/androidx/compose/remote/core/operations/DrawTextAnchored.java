@@ -123,15 +123,15 @@ public class DrawTextAnchored extends PaintOperation implements VariableSupport,
     /**
      * Read this operation and add it to the list of operations
      *
-     * @param buffer     the buffer to read
+     * @param buffer the buffer to read
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int textId = buffer.readInt();
-        float x = buffer.readFloat();
-        float y = buffer.readFloat();
-        float panX = buffer.readFloat();
-        float panY = buffer.readFloat();
+        int textId = buffer.readId();
+        float x = buffer.readNanId();
+        float y = buffer.readNanId();
+        float panX = buffer.readNanId();
+        float panY = buffer.readNanId();
         int flags = buffer.readInt();
 
         DrawTextAnchored op = new DrawTextAnchored(textId, x, y, panX, panY, flags);
@@ -163,11 +163,11 @@ public class DrawTextAnchored extends PaintOperation implements VariableSupport,
      *
      * @param buffer The buffer to write to
      * @param textId The id of the text data
-     * @param x      The x-position of the anchor point
-     * @param y      The y-position of the anchor point
-     * @param panX   The pan from left(-1) to right(1) 0 being centered
-     * @param panY   The pan from top(-1) to bottom(1) 0 being centered
-     * @param flags  Change the behaviour
+     * @param x The x-position of the anchor point
+     * @param y The y-position of the anchor point
+     * @param panX The pan from left(-1) to right(1) 0 being centered
+     * @param panY The pan from top(-1) to bottom(1) 0 being centered
+     * @param flags Change the behaviour
      */
     public static void apply(
             @NonNull WireBuffer buffer,
@@ -192,20 +192,25 @@ public class DrawTextAnchored extends PaintOperation implements VariableSupport,
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Draw Operations", OP_CODE, CLASS_NAME)
+        doc.operation("Text Operations", OP_CODE, CLASS_NAME)
+                .additionalDocumentation("draw_text_anchored")
                 .description("Draw text centered about an anchor point")
-                .field(DocumentedOperation.INT, "textId", "id of bitmap")
+                .field(DocumentedOperation.INT, "textId", "The ID of the text to render")
                 .field(DocumentedOperation.FLOAT, "x", "The x-position of the anchor point")
                 .field(DocumentedOperation.FLOAT, "y", "The y-position of the anchor point")
                 .field(
                         DocumentedOperation.FLOAT,
                         "panX",
-                        "The pan from left(-1) to right(1) 0 being centered")
+                        "The horizontal pan from left(-1) to right(1), 0 being centered")
                 .field(
                         DocumentedOperation.FLOAT,
                         "panY",
-                        "The pan from top(-1) to bottom(1) 0 being centered")
-                .field(DocumentedOperation.INT, "flags", "Change the behaviour");
+                        "The vertical pan from top(-1) to bottom(1), 0 being centered")
+                .field(DocumentedOperation.INT, "flags", "Behavior flags")
+                .possibleValues("ANCHOR_TEXT_RTL", ANCHOR_TEXT_RTL)
+                .possibleValues("ANCHOR_MONOSPACE_MEASURE", ANCHOR_MONOSPACE_MEASURE)
+                .possibleValues("MEASURE_EVERY_TIME", MEASURE_EVERY_TIME)
+                .possibleValues("BASELINE_RELATIVE", BASELINE_RELATIVE);
     }
 
     float @NonNull [] mBounds = new float[4];
@@ -259,5 +264,55 @@ public class DrawTextAnchored extends PaintOperation implements VariableSupport,
                 .add("panX", mPanX, mOutPanX)
                 .add("panY", mPanY, mOutPanY)
                 .add("flags", mFlags);
+    }
+
+    /** Returns {@code mTextID}. */
+    public int getTextID() {
+        return mTextID;
+    }
+
+    /** Returns the raw x anchor, preserving NaN-encoded variable IDs. */
+    public float getX() {
+        return mX;
+    }
+
+    /** Returns the raw y anchor, preserving NaN-encoded variable IDs. */
+    public float getY() {
+        return mY;
+    }
+
+    /** Returns the raw horizontal pan, preserving NaN-encoded variable IDs. */
+    public float getPanX() {
+        return mPanX;
+    }
+
+    /** Returns the raw vertical pan, preserving NaN-encoded variable IDs. */
+    public float getPanY() {
+        return mPanY;
+    }
+
+    /** Returns {@code mOutX}. */
+    public float getOutX() {
+        return mOutX;
+    }
+
+    /** Returns {@code mOutY}. */
+    public float getOutY() {
+        return mOutY;
+    }
+
+    /** Returns {@code mOutPanX}. */
+    public float getOutPanX() {
+        return mOutPanX;
+    }
+
+    /** Returns {@code mOutPanY}. */
+    public float getOutPanY() {
+        return mOutPanY;
+    }
+
+    /** Returns {@code mFlags}. */
+    public int getFlags() {
+        return mFlags;
     }
 }

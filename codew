@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+cd "$(dirname $0)"
+source development/ide-common.sh
+
+IDE_EXTRA_OPTIONS="VS Code Specific Options:
+ --system
+   Use the 'code' binary found in PATH instead of the managed version."
+
+# Parse VS Code specific args
+useSystemCode=false
+gradleArgs=()
+for arg; do
+  if [ "$arg" == "--system" ]; then
+    useSystemCode=true
+  else
+    gradleArgs+=("$arg")
+  fi
+done
+
+init_ide "codew" "${gradleArgs[@]}"
+
+clean_reinstall vscode
+clean_settings "vscode-backup" .vscode ~/.VSCodeAndroidX
+clear_ide_caches .vscode/
+
+if [ "$useSystemCode" == "true" ]; then
+  if command -v code >/dev/null 2>&1; then
+    if [ "$clearCaches" == "true" ]; then
+      ./cleanBuild.sh -y :help
+    fi
+    echo "Found 'code' in PATH. Launching VS Code from PATH..."
+    source development/build-environment/build-environment.sh
+    code .
+  else
+    echo "Error: --system specified but 'code' not found in PATH."
+    exit 1
+  fi
+else
+  echo "Launching managed VS Code..."
+  run_ide :vscode
+fi

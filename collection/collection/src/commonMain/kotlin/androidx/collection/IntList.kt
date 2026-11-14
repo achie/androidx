@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 // Facade class name cannot be updated, the Kt name has been released
-@file:Suppress("NOTHING_TO_INLINE", "RedundantVisibilityModifier", "FacadeClassJvmName")
+@file:Suppress(
+    "NOTHING_TO_INLINE",
+    "RedundantVisibilityModifier",
+    "FacadeClassJvmName",
+)
 @file:OptIn(ExperimentalContracts::class)
 
 package androidx.collection
@@ -30,7 +34,7 @@ import kotlin.jvm.JvmField
 import kotlin.jvm.JvmOverloads
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// DO NOT MAKE CHANGES to the kotlin source file.
+// DO NOT MAKE CHANGES to the Kotlin source file.
 //
 // This file was generated from a template in the template directory.
 // Make a change to the original template and run the generateCollections.sh script
@@ -164,7 +168,9 @@ public sealed class IntList(initialCapacity: Int) {
      */
     public inline fun first(predicate: (element: Int) -> Boolean): Int {
         contract { callsInPlace(predicate) }
-        forEach { item -> if (predicate(item)) return item }
+        forEach { item ->
+            if (predicate(item)) return item
+        }
         throw NoSuchElementException("IntList contains no element matching the predicate.")
     }
 
@@ -180,7 +186,9 @@ public sealed class IntList(initialCapacity: Int) {
     public inline fun <R> fold(initial: R, operation: (acc: R, element: Int) -> R): R {
         contract { callsInPlace(operation) }
         var acc = initial
-        forEach { item -> acc = operation(acc, item) }
+        forEach { item ->
+            acc = operation(acc, item)
+        }
         return acc
     }
 
@@ -194,7 +202,9 @@ public sealed class IntList(initialCapacity: Int) {
     ): R {
         contract { callsInPlace(operation) }
         var acc = initial
-        forEachIndexed { i, item -> acc = operation(i, acc, item) }
+        forEachIndexed { i, item ->
+            acc = operation(i, acc, item)
+        }
         return acc
     }
 
@@ -210,7 +220,9 @@ public sealed class IntList(initialCapacity: Int) {
     public inline fun <R> foldRight(initial: R, operation: (element: Int, acc: R) -> R): R {
         contract { callsInPlace(operation) }
         var acc = initial
-        forEachReversed { item -> acc = operation(item, acc) }
+        forEachReversed { item ->
+            acc = operation(item, acc)
+        }
         return acc
     }
 
@@ -224,7 +236,9 @@ public sealed class IntList(initialCapacity: Int) {
     ): R {
         contract { callsInPlace(operation) }
         var acc = initial
-        forEachReversedIndexed { i, item -> acc = operation(i, item, acc) }
+        forEachReversedIndexed { i, item ->
+            acc = operation(i, item, acc)
+        }
         return acc
     }
 
@@ -407,29 +421,35 @@ public sealed class IntList(initialCapacity: Int) {
     }
 
     /**
-     * Searches this list the specified element in the range defined by [fromIndex] and [toIndex].
-     * The list is expected to be sorted into ascending order according to the natural ordering of
-     * its elements, otherwise the result is undefined.
+     * Searches this list for the specified [element] in the range defined by [fromIndex] and
+     * [toIndex]. The list is expected to be sorted into ascending order according to the natural
+     * ordering of its elements, otherwise the result is undefined.
      *
-     * [fromIndex] must be >= 0 and < [toIndex], and [toIndex] must be <= [size], otherwise an an
+     * [fromIndex] must be >= 0 and < [toIndex], and [toIndex] must be <= [size], otherwise an
      * [IndexOutOfBoundsException] will be thrown.
      *
-     * @return the index of the element if it is contained in the list within the specified range.
+     * @return the index of the element if it is contained in the list within the specified range,
      *   otherwise, the inverted insertion point `(-insertionPoint - 1)`. The insertion point is
      *   defined as the index at which the element should be inserted, so that the list remains
      *   sorted.
      */
     @JvmOverloads
-    public fun binarySearch(element: Int, fromIndex: Int = 0, toIndex: Int = size): Int {
-        if (fromIndex < 0 || fromIndex >= toIndex || toIndex > _size) {
-            throwIndexOutOfBoundsException("")
+    public fun binarySearch(
+        element: Int,
+        @androidx.annotation.IntRange(from = 0) fromIndex: Int = 0,
+        @androidx.annotation.IntRange(from = 0) toIndex: Int = _size,
+    ): Int {
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > _size) {
+            throw IndexOutOfBoundsException(
+                "fromIndex ($fromIndex) and toIndex ($toIndex) must be in range 0..$_size"
+            )
         }
 
         var low = fromIndex
         var high = toIndex - 1
 
         while (low <= high) {
-            val mid = low + high ushr 1
+            val mid = (low + high) ushr 1
             val midVal = content[mid]
             if (midVal < element) {
                 low = mid + 1
@@ -444,6 +464,39 @@ public sealed class IntList(initialCapacity: Int) {
     }
 
     /**
+     * Searches this [IntList] or its range for an element for which the given [comparison] function
+     * returns zero using binary search algorithm.
+     */
+    public inline fun binarySearch(
+        @androidx.annotation.IntRange(from = 0) fromIndex: Int = 0,
+        @androidx.annotation.IntRange(from = 0) toIndex: Int = _size,
+        comparison: (element: Int) -> Int,
+    ): Int {
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > _size) {
+            throw IndexOutOfBoundsException(
+                "fromIndex ($fromIndex) and toIndex ($toIndex) must be in range 0..$_size"
+            )
+        }
+        var low = fromIndex
+        var high = toIndex - 1
+
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val midVal = content[mid]
+            val cmp = comparison(midVal)
+
+            if (cmp < 0) {
+                low = mid + 1
+            } else if (cmp > 0) {
+                high = mid - 1
+            } else {
+                return mid
+            }
+        }
+        return -(low + 1)
+    }
+
+    /**
      * Creates a String from the elements separated by [separator] and using [prefix] before and
      * [postfix] after, if supplied.
      *
@@ -455,7 +508,7 @@ public sealed class IntList(initialCapacity: Int) {
     public fun joinToString(
         separator: CharSequence = ", ",
         prefix: CharSequence = "",
-        postfix: CharSequence = "", // I know this should be suffix, but this is kotlin's name
+        postfix: CharSequence = "", // I know this should be "suffix", but this is kotlin's name
         limit: Int = -1,
         truncated: CharSequence = "...",
     ): String = buildString {
@@ -487,7 +540,7 @@ public sealed class IntList(initialCapacity: Int) {
     public inline fun joinToString(
         separator: CharSequence = ", ",
         prefix: CharSequence = "",
-        postfix: CharSequence = "", // I know this should be suffix, but this is kotlin's name
+        postfix: CharSequence = "", // I know this should be "suffix", but this is kotlin's name
         limit: Int = -1,
         truncated: CharSequence = "...",
         crossinline transform: (Int) -> CharSequence,
@@ -511,7 +564,9 @@ public sealed class IntList(initialCapacity: Int) {
     /** Returns a hash code based on the contents of the [IntList]. */
     override fun hashCode(): Int {
         var hashCode = 0
-        forEach { element -> hashCode += 31 * element.hashCode() }
+        forEach { element ->
+            hashCode += 31 * element.hashCode()
+        }
         return hashCode
     }
 
@@ -599,7 +654,10 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      * @return `true` if the [MutableIntList] was changed or `false` if [elements] was empty
      * @throws IndexOutOfBoundsException if [index] isn't between 0 and [size], inclusive.
      */
-    public fun addAll(@IntRange(from = 0) index: Int, elements: IntArray): Boolean {
+    public fun addAll(
+        @IntRange(from = 0) index: Int,
+        elements: IntArray,
+    ): Boolean {
         if (index !in 0.._size) {
             throwIndexOutOfBoundsException("")
         }
@@ -626,7 +684,10 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      * @return `true` if the [MutableIntList] was changed or `false` if [elements] was empty
      * @throws IndexOutOfBoundsException if [index] isn't between 0 and [size], inclusive
      */
-    public fun addAll(@IntRange(from = 0) index: Int, elements: IntList): Boolean {
+    public fun addAll(
+        @IntRange(from = 0) index: Int,
+        elements: IntList,
+    ): Boolean {
         if (index !in 0.._size) {
             throwIndexOutOfBoundsException("")
         }
@@ -692,6 +753,7 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      *
      * @see ensureCapacity
      */
+    @JvmOverloads
     public fun trim(minCapacity: Int = _size) {
         val minSize = maxOf(minCapacity, _size)
         if (capacity > minSize) {
@@ -751,6 +813,10 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      */
     public fun removeAll(elements: IntList): Boolean {
         val initialSize = _size
+        if (elements === this) {
+            clear()
+            return initialSize != 0
+        }
         for (i in 0..elements.lastIndex) {
             remove(elements[i])
         }
@@ -759,12 +825,20 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
 
     /** Removes all [elements] from the [MutableIntList]. */
     public operator fun minusAssign(elements: IntArray) {
-        elements.forEach { element -> remove(element) }
+        elements.forEach { element ->
+            remove(element)
+        }
     }
 
     /** Removes all [elements] from the [MutableIntList]. */
     public operator fun minusAssign(elements: IntList) {
-        elements.forEach { element -> remove(element) }
+        if (elements === this) {
+            clear()
+            return
+        }
+        elements.forEach { element ->
+            remove(element)
+        }
     }
 
     /**
@@ -796,7 +870,10 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      * @throws IndexOutOfBoundsException if [start] or [end] isn't between 0 and [size], inclusive
      * @throws IllegalArgumentException if [start] is greater than [end]
      */
-    public fun removeRange(@IntRange(from = 0) start: Int, @IntRange(from = 0) end: Int) {
+    public fun removeRange(
+        @IntRange(from = 0) start: Int,
+        @IntRange(from = 0) end: Int,
+    ) {
         if (start !in 0.._size || end !in 0.._size) {
             throwIndexOutOfBoundsException("Index must be between 0 and size")
         }
@@ -856,7 +933,10 @@ public class MutableIntList(initialCapacity: Int = 16) : IntList(initialCapacity
      * @return the previous value set at [index]
      * @throws IndexOutOfBoundsException if [index] isn't between 0 and [lastIndex], inclusive
      */
-    public operator fun set(@IntRange(from = 0) index: Int, element: Int): Int {
+    public operator fun set(
+        @IntRange(from = 0) index: Int,
+        element: Int,
+    ): Int {
         if (index !in 0 until _size) {
             throwIndexOutOfBoundsException("Index must be between 0 and size")
         }
@@ -943,7 +1023,7 @@ public inline fun mutableIntListOf(vararg elements: Int): MutableIntList =
  * Builds a new [IntList] by populating a [MutableIntList] using the given [builderAction].
  *
  * The instance passed as a receiver to the [builderAction] is valid only inside that function.
- * Using it outside of the function produces an unspecified behavior.
+ * Using it outside the function produces an unspecified behavior.
  *
  * @param builderAction Lambda in which the [MutableIntList] can be populated.
  */
@@ -956,7 +1036,7 @@ public inline fun buildIntList(builderAction: MutableIntList.() -> Unit): IntLis
  * Builds a new [IntList] by populating a [MutableIntList] using the given [builderAction].
  *
  * The instance passed as a receiver to the [builderAction] is valid only inside that function.
- * Using it outside of the function produces an unspecified behavior.
+ * Using it outside the function produces an unspecified behavior.
  *
  * @param initialCapacity Hint for the expected number of elements added in the [builderAction].
  * @param builderAction Lambda in which the [MutableIntList] can be populated.

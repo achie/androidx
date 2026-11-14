@@ -17,12 +17,16 @@
 package androidx.camera.camera2.compat
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
 import android.hardware.camera2.params.StreamConfigurationMap
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.compat.workaround.OutputSizesCorrector
-import androidx.camera.camera2.pipe.CameraId
+import androidx.camera.camera2.compat.quirk.DeviceQuirks
+import androidx.camera.camera2.compat.quirk.PixelJpegRSupportedQuirk
+import androidx.camera.camera2.compat.quirk.UnsupportedFormatsQuirk
+import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.CameraPipe
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraSelector
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraXUtil
@@ -45,6 +49,7 @@ class StreamConfigurationMapCompatTest {
     @get:Rule val useCamera = CameraUtil.grantCameraPermissionAndPreTestAndPostTest()
 
     private val lensFacing = CameraSelector.LENS_FACING_BACK
+    private lateinit var cameraMetadata: CameraMetadata
     private lateinit var streamConfigurationMap: StreamConfigurationMap
     private lateinit var streamConfigurationMapCompat: StreamConfigurationMapCompat
 
@@ -54,13 +59,10 @@ class StreamConfigurationMapCompatTest {
         CameraXUtil.initialize(context, Camera2Config.defaultConfig())
         val cameraId = CameraUtil.getCameraIdWithLensFacing(lensFacing)!!
         val cameraPipe = CameraPipe(CameraPipe.Config(context))
-        val cameraMetadata = cameraPipe.cameras().awaitCameraMetadata(CameraId(cameraId))!!
+        cameraMetadata = cameraPipe.cameras().awaitCameraMetadata(CameraId(cameraId))!!
         streamConfigurationMap = cameraMetadata[SCALER_STREAM_CONFIGURATION_MAP]!!
         streamConfigurationMapCompat =
-            StreamConfigurationMapCompat(
-                streamConfigurationMap,
-                OutputSizesCorrector(cameraMetadata, streamConfigurationMap),
-            )
+            StreamConfigurationMapCompat(streamConfigurationMap, cameraMetadata)
     }
 
     @After
@@ -71,6 +73,19 @@ class StreamConfigurationMapCompatTest {
     @Test
     fun canGetOutputFormats() {
         val formats = streamConfigurationMapCompat.getOutputFormats()!!.toList()
-        assertThat(formats).containsExactlyElementsIn(streamConfigurationMap.outputFormats.toList())
+        var expectedFormats = streamConfigurationMap.outputFormats.toList()
+
+        val quirk = DeviceQuirks[PixelJpegRSupportedQuirk::class.java]
+        if (quirk != null) {
+            expectedFormats = expectedFormats.filter { it != ImageFormat.JPEG_R }
+        }
+
+        val unsupportedFormatsQuirk = DeviceQuirks[UnsupportedFormatsQuirk::class.java]
+        if (unsupportedFormatsQuirk != null) {
+            val unsupportedFormats = unsupportedFormatsQuirk.getUnsupportedFormats(cameraMetadata)
+            expectedFormats = expectedFormats.filter { it !in unsupportedFormats }
+        }
+
+        assertThat(formats).containsExactlyElementsIn(expectedFormats)
     }
 }

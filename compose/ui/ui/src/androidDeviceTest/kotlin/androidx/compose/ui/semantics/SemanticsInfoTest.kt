@@ -31,7 +31,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties.TestTag
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -39,7 +39,6 @@ import androidx.test.filters.MediumTest
 import com.google.common.truth.Correspondence
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.Test
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.runner.RunWith
 
@@ -47,7 +46,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SemanticsInfoTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     lateinit var semanticsOwner: SemanticsOwner
 
@@ -232,7 +231,7 @@ class SemanticsInfoTest {
             }
         }
         val semanticsId = rule.onNodeWithTag("0").semanticsId()
-        val semanticsInfo = checkNotNull(rootForTest.semanticsOwner[semanticsId])
+        val semanticsInfo = checkNotNull(rootForTest.semanticsOwner.getSemanticsInfo(semanticsId))
 
         // Act.
         rule.runOnIdle { lazyListState.requestScrollToItem(1) }
@@ -316,7 +315,7 @@ class SemanticsInfoTest {
         tag: String,
         useUnmergedTree: Boolean = true,
     ): SemanticsInfo? {
-        return semanticsOwner[onNodeWithTag(tag, useUnmergedTree).semanticsId()]
+        return semanticsOwner.getSemanticsInfo(onNodeWithTag(tag, useUnmergedTree).semanticsId())
     }
 
     companion object {

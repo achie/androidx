@@ -17,20 +17,28 @@
 package androidx.compose.material3.benchmark
 
 import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.material3.DockedSearchBar
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExpandedDockedSearchBar
+import androidx.compose.material3.ExpandedFullScreenSearchBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SearchBar
 import androidx.compose.material3.SearchBarDefaults
+import androidx.compose.material3.SearchBarState
+import androidx.compose.material3.SearchBarValue
+import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.testutils.LayeredComposeTestCase
 import androidx.compose.testutils.ToggleableTestCase
 import androidx.compose.testutils.benchmark.ComposeBenchmarkRule
+import androidx.compose.testutils.benchmark.benchmarkToFirstPixel
 import androidx.compose.testutils.benchmark.toggleStateBenchmarkComposeMeasureLayout
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventDispatcherOwner
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.test.filters.LargeTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,7 +57,7 @@ class SearchBarBenchmark(private val type: SearchBarType) {
 
     @Test
     fun firstPixel() {
-        benchmarkRule.benchmarkFirstRenderUntilStable(testCaseFactory)
+        benchmarkRule.benchmarkToFirstPixel(testCaseFactory)
     }
 
     @Test
@@ -61,36 +69,41 @@ class SearchBarBenchmark(private val type: SearchBarType) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// No-Op: Prevent IPC Binder calls to system_server
+private val FakeNavigationEventDispatcherOwner =
+    object : NavigationEventDispatcherOwner {
+        override val navigationEventDispatcher = NavigationEventDispatcher()
+    }
+
 internal class SearchBarTestCase(private val type: SearchBarType) :
     LayeredComposeTestCase(), ToggleableTestCase {
-    private lateinit var state: MutableState<Boolean>
+    private lateinit var state: SearchBarState
+    private lateinit var coroutineScope: CoroutineScope
 
     @Composable
     override fun MeasuredContent() {
-        state = remember { mutableStateOf(true) }
+        state = rememberSearchBarState(initialValue = SearchBarValue.Collapsed)
+        coroutineScope = rememberCoroutineScope()
         val inputField: @Composable () -> Unit = {
             SearchBarDefaults.InputField(
-                state = rememberTextFieldState(),
+                textFieldState = rememberTextFieldState(),
+                searchBarState = state,
                 onSearch = {},
-                expanded = state.value,
-                onExpandedChange = { state.value = it },
             )
         }
 
+        SearchBar(state = state, inputField = inputField)
         when (type) {
             SearchBarType.FullScreen ->
-                SearchBar(
+                ExpandedFullScreenSearchBar(
+                    state = state,
                     inputField = inputField,
-                    expanded = state.value,
-                    onExpandedChange = { state.value = it },
                     content = {},
                 )
             SearchBarType.Docked ->
-                DockedSearchBar(
+                ExpandedDockedSearchBar(
+                    state = state,
                     inputField = inputField,
-                    expanded = state.value,
-                    onExpandedChange = { state.value = it },
                     content = {},
                 )
         }
@@ -98,11 +111,21 @@ internal class SearchBarTestCase(private val type: SearchBarType) :
 
     @Composable
     override fun ContentWrappers(content: @Composable () -> Unit) {
-        MaterialTheme { content() }
+        CompositionLocalProvider(
+            LocalNavigationEventDispatcherOwner provides FakeNavigationEventDispatcherOwner
+        ) {
+            MaterialTheme { content() }
+        }
     }
 
     override fun toggleState() {
-        state.value = !state.value
+        coroutineScope.launch {
+            if (state.targetValue == SearchBarValue.Expanded) {
+                state.animateToCollapsed()
+            } else {
+                state.animateToExpanded()
+            }
+        }
     }
 }
 

@@ -18,12 +18,15 @@ package androidx.compose.integration.macrobenchmark
 
 import android.content.Intent
 import androidx.benchmark.macro.CompilationMode
-import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.filters.LargeTest
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.testutils.createCompilationParams
+import androidx.testutils.defaultComposeScrollingMetrics
+import androidx.testutils.defaultMemoryMetrics
+import androidx.testutils.findObjectOrThrow
+import androidx.tracing.trace
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,21 +41,24 @@ class RecyclerViewAsCarouselBenchmark(private val compilationMode: CompilationMo
     fun scroll() {
         benchmarkRule.measureRepeated(
             packageName = PackageName,
-            metrics = listOf(FrameTimingMetric()),
+            metrics = defaultComposeScrollingMetrics() + defaultMemoryMetrics(),
             compilationMode = compilationMode,
             iterations = 10,
             setupBlock = {
                 val intent = Intent()
                 intent.action = Action
                 startActivityAndWait(intent)
+                device.waitForIdle()
             },
         ) {
             // Setting a gesture margin is important otherwise gesture nav is triggered.
-            val pager = device.findObject(By.res(PackageName, ResourceId))
+            val pager = device.findObjectOrThrow(By.res(PackageName, ResourceId))
             pager.setGestureMargin(device.displayWidth / 5)
             for (i in 1..10) {
-                pager.swipe(Direction.LEFT, 1.0f)
-                device.waitForIdle()
+                trace("RecyclerViewAsCarousel#swipe_$i") {
+                    pager.swipe(Direction.LEFT, 1.0f)
+                    device.waitForIdle()
+                }
             }
         }
     }

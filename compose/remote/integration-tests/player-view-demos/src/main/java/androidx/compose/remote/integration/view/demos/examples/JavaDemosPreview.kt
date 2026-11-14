@@ -19,11 +19,16 @@ package androidx.compose.remote.integration.view.demos.examples
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 
-@Preview @Composable fun DemoAnchorTextPreview() = RemoteDocPreview(DemoAnchorText.anchoredText())
+@Preview
+@Composable
+private fun DemoAnchorTextPreview() = RemoteDocumentPreview(DemoAnchorText.anchoredText())
 
 @Preview
 @Composable
-fun DemoAttributedStringPreview() = RemoteDocPreview(DemoAttributedString.demo())
+private fun DemoAttributedStringPreview() = RemoteDocumentPreview(DemoAttributedString.demo())
 
-// Failing to display due to b/450104887
-@Preview @Composable fun DemoPathsPreview() = RemoteDocPreview(DemoPaths.pathTest())
+@Preview @Composable private fun DemoPathsPreview() = RemoteDocumentPreview(DemoPaths.pathTest())
+
+@Preview
+@Composable
+private fun HostileActorPreview() = RemoteDocumentPreview(HostileActor.demoImage())

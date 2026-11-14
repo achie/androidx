@@ -32,10 +32,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.Text
-import androidx.compose.material.TopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +51,7 @@ import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.view.ViewCompat
+import kotlin.OptIn
 import kotlin.math.roundToInt
 
 @Sampled
@@ -87,28 +88,25 @@ fun ViewInComposeNestedScrollInteropSample() {
             )
     ) {
         AndroidView({ context ->
-            LayoutInflater.from(context).inflate(android.R.layout.activity_list_item, null).apply {
-                // Nested Scroll Interop will be Enabled when
-                // nested scroll is enabled for the root view
-                ViewCompat.setNestedScrollingEnabled(this, true)
-            }
+            LayoutInflater.from(context).inflate(android.R.layout.activity_list_item, null)
         })
     }
 }
 
 private val ToolbarHeight = 48.dp
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CollapsingToolbarComposeViewComposeNestedScrollInteropSample() {
     val toolbarHeightPx = with(LocalDensity.current) { ToolbarHeight.roundToPx().toFloat() }
-    val toolbarOffsetHeightPx = remember { mutableStateOf(0f) }
+    val toolbarOffsetHeightPx = remember { mutableFloatStateOf(0f) }
 
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 val delta = available.y
-                val newOffset = toolbarOffsetHeightPx.value + delta
-                toolbarOffsetHeightPx.value = newOffset.coerceIn(-toolbarHeightPx, 0f)
+                val newOffset = toolbarOffsetHeightPx.floatValue + delta
+                toolbarOffsetHeightPx.floatValue = newOffset.coerceIn(-toolbarHeightPx, 0f)
                 return Offset.Zero
             }
         }
@@ -119,9 +117,9 @@ fun CollapsingToolbarComposeViewComposeNestedScrollInteropSample() {
         TopAppBar(
             modifier =
                 Modifier.height(ToolbarHeight).offset {
-                    IntOffset(x = 0, y = toolbarOffsetHeightPx.value.roundToInt())
+                    IntOffset(x = 0, y = toolbarOffsetHeightPx.floatValue.roundToInt())
                 },
-            title = { Text("toolbar offset is ${toolbarOffsetHeightPx.value}") },
+            title = { Text("toolbar offset is ${toolbarOffsetHeightPx.floatValue}") },
         )
         // Android View
         AndroidView(
@@ -140,7 +138,6 @@ private fun AndroidViewWithCompose(context: Context): View {
                 setContent { LazyColumnWithNestedScrollInteropEnabled() }
             }
         }
-        .also { ViewCompat.setNestedScrollingEnabled(it, true) }
 }
 
 @Composable

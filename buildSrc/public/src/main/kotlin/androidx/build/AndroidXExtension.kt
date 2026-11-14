@@ -25,12 +25,15 @@ import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.attributes.plugin.GradlePluginApiVersion
 import org.gradle.api.configuration.BuildFeatures
+import org.gradle.api.model.ObjectFactory
 import org.gradle.api.plugins.ExtensionAware
 import org.gradle.api.plugins.ExtensionContainer
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.api.provider.SetProperty
 import org.gradle.kotlin.dsl.named
+import org.gradle.kotlin.dsl.property
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 
 /** Extension for [AndroidXImplPlugin] that's responsible for holding configuration options. */
@@ -42,11 +45,11 @@ abstract class AndroidXExtension(
     @Suppress("unused") // used from build.gradle
     @JvmField
     val AllLibraryGroups: List<LibraryGroup>,
-    private val libraryGroupsByGroupId: Map<String, LibraryGroup>,
-    private val overrideLibraryGroupsByProjectPath: Map<String, LibraryGroup>,
+    val mavenCoordinatesToProjectPathMap: Map<String, String>,
     private val allPossibleProjects: Provider<List<IncludedProject>>,
     private val headShaProvider: () -> Provider<String>,
     private val configureAarAsJarForConfigurationDelegate: (String) -> Unit,
+    private val libraryGroupFromPathProvider: (String, MutableList<String>?) -> LibraryGroup?,
 ) : ExtensionAware, AndroidXConfiguration {
     val mavenGroup: LibraryGroup?
     val deviceTests = DeviceTests.register(project.extensions)
@@ -62,24 +65,6 @@ abstract class AndroidXExtension(
 
     fun isIsolatedProjectsEnabled(): Boolean {
         return buildFeatures.isIsolatedProjectsEnabled()
-    }
-
-    /**
-     * Map of maven coordinates (e.g. "androidx.core:core") to a Gradle project path (e.g.
-     * ":core:core")
-     */
-    val mavenCoordinatesToProjectPathMap: Map<String, String> by lazy {
-        val newProjectMap: MutableMap<String, String> = mutableMapOf()
-        allPossibleProjects.get().forEach {
-            val group =
-                overrideLibraryGroupsByProjectPath[it.gradlePath]
-                    ?: getLibraryGroupFromProjectPath(it.gradlePath, null)
-            if (group != null) {
-                newProjectMap["${group.group}:${substringAfterLastColon(it.gradlePath)}"] =
-                    it.gradlePath
-            }
-        }
-        newProjectMap
     }
 
     val name: Property<String> = project.objects.property(String::class.java)
@@ -110,7 +95,7 @@ abstract class AndroidXExtension(
                 if (otherProject.gradlePath == project.path) {
                     false
                 } else {
-                    getLibraryGroupFromProjectPath(otherProject.gradlePath) == ourGroup
+                    libraryGroupFromPathProvider(otherProject.gradlePath, null) == ourGroup
                 }
             }
         return otherProjectsInSameGroup
@@ -124,68 +109,7 @@ abstract class AndroidXExtension(
     }
 
     private fun chooseLibraryGroup(explanationBuilder: MutableList<String>? = null): LibraryGroup? {
-        return getLibraryGroupFromProjectPath(project.path, explanationBuilder)
-    }
-
-    private fun substringBeforeLastColon(projectPath: String): String {
-        val lastColonIndex = projectPath.lastIndexOf(":")
-        return projectPath.substring(0, lastColonIndex)
-    }
-
-    private fun substringAfterLastColon(projectPath: String): String {
-        val lastColonIndex = projectPath.lastIndexOf(":")
-        return projectPath.substring(lastColonIndex + 1)
-    }
-
-    // gets the library group from the project path, including special cases
-    private fun getLibraryGroupFromProjectPath(
-        projectPath: String,
-        explanationBuilder: MutableList<String>? = null,
-    ): LibraryGroup? {
-        val overridden = overrideLibraryGroupsByProjectPath[projectPath]
-        explanationBuilder?.add(
-            "Library group (in libraryversions.toml) having" +
-                " overrideInclude=[\"$projectPath\"] is $overridden"
-        )
-        if (overridden != null) return overridden
-
-        val result = getStandardLibraryGroupFromProjectPath(projectPath, explanationBuilder)
-        if (result != null) return result
-
-        // samples are allowed to be nested deeper
-        if (projectPath.contains("samples")) {
-            val parentPath = substringBeforeLastColon(projectPath)
-            return getLibraryGroupFromProjectPath(parentPath, explanationBuilder)
-        }
-        return null
-    }
-
-    // simple function to get the library group from the project path, without special cases
-    private fun getStandardLibraryGroupFromProjectPath(
-        projectPath: String,
-        explanationBuilder: MutableList<String>?,
-    ): LibraryGroup? {
-        // Get the text of the library group, something like "androidx.core"
-        val parentPath = substringBeforeLastColon(projectPath)
-
-        if (parentPath == "") {
-            explanationBuilder?.add("Parent path for $projectPath is empty")
-            return null
-        }
-        // convert parent project path to groupId
-        val groupIdText =
-            if (projectPath.startsWith(":external")) {
-                projectPath.replace(":external:", "")
-            } else {
-                "androidx.${parentPath.substring(1).replace(':', '.')}"
-            }
-
-        // get the library group having that text
-        val result = libraryGroupsByGroupId[groupIdText]
-        explanationBuilder?.add(
-            "Library group (in libraryversions.toml) having group=\"$groupIdText\" is $result"
-        )
-        return result
+        return libraryGroupFromPathProvider(project.path, explanationBuilder)
     }
 
     /**
@@ -289,40 +213,42 @@ abstract class AndroidXExtension(
         private set
 
     /** Description for this artifact to use in .pom files */
-    var description: String? = null
+    abstract val description: Property<String>
     /** The year when the development of this library started to use in .pom files */
-    var inceptionYear: String? = null
+    abstract val inceptionYear: Property<String>
 
     /** The main license to add when publishing. Default is Apache 2. */
-    var license: License =
-        License().apply {
-            name = "The Apache Software License, Version 2.0"
-            url = "http://www.apache.org/licenses/LICENSE-2.0.txt"
+    val license: License =
+        project.objects.newInstance(License::class.java).apply {
+            name.convention("The Apache Software License, Version 2.0")
+            url.convention("http://www.apache.org/licenses/LICENSE-2.0.txt")
         }
 
     private var extraLicenses: MutableCollection<License> = ArrayList()
 
-    fun shouldPublish(): Boolean = type.publish.shouldPublish()
+    val shouldPublish: Provider<Boolean>
+        get() = type.map { it.publish.shouldPublish() }
 
-    fun shouldRelease(): Boolean = type.publish.shouldRelease()
+    val shouldRelease: Provider<Boolean>
+        get() = type.map { it.publish.shouldRelease() }
 
     fun ifReleasing(action: () -> Unit) {
         project.afterEvaluate {
-            if (shouldRelease()) {
+            if (shouldRelease.get()) {
                 action()
             }
         }
     }
 
-    fun shouldPublishSbom(): Boolean {
-        if (isIsolatedProjectsEnabled()) return false
+    fun shouldPublishSbom(): Provider<Boolean> {
         // IDE plugins are used by and ship inside Studio
-        return shouldPublish() || type == SoftwareType.IDE_PLUGIN
+        return type.map { type -> type.publish.shouldPublish() || type == SoftwareType.IDE_PLUGIN }
     }
 
-    var doNotDocumentReason: String? = null
+    abstract val doNotDocumentReason: Property<String>
 
-    var type: SoftwareType = SoftwareType.UNSET
+    val type: Property<SoftwareType> =
+        project.objects.property(SoftwareType::class.java).convention(SoftwareType.UNSET)
 
     val failOnDeprecationWarnings: Property<Boolean> =
         project.objects.property(Boolean::class.java).convention(true)
@@ -330,47 +256,18 @@ abstract class AndroidXExtension(
     /** Whether this project should fail on javac compilation warnings */
     fun failOnDeprecationWarnings(enabled: Boolean) = failOnDeprecationWarnings.set(enabled)
 
-    /**
-     * Whether Kotlin Strict API mode is enabled, see
-     * [kotlin 1.4 release notes](https://kotlinlang.org/docs/whatsnew14.html#explicit-api-mode-for-library-authors)
-     */
-    var legacyDisableKotlinStrictApiMode = false
+    val bypassCoordinateValidation: Property<Boolean> =
+        project.objects.property(Boolean::class.java).convention(false)
 
-    var bypassCoordinateValidation = false
+    abstract val additionalDeviceTestApkKeys: ListProperty<String>
 
-    /** Whether Metalava should use K2 Kotlin front-end for source analysis */
-    var metalavaK2UastEnabled = true
-
-    /** Whether the project has not yet been migrated to use JSpecify annotations. */
-    var optOutJSpecify = false
-
-    val additionalDeviceTestApkKeys = mutableListOf<String>()
-
-    val additionalDeviceTestTags: MutableList<String> by lazy {
-        val tags =
-            when {
-                project.path.startsWith(":compose:") -> mutableListOf("compose")
-                project.path.startsWith(":privacysandbox:ads:") ->
-                    mutableListOf("privacysandbox", "privacysandbox_ads")
-                project.path.startsWith(":privacysandbox:") -> mutableListOf("privacysandbox")
-                project.path.startsWith(":wear:watchface") -> mutableListOf("wear_optin")
-                else -> mutableListOf()
-            }
-        if (deviceTests.enableAlsoRunningOnPhysicalDevices) {
-            tags.add("all_run_on_physical_device")
-        }
-        if (deviceTests.enableAlsoRunOn16KbPageSizeDevices) {
-            tags.add("all_run_on_16kb_page_size_device")
-        }
-        return@lazy tags
-    }
-
-    fun shouldEnforceKotlinStrictApiMode(): Boolean {
-        return !legacyDisableKotlinStrictApiMode && type.checkApi is RunApiTasks.Yes
-    }
+    abstract val additionalDeviceTestTags: ListProperty<String>
 
     fun extraLicense(closure: Closure<Any>): License {
-        val license = project.configure(License(), closure) as License
+        val license =
+            project.configure(project.objects.newInstance(License::class.java), closure) as License
+        check(license.name.isPresent) { "extraLicense in ${project.path} is missing 'name'" }
+        check(license.url.isPresent) { "extraLicense in ${project.path} is missing 'url'" }
         extraLicenses.add(license)
         return license
     }
@@ -412,8 +309,7 @@ abstract class AndroidXExtension(
     }
 
     /** List of documentation samples projects for this project. */
-    var samplesProjects: MutableCollection<Project> = mutableSetOf()
-        private set
+    abstract val samplesProjects: SetProperty<Project>
 
     /**
      * Used to register a project that will be providing documentation samples for this project. Can
@@ -442,6 +338,9 @@ abstract class AndroidXExtension(
     fun enableRobolectric() {
         configureRobolectric(project)
     }
+
+    val usePlatformSpecificCacheForJvmTests: Property<Boolean> =
+        project.objects.property<Boolean>().convention(false)
 
     /** Sets the minimum supported version of Gradle for this Gradle plugin */
     fun setMinimumGradleVersion(version: String) {
@@ -482,12 +381,12 @@ abstract class AndroidXExtension(
     }
 }
 
-class License {
-    var name: String? = null
-    var url: String? = null
+abstract class License {
+    abstract val name: Property<String>
+    abstract val url: Property<String>
 }
 
-abstract class DeviceTests {
+abstract class DeviceTests @Inject constructor(objects: ObjectFactory) {
     companion object {
         private const val EXTENSION_NAME = "deviceTests"
 
@@ -498,22 +397,39 @@ abstract class DeviceTests {
     }
 
     /** Whether this project's Android on device tests should be run in CI. */
-    var enabled = true
+    val enabled: Property<Boolean> = objects.property<Boolean>().convention(true)
     /** The app project that this project's Android on device tests require to be able to run. */
-    var targetAppProject: Project? = null
-    var targetAppVariant = "debug"
+    abstract val targetAppProject: Property<Project>
+    val targetAppVariant: Property<String> = objects.property<String>().convention("debug")
 
     /**
      * Whether this project's Android on device tests should also run on a physical Android device
      * when run in CI.
      */
-    var enableAlsoRunningOnPhysicalDevices = false
+    val enableAlsoRunningOnPhysicalDevices: Property<Boolean> =
+        objects.property<Boolean>().convention(false)
 
     /**
      * Whether this project's Android on device tests should also run on an Android device that uses
      * 16KB page size when run in CI.
      */
-    var enableAlsoRunOn16KbPageSizeDevices = false
+    val enableAlsoRunOn16KbPageSizeDevices: Property<Boolean> =
+        objects.property<Boolean>().convention(false)
 
-    var minSdkForFtlOverride: Int? = null
+    /**
+     * Whether this project's Android on device tests should use test orchestrator to isolate tests
+     * to improve stability. Note, this comes at a very high performance cost, so please consult
+     * androidx core team before using this.
+     */
+    val useOrchestrator: Property<Boolean> = objects.property<Boolean>().convention(false)
+
+    abstract val minSdkForFtlOverride: Property<Int>
+
+    /**
+     * Maximum number of shards Tradefed may use for this module's instrumentation tests. When set
+     * to 1, tests will run on a single shard ("not-shardable"). When set to > 1, Tradefed limits
+     * shards to this value ("ajur-max-shard"). When unset, Tradefed defaults to the suite-level
+     * shard count (e.g. 16 on Cuttlefish).
+     */
+    abstract val maxShardCount: Property<Int>
 }

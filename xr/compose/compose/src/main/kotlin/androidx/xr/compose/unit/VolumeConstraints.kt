@@ -43,6 +43,9 @@ public class VolumeConstraints(
     @IntRange(from = 0) public val maxDepth: Int = INFINITY,
 ) {
     init {
+        require(minWidth >= 0) { "minWidth ($minWidth) must be >= 0." }
+        require(minHeight >= 0) { "minHeight ($minHeight) must be >= 0." }
+        require(minDepth >= 0) { "minDepth ($minDepth) must be >= 0." }
         require(maxWidth >= minWidth) { "maxWidth ($maxWidth) must be >= minWidth ($minWidth)." }
         require(maxHeight >= minHeight) {
             "maxHeight ($maxHeight) must be >= minHeight ($minHeight)."
@@ -73,7 +76,7 @@ public class VolumeConstraints(
 
     /** Returns a string representation of the [VolumeConstraints]. */
     override fun toString(): String =
-        "width: $minWidth-$maxWidth, height: $minHeight-$maxHeight, depth=$minDepth-$maxDepth"
+        "width: $minWidth-$maxWidth, height: $minHeight-$maxHeight, depth: $minDepth-$maxDepth"
 
     /** Checks if this [VolumeConstraints] object is equal to [other] object. */
     override fun equals(other: Any?): Boolean {
@@ -185,22 +188,19 @@ public fun VolumeConstraints.constrainDepth(depth: Int): Int = depth.coerceIn(mi
  * @param horizontal the horizontal offset to apply.
  * @param vertical the vertical offset to apply.
  * @param depth the depth offset to apply.
- * @param resetMins if true, the minimum values in the new constraints will be set to 0, otherwise.
- *   they will be offset.
  * @return a new [VolumeConstraints] object with offset values.
  */
 public fun VolumeConstraints.offset(
     horizontal: Int = 0,
     vertical: Int = 0,
     depth: Int = 0,
-    resetMins: Boolean = false,
 ): VolumeConstraints =
     VolumeConstraints(
-        if (resetMins) 0 else (minWidth + horizontal).coerceAtLeast(0),
+        (minWidth + horizontal).coerceAtLeast(0),
         addMaxWithMinimum(maxWidth, horizontal),
-        if (resetMins) 0 else (minHeight + vertical).coerceAtLeast(0),
+        (minHeight + vertical).coerceAtLeast(0),
         addMaxWithMinimum(maxHeight, vertical),
-        if (resetMins) 0 else (minDepth + depth).coerceAtLeast(0),
+        (minDepth + depth).coerceAtLeast(0),
         addMaxWithMinimum(maxDepth, depth),
     )
 

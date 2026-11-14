@@ -21,9 +21,25 @@ import androidx.savedstate.internal.SavedStateRegistryImpl
 public actual class SavedStateRegistry
 internal actual constructor(private val impl: SavedStateRegistryImpl) {
 
+    public actual constructor() : this(SavedStateRegistryImpl())
+
+    internal actual constructor(
+        container: SavedStateContainer
+    ) : this(SavedStateRegistryImpl(container))
+
+    public actual constructor(
+        initialState: SavedState?
+    ) : this(SavedStateRegistryImpl(initialState))
+
     @get:MainThread
     public actual val isRestored: Boolean
         get() = impl.isRestored
+
+    @MainThread public actual fun asContainer(): SavedStateContainer = impl.asContainer()
+
+    @MainThread
+    public actual fun getOrCreateContainer(key: String): SavedStateContainer =
+        impl.getOrCreateContainer(key)
 
     @MainThread
     public actual fun consumeRestoredStateForKey(key: String): SavedState? =
@@ -35,7 +51,7 @@ internal actual constructor(private val impl: SavedStateRegistryImpl) {
     }
 
     public actual fun getSavedStateProvider(key: String): SavedStateProvider? =
-        impl.getSavedStateProvider(key)
+        impl.getSavedStateProvider(key) as? SavedStateProvider
 
     @MainThread
     public actual fun unregisterSavedStateProvider(key: String) {
@@ -44,5 +60,9 @@ internal actual constructor(private val impl: SavedStateRegistryImpl) {
 
     public actual fun interface SavedStateProvider {
         public actual fun saveState(): SavedState
+    }
+
+    public actual fun interface SavedStateRestorer {
+        public actual fun restoreState(savedState: SavedState?)
     }
 }

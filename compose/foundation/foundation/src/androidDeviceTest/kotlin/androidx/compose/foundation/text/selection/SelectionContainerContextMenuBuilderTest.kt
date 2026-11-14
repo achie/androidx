@@ -16,6 +16,7 @@
 
 package androidx.compose.foundation.text.selection
 
+import androidx.compose.foundation.contextmenu.LookUpItemOverrideRule
 import androidx.compose.foundation.contextmenu.ProcessTextItemOverrideRule
 import androidx.compose.foundation.internal.readText
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextContextMenuItems
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.CopyKey
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.LookUpKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys.SelectAllKey
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuSession
 import androidx.compose.foundation.text.contextmenu.test.ContextMenuFlagFlipperRunner
@@ -34,23 +36,22 @@ import androidx.compose.foundation.text.input.internal.selection.FakeClipboard
 import androidx.compose.foundation.text.selection.gestures.util.longPress
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
 import androidx.test.filters.MediumTest
+import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -60,13 +61,15 @@ import org.junit.runner.RunWith
 @RunWith(ContextMenuFlagFlipperRunner::class)
 @ContextMenuFlagSuppress(suppressedFlagValue = false)
 class SelectionContainerContextMenuBuilderTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val textTag = "text"
     private val defaultText = "Text Text Text"
     private val initialClipboardText = "initialClipboardText"
 
     @get:Rule val processTextRule = ProcessTextItemOverrideRule()
+
+    @get:Rule val lookUpRule = LookUpItemOverrideRule()
 
     @Test
     fun whenTouch_onClick_copy() = runTest {
@@ -130,10 +133,10 @@ class SelectionContainerContextMenuBuilderTest {
         val fakeClipboard = FakeClipboard(initialClipboardText)
 
         val reader = TestTextContextMenuDataInvoker()
-        var selection by mutableStateOf<Selection?>(null)
+        val state = SelectionState()
         rule.setContent {
             CompositionLocalProvider(LocalClipboard provides fakeClipboard) {
-                SelectionContainer(selection = selection, onSelectionChange = { selection = it }) {
+                SelectionContainer(state = state) {
                     BasicText(
                         defaultText,
                         modifier = Modifier.testTag(textTag).testTextContextMenuDataReader(reader),
@@ -171,7 +174,7 @@ class SelectionContainerContextMenuBuilderTest {
         }
 
         // verify selection updated
-        assertThat(selection?.toTextRange()).isEqualTo(expectedSelection)
+        assertThat(state.selection?.toTextRange()).isEqualTo(expectedSelection)
 
         // verify clipboard contents
         val clipboardContent = fakeClipboard.getClipEntry()
@@ -201,6 +204,40 @@ class SelectionContainerContextMenuBuilderTest {
             },
             expectedItems = listOf(CopyKey),
         )
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun whenNoSelection_lookUpAvailable_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runItemMatchTest(expectedItems = listOf(SelectAllKey))
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun whenPartialSelection_lookUpAvailable_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runItemMatchTest(
+            actions = { rule.onNodeWithTag(textTag).performTouchInput { longClick(center) } },
+            expectedItems = listOf(CopyKey, LookUpKey, SelectAllKey),
+        )
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 37)
+    fun whenFullSelection_lookUpAvailable_itemsMatch_afterApi37() {
+        lookUpRule.isLookUpAvailable = true
+        runItemMatchTest(
+            actions = {
+                rule.onNodeWithTag(textTag).performTouchInput {
+                    val xShift = Offset(1f, 0f)
+                    longPress(centerLeft + xShift)
+                    moveTo(centerRight - xShift)
+                    up()
+                }
+            },
+            expectedItems = listOf(CopyKey, LookUpKey),
+        )
+    }
 
     private fun runItemMatchTest(actions: (() -> Unit)? = null, expectedItems: List<Any>) {
         val reader = TestTextContextMenuDataInvoker()

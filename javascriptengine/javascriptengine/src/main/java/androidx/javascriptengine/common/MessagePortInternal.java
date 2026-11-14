@@ -33,7 +33,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -64,6 +65,7 @@ public final class MessagePortInternal {
     // Local binder stub that receives calls from the remote process.
     // Responsible for receiving messages from the remote port.
     @NonNull
+    @SuppressWarnings("ExposedPrivateType")
     public final MessagePortIpcClient mLocalIMessagePort;
     // Remote binder proxy to send messages to the other process.
     // Dictates the state of the message port. If null port is closed, if otherwise port is open.
@@ -73,7 +75,7 @@ public final class MessagePortInternal {
     // Sandbox thread pool task executor.
     // Offloads messages sent over file descriptor.
     @NonNull
-    public final ExecutorService mIoExecutor;
+    public final Executor mIoExecutor;
     // The client is an implementation logic of the functions that determine how the messages
     // are processed after they have been received.
     // This is not responsible for receiving messages. Is is responsible to process messages.
@@ -192,6 +194,11 @@ public final class MessagePortInternal {
         public void close() {
             MessagePortInternal.this.closeLocally();
         }
+
+        @Override
+        public int getInterfaceVersion() {
+            return super.VERSION;
+        }
     }
 
     /**
@@ -216,13 +223,13 @@ public final class MessagePortInternal {
     /**
      * Creates a new MessagePortInternal that can later be entangled.
      *
-     * @param executorService The ExecutorService that will run the pipe reading.
-     * @param maxMessageSize The maximum size allowed for a received message.
+     * @param executor The Executor that will run the pipe reading.
+     * @param maxMessageSize The maximum size in bytes allowed for a received message.
      * @return a new MessagePortInternal.
      */
-    public MessagePortInternal(@NonNull ExecutorService executorService, int maxMessageSize) {
+    public MessagePortInternal(@NonNull Executor executor, int maxMessageSize) {
         mLocalIMessagePort = new MessagePortIpcClient();
-        mIoExecutor = executorService;
+        mIoExecutor = executor;
         mMessagePortClient = new MessagePortClient() {
             @Override
             public void onString(String string) {}
@@ -240,7 +247,7 @@ public final class MessagePortInternal {
      */
     public MessagePortInternal() {
         mLocalIMessagePort = new MessagePortIpcClient();
-        mIoExecutor = MoreExecutors.newDirectExecutorService();
+        mIoExecutor = MoreExecutors.directExecutor();
         mMessagePortClient = new MessagePortClient() {
             @Override
             public void onString(String string) {}
@@ -311,6 +318,9 @@ public final class MessagePortInternal {
             if (string.length() <= MAX_BINDER_STRING_LENGTH) {
                 remote.sendString(string);
             } else {
+                // TODO(b/484314333):
+                //  Mangles illegal code units into '?'. If we needed to change this to U+FFFD like
+                //  most other parts of JavaScriptEngine, we could use a customized CharsetEncoder.
                 byte[] bytes = string.getBytes(StandardCharsets.UTF_8);
                 try (AssetFileDescriptor afd = Utils.writeBytesIntoPipeAsync(bytes, mIoExecutor)) {
                     remote.sendStringOverFd(afd);
@@ -318,6 +328,13 @@ public final class MessagePortInternal {
                     throw new RuntimeException(e);
                 }
             }
+        } catch (RejectedExecutionException e) {
+            // On the app side, this probably means the sandbox is closed, but it could also mean
+            // something has gone horribly wrong (like exhausting a task queue limit), which should
+            // be handled separately.
+            //
+            // At the very least, it's no longer valid to send messages on this port.
+            closeLocally();
         } catch (DeadObjectException e) {
             // The remote process has died, so we can ignore this error.
         } catch (RemoteException e) {
@@ -344,6 +361,13 @@ public final class MessagePortInternal {
                     throw new RuntimeException(e);
                 }
             }
+        } catch (RejectedExecutionException e) {
+            // On the app side, this probably means the sandbox is closed, but it could also mean
+            // something has gone horribly wrong (like exhausting a task queue limit), which should
+            // be handled separately.
+            //
+            // At the very least, it's no longer valid to send messages on this port.
+            closeLocally();
         } catch (DeadObjectException e) {
             // The remote process has died, so we can ignore this error.
         } catch (RemoteException e) {

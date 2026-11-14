@@ -19,10 +19,13 @@ package androidx.room3.integration.multiplatformtestapp.test
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
 import androidx.room3.RoomRawQuery
-import androidx.room3.execSQL
+import androidx.room3.executeSQL
 import androidx.room3.immediateTransaction
+import androidx.room3.integration.multiplatformtestapp.library.LibraryEntity
 import androidx.room3.useReaderConnection
 import androidx.room3.useWriterConnection
+import androidx.room3.withWriteTransaction
+import androidx.sqlite.async.step
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -118,7 +121,7 @@ abstract class BaseQueryTest {
 
     @Test
     fun queryFlow() = runTest {
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
         dao.insertItem(1)
 
         val channel = dao.getItemListFlow().produceIn(this)
@@ -132,13 +135,16 @@ abstract class BaseQueryTest {
         assertThat(channel.receive())
             .containsExactly(SampleEntity(1), SampleEntity(2), SampleEntity(3))
 
+        dao.deleteList(listOf(1, 2, 3))
+        assertThat(channel.receive()).isEmpty()
+
         channel.cancel()
     }
 
     @Test
     fun insertAndDelete() = runTest {
         val sampleEntity = SampleEntity(1, 1)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity)
         assertThat(dao.getSingleItemWithColumn().pk).isEqualTo(1)
@@ -153,7 +159,7 @@ abstract class BaseQueryTest {
     fun insertAndUpdateAndDelete() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         assertThat(dao.getSingleItemWithColumn().data).isEqualTo(1)
@@ -171,7 +177,7 @@ abstract class BaseQueryTest {
     fun insertAndUpsertAndDelete() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         assertThat(dao.getSingleItemWithColumn().data).isEqualTo(1)
@@ -189,7 +195,7 @@ abstract class BaseQueryTest {
     fun insertMap() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity2(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -203,7 +209,7 @@ abstract class BaseQueryTest {
     fun insertListMap() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity2(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -217,7 +223,7 @@ abstract class BaseQueryTest {
     fun insertSetMap() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity2(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -231,7 +237,7 @@ abstract class BaseQueryTest {
     fun mapWithDupeColumns() = runTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntityCopy(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -249,7 +255,7 @@ abstract class BaseQueryTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity2(1, 2)
         val sampleEntity3 = SampleEntity3(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -265,7 +271,7 @@ abstract class BaseQueryTest {
         val sampleEntity1 = SampleEntity(1, 1)
         val sampleEntity2 = SampleEntity2(1, 2)
         val sampleEntity3 = SampleEntity3(1, 2)
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insert(sampleEntity1)
         dao.insert(sampleEntity2)
@@ -278,10 +284,9 @@ abstract class BaseQueryTest {
 
     @Test
     fun combineInsertAndManualWrite() = runTest {
-        val db = getRoomDatabase()
         db.useWriterConnection { connection ->
             db.dao().insertItem(1)
-            connection.execSQL("INSERT INTO SampleEntity (pk) VALUES (2)")
+            connection.executeSQL("INSERT INTO SampleEntity (pk) VALUES (2)")
         }
         db.useReaderConnection { connection ->
             val count =
@@ -295,7 +300,6 @@ abstract class BaseQueryTest {
 
     @Test
     fun combineQueryAndManualRead() = runTest {
-        val db = getRoomDatabase()
         val entity = SampleEntity(1, 10)
         db.dao().insert(entity)
         db.useReaderConnection { connection ->
@@ -315,8 +319,6 @@ abstract class BaseQueryTest {
 
     @Test
     fun queryFlowFromManualWrite() = runTest {
-        val db = getRoomDatabase()
-
         val channel = db.dao().getItemListFlow().produceIn(this)
 
         assertThat(channel.receive()).isEmpty()
@@ -324,7 +326,7 @@ abstract class BaseQueryTest {
         // Validates that a write using the connection directly will cause invalidation without
         // the need to do a manual refresh.
         db.useWriterConnection { connection ->
-            connection.execSQL("INSERT INTO SampleEntity (pk) VALUES (13)")
+            connection.executeSQL("INSERT INTO SampleEntity (pk) VALUES (13)")
         }
         assertThat(channel.receive()).containsExactly(SampleEntity(13))
 
@@ -333,7 +335,6 @@ abstract class BaseQueryTest {
 
     @Test
     fun rollbackDaoQuery() = runTest {
-        val db = getRoomDatabase()
         db.dao().insertItem(1)
         db.useWriterConnection { transactor ->
             transactor.immediateTransaction {
@@ -353,7 +354,7 @@ abstract class BaseQueryTest {
     @Test
     fun insertAndDeleteArray() = runTest {
         val entityArray = arrayOf(SampleEntity(1, 1), SampleEntity(2, 2))
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
 
         dao.insertArray(entityArray)
 
@@ -370,7 +371,7 @@ abstract class BaseQueryTest {
     @Test
     fun insertAndReadArrays() = runTest {
         val expected = arrayOf(SampleEntity(1, 1), SampleEntity(2, 2))
-        val dao = getRoomDatabase().dao()
+        val dao = db.dao()
         dao.insertArray(expected)
 
         val resultArray = dao.queryOfArray()
@@ -433,11 +434,48 @@ abstract class BaseQueryTest {
     }
 
     @Test
+    fun relationWithRandomAndLimit() = runTest {
+        for (i in 1..10) {
+            val s1 = SampleEntity(i.toLong(), i.toLong())
+            val s2 = SampleEntity2(i.toLong(), i.toLong() * 10)
+            db.dao().insert(s1)
+            db.dao().insert(s2)
+        }
+        val result = db.dao().getRandomSample1To2(limit = 3)
+        assertThat(result).hasSize(3)
+        for (item in result) {
+            assertThat(item.sample2).isNotNull()
+            assertThat(item.sample2.pk2).isEqualTo(item.sample1.pk)
+            assertThat(item.sample2.data2).isEqualTo(item.sample1.pk * 10)
+        }
+    }
+
+    @Test
     fun invalidRawQueryOnBindStatement() = runTest {
         val query =
-            RoomRawQuery(sql = "SELECT * FROM SampleEntity", onBindStatement = { it.step() })
+            RoomRawQuery(
+                sql = "SELECT * FROM SampleEntity",
+                onBindStatement = { it.getColumnCount() },
+            )
         assertThrows<IllegalStateException> { db.dao().getSingleItemRaw(query) }
             .hasMessageThat()
             .contains("Only bind*() calls are allowed")
+    }
+
+    @Test
+    fun libraryEntityAndDao() = runTest {
+        val items = List(10) { LibraryEntity(it.toLong(), "test$it") }
+        db.withWriteTransaction { items.forEach { db.libraryDao().insert(it) } }
+        val result = db.libraryDao().getAll()
+        assertThat(result).containsExactlyElementsIn(items)
+    }
+
+    @Test
+    fun clearTables() = runTest {
+        val dao = db.dao()
+        repeat(10) { dao.insertItem(it.toLong()) }
+        assertThat(dao.getItemList().size).isEqualTo(10)
+        db.clearAllTables()
+        assertThat(dao.getItemList()).isEmpty()
     }
 }

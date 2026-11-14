@@ -151,6 +151,30 @@ public class FontResourcesParserCompatTest {
         assertEquals("androidx.core.test", request.getProviderPackage());
         assertEquals("singleFontFamily", request.getQuery());
         assertEquals("serif", providerEntry.getSystemFontFamilyName());
+        assertNotNull(request.getSystemCertificates());
+        assertEquals(0, request.getSystemCertificates().size());
+    }
+
+    @Test
+    public void testParseDownloadableFont_withSystemCerts() throws IOException,
+            XmlPullParserException {
+        @SuppressLint("ResourceType")
+        XmlResourceParser parser = mResources.getXml(R.font.samplexmldownloadedfont_systemcerts);
+
+        FamilyResourceEntry result = FontResourcesParserCompat.parse(parser, mResources);
+
+        assertNotNull(result);
+        ProviderResourceEntry providerEntry = (ProviderResourceEntry) result;
+        FontRequest request = providerEntry.getRequest();
+        assertEquals("androidx.core.provider.fonts.font",
+                request.getProviderAuthority());
+        assertEquals("androidx.core.test", request.getProviderPackage());
+        assertEquals("singleFontFamily", request.getQuery());
+        assertEquals("serif", providerEntry.getSystemFontFamilyName());
+        List<List<byte[]>> systemCerts = request.getSystemCertificates();
+        assertNotNull(systemCerts);
+        assertEquals(1, systemCerts.size());
+        assertEquals(2, systemCerts.get(0).size());
     }
 
     @Test
@@ -250,5 +274,27 @@ public class FontResourcesParserCompatTest {
         assertThat(request.getProviderPackage()).isEqualTo("androidx.core.test");
         assertThat(request.getQuery()).isEqualTo("secondFallback");
         assertThat(request.getSystemFont()).isEqualTo("monospace");
+    }
+
+    @Test
+    public void testFallbackSyntax_Variation() throws XmlPullParserException, IOException {
+        XmlResourceParser parser = mResources.getXml(R.font.system_fallback_variation);
+        FamilyResourceEntry result = FontResourcesParserCompat.parse(parser, mResources);
+        assertNotNull(result);
+
+        assertThat(result).isInstanceOf(ProviderResourceEntry.class);
+        ProviderResourceEntry entry = (ProviderResourceEntry) result;
+
+        List<FontRequest> requests = entry.getRequests();
+        assertThat(requests).hasSize(1);
+        FontRequest request = requests.get(0);
+        assertThat(request.getQuery()).isEqualTo("fallbackWithVariation");
+        assertThat(request.getVariationSettings()).isEqualTo("'wdth' 1.0");
+    }
+
+    @Test(expected = XmlPullParserException.class)
+    public void testFallbackSyntax_Invalid() throws XmlPullParserException, IOException {
+        XmlResourceParser parser = mResources.getXml(R.font.system_fallback_invalid);
+        FontResourcesParserCompat.parse(parser, mResources);
     }
 }

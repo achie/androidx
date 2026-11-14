@@ -37,8 +37,8 @@ import androidx.wear.compose.foundation.sizeIn
 
 /**
  * CurvedText is a component allowing developers to easily write curved text following the curvature
- * a circle (usually at the edge of a circular screen). CurvedText can be only created within the
- * CurvedLayout to ensure the best experience, like being able to specify to positioning.
+ * of a circle (usually at the edge of a circular screen). CurvedText can be only created within the
+ * CurvedLayout to ensure the best experience, like being able to specify positioning.
  *
  * Note that Wear Material UX guidance recommends that [curvedText] should not exceed the sweep
  * angle [CurvedTextDefaults.ScrollableContentMaxSweepAngle] on screens with scrollable content such
@@ -54,18 +54,29 @@ import androidx.wear.compose.foundation.sizeIn
  *
  * For ease of use, commonly used parameters from [CurvedTextStyle] are also present here. The order
  * of precedence is as follows:
- * - If a parameter is explicitly set here (i.e, it is _not_ `null` or [TextUnit.Unspecified]), then
- *   this parameter will always be used.
+ * - If a parameter is explicitly set here (i.e., it is _not_ `null` or [TextUnit.Unspecified]),
+ *   then this parameter will always be used.
  * - If a parameter is _not_ set, (`null` or [TextUnit.Unspecified]), then the corresponding value
  *   from [style] will be used instead.
  *
  * Additionally, for [color], if [color] is not set, and [style] does not have a color, then
  * [LocalContentColor] will be used.
  *
+ * There is also Modifier.[drawCurvedToEdge] as an alternative, which is more performant and does
+ * warping at no extra cost. See Modifier.[drawCurvedToEdge] documentation for full details,
+ * including recommendations on when to use it.
+ *
  * For samples using curved text in a [CurvedLayout] see:
  *
  * @sample androidx.wear.compose.material3.samples.CurvedTextTop
+ *
+ * ![CurvedTextTop Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_CurvedTextTop_CompositeImage.png)
+ *
  * @sample androidx.wear.compose.material3.samples.CurvedTextBottom
+ *
+ * ![CurvedTextBottom Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_CurvedTextBottom_CompositeImage.png)
  *
  * For more information, see the
  * [Curved Text](https://developer.android.com/training/wearables/compose/curved-text) guide.
@@ -121,8 +132,9 @@ public fun CurvedScope.curvedText(
         overflow = overflow,
     ) {
         val baseStyle = style ?: MaterialTheme.typography.arcMedium
-        val textColor =
-            color.takeOrElse { baseStyle.color.takeOrElse { LocalContentColor.current } }
+        val textColor = color.takeOrElse {
+            baseStyle.color.takeOrElse { LocalContentColor.current }
+        }
         baseStyle.merge(
             CurvedTextStyle(
                 color = textColor,
@@ -142,7 +154,7 @@ public object CurvedTextDefaults {
 
     /**
      * The default maximum sweep angle in degrees used by [curvedText]. This threshold is for the
-     * [curvedText] displayed on screens with scrollable content, such as lists..
+     * [curvedText] displayed on screens with scrollable content, such as lists.
      *
      * This is calculated by keeping the length of the corresponding chord on the circle to be
      * approximately 57% of the screen width.

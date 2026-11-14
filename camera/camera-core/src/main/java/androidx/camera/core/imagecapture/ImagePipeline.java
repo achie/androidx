@@ -78,6 +78,7 @@ public class ImagePipeline {
     private final @NonNull CaptureNode mCaptureNode;
     private final @NonNull ProcessingNode mProcessingNode;
     private final CaptureNode.@NonNull In mPipelineIn;
+    private final @Nullable String mPhysicalCameraId;
 
     // ===== public methods =====
 
@@ -88,7 +89,8 @@ public class ImagePipeline {
             @NonNull Size cameraSurfaceSize,
             @NonNull CameraCharacteristics cameraCharacteristics) {
         this(useCaseConfig, cameraSurfaceSize, cameraCharacteristics, /*cameraEffect=*/ null,
-                /*isVirtualCamera=*/ false, /* postviewSettings */ null);
+                /*isVirtualCamera=*/ false, /* postviewSettings */ null,
+                /* physicalCameraId= */ null);
     }
 
     @MainThread
@@ -99,7 +101,7 @@ public class ImagePipeline {
             @Nullable CameraEffect cameraEffect,
             boolean isVirtualCamera) {
         this(useCaseConfig, cameraSurfaceSize, cameraCharacteristics, cameraEffect, isVirtualCamera,
-                null);
+                /* postviewSettings= */ null, /* physicalCameraId= */ null);
     }
 
     @MainThread
@@ -110,16 +112,34 @@ public class ImagePipeline {
             @Nullable CameraEffect cameraEffect,
             boolean isVirtualCamera,
             @Nullable PostviewSettings postviewSettings) {
+        this(useCaseConfig, cameraSurfaceSize, cameraCharacteristics, cameraEffect, isVirtualCamera,
+                postviewSettings, /* physicalCameraId= */ null);
+    }
+
+    @MainThread
+    public ImagePipeline(
+            @NonNull ImageCaptureConfig useCaseConfig,
+            @NonNull Size cameraSurfaceSize,
+            @Nullable CameraCharacteristics cameraCharacteristics,
+            @Nullable CameraEffect cameraEffect,
+            boolean isVirtualCamera,
+            @Nullable PostviewSettings postviewSettings,
+            @Nullable String physicalCameraId) {
         checkMainThread();
         mUseCaseConfig = useCaseConfig;
         mCaptureConfig = CaptureConfig.Builder.createFrom(useCaseConfig).build();
+        mPhysicalCameraId = physicalCameraId;
 
-        // Create nodes
+        // Create nodes. Only attach InternalImageProcessor if the effect provides an
+        // ImageProcessor. A SurfaceProcessor-based effect targeting IMAGE_CAPTURE is applied
+        // upstream on the shared stream when ImageCapture is a StreamSharing child; otherwise it
+        // is not applied to still captures.
         mCaptureNode = new CaptureNode();
         mProcessingNode = new ProcessingNode(
                 requireNonNull(mUseCaseConfig.getIoExecutor(CameraXExecutors.ioExecutor())),
                 cameraCharacteristics,
-                cameraEffect != null ? new InternalImageProcessor(cameraEffect) : null);
+                cameraEffect != null && cameraEffect.getImageProcessor() != null
+                        ? new InternalImageProcessor(cameraEffect) : null);
 
         // Pass down [RAW_SENSOR, JPEG] to the pipeline if simultaneous capture is enabled.
         List<Integer> outputFormats = new ArrayList<>();
@@ -148,15 +168,15 @@ public class ImagePipeline {
     public SessionConfig.@NonNull Builder createSessionConfigBuilder(@NonNull Size resolution) {
         SessionConfig.Builder builder = SessionConfig.Builder.createFrom(mUseCaseConfig,
                 resolution);
-        builder.addNonRepeatingSurface(mPipelineIn.getSurface());
+        builder.addNonRepeatingSurface(mPipelineIn.getSurface(), mPhysicalCameraId);
         if (mPipelineIn.getOutputFormats().size() > 1
                 && mPipelineIn.getSecondarySurface() != null) {
-            builder.addNonRepeatingSurface(mPipelineIn.getSecondarySurface());
+            builder.addNonRepeatingSurface(mPipelineIn.getSecondarySurface(), mPhysicalCameraId);
         }
 
         // Postview surface is generated when initializing CaptureNode.
         if (mPipelineIn.getPostviewSurface() != null) {
-            builder.setPostviewSurface(mPipelineIn.getPostviewSurface());
+            builder.setPostviewSurface(mPipelineIn.getPostviewSurface(), mPhysicalCameraId);
         }
         return builder;
     }
@@ -209,7 +229,7 @@ public class ImagePipeline {
      *                      capture failure or abortion.
      */
     @MainThread
-    @NonNull Pair<CameraRequest, ProcessingRequest> createRequests(
+    public @NonNull Pair<CameraRequest, ProcessingRequest> createRequests(
             @NonNull TakePictureRequest takePictureRequest,
             @NonNull TakePictureCallback takePictureCallback,
             @NonNull ListenableFuture<Void> captureFuture) {

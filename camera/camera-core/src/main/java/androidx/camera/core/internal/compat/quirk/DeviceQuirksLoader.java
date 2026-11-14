@@ -71,6 +71,18 @@ public class DeviceQuirksLoader {
                 PreviewGreenTintQuirk.load())) {
             quirks.add(PreviewGreenTintQuirk.INSTANCE);
         }
+        if (quirkSettings.shouldEnableQuirk(SimultaneousRawJpegNotSupportedQuirk.class,
+                SimultaneousRawJpegNotSupportedQuirk.load())) {
+            quirks.add(new SimultaneousRawJpegNotSupportedQuirk());
+        }
+        if (quirkSettings.shouldEnableQuirk(FastSessionSwitchDisablerQuirk.class,
+                FastSessionSwitchDisablerQuirk.load())) {
+            quirks.add(new FastSessionSwitchDisablerQuirk());
+        }
+        if (quirkSettings.shouldEnableQuirk(AbnormalStreamWhenHlg10WithStabilizationQuirk.class,
+                AbnormalStreamWhenHlg10WithStabilizationQuirk.load())) {
+            quirks.add(AbnormalStreamWhenHlg10WithStabilizationQuirk.INSTANCE);
+        }
 
         return quirks;
     }

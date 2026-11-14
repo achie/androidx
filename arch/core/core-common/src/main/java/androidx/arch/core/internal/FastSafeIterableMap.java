@@ -31,13 +31,14 @@ import java.util.Map;
  *
  * @param <K> Key type
  * @param <V> Value type
+ * @deprecated These are internal legacy utilities and should not be used.
  */
+@Deprecated
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
 public class FastSafeIterableMap<K, V> extends SafeIterableMap<K, V> {
 
     private final HashMap<K, Entry<K, V>> mHashMap = new HashMap<>();
 
-    @SuppressWarnings("HiddenTypeParameter")
     @Override
     protected @Nullable Entry<K, V> get(K k) {
         return mHashMap.get(k);

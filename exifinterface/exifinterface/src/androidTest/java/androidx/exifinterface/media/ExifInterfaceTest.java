@@ -66,10 +66,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -79,6 +87,7 @@ import java.util.concurrent.atomic.AtomicReference;
 // TODO: Add NEF test file from CTS after reducing file size in order to test uncompressed thumbnail
 // image.
 @RunWith(AndroidJUnit4.class)
+@SuppressWarnings("deprecation")
 public class ExifInterfaceTest {
     private static final String TAG = ExifInterface.class.getSimpleName();
     private static final boolean VERBOSE = false;  // lots of logging
@@ -339,13 +348,24 @@ public class ExifInterfaceTest {
 
     @Test
     @LargeTest
-    public void testJpegWithFillBytes() throws Throwable {
-        // Fill bytes are added before APP1 and SOS markers.
+    public void testJpegWithFill1Byte() throws Throwable {
+        // One fill bytes added before each marker
         File imageFile =
                 copyFromResourceToFile(
-                        R.raw.jpeg_with_fill_bytes, "jpeg_with_fill_bytes.jpg");
-        readFromFilesWithExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_BYTES);
-        testWritingExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_BYTES);
+                        R.raw.jpeg_with_fill_1byte, "jpeg_with_fill_1byte.jpg");
+        readFromFilesWithExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_1BYTE);
+        testWritingExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_1BYTE);
+    }
+
+    @Test
+    @LargeTest
+    public void testJpegWithFill2Bytes() throws Throwable {
+        // Two fill bytes added before each marker
+        File imageFile =
+                copyFromResourceToFile(
+                        R.raw.jpeg_with_fill_2bytes, "jpeg_with_fill_2bytes.jpg");
+        readFromFilesWithExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_2BYTES);
+        testWritingExif(imageFile, ExpectedAttributes.JPEG_WITH_FILL_2BYTES);
     }
 
     @Test
@@ -536,7 +556,7 @@ public class ExifInterfaceTest {
     // https://issuetracker.google.com/342697059
     @Test
     @LargeTest
-    @SdkSuppress(minSdkVersion = 24) // Parsing the large image causes OOM on API 23 FTL emulators.
+    @SdkSuppress(minSdkVersion = 25) // Parsing the large image causes OOM on API 24 FTL emulators.
     public void testWebpWithoutExifHeight8192px() throws Throwable {
         File imageFile =
                 copyFromResourceToFile(
@@ -674,6 +694,32 @@ public class ExifInterfaceTest {
                     .isEqualTo(defaultTagValue);
             assertThat(exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH)).isEqualTo(defaultTagValue);
         }
+    }
+
+    @Test
+    @SmallTest
+    public void testIsSupportedMimeType() {
+        assertThrows(NullPointerException.class, () -> ExifInterface.isSupportedMimeType(null));
+        assertThat(ExifInterface.isSupportedMimeType("image/jpeg")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-adobe-dng")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-canon-cr2")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-nikon-nef")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-nikon-nrw")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-sony-arw")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-panasonic-rw2")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-olympus-orf")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-pentax-pef")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-samsung-srw")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/x-fuji-raf")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/heic"))
+                .isEqualTo(Build.VERSION.SDK_INT >= 28);
+        assertThat(ExifInterface.isSupportedMimeType("image/heif"))
+                .isEqualTo(Build.VERSION.SDK_INT >= 28);
+        assertThat(ExifInterface.isSupportedMimeType("image/avif"))
+                .isEqualTo(Build.VERSION.SDK_INT >= 31);
+        assertThat(ExifInterface.isSupportedMimeType("image/png")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/webp")).isTrue();
+        assertThat(ExifInterface.isSupportedMimeType("image/gif")).isFalse();
     }
 
     @Test
@@ -933,6 +979,112 @@ public class ExifInterfaceTest {
         assertThat(exif.getAttribute(ExifInterface.TAG_DATETIME))
                 .isEqualTo(modifiedNewDateTimeStringValue);
         assertThat(exif.getDateTime()).isEqualTo(newDateTimeLongValue);
+    }
+
+    @Test
+    @SmallTest
+    public void testGetSetDateTimeConcurrent() throws Exception {
+        final int numThreads = 8;
+        final int numIterations = 100;
+        final long baseTimestamp = 1577836800000L; // 2020-01-01T00:00:00.000Z
+        final long secondaryExpectedDatetime =
+                1454027547000L /* "2016-01-29 18:32:27" */
+                + 100L /* "100000" */
+                + 32400000L /* "+09:00" */;
+        final File secondaryFormatFile =
+                copyFromResourceToFile(
+                        R.raw.jpeg_with_datetime_tag_secondary_format,
+                        "jpeg_with_datetime_tag_secondary_format_concurrent.jpg");
+
+        final List<ExifInterface> primaryExifs = new ArrayList<>(numThreads);
+        final List<ExifInterface> secondaryExifs = new ArrayList<>(numThreads);
+        for (int i = 0; i < numThreads; i++) {
+            primaryExifs.add(createTestExifInterface());
+            secondaryExifs.add(new ExifInterface(secondaryFormatFile.getAbsolutePath()));
+        }
+
+        final ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        final CountDownLatch startLatch = new CountDownLatch(1);
+        final List<Future<Void>> futures = new ArrayList<>(numThreads);
+
+        try {
+            for (int t = 0; t < numThreads; t++) {
+                final int threadIndex = t;
+                final ExifInterface exif = primaryExifs.get(t);
+                final ExifInterface secondaryExif = secondaryExifs.get(t);
+                futures.add(
+                        executor.submit(
+                                new Callable<Void>() {
+                                    @Override
+                                    public Void call() throws Exception {
+                                        startLatch.await();
+                                        for (int i = 0; i < numIterations; i++) {
+                                            long timestamp =
+                                                    baseTimestamp
+                                                            + (threadIndex * 86400000L)
+                                                            + (i * 61000L)
+                                                            + (threadIndex * 100L + (i % 100));
+                                            exif.setDateTime(timestamp);
+                                            assertThat(exif.getDateTime()).isEqualTo(timestamp);
+
+                                            String formattedDateTime =
+                                                    exif.getAttribute(ExifInterface.TAG_DATETIME);
+                                            String formattedSubsec =
+                                                    exif.getAttribute(
+                                                            ExifInterface.TAG_SUBSEC_TIME);
+                                            exif.setAttribute(
+                                                    ExifInterface.TAG_DATETIME_ORIGINAL,
+                                                    formattedDateTime);
+                                            exif.setAttribute(
+                                                    ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
+                                                    formattedSubsec);
+                                            exif.setAttribute(
+                                                    ExifInterface.TAG_DATETIME_DIGITIZED,
+                                                    formattedDateTime);
+                                            exif.setAttribute(
+                                                    ExifInterface.TAG_SUBSEC_TIME_DIGITIZED,
+                                                    formattedSubsec);
+                                            assertThat(exif.getDateTimeOriginal())
+                                                    .isEqualTo(timestamp);
+                                            assertThat(exif.getDateTimeDigitized())
+                                                    .isEqualTo(timestamp);
+
+                                            long gpsTimestamp = (timestamp / 1000L) * 1000L;
+                                            Location location = new Location("ExifInterfaceTest");
+                                            location.setLatitude(37.4219999);
+                                            location.setLongitude(-122.0840575);
+                                            location.setAltitude(10.0);
+                                            location.setSpeed(5.0f);
+                                            location.setTime(gpsTimestamp);
+                                            exif.setGpsInfo(location);
+                                            assertThat(exif.getGpsDateTime())
+                                                    .isEqualTo(gpsTimestamp);
+
+                                            // Also exercise secondary formatter parsing.
+                                            assertThat(secondaryExif.getDateTime())
+                                                    .isEqualTo(secondaryExpectedDatetime);
+                                            assertThat(secondaryExif.getDateTimeOriginal())
+                                                    .isEqualTo(secondaryExpectedDatetime);
+                                            assertThat(secondaryExif.getDateTimeDigitized())
+                                                    .isEqualTo(secondaryExpectedDatetime);
+                                            secondaryExif.setAttribute(
+                                                    ExifInterface.TAG_GPS_DATESTAMP, "2020-01-01");
+                                            secondaryExif.setAttribute(
+                                                    ExifInterface.TAG_GPS_TIMESTAMP, "00:00:00");
+                                            assertThat(secondaryExif.getGpsDateTime())
+                                                    .isEqualTo(baseTimestamp);
+                                        }
+                                        return null;
+                                    }
+                                }));
+            }
+            startLatch.countDown();
+            for (Future<Void> future : futures) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -1217,6 +1369,51 @@ public class ExifInterfaceTest {
 
         assertThat(exifInterface.getAttribute(ExifInterface.TAG_GPS_TIMESTAMP))
                 .isEqualTo(ExpectedAttributes.JPEG_WITH_EXIF_WITH_XMP.gpsTimestamp);
+    }
+
+    @Test
+    @SmallTest
+    public void testSetUndefinedFormatAttribute() throws Exception {
+        File imageFile =
+                copyFromResourceToFile(
+                        R.raw.jpeg_with_exif_byte_order_ii, "jpeg_with_exif_byte_order_ii.jpg");
+        ExifInterface exifInterface = new ExifInterface(imageFile);
+
+        exifInterface.setAttribute(ExifInterface.TAG_EXIF_VERSION, "0232");
+        exifInterface.setAttribute(ExifInterface.TAG_FLASHPIX_VERSION, "0101");
+
+        assertThat(exifInterface.getAttribute(ExifInterface.TAG_EXIF_VERSION)).isEqualTo("0232");
+        assertThat(exifInterface.getAttributeBytes(ExifInterface.TAG_EXIF_VERSION))
+                .isEqualTo(new byte[] {'0', '2', '3', '2'});
+        assertThat(exifInterface.getAttribute(ExifInterface.TAG_FLASHPIX_VERSION))
+                .isEqualTo("0101");
+        assertThat(exifInterface.getAttributeBytes(ExifInterface.TAG_FLASHPIX_VERSION))
+                .isEqualTo(new byte[] {'0', '1', '0', '1'});
+
+        exifInterface.saveAttributes();
+
+        // Verify the raw little-endian TIFF IFD entries use format 7 (IFD_FORMAT_UNDEFINED)
+        // and component count 4 (with no trailing NUL byte).
+        byte[] imageBytes = Files.toByteArray(imageFile);
+        byte[] expectedExifVersionEntry =
+                new byte[] {
+                    0x00, (byte) 0x90, 0x07, 0x00, 0x04, 0x00, 0x00, 0x00, '0', '2', '3', '2'
+                };
+        byte[] expectedFlashpixVersionEntry =
+                new byte[] {
+                    0x00, (byte) 0xA0, 0x07, 0x00, 0x04, 0x00, 0x00, 0x00, '0', '1', '0', '1'
+                };
+        assertThat(countOccurrences(imageBytes, expectedExifVersionEntry)).isEqualTo(1);
+        assertThat(countOccurrences(imageBytes, expectedFlashpixVersionEntry)).isEqualTo(1);
+
+        exifInterface = new ExifInterface(imageFile);
+        assertThat(exifInterface.getAttribute(ExifInterface.TAG_EXIF_VERSION)).isEqualTo("0232");
+        assertThat(exifInterface.getAttributeBytes(ExifInterface.TAG_EXIF_VERSION))
+                .isEqualTo(new byte[] {'0', '2', '3', '2'});
+        assertThat(exifInterface.getAttribute(ExifInterface.TAG_FLASHPIX_VERSION))
+                .isEqualTo("0101");
+        assertThat(exifInterface.getAttributeBytes(ExifInterface.TAG_FLASHPIX_VERSION))
+                .isEqualTo(new byte[] {'0', '1', '0', '1'});
     }
 
     @Test
@@ -1850,6 +2047,94 @@ public class ExifInterfaceTest {
         expect.that(result.denominator).isEqualTo(1);
     }
 
+    @Test
+    @SmallTest
+    public void testSaveAttributes_sortsIfdEntriesByTagNumber() throws Exception {
+        File imageFile =
+                copyFromResourceToFile(
+                        R.raw.jpeg_with_exif_byte_order_ii, "jpeg_with_exif_byte_order_ii.jpg");
+
+        ExifInterface exifInterface = new ExifInterface(imageFile.getAbsolutePath());
+        // Set multiple attributes in IFD0 and Exif SubIFD with tag numbers that are not in
+        // alphabetical order or natural hash order to ensure sorting is exercised.
+        exifInterface.setAttribute(ExifInterface.TAG_MAKE, "CustomMake");
+        exifInterface.setAttribute(ExifInterface.TAG_MODEL, "CustomModel");
+        exifInterface.setAttribute(ExifInterface.TAG_SOFTWARE, "CustomSoftware");
+        exifInterface.setAttribute(ExifInterface.TAG_ARTIST, "CustomArtist");
+        exifInterface.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "CustomDesc");
+        exifInterface.setAttribute(ExifInterface.TAG_DATETIME, "2026:01:01 00:00:00");
+        exifInterface.setAttribute(ExifInterface.TAG_COPYRIGHT, "CustomCopyright");
+        exifInterface.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, "0.001");
+        exifInterface.setAttribute(ExifInterface.TAG_F_NUMBER, "2.8");
+        exifInterface.setAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS, "100");
+        exifInterface.setAttribute(ExifInterface.TAG_USER_COMMENT, "CustomComment");
+        exifInterface.saveAttributes();
+
+        byte[] bytes = Files.toByteArray(imageFile);
+
+        // Find APP1 marker (0xFF, 0xE1) and verify "Exif\0\0"
+        int app1Offset = -1;
+        for (int i = 0; i < bytes.length - 10; i++) {
+            if (bytes[i] == (byte) 0xFF
+                    && bytes[i + 1] == (byte) 0xE1
+                    && bytes[i + 4] == 'E'
+                    && bytes[i + 5] == 'x'
+                    && bytes[i + 6] == 'i'
+                    && bytes[i + 7] == 'f'
+                    && bytes[i + 8] == 0
+                    && bytes[i + 9] == 0) {
+                app1Offset = i;
+                break;
+            }
+        }
+        assertThat(app1Offset).isAtLeast(0);
+
+        int tiffOffset = app1Offset + 10;
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        if (bytes[tiffOffset] == 'I' && bytes[tiffOffset + 1] == 'I') {
+            buffer.order(ByteOrder.LITTLE_ENDIAN);
+        } else if (bytes[tiffOffset] == 'M' && bytes[tiffOffset + 1] == 'M') {
+            buffer.order(ByteOrder.BIG_ENDIAN);
+        } else {
+            fail("Unexpected byte order: " + bytes[tiffOffset] + ", " + bytes[tiffOffset + 1]);
+        }
+
+        // Verify TIFF magic number 42
+        assertThat(buffer.getShort(tiffOffset + 2) & 0xFFFF).isEqualTo(42);
+
+        int ifd0Offset = buffer.getInt(tiffOffset + 4);
+        int ifd0AbsOffset = tiffOffset + ifd0Offset;
+        int ifd0EntryCount = buffer.getShort(ifd0AbsOffset) & 0xFFFF;
+        assertThat(ifd0EntryCount).isGreaterThan(1);
+
+        int previousTagNumber = -1;
+        int exifSubIfdOffset = -1;
+        for (int i = 0; i < ifd0EntryCount; i++) {
+            int entryOffset = ifd0AbsOffset + 2 + i * 12;
+            int tagNumber = buffer.getShort(entryOffset) & 0xFFFF;
+            assertThat(tagNumber).isGreaterThan(previousTagNumber);
+            previousTagNumber = tagNumber;
+
+            if (tagNumber == 0x8769) { // TAG_EXIF_IFD_POINTER
+                exifSubIfdOffset = buffer.getInt(entryOffset + 8);
+            }
+        }
+
+        // Verify Exif SubIFD directory entries are also sorted
+        assertThat(exifSubIfdOffset).isGreaterThan(0);
+        int subIfdAbsOffset = tiffOffset + exifSubIfdOffset;
+        int subIfdEntryCount = buffer.getShort(subIfdAbsOffset) & 0xFFFF;
+        assertThat(subIfdEntryCount).isGreaterThan(1);
+
+        int previousSubTagNumber = -1;
+        for (int i = 0; i < subIfdEntryCount; i++) {
+            int entryOffset = subIfdAbsOffset + 2 + i * 12;
+            int tagNumber = buffer.getShort(entryOffset) & 0xFFFF;
+            assertThat(tagNumber).isGreaterThan(previousSubTagNumber);
+            previousSubTagNumber = tagNumber;
+        }
+    }
+
     private void printExifTagsAndValues(String fileName, ExifInterface exifInterface) {
         // Prints thumbnail information.
         if (exifInterface.hasThumbnail()) {
@@ -2191,7 +2476,7 @@ public class ExifInterfaceTest {
             compareWithExpectedAttributes(exifInterface, expectedAttributes, verboseTag);
         }
         expectBitmapsEquivalent(srcFile, imageFile);
-        expectSecondSaveProducesSameSizeFile(imageFile);
+        assertSecondSaveProducesIdenticalFile(imageFile);
     }
 
     private void expectSavingPersistsModifications(
@@ -2402,13 +2687,13 @@ public class ExifInterfaceTest {
     }
 
     /**
-     * Asserts (using {@link #expect}) that saving the file the second time (without modifying any
-     * attributes) produces exactly the same length file as the first save. The first save (with no
-     * modifications) is expected to (possibly) change the file length because {@link ExifInterface}
-     * may move/reformat the Exif block within the file, but the second save should not make further
+     * Asserts that saving the file the second time (without modifying any attributes) produces
+     * exactly the same bytes as the first save. The first save (with no modifications) is
+     * expected to (possibly) change the file bytes because {@link ExifInterface} may
+     * move/reformat the Exif block within the file, but the second save should not make further
      * modifications.
      */
-    private void expectSecondSaveProducesSameSizeFile(File imageFileAfterOneSave)
+    private void assertSecondSaveProducesIdenticalFile(File imageFileAfterOneSave)
             throws IOException {
         File imageFileAfterTwoSaves = clone(imageFileAfterOneSave);
         ExifInterface exifInterface = new ExifInterface(imageFileAfterTwoSaves.getAbsolutePath());
@@ -2420,11 +2705,17 @@ public class ExifInterfaceTest {
             File imageFileAfterThreeSaves = clone(imageFileAfterTwoSaves);
             exifInterface = new ExifInterface(imageFileAfterThreeSaves.getAbsolutePath());
             exifInterface.saveAttributes();
-            expect.that(imageFileAfterThreeSaves.length())
-                    .isEqualTo(imageFileAfterTwoSaves.length());
+            assertFileContentsEqual(imageFileAfterTwoSaves, imageFileAfterThreeSaves);
         } else {
-            expect.that(imageFileAfterTwoSaves.length()).isEqualTo(imageFileAfterOneSave.length());
+            assertFileContentsEqual(imageFileAfterOneSave, imageFileAfterTwoSaves);
         }
+    }
+
+    private void assertFileContentsEqual(File expectedImageFile, File actualImageFile)
+            throws IOException {
+        byte[] expectedBytes = Files.toByteArray(expectedImageFile);
+        byte[] actualBytes = Files.toByteArray(actualImageFile);
+        assertThat(actualBytes).isEqualTo(expectedBytes);
     }
 
     private File clone(File original) throws IOException {

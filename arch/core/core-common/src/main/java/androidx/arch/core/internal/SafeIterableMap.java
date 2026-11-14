@@ -31,7 +31,9 @@ import java.util.WeakHashMap;
  *
  * @param <K> Key type
  * @param <V> Value type
+ * @deprecated These are internal legacy utilities and should not be used.
  */
+@Deprecated
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
 public class SafeIterableMap<K, V> implements Iterable<Map.Entry<K, V>> {
 
@@ -43,7 +45,6 @@ public class SafeIterableMap<K, V> implements Iterable<Map.Entry<K, V>> {
     private final WeakHashMap<SupportRemove<K, V>, Boolean> mIterators = new WeakHashMap<>();
     private int mSize = 0;
 
-    @SuppressWarnings("HiddenTypeParameter")
     protected @Nullable Entry<K, V> get(K k) {
         Entry<K, V> currentNode = mStart;
         while (currentNode != null) {
@@ -278,7 +279,7 @@ public class SafeIterableMap<K, V> implements Iterable<Map.Entry<K, V>> {
         abstract Entry<K, V> backward(Entry<K, V> entry);
     }
 
-    static class AscendingIterator<K, V> extends ListIterator<K, V> {
+    private static class AscendingIterator<K, V> extends ListIterator<K, V> {
         AscendingIterator(Entry<K, V> start, Entry<K, V> expectedEnd) {
             super(start, expectedEnd);
         }

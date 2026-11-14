@@ -19,9 +19,12 @@ package androidx.wear.compose.foundation.lazy
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.lazy.layout.LazyLayoutPinnedItemList
 import androidx.compose.foundation.lazy.layout.LazyLayoutPrefetchState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
+import androidx.compose.runtime.annotation.RememberInComposition
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -86,10 +89,10 @@ public fun rememberTransformingLazyColumnState(
  *   correlates with [TransformingLazyColumnState.anchorItemScrollOffset].
  */
 @Stable
-public class TransformingLazyColumnState(
-    initialAnchorItemIndex: Int = -1,
-    initialAnchorItemScrollOffset: Int = 0,
-) : ScrollableState {
+public class TransformingLazyColumnState
+@RememberInComposition
+constructor(initialAnchorItemIndex: Int = -1, initialAnchorItemScrollOffset: Int = 0) :
+    ScrollableState {
 
     private val actualInitialAnchorItemIndex = max(0, initialAnchorItemIndex)
 
@@ -136,12 +139,12 @@ public class TransformingLazyColumnState(
      * can use it to calculate what items are currently visible. Note that this property is
      * observable and is updated after every scroll or remeasure. If you use it in the composable
      * function it will be recomposed on every change causing potential performance issues including
-     * infinity recomposition loop. Therefore, avoid using it in the composition. If you want to run
+     * infinite recomposition loop. Therefore, avoid using it in the composition. If you want to run
      * some side effects like sending an analytics event or updating a state based on this value
      * consider using "snapshotFlow":
      */
     public val layoutInfo: TransformingLazyColumnLayoutInfo
-        get() = layoutInfoState.value
+        @FrequentlyChangingValue get() = layoutInfoState.value
 
     internal val density: Density
         get() = layoutInfoState.value.density
@@ -168,6 +171,7 @@ public class TransformingLazyColumnState(
      *
      * @sample androidx.wear.compose.foundation.samples.TransformingLazyColumnScrollToItemSample
      */
+    @get:FrequentlyChangingValue
     public var anchorItemIndex: Int by mutableIntStateOf(actualInitialAnchorItemIndex)
         private set
 
@@ -180,6 +184,7 @@ public class TransformingLazyColumnState(
      *
      * @see anchorItemIndex for samples with the recommended usage patterns.
      */
+    @get:FrequentlyChangingValue
     public var anchorItemScrollOffset: Int by mutableIntStateOf(actualInitialAnchorItemScrollOffset)
         private set
 
@@ -222,6 +227,7 @@ public class TransformingLazyColumnState(
     internal val prefetchStrategy: TransformingLazyColumnPrefetchStrategy =
         TransformingLazyColumnPrefetchStrategy()
     internal val prefetchState = LazyLayoutPrefetchState()
+    internal val pinnedItems = LazyLayoutPinnedItemList()
 
     private val prefetchScope: TransformingLazyColumnPrefetchScope =
         object : TransformingLazyColumnPrefetchScope {
@@ -229,8 +235,9 @@ public class TransformingLazyColumnState(
                 // Without read observation since this can be triggered from scroll - this will then
                 // cause us to recompose when the measure result changes. We don't care since the
                 // prefetch is best effort.
-                val constraints =
-                    Snapshot.withoutReadObservation { layoutInfoState.value.childConstraints }
+                val constraints = Snapshot.withoutReadObservation {
+                    layoutInfoState.value.childConstraints
+                }
                 return prefetchState.schedulePrecompositionAndPremeasure(index, constraints)
             }
         }
@@ -253,8 +260,7 @@ public class TransformingLazyColumnState(
     internal val animator = LazyLayoutItemAnimator<TransformingLazyColumnMeasuredItem>()
 
     internal fun applyMeasureResult(measureResult: TransformingLazyColumnMeasureResult) {
-        // TODO(b/416503918): The scroll shouldn't be fully consumed during the first touch.
-        scrollToBeConsumed = 0f
+        scrollToBeConsumed -= measureResult.consumedScroll
         anchorItemKey = measureResult.anchorItemKey
         anchorItemIndex = measureResult.anchorItemIndex
         anchorItemScrollOffset = measureResult.anchorItemScrollOffset
@@ -445,6 +451,7 @@ private val EmptyTransformingLazyColumnMeasureResult =
         anchorItemIndex = 0,
         anchorItemScrollOffset = 0,
         visibleItems = emptyList(),
+        positionedItems = emptyList(),
         totalItemsCount = 0,
         lastMeasuredItemHeight = Int.MIN_VALUE,
         canScrollForward = false,
@@ -456,6 +463,7 @@ private val EmptyTransformingLazyColumnMeasureResult =
         afterContentPadding = 0,
         childConstraints = Constraints(),
         reverseLayout = false,
+        consumedScroll = 0f,
         measureResult =
             object : MeasureResult {
                 override val width: Int = 0

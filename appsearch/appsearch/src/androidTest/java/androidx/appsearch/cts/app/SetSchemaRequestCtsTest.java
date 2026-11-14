@@ -100,6 +100,22 @@ public class SetSchemaRequestCtsTest {
     }
 
     @Test
+    public void testSetSchema_privateComputeCoreUidAccess() {
+        SetSchemaRequest request = new SetSchemaRequest.Builder()
+                .addSchemas(AppSearchEmail.SCHEMA)
+                .addRequiredPermissionsForSchemaTypeVisibility(
+                        AppSearchEmail.SCHEMA_TYPE,
+                        ImmutableSet.of(SetSchemaRequest.PRIVATE_COMPUTE_CORE_UID_ACCESS))
+                .build();
+
+        assertThat(request.getRequiredPermissionsForSchemaTypeVisibility())
+                .containsEntry(
+                        AppSearchEmail.SCHEMA_TYPE,
+                        ImmutableSet.of(
+                                ImmutableSet.of(SetSchemaRequest.PRIVATE_COMPUTE_CORE_UID_ACCESS)));
+    }
+
+    @Test
     public void testSetSchemaRequestTypeChanges() {
         AppSearchSchema.StringPropertyConfig requiredProp =
                 new AppSearchSchema.StringPropertyConfig.Builder("prop1")
@@ -1494,6 +1510,48 @@ public class SetSchemaRequestCtsTest {
                 .containsExactly("type1", ImmutableSet.of("account1"));
         assertThat(copy.getSchemasWipeoutAccountPropertyPaths())
                 .containsExactly("type1", ImmutableSet.of("account1", "account2"));
+    }
+
+    @Test
+    @RequiresFlagsEnabled(Flags.FLAG_ENABLE_PACKAGE_IDENTIFIER_MULTI_CERT)
+    public void testSetPubliclyVisibleSchema_multiCert() {
+        byte[] cert1 = new byte[32];
+        byte[] cert2 = new byte[32];
+        Arrays.fill(cert1, (byte) 1);
+        Arrays.fill(cert2, (byte) 2);
+
+        PackageIdentifier multiCertPkg =
+                new PackageIdentifier("com.package.foo", List.of(cert1, cert2));
+
+        SetSchemaRequest request =
+                new SetSchemaRequest.Builder()
+                        .addSchemas(new AppSearchSchema.Builder("type1").build())
+                        .setPubliclyVisibleSchema("type1", multiCertPkg)
+                        .build();
+
+        assertThat(request.getPubliclyVisibleSchemas()).containsExactly("type1", multiCertPkg);
+    }
+
+    @Test
+    @RequiresFlagsEnabled(Flags.FLAG_ENABLE_PACKAGE_IDENTIFIER_MULTI_CERT)
+    public void testSetSchemaTypeVisibilityForPackage_multiCert() {
+        byte[] cert1 = new byte[32];
+        byte[] cert2 = new byte[32];
+        Arrays.fill(cert1, (byte) 1);
+        Arrays.fill(cert2, (byte) 2);
+
+        PackageIdentifier multiCertPkg =
+                new PackageIdentifier("com.package.foo", List.of(cert1, cert2));
+
+        SetSchemaRequest request =
+                new SetSchemaRequest.Builder()
+                        .addSchemas(new AppSearchSchema.Builder("type1").build())
+                        .setSchemaTypeVisibilityForPackage(
+                                "type1", /* visible= */ true, multiCertPkg)
+                        .build();
+
+        assertThat(request.getSchemasVisibleToPackages())
+                .containsExactly("type1", Set.of(multiCertPkg));
     }
 
     // @exportToFramework:startStrip()

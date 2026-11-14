@@ -27,7 +27,9 @@ import androidx.annotation.VisibleForTesting;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraInfo;
+import androidx.camera.core.CompositionSettings;
 import androidx.camera.core.LegacySessionConfig;
+import androidx.camera.core.RotationProvider;
 import androidx.camera.core.SessionConfig;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.featuregroup.GroupableFeature;
@@ -63,9 +65,11 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
 
     @GuardedBy("mLock")
     // The lifecycle that controls the LifecycleCamera
-    private final LifecycleOwner mLifecycleOwner;
+    private final @NonNull LifecycleOwner mLifecycleOwner;
 
-    private final CameraUseCaseAdapter mCameraUseCaseAdapter;
+    private final @NonNull CameraUseCaseAdapter mCameraUseCaseAdapter;
+
+    private final @NonNull RotationProvider mRotationProvider;
 
     @GuardedBy("mLock")
     private volatile boolean mIsActive = false;
@@ -82,9 +86,12 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
     /**
      * Wraps an existing {@link CameraUseCaseAdapter} so it is controlled by lifecycle transitions.
      */
-    LifecycleCamera(LifecycleOwner lifecycleOwner, CameraUseCaseAdapter cameraUseCaseAdaptor) {
+    LifecycleCamera(@NonNull LifecycleOwner lifecycleOwner,
+            @NonNull CameraUseCaseAdapter cameraUseCaseAdaptor,
+            @NonNull RotationProvider rotationProvider) {
         mLifecycleOwner = lifecycleOwner;
         mCameraUseCaseAdapter = cameraUseCaseAdaptor;
+        mRotationProvider = rotationProvider;
 
         // Make sure that the attach state of mCameraUseCaseAdapter matches that of the lifecycle
         if (mLifecycleOwner.getLifecycle().getCurrentState().isAtLeast(State.STARTED)) {
@@ -117,9 +124,7 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
 
     @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     public void onDestroy(@NonNull LifecycleOwner lifecycleOwner) {
-        synchronized (mLock) {
-            mCameraUseCaseAdapter.removeUseCases(mCameraUseCaseAdapter.getUseCases());
-        }
+        unbindAll();
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
@@ -238,48 +243,61 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
      * @throws IllegalStateException if the {@link SessionConfig} can't be bound because either the
      * given {@link SessionConfig} or the previously bound {@link SessionConfig} disallows multiple
      * binding.
+     * @throws IllegalArgumentException if the {@link SessionConfig} specifies a subset of
+     * {@link SessionConfig#getInitialEnabledUseCases()} that is not supported for dynamic
+     * {@link UseCase} switching.
      */
     void bind(@NonNull SessionConfig sessionConfig)
             throws CameraUseCaseAdapter.CameraException {
         synchronized (mLock) {
+            if (mBoundSessionConfig != null) {
+                if (sessionConfig.isLegacy() && !mBoundSessionConfig.isLegacy()) {
+                    throw new IllegalStateException(
+                            "Cannot bind use cases when a SessionConfig is already bound to "
+                                    + "this LifecycleOwner. Please unbind first");
+                }
+                if (!sessionConfig.isLegacy() && mBoundSessionConfig.isLegacy()) {
+                    throw new IllegalStateException(
+                            "Cannot bind the SessionConfig when use cases are bound to this"
+                                    + " LifecycleOwner already. Please unbind first");
+                }
+            }
+            if (!sessionConfig.isLegacy() && sessionConfig.isInitialEnabledUseCasesSet()) {
+                mCameraUseCaseAdapter.checkDynamicUseCaseSwitchingSupported(sessionConfig);
+            }
+
+            ResolvedFeatureGroup resolvedFeatureGroup = resolveFeatureGroup(
+                    sessionConfig, (CameraInfoInternal) getCameraInfo());
+
+            SessionConfig previousBoundSessionConfig = mBoundSessionConfig;
             if (mBoundSessionConfig == null) {
                 mBoundSessionConfig = sessionConfig;
-            } else {
-                if (sessionConfig.isLegacy()) { // Bind use cases
-                    if (!mBoundSessionConfig.isLegacy()) {
-                        throw new IllegalStateException(
-                                "Cannot bind use cases when a SessionConfig is already bound to "
-                                        + "this LifecycleOwner. Please unbind first");
-                    }
-
-                    List<UseCase> boundUseCases =
-                            new ArrayList<>(mBoundSessionConfig.getUseCases());
-                    boundUseCases.addAll(sessionConfig.getUseCases());
-                    // Uses the latest SessionConfig parameters to update the mBoundSessionConfig.
-                    mBoundSessionConfig = new LegacySessionConfig(
-                            boundUseCases,
-                            sessionConfig.getViewPort(),
-                            sessionConfig.getEffects()
-                    );
-                }
-                else { // Bind sessionConfig.
-                    if (mBoundSessionConfig.isLegacy()) {
-                        throw new IllegalStateException(
-                                "Cannot bind the SessionConfig when use cases are bound to this"
-                                        + " LifecycleOwner already. Please unbind first");
-                    }
-                    mBoundSessionConfig = sessionConfig;
-                    // implicitly unbind the previous SessionConfig when SessionConfig is updated.
-                    mCameraUseCaseAdapter.removeUseCases(mCameraUseCaseAdapter.getUseCases());
-                }
+            } else if (sessionConfig.isLegacy()) { // Bind use cases
+                List<UseCase> boundUseCases =
+                        new ArrayList<>(mBoundSessionConfig.getUseCases());
+                boundUseCases.addAll(sessionConfig.getUseCases());
+                // Uses the latest SessionConfig parameters to update the mBoundSessionConfig.
+                mBoundSessionConfig = new LegacySessionConfig(
+                        boundUseCases,
+                        sessionConfig.getViewPort(),
+                        sessionConfig.getEffects()
+                );
+            } else { // Bind sessionConfig.
+                mBoundSessionConfig = sessionConfig;
+                // implicitly unbind the previous SessionConfig when SessionConfig is updated.
+                mCameraUseCaseAdapter.removeUseCases(mCameraUseCaseAdapter.getUseCases());
             }
             mCameraUseCaseAdapter.setViewPort(sessionConfig.getViewPort());
             mCameraUseCaseAdapter.setEffects(sessionConfig.getEffects());
             mCameraUseCaseAdapter.setSessionType(sessionConfig.getSessionType());
             mCameraUseCaseAdapter.setFrameRate(sessionConfig.getFrameRateRange());
+            mCameraUseCaseAdapter.setSessionInteropConfig(sessionConfig.getInteropConfig());
 
-            ResolvedFeatureGroup resolvedFeatureGroup = resolveFeatureGroup(
-                    sessionConfig, (CameraInfoInternal) getCameraInfo());
+            // Sets RotationProvider to ImageCapture, ImageAnalysis and VideoCapture when
+            // auto-rotation is enabled.
+            if (sessionConfig.isAutoRotationEnabled()) {
+                updateUseCasesRotationProvider(sessionConfig.getUseCases(), mRotationProvider);
+            }
 
             sessionConfig.getFeatureSelectionListenerExecutor().execute(
                     () -> {
@@ -292,8 +310,44 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
                         sessionConfig.getFeatureSelectionListener().accept(features);
                     });
 
-            mCameraUseCaseAdapter.addUseCases(sessionConfig.getUseCases(),
-                    resolvedFeatureGroup);
+            try {
+                // Must be set before the use cases are added so that the capture session is
+                // configured with the initialEnabledUseCases of the config from the start.
+                mCameraUseCaseAdapter.setBoundSessionConfig(
+                        sessionConfig.isLegacy() ? null : sessionConfig);
+                mCameraUseCaseAdapter.addUseCases(sessionConfig.getUseCases(),
+                        resolvedFeatureGroup);
+            } catch (CameraUseCaseAdapter.CameraException | RuntimeException e) {
+                if (sessionConfig.isAutoRotationEnabled()) {
+                    List<UseCase> failedUseCases = new ArrayList<>(sessionConfig.getUseCases());
+                    if (previousBoundSessionConfig != null) {
+                        failedUseCases.removeAll(previousBoundSessionConfig.getUseCases());
+                    }
+                    updateUseCasesRotationProvider(failedUseCases, null);
+                }
+                mBoundSessionConfig = sessionConfig.isLegacy() ? previousBoundSessionConfig : null;
+                mCameraUseCaseAdapter.setBoundSessionConfig(null);
+                mCameraUseCaseAdapter.setSessionInteropConfig(
+                        mBoundSessionConfig != null ? mBoundSessionConfig.getInteropConfig() : null);
+                if (mBoundSessionConfig != null) {
+                    mCameraUseCaseAdapter.setViewPort(mBoundSessionConfig.getViewPort());
+                    mCameraUseCaseAdapter.setEffects(mBoundSessionConfig.getEffects());
+                    mCameraUseCaseAdapter.setSessionType(mBoundSessionConfig.getSessionType());
+                    mCameraUseCaseAdapter.setFrameRate(mBoundSessionConfig.getFrameRateRange());
+                } else {
+                    mCameraUseCaseAdapter.setEffects(Collections.emptyList());
+                }
+                throw e;
+            }
+        }
+    }
+
+    private void updateUseCasesRotationProvider(@NonNull List<UseCase> useCases,
+            @Nullable RotationProvider rotationProvider) {
+        for (UseCase useCase : useCases) {
+            if (useCase.isAutoRotationSupported()) {
+                useCase.setRotationProvider(rotationProvider);
+            }
         }
     }
 
@@ -329,6 +383,7 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
                 if (mBoundSessionConfig == sessionConfig) {
                     // Unbind the bound SessionConfig successfully only when they are identical.
                     mBoundSessionConfig = null;
+                    mCameraUseCaseAdapter.setSessionInteropConfig(null);
                 } else {
                     // If the unbinding SessionConfig is different than the bound one. we do nothing
                     // Returning here is necessary to avoid removing the use cases.
@@ -348,7 +403,15 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
             }
             List<UseCase> useCasesToRemove = new ArrayList<>(sessionConfig.getUseCases());
             useCasesToRemove.retainAll(mCameraUseCaseAdapter.getUseCases());
+
             mCameraUseCaseAdapter.removeUseCases(useCasesToRemove);
+            // Clears RotationProvider to ImageCapture, ImageAnalysis and VideoCapture when
+            // UseCase is unbound.
+            updateUseCasesRotationProvider(useCasesToRemove, null);
+            if (mBoundSessionConfig == null) {
+                // Don't retain CameraEffect references once nothing is bound.
+                mCameraUseCaseAdapter.setEffects(Collections.emptyList());
+            }
         }
     }
 
@@ -359,8 +422,15 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
      */
     void unbindAll() {
         synchronized (mLock) {
-            mCameraUseCaseAdapter.removeUseCases(mCameraUseCaseAdapter.getUseCases());
+            List<UseCase> useCases = mCameraUseCaseAdapter.getUseCases();
+            mCameraUseCaseAdapter.removeUseCases(useCases);
+            // Clears RotationProvider to ImageCapture, ImageAnalysis and VideoCapture when
+            // UseCase is unbound.
+            updateUseCasesRotationProvider(useCases, null);
             mBoundSessionConfig = null;
+            mCameraUseCaseAdapter.setSessionInteropConfig(null);
+            // Don't retain CameraEffect references once nothing is bound.
+            mCameraUseCaseAdapter.setEffects(Collections.emptyList());
         }
     }
 
@@ -381,9 +451,7 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
         }
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
     // Camera interface
-    ////////////////////////////////////////////////////////////////////////////////////////////////
     @Override
     public @NonNull CameraControl getCameraControl() {
         return mCameraUseCaseAdapter.getCameraControl();
@@ -407,5 +475,10 @@ public final class LifecycleCamera implements LifecycleObserver, Camera {
     public boolean isUseCasesCombinationSupported(boolean withStreamSharing,
             UseCase @NonNull ... useCases) {
         return mCameraUseCaseAdapter.isUseCasesCombinationSupported(withStreamSharing, useCases);
+    }
+
+    @Override
+    public void setCompositionSettings(@NonNull List<CompositionSettings> compositionSettings) {
+        mCameraUseCaseAdapter.setCompositionSettings(compositionSettings);
     }
 }

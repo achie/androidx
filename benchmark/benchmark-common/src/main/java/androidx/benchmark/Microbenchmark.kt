@@ -16,19 +16,16 @@
 
 package androidx.benchmark
 
-import android.os.Build
 import android.util.Log
 import androidx.annotation.RestrictTo
+import androidx.annotation.VisibleForTesting
 import androidx.benchmark.BenchmarkState.Companion.enableMethodTracingAffectsMeasurementError
 import androidx.benchmark.perfetto.PerfettoCapture
 import androidx.benchmark.perfetto.PerfettoCaptureWrapper
 import androidx.benchmark.perfetto.PerfettoConfig
-import androidx.benchmark.perfetto.UiState
-import androidx.benchmark.perfetto.appendUiState
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.tracing.Trace
 import androidx.tracing.trace
-import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,7 +38,7 @@ import kotlinx.coroutines.yield
  * This is functionally an equivalent to `BenchmarkRule.Scope` which will work without the JUnit
  * dependency.
  */
-open class MicrobenchmarkScope
+public open class MicrobenchmarkScope
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 constructor(internal val state: MicrobenchmarkRunningState) {
     /**
@@ -54,7 +51,7 @@ constructor(internal val state: MicrobenchmarkRunningState) {
      *
      * @sample androidx.benchmark.samples.runWithMeasurementDisabledSample
      */
-    inline fun <T> runWithMeasurementDisabled(block: () -> T): T {
+    public inline fun <T> runWithMeasurementDisabled(block: () -> T): T {
         pauseMeasurement()
         // Note: we only bother with tracing for the runWithMeasurementDisabled function for
         // Kotlin callers, since we want to avoid corrupting the trace with incorrectly paired
@@ -80,7 +77,7 @@ constructor(internal val state: MicrobenchmarkRunningState) {
      *
      * Kotlin callers should generally instead use [runWithMeasurementDisabled].
      */
-    fun pauseMeasurement() {
+    public fun pauseMeasurement() {
         state.pauseMeasurement()
     }
 
@@ -89,7 +86,7 @@ constructor(internal val state: MicrobenchmarkRunningState) {
      *
      * Kotlin callers should generally instead use [runWithMeasurementDisabled].
      */
-    fun resumeMeasurement() {
+    public fun resumeMeasurement() {
         state.resumeMeasurement()
     }
 }
@@ -101,13 +98,15 @@ constructor(internal val state: MicrobenchmarkRunningState) {
  * allocation
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-class MicrobenchmarkRunningState
-internal constructor(metrics: MetricsContainer, val yieldThreadPeriodically: Boolean) {
+public class MicrobenchmarkRunningState
+internal constructor(
+    internal var metrics: MetricsContainer,
+    public val yieldThreadPeriodically: Boolean,
+) {
     internal var warmupEstimatedIterationTimeNs: Long = 0
     internal var warmupIterations: Int = 0
     internal var totalThermalThrottleSleepSeconds: Long = 0
     internal var maxIterationsPerRepeat = 0
-    internal var metrics: MetricsContainer = metrics
     internal var metricResults = mutableListOf<MetricResult>()
     internal var profilerResults = mutableListOf<Profiler.ResultFile>()
     internal var paused = false
@@ -116,30 +115,36 @@ internal constructor(metrics: MetricsContainer, val yieldThreadPeriodically: Boo
     internal var softDeadlineNs: Long = 0
     internal var hardDeadlineNs: Long = 0
 
-    fun pauseMeasurement() {
+    public fun pauseMeasurement() {
         check(!paused) { "Unable to pause the benchmark. The benchmark has already paused." }
         metrics.capturePaused()
         paused = true
     }
 
-    fun resumeMeasurement() {
+    public fun resumeMeasurement() {
         check(paused) { "Unable to resume the benchmark. The benchmark is already running." }
         metrics.captureResumed()
         paused = false
     }
 
-    fun beginTaskTrace() {
+    internal fun resetTaskDeadlines() {
+        initialTimeNs = System.nanoTime()
+        // we try to stop next measurement after soft deadline...
+        softDeadlineNs =
+            initialTimeNs + TimeUnit.MILLISECONDS.toNanos(Microbenchmark.softDeadlineDurationMs)
+        // ... and throw if took longer than hard deadline
+        hardDeadlineNs =
+            initialTimeNs + TimeUnit.MILLISECONDS.toNanos(Microbenchmark.hardDeadlineDurationMs)
+    }
+
+    public fun beginTaskTrace() {
         if (yieldThreadPeriodically) {
             Trace.beginSection("benchmark task")
-            initialTimeNs = System.nanoTime()
-            // we try to stop next measurement after soft deadline...
-            softDeadlineNs = initialTimeNs + TimeUnit.SECONDS.toNanos(2)
-            // ... and throw if took longer than hard deadline
-            hardDeadlineNs = initialTimeNs + TimeUnit.SECONDS.toNanos(10)
+            resetTaskDeadlines()
         }
     }
 
-    fun endTaskTrace() {
+    public fun endTaskTrace() {
         if (yieldThreadPeriodically) {
             Trace.endSection()
         }
@@ -193,6 +198,10 @@ private fun checkForErrors() {
             "ProfilerConfig.MethodTracing.affectsMeasurementOnThisDevice to detect affected " +
             "devices, see its documentation for more info."
     }
+    check(Microbenchmark.softDeadlineDurationMs < Microbenchmark.hardDeadlineDurationMs) {
+        "Soft deadline (${Microbenchmark.softDeadlineDurationMs}) must be less than hard deadline" +
+            " (${Microbenchmark.hardDeadlineDurationMs})"
+    }
 }
 
 internal typealias LoopedMeasurementBlock = suspend (MicrobenchmarkScope, Int) -> Unit
@@ -230,14 +239,14 @@ internal fun captureMicroPerfettoTrace(
                 ),
             // TODO(290918736): add support for Perfetto SDK Tracing in
             //  Microbenchmark in other cases, outside of MicrobenchmarkConfig
-            perfettoSdkConfig =
-                if (
-                    config?.perfettoSdkTracingEnabled == true &&
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                ) {
-                    PerfettoCapture.PerfettoSdkConfig(
-                        InstrumentationRegistry.getInstrumentation().context.packageName,
-                        PerfettoCapture.PerfettoSdkConfig.InitialProcessState.Alive,
+            tracingLibraryConfig =
+                if (config?.perfettoSdkTracingEnabled == true) {
+                    PerfettoCapture.TracingLibraryConfig(
+                        targetPackage =
+                            InstrumentationRegistry.getInstrumentation().context.packageName,
+                        processState =
+                            PerfettoCapture.TracingLibraryConfig.InitialProcessState.Alive,
+                        enablePerfettoSdk = true,
                     )
                 } else {
                     null
@@ -352,18 +361,6 @@ internal class Microbenchmark(
 
     private fun processProfilerResults(perfettoTracePath: String?): List<Profiler.ResultFile> {
         // prepare profiling result files
-        perfettoTracePath?.apply {
-            // trace completed, and copied into shell writeable dir
-            val file = File(this)
-            file.appendUiState(
-                UiState(
-                    timelineStart = null,
-                    timelineEnd = null,
-                    highlightPackage =
-                        InstrumentationRegistry.getInstrumentation().context.packageName,
-                )
-            )
-        }
         state.profilerResults.forEach {
             it.convertBeforeSync?.invoke()
             if (perfettoTracePath != null) {
@@ -381,6 +378,18 @@ internal class Microbenchmark(
 
     companion object {
         internal const val TAG = "Benchmark"
+
+        internal val softDeadlineDurationMs: Long
+            get() = softDeadlineDurationMsOverride ?: _softDeadlineDurationMs
+
+        private val _softDeadlineDurationMs: Long = TimeUnit.SECONDS.toMillis(2)
+        @VisibleForTesting internal var softDeadlineDurationMsOverride: Long? = null
+
+        internal val hardDeadlineDurationMs: Long
+            get() = hardDeadlineDurationMsOverride ?: _hardDeadlineDurationMs
+
+        private val _hardDeadlineDurationMs: Long = TimeUnit.SECONDS.toMillis(10)
+        @VisibleForTesting internal var hardDeadlineDurationMsOverride: Long? = null
     }
 }
 
@@ -433,7 +442,7 @@ internal suspend fun measureRepeatedImplNoTracing(
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-fun measureRepeatedImplWithTracing(
+public fun measureRepeatedImplWithTracing(
     definition: TestDefinition,
     config: MicrobenchmarkConfig?,
     postToMainThread: Boolean,
@@ -466,7 +475,7 @@ fun measureRepeatedImplWithTracing(
  * Eventually this method (or one like it) should be public, and also expose a results object
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-inline fun measureRepeated(
+public inline fun measureRepeated(
     definition: TestDefinition,
     config: MicrobenchmarkConfig? = null,
     crossinline measureBlock: MicrobenchmarkScope.() -> Unit,

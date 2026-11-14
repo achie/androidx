@@ -20,10 +20,9 @@ import android.view.PixelCopy
 import androidx.compose.testutils.expectError
 import androidx.compose.ui.test.android.PixelCopyException
 import androidx.compose.ui.test.android.runWithRetryWhenNoData
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,7 +30,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BitmapCapturingRetryLogicTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun pixelCopyRequest_succeeded_noRetries() {

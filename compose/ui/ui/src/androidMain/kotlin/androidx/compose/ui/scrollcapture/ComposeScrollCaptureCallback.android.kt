@@ -18,8 +18,10 @@ package androidx.compose.ui.scrollcapture
 
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Color
+import android.graphics.HardwareRenderer
 import android.graphics.Paint
 import android.graphics.Rect as AndroidRect
+import android.graphics.RenderNode
 import android.os.CancellationSignal
 import android.util.Log
 import android.view.ScrollCaptureCallback
@@ -27,7 +29,7 @@ import android.view.ScrollCaptureSession
 import android.view.View
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.ComposeUiFlags.isScrollCaptureCenteringEnabled
+import androidx.compose.ui.AndroidComposeUiFlags.isAlwaysScrollDuringScrollCaptureEnabled
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Offset
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.toAndroidRect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toComposeIntRect
 import androidx.compose.ui.internal.checkPreconditionNotNull
+import androidx.compose.ui.platform.ExperimentalComposeUiHostApi
 import androidx.compose.ui.semantics.SemanticsActions.ScrollByOffset
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange
@@ -59,6 +62,7 @@ private const val TAG = "ScrollCapture"
  * known or not (e.g. `LazyColumn`). Pixels are captured by drawing the node directly after each
  * scroll operation.
  */
+@OptIn(ExperimentalComposeUiHostApi::class)
 @RequiresApi(31)
 internal class ComposeScrollCaptureCallback(
     private val node: SemanticsNode,
@@ -95,6 +99,18 @@ internal class ComposeScrollCaptureCallback(
     /** Only used when [DEBUG] is true. */
     private var requestCount = 0
 
+    private val renderNode =
+        RenderNode("ScrollCapture").apply {
+            clipToBounds = false
+            isForceDarkAllowed = false
+        }
+
+    private val hardwareRenderer =
+        HardwareRenderer().apply {
+            setLightSourceAlpha(0f, 0f)
+            setLightSourceGeometry(0f, 0f, 0f, 0f)
+        }
+
     override fun onScrollCaptureSearch(signal: CancellationSignal, onReady: Consumer<AndroidRect>) {
         val bounds = viewportBoundsInWindow
         onReady.accept(bounds.toAndroidRect())
@@ -107,6 +123,8 @@ internal class ComposeScrollCaptureCallback(
     ) {
         scrollTracker.reset()
         requestCount = 0
+        hardwareRenderer.setContentRoot(renderNode)
+        hardwareRenderer.setSurface(session.surface)
         listener.onSessionStarted()
         onReady.run()
     }
@@ -118,25 +136,17 @@ internal class ComposeScrollCaptureCallback(
         onComplete: Consumer<AndroidRect>,
     ) {
         coroutineScope.launchWithCancellationSignal(signal) {
-            val result = onScrollCaptureImageRequest(session, captureArea.toComposeIntRect())
+            val result = onScrollCaptureImageRequest(captureArea.toComposeIntRect())
             onComplete.accept(result.toAndroidRect())
         }
     }
 
-    @OptIn(ExperimentalComposeUiApi::class)
-    private suspend fun onScrollCaptureImageRequest(
-        session: ScrollCaptureSession,
-        captureArea: IntRect,
-    ): IntRect {
+    private suspend fun onScrollCaptureImageRequest(captureArea: IntRect): IntRect {
         // Scroll the requested capture area into the viewport so we can draw it.
         val targetMin = captureArea.top
         val targetMax = captureArea.bottom
         if (DEBUG) Log.d(TAG, "capture request for $targetMin..$targetMax")
-        if (isScrollCaptureCenteringEnabled) {
-            scrollTracker.scrollRangeToCenter(targetMin, targetMax)
-        } else {
-            scrollTracker.scrollRangeIntoView(targetMin, targetMax)
-        }
+        scrollTracker.scrollRangeToCenter(targetMin, targetMax)
 
         // Wait a frame to allow layout to respond to the scroll.
         withFrameNanos {}
@@ -155,7 +165,7 @@ internal class ComposeScrollCaptureCallback(
             return IntRect.Zero
         }
 
-        val canvas = session.surface.lockHardwareCanvas()
+        val canvas = renderNode.beginRecording(captureArea.width, captureArea.height)
         try {
             if (DEBUG) {
                 canvas.drawDebugBackground()
@@ -179,7 +189,12 @@ internal class ComposeScrollCaptureCallback(
                 canvas.drawDebugOverlay()
             }
         } finally {
-            session.surface.unlockCanvasAndPost(canvas)
+            renderNode.endRecording()
+            hardwareRenderer
+                .createRenderRequest()
+                .setVsyncTime(System.nanoTime())
+                .setWaitForPresent(true)
+                .syncAndDraw()
         }
 
         // Translate back to "original" coordinates to report.
@@ -191,6 +206,7 @@ internal class ComposeScrollCaptureCallback(
     override fun onScrollCaptureEnd(onReady: Runnable) {
         coroutineScope.launch(NonCancellable) {
             scrollTracker.scrollTo(0f)
+            hardwareRenderer.destroy()
             listener.onSessionEnded()
             onReady.run()
         }
@@ -260,30 +276,8 @@ private class RelativeScroller(
         scrollAmount = 0f
     }
 
-    /**
-     * Scrolls so that the range ([min], [max]) is in the viewport. The range must fit inside the
-     * viewport.
-     */
-    suspend fun scrollRangeIntoView(min: Int, max: Int) {
-        if (DEBUG) Log.d(TAG, "scrollRangeIntoView(min=$min, max=$max)")
-        require(min <= max) { "Expected min=$min ≤ max=$max" }
-        require(max - min <= viewportSize) {
-            "Expected range (${max - min}) to be ≤ viewportSize=$viewportSize"
-        }
-
-        if (min >= scrollAmount && max <= scrollAmount + viewportSize) {
-            // Already visible, no need to scroll.
-            if (DEBUG) Log.d(TAG, "requested range already in view, not scrolling")
-            return
-        }
-
-        // Scroll to the nearest edge.
-        val target = if (min < scrollAmount) min else max - viewportSize
-        if (DEBUG) Log.d(TAG, "scrolling to $target")
-        scrollTo(target.toFloat())
-    }
-
-    /** Scroll the specified range into the center unless it's already fully visible. */
+    /** Scroll the specified range into the center. */
+    @OptIn(ExperimentalComposeUiApi::class)
     suspend fun scrollRangeToCenter(min: Int, max: Int) {
         if (DEBUG) Log.d(TAG, "scrollRangeToCenter(min=$min, max=$max)")
         require(min <= max) { "Expected min=$min ≤ max=$max" }
@@ -291,10 +285,12 @@ private class RelativeScroller(
             "Expected range (${max - min}) to be ≤ viewportSize=$viewportSize"
         }
 
-        if (min >= scrollAmount && max <= scrollAmount + viewportSize) {
-            // Already visible, no need to scroll.
-            if (DEBUG) Log.d(TAG, "requested range already in view, not scrolling")
-            return
+        if (!isAlwaysScrollDuringScrollCaptureEnabled) {
+            if (min >= scrollAmount && max <= scrollAmount + viewportSize) {
+                // Already visible, no need to scroll.
+                if (DEBUG) Log.d(TAG, "requested range already in view, not scrolling")
+                return
+            }
         }
 
         // Target is requested center minus half the viewport size

@@ -13,12 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:OptIn(ExperimentalComposeUiHostApi::class)
+
 package androidx.compose.ui.node
 
+import androidx.collection.MutableObjectList
+import androidx.collection.ObjectList
+import androidx.collection.mutableObjectListOf
 import androidx.compose.runtime.ComposeNodeLifecycleCallback
 import androidx.compose.runtime.CompositionLocalMap
-import androidx.compose.runtime.collection.MutableVector
-import androidx.compose.runtime.collection.mutableVectorOf
 import androidx.compose.runtime.tooling.CompositionErrorContext
 import androidx.compose.runtime.tooling.LocalCompositionErrorContext
 import androidx.compose.ui.InternalComposeUiApi
@@ -44,12 +47,10 @@ import androidx.compose.ui.layout.ModifierInfo
 import androidx.compose.ui.layout.OnGloballyPositionedModifier
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.Remeasurement
+import androidx.compose.ui.node.LayoutNode.Companion.NotPlacedPlaceOrder
 import androidx.compose.ui.node.LayoutNode.LayoutState.Idle
-import androidx.compose.ui.node.LayoutNode.LayoutState.LayingOut
-import androidx.compose.ui.node.LayoutNode.LayoutState.LookaheadLayingOut
-import androidx.compose.ui.node.LayoutNode.LayoutState.LookaheadMeasuring
-import androidx.compose.ui.node.LayoutNode.LayoutState.Measuring
 import androidx.compose.ui.node.Nodes.PointerInput
+import androidx.compose.ui.platform.ExperimentalComposeUiHostApi
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -58,6 +59,7 @@ import androidx.compose.ui.platform.simpleIdentityToString
 import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsInfo
 import androidx.compose.ui.semantics.generateSemanticsId
+import androidx.compose.ui.spatial.NotFound
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
@@ -74,21 +76,18 @@ private val DefaultDensity = Density(1f)
 /** An element in the layout hierarchy, built with compose UI. */
 @OptIn(InternalComposeUiApi::class)
 internal class LayoutNode(
-    // Virtual LayoutNode is the temporary concept allows us to a node which is not a real node,
-    // but just a holder for its children - allows us to combine some children into something we
-    // can subcompose in(LayoutNode) without being required to define it as a real layout - we
-    // don't want to define the layout strategy for such nodes, instead the children of the
-    // virtual nodes will be treated as the direct children of the virtual node parent.
-    // This whole concept will be replaced with a proper subcomposition logic which allows to
-    // subcompose multiple times into the same LayoutNode and define offsets.
-    private val isVirtual: Boolean = false,
+    // Virtual LayoutNode is a node which is not a real layout node, but just a holder for its
+    // children. It allows combining children into a structure that can subcompose without
+    // being required to define it as a real layout. The children of the virtual node are treated
+    // as the direct children of the virtual node's parent.
+    override val isVirtual: Boolean = false,
     // The unique semantics ID that is used by all semantics modifiers attached to this LayoutNode.
     // TODO(b/281907968): Implement this with a getter that returns the compositeKeyHash.
     override var semanticsId: Int = generateSemanticsId(),
 ) :
     ComposeNodeLifecycleCallback,
     Remeasurement,
-    OwnerScope,
+    ObservationTarget,
     LayoutInfo,
     SemanticsInfo,
     ComposeUiNode,
@@ -106,7 +105,10 @@ internal class LayoutNode(
     // rect in parent is the sum of transformations for parent's coordinators not including the
     // outer one, and the transformations on this node's outer coordinator.
     internal var rectInParentDirty: Boolean = true
-    internal var addedToRectList: Boolean = false
+    // Cached last known rect list index. It might be incorrect if RectManager structure got updated
+    // since last access. Expected to be reset to the default value when the node is removed from
+    // the list.
+    internal var rectListIndex: Int = NotFound
     // Params managed by RectManager end.
 
     override var compositeKeyHash: Int = 0
@@ -142,7 +144,7 @@ internal class LayoutNode(
 
     // the list of nodes containing the virtual children as is
     private val _foldedChildren =
-        MutableVectorWithMutationTracking(mutableVectorOf<LayoutNode>()) {
+        MutableObjectListWithMutationTracking(mutableObjectListOf<LayoutNode>()) {
             layoutDelegate.markChildrenDirty()
         }
     internal val foldedChildren: List<LayoutNode>
@@ -150,13 +152,14 @@ internal class LayoutNode(
 
     // the list of nodes where the virtual children are unfolded (their children are represented
     // as our direct children)
-    private var _unfoldedChildren: MutableVector<LayoutNode>? = null
+    private var _unfoldedChildren: MutableObjectList<LayoutNode>? = null
 
     private fun recreateUnfoldedChildrenIfDirty() {
         if (unfoldedVirtualChildrenListDirty) {
             unfoldedVirtualChildrenListDirty = false
             val unfoldedChildren =
-                _unfoldedChildren ?: mutableVectorOf<LayoutNode>().also { _unfoldedChildren = it }
+                _unfoldedChildren
+                    ?: mutableObjectListOf<LayoutNode>().also { _unfoldedChildren = it }
             unfoldedChildren.clear()
             _foldedChildren.forEach {
                 if (it.isVirtual) {
@@ -193,11 +196,11 @@ internal class LayoutNode(
      * This should **not** be mutated or even accessed directly from outside of [LayoutNode]. Use
      * [forEachChild]/[forEachChildIndexed] when there's a need to iterate through the vector.
      */
-    internal val _children: MutableVector<LayoutNode>
+    internal val _children: MutableObjectList<LayoutNode>
         get() {
             updateChildrenIfDirty()
             return if (virtualChildrenCount == 0) {
-                _foldedChildren.vector
+                _foldedChildren.objectList
             } else {
                 _unfoldedChildren!!
             }
@@ -217,6 +220,7 @@ internal class LayoutNode(
 
     /** The children of this LayoutNode, controlled by [insertAt], [move], and [removeAt]. */
     internal val children: List<LayoutNode>
+        @Suppress("AsCollectionCall") // Exposed as a List to callers.
         get() = _children.asMutableList()
 
     /**
@@ -610,7 +614,7 @@ internal class LayoutNode(
         }
     }
 
-    private val _zSortedChildren = mutableVectorOf<LayoutNode>()
+    private val _zSortedChildren = mutableObjectListOf<LayoutNode>()
     private var zSortedChildrenInvalidated = true
 
     /**
@@ -620,8 +624,7 @@ internal class LayoutNode(
      *
      * Note that the object is reused so you shouldn't save it for later.
      */
-    @PublishedApi
-    internal val zSortedChildren: MutableVector<LayoutNode>
+    internal val zSortedChildrenList: ObjectList<LayoutNode>
         get() {
             if (zSortedChildrenInvalidated) {
                 _zSortedChildren.clear()
@@ -632,12 +635,28 @@ internal class LayoutNode(
             return _zSortedChildren
         }
 
-    override val isValidOwnerScope: Boolean
+    /**
+     * A copy of [zSortedChildrenList] as a [androidx.compose.runtime.collection.MutableVector].
+     * Kept only for binary compatibility with prebuilt code that calls this [PublishedApi] getter;
+     * use [zSortedChildrenList] instead.
+     */
+    @Deprecated("Use zSortedChildrenList instead.", ReplaceWith("zSortedChildrenList"))
+    @PublishedApi
+    @Suppress("DEPRECATION") // MutableVector is deprecated; kept for binary compatibility.
+    internal val zSortedChildren: androidx.compose.runtime.collection.MutableVector<LayoutNode>
+        get() {
+            val list = zSortedChildrenList
+            val vector = androidx.compose.runtime.collection.MutableVector<LayoutNode>(list.size)
+            list.forEach { vector.add(it) }
+            return vector
+        }
+
+    override val isObservationValid: Boolean
         get() = isAttached
 
     override fun toString(): String {
         return "${simpleIdentityToString(this, null)} children: ${children.size} " +
-            "measurePolicy: $measurePolicy deactivated: $isDeactivated"
+            "measurePolicy: $measurePolicy deactivated: $isDeactivated isVirtual: $isVirtual isPlaced: $isPlaced"
     }
 
     internal val hasFixedInnerContentConstraints: Boolean
@@ -795,7 +814,7 @@ internal class LayoutNode(
         // measure/layout modifiers on the node
         invalidateMeasurements()
         // draw modifiers on the node
-        parent?.invalidateLayer()
+        parent?.invalidateLayer() ?: owner?.invalidateRootLayer()
         // and draw modifiers after graphics layers on the node
         invalidateLayers()
     }
@@ -811,11 +830,10 @@ internal class LayoutNode(
         get() = layoutDelegate.height
 
     internal val alignmentLinesRequired: Boolean
-        get() =
-            layoutDelegate.run {
-                alignmentLinesOwner.alignmentLines.required ||
-                    lookaheadAlignmentLinesOwner?.alignmentLines?.required == true
-            }
+        get() = layoutDelegate.run {
+            alignmentLinesOwner.alignmentLines.required ||
+                lookaheadAlignmentLinesOwner?.alignmentLines?.required == true
+        }
 
     internal val mDrawScope: LayoutNodeDrawScope
         get() = requireOwner().sharedDrawScope
@@ -840,7 +858,8 @@ internal class LayoutNode(
      * nextChildPlaceOrder and increments this counter. Not placed items will still have
      * [NotPlacedPlaceOrder] set.
      */
-    internal val placeOrder: Int
+    @OptIn(ExperimentalComposeUiHostApi::class)
+    override val placeOrder: Int
         get() = measurePassDelegate.placeOrder
 
     /** Remembers how the node was measured by the parent. */
@@ -853,12 +872,6 @@ internal class LayoutNode(
 
     /** Remembers how the node was measured using intrinsics by an ancestor. */
     internal var intrinsicsUsageByParent: UsageByParent = UsageByParent.NotUsed
-
-    /**
-     * We must cache a previous value of [intrinsicsUsageByParent] because measurement is sometimes
-     * skipped. When it is skipped, the subtree must be restored to this value.
-     */
-    private var previousIntrinsicsUsageByParent: UsageByParent = UsageByParent.NotUsed
 
     @Deprecated("Temporary API to support ConstraintLayout prototyping.")
     internal var canMultiMeasure: Boolean = false
@@ -877,7 +890,8 @@ internal class LayoutNode(
      * is 0. We use sum of the values passed as zIndex to place() by the parent layout and all the
      * applied modifiers.
      */
-    private val zIndex: Float
+    @OptIn(ExperimentalComposeUiHostApi::class)
+    override val zIndex: Float
         get() = measurePassDelegate.zIndex
 
     /** The inner state associated with [androidx.compose.ui.layout.SubcomposeLayout]. */
@@ -899,10 +913,14 @@ internal class LayoutNode(
                     }
                     coordinator = coordinator?.wrappedBy
                 }
+                innerLayerCoordinatorIsDirty = false
             }
             val layerCoordinator = _innerLayerCoordinator
             if (layerCoordinator != null) {
-                checkPreconditionNotNull(layerCoordinator.layer) { "layer was not set" }
+                checkPreconditionNotNull(layerCoordinator.layer) {
+                    "layer was not set. This error is usually caused by operating off of the UI " +
+                        "thread. Did you call invalidate() instead of postInvalidate()?"
+                }
             }
             return layerCoordinator
         }
@@ -918,7 +936,7 @@ internal class LayoutNode(
             innerLayerCoordinator.invalidateLayer()
         } else {
             val parent = this.parent
-            parent?.invalidateLayer()
+            parent?.invalidateLayer() ?: owner?.invalidateRootLayer()
         }
     }
 
@@ -1184,7 +1202,7 @@ internal class LayoutNode(
     internal fun onCoordinatorRectChanged(coordinator: NodeCoordinator) {
         val rectManager = owner?.rectManager
         val placementPending = layoutState != Idle || measurePending || layoutPending
-        if (addedToRectList && rectManager != null) {
+        if (rectListIndex != NotFound && rectManager != null) {
             if (coordinator === outerCoordinator) {
                 // transformations on the outer coordinator update the offset from parent
                 rectInParentDirty = true
@@ -1278,11 +1296,6 @@ internal class LayoutNode(
     /** Return true if the measured size has been changed */
     internal fun remeasure(constraints: Constraints? = layoutDelegate.lastConstraints): Boolean {
         return if (constraints != null) {
-            if (intrinsicsUsageByParent == UsageByParent.NotUsed) {
-                // This LayoutNode may have asked children for intrinsics. If so, we should
-                // clear the intrinsics usage for everything that was requested previously.
-                clearSubtreeIntrinsicsUsage()
-            }
             measurePassDelegate.remeasure(constraints)
         } else {
             false
@@ -1293,7 +1306,7 @@ internal class LayoutNode(
      * Tracks whether another measure pass is needed for the LayoutNode. Mutation to
      * [measurePending] is confined to LayoutNodeLayoutDelegate. It can only be set true from
      * outside of LayoutNode via [markMeasurePending]. It is cleared (i.e. set false) during the
-     * measure pass ( i.e. in [LayoutNodeLayoutDelegate.performMeasure]).
+     * measure pass ( i.e. in [LayoutNodeLayoutDelegate.performLookaheadMeasure]).
      */
     internal val measurePending: Boolean
         get() = layoutDelegate.measurePending
@@ -1324,7 +1337,7 @@ internal class LayoutNode(
 
     fun invalidateSubtree(isRootOfInvalidation: Boolean = true) {
         if (isRootOfInvalidation) {
-            parent?.invalidateLayer()
+            parent?.invalidateLayer() ?: owner?.invalidateRootLayer()
         }
         invalidateSemantics()
         requestRemeasure()
@@ -1340,7 +1353,7 @@ internal class LayoutNode(
 
     fun invalidateDrawForSubtree(isRootOfInvalidation: Boolean = true) {
         if (isRootOfInvalidation) {
-            parent?.invalidateLayer()
+            parent?.invalidateLayer() ?: owner?.invalidateRootLayer()
         }
         nodes.headToTail(Nodes.Layout) { it.requireCoordinator(Nodes.Layout).layer?.invalidate() }
         _children.forEach { it.invalidateDrawForSubtree(false) }
@@ -1397,10 +1410,11 @@ internal class LayoutNode(
      *
      * We can't do clearing as part of measure() because the child's measure() call is normally done
      * after the intrinsics is requested and we don't want to clear the usage at that point.
+     *
+     * This is only called when the node is actually remeasured. When measurement is skipped, the
+     * existing usage is still valid and must be left untouched.
      */
     internal fun clearSubtreeIntrinsicsUsage() {
-        // save the usage in case we short-circuit the measure call
-        previousIntrinsicsUsageByParent = intrinsicsUsageByParent
         intrinsicsUsageByParent = UsageByParent.NotUsed
         forEachChild {
             if (it.intrinsicsUsageByParent != UsageByParent.NotUsed) {
@@ -1420,25 +1434,10 @@ internal class LayoutNode(
      * after the intrinsics is requested and we don't want to clear the usage at that point.
      */
     private fun clearSubtreePlacementIntrinsicsUsage() {
-        // save the usage in case we short-circuit the measure call
-        previousIntrinsicsUsageByParent = intrinsicsUsageByParent
         intrinsicsUsageByParent = UsageByParent.NotUsed
         forEachChild {
             if (it.intrinsicsUsageByParent == UsageByParent.InLayoutBlock) {
                 it.clearSubtreePlacementIntrinsicsUsage()
-            }
-        }
-    }
-
-    /**
-     * For a subtree that skips measurement, this resets the [intrinsicsUsageByParent] to what it
-     * was prior to [clearSubtreeIntrinsicsUsage].
-     */
-    internal fun resetSubtreeIntrinsicsUsage() {
-        forEachChild {
-            it.intrinsicsUsageByParent = it.previousIntrinsicsUsageByParent
-            if (it.intrinsicsUsageByParent != UsageByParent.NotUsed) {
-                it.resetSubtreeIntrinsicsUsage()
             }
         }
     }
@@ -1512,7 +1511,9 @@ internal class LayoutNode(
             }
 
         /** Constant used by [placeOrder]. */
-        @Suppress("ConstPropertyName") internal const val NotPlacedPlaceOrder = Int.MAX_VALUE
+        @OptIn(ExperimentalComposeUiHostApi::class)
+        @Suppress("ConstPropertyName")
+        internal const val NotPlacedPlaceOrder = LayoutInfo.NotPlacedPlaceOrder
 
         /** Pre-allocated constructor to be used with ComposeNode */
         internal val Constructor: () -> LayoutNode = { LayoutNode() }

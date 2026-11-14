@@ -1,4 +1,5 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=public
 package androidx.wear.watchface.complications.datasource {
 
   public abstract class ComplicationDataSourceService extends android.app.Service {
@@ -78,6 +79,18 @@ package androidx.wear.watchface.complications.datasource {
     property public androidx.wear.watchface.complications.data.ComplicationType complicationType;
     property public boolean immediateResponseRequired;
     property public int isForSafeWatchFace;
+  }
+
+  public abstract class SuspendingComplicationDataSourceService extends androidx.wear.watchface.complications.datasource.ComplicationDataSourceService {
+    ctor public SuspendingComplicationDataSourceService();
+    method public final void onComplicationRequest(androidx.wear.watchface.complications.datasource.ComplicationRequest request, androidx.wear.watchface.complications.datasource.ComplicationDataSourceService.ComplicationRequestListener listener);
+    method @UiThread public abstract suspend Object? onComplicationRequest(androidx.wear.watchface.complications.datasource.ComplicationRequest request, kotlin.coroutines.Continuation<? super androidx.wear.watchface.complications.data.ComplicationData?>);
+  }
+
+  public abstract class SuspendingTimelineComplicationDataSourceService extends androidx.wear.watchface.complications.datasource.ComplicationDataSourceService {
+    ctor public SuspendingTimelineComplicationDataSourceService();
+    method public final void onComplicationRequest(androidx.wear.watchface.complications.datasource.ComplicationRequest request, androidx.wear.watchface.complications.datasource.ComplicationDataSourceService.ComplicationRequestListener listener);
+    method @UiThread public abstract suspend Object? onComplicationRequest(androidx.wear.watchface.complications.datasource.ComplicationRequest request, kotlin.coroutines.Continuation<? super androidx.wear.watchface.complications.datasource.ComplicationDataTimeline?>);
   }
 
   @RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU) public final class TargetWatchFaceSafety {

@@ -21,23 +21,29 @@ import android.graphics.ImageFormat.JPEG_R
 import android.graphics.ImageFormat.RAW_SENSOR
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.os.Build
+import android.os.Looper.getMainLooper
 import android.util.Range
 import android.util.Rational
 import android.util.Size
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import androidx.camera.camera2.impl.Camera2ImplConfig
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraEffect.PREVIEW
 import androidx.camera.core.CameraEffect.VIDEO_CAPTURE
 import androidx.camera.core.CompositionSettings
+import androidx.camera.core.DynamicRange
 import androidx.camera.core.DynamicRange.HDR_UNSPECIFIED_10_BIT
+import androidx.camera.core.DynamicRange.HLG_10_BIT
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.FocusMeteringAction.FLAG_AE
 import androidx.camera.core.FocusMeteringAction.FLAG_AF
 import androidx.camera.core.FocusMeteringAction.FLAG_AWB
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.TorchState
@@ -106,7 +112,10 @@ import org.mockito.ArgumentMatchers.isNull
 import org.mockito.Mockito.spy
 import org.mockito.Mockito.verify
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.internal.DoNotInstrument
+import org.robolectric.shadows.ShadowBuild
+import org.robolectric.util.ReflectionHelpers
 
 private const val CAMERA_ID = "0"
 private const val SECONDARY_CAMERA_ID = "1"
@@ -170,14 +179,36 @@ class CameraUseCaseAdapterTest {
         for (adapter in adaptersToDetach) {
             adapter.removeAllUseCases()
         }
+
+        // Process any pending looper updates to prevent leaks
+        shadowOf(getMainLooper()).idle()
     }
 
-    @Test(expected = CameraException::class)
-    fun attachTwoPreviews_streamSharingNotEnabled() {
-        // Arrange: bind 2 previews with an ImageCapture. Request fails without enabling
-        // StreamSharing because StreamSharing only allows one use case per type.
+    @Test
+    fun attachTwoPreviews_streamSharingEnabled() {
+        // Arrange: bind 2 previews with an ImageCapture. StreamSharing wraps the two previews.
         val preview2 = Preview.Builder().build()
         adapter.addUseCases(setOf(preview, preview2, image))
+        // Assert: StreamSharing is used for the two Previews.
+        adapter.cameraUseCases.hasExactTypes(StreamSharing::class.java, ImageCapture::class.java)
+    }
+
+    @Test
+    fun attachTwoPreviewsWithOverlayEffect_streamSharingEnabled() {
+        // Arrange: assign an effect with PREVIEW target and OUTPUT_OPTION_ONE_FOR_ALL_TARGETS (like
+        // OverlayEffect).
+        adapter.effects = listOf(previewEffect)
+
+        // Act: bind 2 previews.
+        val preview2 = Preview.Builder().build()
+        adapter.addUseCases(setOf(preview, preview2))
+
+        // Assert: StreamSharing is created to share the effect across both Previews.
+        val streamSharing = adapter.getStreamSharing()
+        assertThat(streamSharing.children).containsExactly(preview, preview2)
+        assertThat(streamSharing.effect).isEqualTo(previewEffect)
+        assertThat(preview.effect).isNull()
+        assertThat(preview2.effect).isNull()
     }
 
     @Test
@@ -185,6 +216,42 @@ class CameraUseCaseAdapterTest {
         adapter.addUseCases(setOf(video, image))
         // Assert: StreamSharing is not bound.
         adapter.cameraUseCases.hasExactTypes(FakeUseCase::class.java, ImageCapture::class.java)
+    }
+
+    // 10-bit HDR is only supported on API 33+.
+    @org.robolectric.annotation.Config(minSdk = 33)
+    @Test
+    fun attachHlg10VideoCaptureWithStabilization_onSamsungSm8550_streamSharingForceEnabled() {
+        // Arrange: a Samsung Snapdragon 8 Gen 2 device, affected by
+        // AbnormalStreamWhenHlg10WithStabilizationQuirk.
+        setSamsungSm8550Device()
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        val preview = Preview.Builder().setPreviewStabilizationEnabled(true).build()
+        val video = createFakeVideoCaptureUseCase(HLG_10_BIT)
+
+        // Act.
+        adapter.addUseCases(setOf(preview, video))
+
+        // Assert: StreamSharing is force enabled so the camera doesn't output HLG10 directly to
+        // the encoder surface.
+        adapter.cameraUseCases.hasExactTypes(StreamSharing::class.java)
+        assertThat(adapter.getStreamSharing().children).containsExactly(preview, video)
+    }
+
+    // 10-bit HDR is only supported on API 33+.
+    @org.robolectric.annotation.Config(minSdk = 33)
+    @Test
+    fun attachHlg10VideoCaptureWithoutStabilization_onSamsungSm8550_streamSharingNotEnabled() {
+        // Arrange.
+        setSamsungSm8550Device()
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        val video = createFakeVideoCaptureUseCase(HLG_10_BIT)
+
+        // Act.
+        adapter.addUseCases(setOf(preview, video))
+
+        // Assert: StreamSharing isn't needed without stabilization.
+        adapter.cameraUseCases.hasExactTypes(Preview::class.java, FakeUseCase::class.java)
     }
 
     @Test(expected = CameraException::class)
@@ -354,7 +421,7 @@ class CameraUseCaseAdapterTest {
         adapter.simulateAddUseCases(
             setOf(preview),
             ResolvedFeatureGroup(features = supportedFeatures),
-            /*findMaxSupportedFrameRate=*/ false,
+            /*findSupportedFrameRateRanges=*/ false,
         )
 
         // Assert.
@@ -551,6 +618,7 @@ class CameraUseCaseAdapterTest {
                 CompositionSettings.DEFAULT,
                 CompositionSettings.DEFAULT,
                 setOf(preview, video),
+                emptyList(),
                 useCaseConfigFactory,
             )
         // Act: add use cases that can only be supported with StreamSharing
@@ -585,10 +653,9 @@ class CameraUseCaseAdapterTest {
     @Test
     fun isUseCasesCombinationSupported_returnFalseWhenNotSupported() {
         // Arrange
-        val preview2 = Preview.Builder().build()
-        // Assert: double preview use cases should not be supported even with stream sharing.
-        assertThat(adapter.isUseCasesCombinationSupported(preview, preview2, video, image))
-            .isFalse()
+        val video2 = createFakeVideoCaptureUseCase()
+        // Assert: double video capture use cases should not be supported even with stream sharing.
+        assertThat(adapter.isUseCasesCombinationSupported(preview, video, video2, image)).isFalse()
     }
 
     @Test
@@ -1158,6 +1225,146 @@ class CameraUseCaseAdapterTest {
         assertThat(video.effect).isNull()
     }
 
+    @Test
+    fun addUseCases_whenCalculationFails_doesNotMutateEffectsOnAddedUseCases() {
+        // Arrange: bind preview with previewEffect first, then restrict valid surface combos so
+        // adding image fails calculation.
+        adapter.effects = listOf(previewEffect, imageEffect)
+        adapter.addUseCases(listOf(preview))
+        assertThat(preview.effect).isEqualTo(previewEffect)
+        fakeCameraDeviceSurfaceManager.setValidSurfaceCombos(
+            setOf(listOf(INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE))
+        )
+
+        // Act: attempt to add image, which fails surface combination validation.
+        assertThrows<CameraException> { adapter.addUseCases(listOf(image)) }
+
+        // Assert: preview retains its effect, and image (which failed to bind) was not mutated.
+        assertThat(preview.effect).isEqualTo(previewEffect)
+        assertThat(image.effect).isNull()
+    }
+
+    @Test
+    fun simulateAddUseCases_doesNotMutateEffectsOnSimulatedOrBoundUseCases() {
+        // Arrange: bind preview to adapter with previewEffect.
+        adapter.effects = listOf(previewEffect)
+        adapter.addUseCases(listOf(preview))
+        assertThat(preview.effect).isEqualTo(previewEffect)
+
+        // Act 1: simulate adding image on adapter (which has imageEffect configured).
+        adapter.effects = listOf(previewEffect, imageEffect)
+        adapter.simulateAddUseCases(
+            setOf(image),
+            /*featureGroup=*/ null,
+            /*findSupportedFrameRateRanges=*/ false,
+        )
+
+        // Assert 1: simulated UseCase does not have its effect mutated.
+        assertThat(image.effect).isNull()
+        assertThat(preview.effect).isEqualTo(previewEffect)
+
+        // Act 2: simulate adding already-bound preview on a fresh temporary adapter (like
+        // UseCaseAdditionSimulator) that has no effects configured.
+        val simulatorAdapter = createCameraUseCaseAdapter(fakeCamera)
+        simulatorAdapter.simulateAddUseCases(
+            setOf(preview),
+            /*featureGroup=*/ null,
+            /*findSupportedFrameRateRanges=*/ false,
+        )
+
+        // Assert 2: preview's effect from its active binding is not cleared by the simulation.
+        assertThat(preview.effect).isEqualTo(previewEffect)
+    }
+
+    @Test
+    fun addAdditionalUseCase_whenEffectsChange_streamSharingRecreated() {
+        // Arrange: bind preview, video, and image so StreamSharing is created without effects.
+        adapter.addUseCases(setOf(preview, video, image))
+        val initialStreamSharing = adapter.getStreamSharing()
+        assertThat(initialStreamSharing.hasSameChildrenEffectResolutionValidators(emptyList()))
+            .isTrue()
+
+        // Act: configure a child-only effect with a resolution validator on video and add analysis.
+        val validator = androidx.core.util.Predicate<Size> { true }
+        val videoEffectWithValidator =
+            object : FakeSurfaceEffect(VIDEO_CAPTURE, surfaceProcessorInternal) {
+                override fun getResolutionValidator() = validator
+            }
+        adapter.effects = listOf(videoEffectWithValidator)
+        adapter.addUseCases(setOf(analysis))
+
+        // Assert: StreamSharing is recreated with the updated child effect resolution validator.
+        val updatedStreamSharing = adapter.getStreamSharing()
+        assertThat(updatedStreamSharing).isNotSameInstanceAs(initialStreamSharing)
+        assertThat(
+                updatedStreamSharing.hasSameChildrenEffectResolutionValidators(
+                    listOf(videoEffectWithValidator)
+                )
+            )
+            .isTrue()
+        assertThat(video.effect).isEqualTo(videoEffectWithValidator)
+    }
+
+    @Test
+    fun resolveEffects_cameraUseCasesMatchedFirst_appOnlyUseCasesGetUnusedEffects() {
+        // Act: preview (camera use case) and video (app-only use case) both support sharedEffect.
+        val resolvedEffects =
+            CameraUseCaseAdapter.resolveEffects(
+                listOf(sharedEffect, imageEffect),
+                listOf(preview, image),
+                listOf(preview, video, image),
+            )
+
+        // Assert: the camera use case takes sharedEffect, so video gets nothing. UseCases are not
+        // mutated.
+        assertThat(resolvedEffects).containsExactly(preview, sharedEffect, image, imageEffect)
+        assertThat(preview.effect).isNull()
+        assertThat(image.effect).isNull()
+        assertThat(video.effect).isNull()
+    }
+
+    @Test
+    fun resolveEffects_appOnlyUseCaseGetsEffectNotUsedByCameraUseCases() {
+        val resolvedEffects =
+            CameraUseCaseAdapter.resolveEffects(
+                listOf(previewEffect, videoEffect),
+                listOf(preview),
+                listOf(preview, video),
+            )
+
+        assertThat(resolvedEffects).containsExactly(preview, previewEffect, video, videoEffect)
+    }
+
+    @Test
+    fun resolveEffects_noEffects_returnsEmptyMap() {
+        assertThat(CameraUseCaseAdapter.resolveEffects(emptyList(), listOf(preview), emptyList()))
+            .isEmpty()
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun resolveEffectsWithDuplicateTargets_throwsException() {
+        CameraUseCaseAdapter.resolveEffects(
+            listOf(previewEffect, sharedEffect),
+            listOf(preview),
+            emptyList(),
+        )
+    }
+
+    @Test
+    fun removeUseCases_releasesEffectOfRemovedUseCase() {
+        // Arrange.
+        adapter.effects = listOf(previewEffect, imageEffect)
+        adapter.addUseCases(listOf(preview, image))
+        assertThat(image.effect).isEqualTo(imageEffect)
+
+        // Act.
+        adapter.removeUseCases(listOf(image))
+
+        // Assert: the removed use case no longer references its effect.
+        assertThat(image.effect).isNull()
+        assertThat(preview.effect).isEqualTo(previewEffect)
+    }
+
     @RequiresApi(23)
     private fun createAdapterWithSupportedCameraOperations(
         @AdapterCameraInfo.CameraOperation supportedOps: Set<Int>
@@ -1167,7 +1374,6 @@ class CameraUseCaseAdapterTest {
         return createCameraUseCaseAdapter(fakeCamera, cameraConfig)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraControlFailed_whenNoCameraOperationsSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1202,7 +1408,6 @@ class CameraUseCaseAdapterTest {
             .build()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun zoomEnabled_whenZoomOperationsSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1218,7 +1423,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.linearZoom).isEqualTo(1.0f)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun torchEnabled_whenTorchOperationSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1234,7 +1438,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.torchEnabled).isEqualTo(true)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun focusMetering_afEnabled_whenAfOperationSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1258,7 +1461,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.lastSubmittedFocusMeteringAction?.meteringPointsAwb).isEmpty()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun focusMetering_aeEnabled_whenAeOperationsSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1278,7 +1480,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.lastSubmittedFocusMeteringAction?.meteringPointsAwb).isEmpty()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun focusMetering_awbEnabled_whenAwbOperationsSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1298,7 +1499,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.lastSubmittedFocusMeteringAction?.meteringPointsAe).isEmpty()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun focusMetering_disabled_whenNoneIsSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1316,7 +1516,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.lastSubmittedFocusMeteringAction).isNull()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun exposureEnabled_whenExposureOperationSupported(): Unit = runBlocking {
         // 1. Arrange
@@ -1332,7 +1531,6 @@ class CameraUseCaseAdapterTest {
         assertThat(fakeCameraControl.exposureCompensationIndex).isEqualTo(0)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_returnsDisabledState_AllOpsDisabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1370,7 +1568,6 @@ class CameraUseCaseAdapterTest {
             .isEqualTo(0)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_zoomEnabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1391,7 +1588,6 @@ class CameraUseCaseAdapterTest {
         assertThat(zoomState.linearZoom).isEqualTo(fakeZoomState.linearZoom)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_torchEnabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1406,7 +1602,6 @@ class CameraUseCaseAdapterTest {
             .isEqualTo(fakeCameraInfo.torchState.value)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_afEnabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1427,7 +1622,6 @@ class CameraUseCaseAdapterTest {
             .isTrue()
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_exposureExposureEnabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1448,7 +1642,6 @@ class CameraUseCaseAdapterTest {
             .isEqualTo(fakeCameraInfo.exposureState.isExposureCompensationSupported)
     }
 
-    @org.robolectric.annotation.Config(minSdk = 23)
     @Test
     fun cameraInfo_flashEnabled(): Unit = runBlocking {
         // 1. Arrange
@@ -1593,12 +1786,19 @@ class CameraUseCaseAdapterTest {
         )
     }
 
-    private fun createFakeVideoCaptureUseCase(): FakeUseCase {
+    private fun createFakeVideoCaptureUseCase(dynamicRange: DynamicRange? = null): FakeUseCase {
         return FakeUseCaseConfig.Builder()
             .setCaptureType(CaptureType.VIDEO_CAPTURE)
             .setSurfaceOccupancyPriority(0)
+            .apply { dynamicRange?.let { setDynamicRange(it) } }
             .build()
             .apply { this.supportedEffectTargets = setOf(VIDEO_CAPTURE) }
+    }
+
+    private fun setSamsungSm8550Device() {
+        ShadowBuild.setBrand("samsung")
+        ShadowBuild.setManufacturer("samsung")
+        ShadowBuild.setSystemOnChipModel("SM8550")
     }
 
     private fun createCoexistingRequiredRuleCameraConfig(
@@ -1676,5 +1876,454 @@ class CameraUseCaseAdapterTest {
             )
         adaptersToDetach.add(adapter)
         return adapter
+    }
+
+    @Test
+    fun sessionInteropConfig_forwardedToCameraInternalAndNotMergedIntoUseCaseConfigs() {
+        // Arrange
+        val captureCallback =
+            object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {}
+        val sessionStateCallback =
+            object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {}
+
+                override fun onConfigureFailed(
+                    session: android.hardware.camera2.CameraCaptureSession
+                ) {}
+            }
+        val deviceStateCallback =
+            object : android.hardware.camera2.CameraDevice.StateCallback() {
+                override fun onOpened(camera: android.hardware.camera2.CameraDevice) {}
+
+                override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) {}
+
+                override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) {}
+            }
+
+        val interopConfig =
+            androidx.camera.core.impl.MutableOptionsBundle.create().apply {
+                insertOption(Camera2ImplConfig.SESSION_CAPTURE_CALLBACK_OPTION, captureCallback)
+                insertOption(Camera2ImplConfig.SESSION_STATE_CALLBACK_OPTION, sessionStateCallback)
+                insertOption(Camera2ImplConfig.DEVICE_STATE_CALLBACK_OPTION, deviceStateCallback)
+            }
+
+        // Act: attach SessionConfig with interopConfig to adapter
+        val sessionConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, analysis, image)
+                .setInterop { builder ->
+                    for (option in interopConfig.listOptions()) {
+                        @Suppress("UNCHECKED_CAST") val opt = option as Config.Option<Any>
+                        builder.interopMutableConfig.insertOption(
+                            opt,
+                            interopConfig.getOptionPriority(opt),
+                            interopConfig.retrieveOption(opt),
+                        )
+                    }
+                }
+                .build()
+        adapter.setSessionInteropConfig(sessionConfig.interopConfig)
+        adapter.setBoundSessionConfig(sessionConfig)
+        adapter.addUseCases(sessionConfig.useCases)
+
+        // Assert: sessionInteropConfig is forwarded to CameraInternal and not merged into any
+        // UseCase's currentConfig.
+        assertThat(fakeCamera.sessionInteropConfig).isEqualTo(sessionConfig.interopConfig)
+        for (useCase in listOf(preview, analysis, image)) {
+            assertThat(
+                    useCase.currentConfig.containsOption(
+                        Camera2ImplConfig.SESSION_CAPTURE_CALLBACK_OPTION
+                    )
+                )
+                .isFalse()
+            assertThat(
+                    useCase.currentConfig.containsOption(
+                        Camera2ImplConfig.SESSION_STATE_CALLBACK_OPTION
+                    )
+                )
+                .isFalse()
+            assertThat(
+                    useCase.currentConfig.containsOption(
+                        Camera2ImplConfig.DEVICE_STATE_CALLBACK_OPTION
+                    )
+                )
+                .isFalse()
+        }
+
+        // Detaching (ON_STOP) clears CameraInternal's sessionInteropConfig, and re-attaching
+        // (ON_START) restores it.
+        adapter.detachUseCases()
+        assertThat(fakeCamera.sessionInteropConfig).isNull()
+        adapter.attachUseCases()
+        assertThat(fakeCamera.sessionInteropConfig).isEqualTo(sessionConfig.interopConfig)
+
+        // Removing all UseCases clears sessionInteropConfig on CameraInternal.
+        adapter.removeUseCases(sessionConfig.useCases)
+        assertThat(fakeCamera.sessionInteropConfig).isNull()
+    }
+
+    @Test
+    fun addUseCases_withPhysicalCameraId_propagatesToPreviewImageAnalysisImageCapture() {
+        val physicalCameraId = "2"
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        preview.setSurfaceProvider { it.willNotProvideSurface() }
+        preview.setPhysicalCameraId(physicalCameraId)
+        analysis.setPhysicalCameraId(physicalCameraId)
+        image.setPhysicalCameraId(physicalCameraId)
+
+        adapter.addUseCases(listOf(preview, analysis, image))
+
+        assertThat(preview.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(analysis.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(image.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(preview.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+        assertThat(analysis.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+        assertThat(image.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+    }
+
+    @Test
+    fun addUseCases_withStreamSharingAndPhysicalCameraId_propagatesToStreamSharingOutputConfig() {
+        val physicalCameraId = "2"
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        preview.setPhysicalCameraId(physicalCameraId)
+        video.setPhysicalCameraId(physicalCameraId)
+        image.setPhysicalCameraId(physicalCameraId)
+
+        adapter.addUseCases(setOf(preview, video, image))
+
+        val streamSharing = adapter.cameraUseCases.filterIsInstance<StreamSharing>().single()
+        assertThat(streamSharing.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(streamSharing.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+        assertThat(preview.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(video.physicalCameraId).isEqualTo(physicalCameraId)
+    }
+
+    @Test
+    fun addUseCases_withStreamSharingMismatchedOrClearedPhysicalCameraId_preserves() {
+        val physicalCameraId = "2"
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        preview.setPhysicalCameraId(physicalCameraId)
+        video.setPhysicalCameraId("3")
+        image.setPhysicalCameraId(physicalCameraId)
+
+        // Act 1: mismatched physicalCameraIds across children -> StreamSharing physicalCameraId is
+        // null
+        adapter.addUseCases(setOf(preview, video, image))
+
+        val streamSharingWithMismatch =
+            adapter.cameraUseCases.filterIsInstance<StreamSharing>().single()
+        assertThat(streamSharingWithMismatch.physicalCameraId).isNull()
+        assertThat(streamSharingWithMismatch.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isNull()
+
+        // Act 2: align all children to physicalCameraId "2" -> StreamSharing gets "2"
+        adapter.removeUseCases(setOf(preview, video, image))
+        preview.setPhysicalCameraId(physicalCameraId)
+        video.setPhysicalCameraId(physicalCameraId)
+        image.setPhysicalCameraId(physicalCameraId)
+        adapter.addUseCases(setOf(preview, video, image))
+
+        val streamSharingWithMatch =
+            adapter.cameraUseCases.filterIsInstance<StreamSharing>().single()
+        assertThat(streamSharingWithMatch.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(streamSharingWithMatch.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+
+        // Act 3: remove and re-add without physicalCameraId -> StreamSharing physicalCameraId is
+        // null
+        adapter.removeUseCases(setOf(preview, video, image))
+        adapter.addUseCases(setOf(preview, video, image))
+
+        val streamSharingAfterClear =
+            adapter.cameraUseCases.filterIsInstance<StreamSharing>().single()
+        assertThat(streamSharingAfterClear.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(streamSharingAfterClear.sessionConfig.outputConfigs.single().physicalCameraId)
+            .isEqualTo(physicalCameraId)
+    }
+
+    @Test
+    fun removeUseCases_preservesUseCasePhysicalCameraId() {
+        val physicalCameraId = "2"
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        preview.setPhysicalCameraId(physicalCameraId)
+        image.setPhysicalCameraId(physicalCameraId)
+        adapter.addUseCases(listOf(preview, image))
+        assertThat(preview.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(image.physicalCameraId).isEqualTo(physicalCameraId)
+
+        adapter.removeUseCases(listOf(preview))
+
+        assertThat(preview.physicalCameraId).isEqualTo(physicalCameraId)
+        assertThat(image.physicalCameraId).isEqualTo(physicalCameraId)
+    }
+
+    @Test
+    fun setEnabledUseCasesAsync_validatesPreconditionsAndRetainsAcrossDetachAndAttach(): Unit =
+        runBlocking {
+            val fakeUseCase1 = FakeUseCase()
+            val fakeUseCase2 = FakeUseCase()
+            val unboundUseCase = FakeUseCase()
+
+            // 1. Fails with IllegalStateException when no SessionConfig is bound.
+            assertThrows<IllegalStateException> {
+                adapter.cameraControl.setEnabledUseCasesAsync(listOf(fakeUseCase1)).await()
+            }
+
+            // 2. Bind a SessionConfig with initialEnabledUseCases = [fakeUseCase1].
+            val config =
+                androidx.camera.core.SessionConfig.Builder(fakeUseCase1, fakeUseCase2)
+                    .setInitialEnabledUseCases(fakeUseCase1)
+                    .build()
+            adapter.setBoundSessionConfig(config)
+            adapter.addUseCases(config.useCases)
+            assertThat(fakeCamera.enabledUseCases).containsExactly(fakeUseCase1)
+
+            // 3. Rejects empty list and UseCases not in the bound SessionConfig.
+            assertThrows<IllegalArgumentException> {
+                adapter.cameraControl.setEnabledUseCasesAsync(emptyList()).await()
+            }
+            assertThrows<IllegalArgumentException> {
+                adapter.cameraControl
+                    .setEnabledUseCasesAsync(listOf(fakeUseCase1, unboundUseCase))
+                    .await()
+            }
+
+            // 4. Switching at runtime updates the camera's enabled UseCases.
+            adapter.cameraControl
+                .setEnabledUseCasesAsync(listOf(fakeUseCase1, fakeUseCase2))
+                .await()
+            assertThat(fakeCamera.enabledUseCases).containsExactly(fakeUseCase1, fakeUseCase2)
+
+            // 5. Detaching (ON_STOP) rejects setEnabledUseCasesAsync with
+            // OperationCanceledException without mutating the retained enabled set, and
+            // re-attaching (ON_START) restores it.
+            adapter.detachUseCases()
+            assertThat(fakeCamera.enabledUseCases).isNull()
+            assertThrows<CameraControl.OperationCanceledException> {
+                adapter.cameraControl.setEnabledUseCasesAsync(listOf(fakeUseCase1)).await()
+            }
+            adapter.attachUseCases()
+            assertThat(fakeCamera.enabledUseCases).containsExactly(fakeUseCase1, fakeUseCase2)
+
+            // 6. Rebinding the same SessionConfig resets enabledUseCases to initialEnabledUseCases.
+            adapter.removeUseCases(config.useCases)
+            adapter.setBoundSessionConfig(config)
+            adapter.addUseCases(config.useCases)
+            assertThat(fakeCamera.enabledUseCases).containsExactly(fakeUseCase1)
+
+            // 7. Removing all UseCases clears the bound SessionConfig so subsequent calls fail with
+            // IllegalStateException.
+            adapter.removeUseCases(config.useCases)
+            assertThrows<IllegalStateException> {
+                adapter.cameraControl.setEnabledUseCasesAsync(listOf(fakeUseCase1)).await()
+            }
+        }
+
+    @Test
+    fun setEnabledUseCasesAsync_withStreamSharing_mapsChildrenToStreamSharingParent(): Unit =
+        runBlocking {
+            val video = createFakeVideoCaptureUseCase()
+            val config =
+                androidx.camera.core.SessionConfig.Builder(preview, video, image)
+                    .setInitialEnabledUseCases(preview, image)
+                    .build()
+            // Restrict surface combinations so Preview + Video + ImageCapture triggers
+            // StreamSharing(Preview, Video) + ImageCapture.
+            fakeCameraDeviceSurfaceManager.setValidSurfaceCombos(
+                setOf(
+                    listOf(INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE, JPEG),
+                    listOf(
+                        INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE,
+                        INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE,
+                    ),
+                )
+            )
+
+            adapter.setBoundSessionConfig(config)
+            adapter.addUseCases(config.useCases)
+
+            val streamSharing = adapter.cameraUseCases.filterIsInstance<StreamSharing>().single()
+            assertThat(fakeCamera.enabledUseCases).containsExactly(streamSharing, image)
+
+            // Switching to [preview, video] maps both children to streamSharing and disables image.
+            adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview, video)).await()
+            assertThat(fakeCamera.enabledUseCases).containsExactly(streamSharing)
+        }
+
+    @Test
+    fun submitStillCaptureRequests_rejectsDisabledImageCaptureAndAllowsWhenEnabled(): Unit =
+        runBlocking {
+            val config =
+                androidx.camera.core.SessionConfig.Builder(preview, image)
+                    .setInitialEnabledUseCases(preview)
+                    .build()
+            adapter.setBoundSessionConfig(config)
+            adapter.addUseCases(config.useCases)
+
+            val imageCaptureSurface = image.sessionConfig.surfaces.single()
+            val captureConfig =
+                androidx.camera.core.impl.CaptureConfig.Builder()
+                    .apply { addSurface(imageCaptureSurface) }
+                    .build()
+            val controlInternal =
+                adapter.cameraControl as androidx.camera.core.impl.CameraControlInternal
+
+            // 1. Initially only preview is enabled, so still capture targeting image's surface
+            // fails with ImageCaptureException(ERROR_INVALID_CAMERA).
+            assertThrows<ImageCaptureException> {
+                controlInternal
+                    .submitStillCaptureRequests(
+                        listOf(captureConfig),
+                        ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY,
+                        ImageCapture.FLASH_TYPE_ONE_SHOT_FLASH,
+                    )
+                    .await()
+            }
+            assertThat(adapter.areCaptureRequestsEnabled(listOf(captureConfig))).isFalse()
+
+            // 2. Enabling image allows still capture requests to reach the underlying camera.
+            adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview, image)).await()
+            assertThat(adapter.areCaptureRequestsEnabled(listOf(captureConfig))).isTrue()
+
+            // 3. Disabling image again rejects still capture requests.
+            adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview)).await()
+            assertThat(adapter.areCaptureRequestsEnabled(listOf(captureConfig))).isFalse()
+        }
+
+    @Test
+    fun dynamicUseCaseSwitching_withFeatureGroup_isRejected(): Unit = runBlocking {
+        // 1. Setting a SessionConfig with setInitialEnabledUseCases and requiredFeatureGroup or
+        // preferredFeatureGroup throws IllegalArgumentException.
+        val requiredFeatureConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, image)
+                .setRequiredFeatureGroup(HDR_HLG10)
+                .setInitialEnabledUseCases(preview)
+                .build()
+        assertThrows<IllegalArgumentException> {
+            adapter.setBoundSessionConfig(requiredFeatureConfig)
+        }
+
+        val preferredFeatureConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, image)
+                .setPreferredFeatureGroup(FPS_60)
+                .setInitialEnabledUseCases(preview)
+                .build()
+        assertThrows<IllegalArgumentException> {
+            adapter.setBoundSessionConfig(preferredFeatureConfig)
+        }
+
+        // 2. Binding a SessionConfig with preferredFeatureGroup (without setInitialEnabledUseCases)
+        // succeeds, and calling setEnabledUseCasesAsync at runtime fails with
+        // IllegalStateException.
+        val nonFastSwitchFeatureConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, image)
+                .setPreferredFeatureGroup(FPS_60)
+                .build()
+        adapter.setBoundSessionConfig(nonFastSwitchFeatureConfig)
+        adapter.addUseCases(nonFastSwitchFeatureConfig.useCases)
+
+        assertThrows<IllegalStateException> {
+            adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview)).await()
+        }
+    }
+
+    @Test
+    fun dynamicUseCaseSwitching_withZeroShutterLag_isRejected(): Unit = runBlocking {
+        val zslImageCapture =
+            ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG)
+                .build()
+        val zslFastSwitchConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, zslImageCapture)
+                .setInitialEnabledUseCases(preview)
+                .build()
+        assertThrows<IllegalArgumentException> {
+            adapter.setBoundSessionConfig(zslFastSwitchConfig)
+        }
+
+        val nonFastSwitchZslConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, zslImageCapture).build()
+        adapter.setBoundSessionConfig(nonFastSwitchZslConfig)
+        adapter.addUseCases(nonFastSwitchZslConfig.useCases)
+
+        assertThrows<IllegalStateException> {
+            adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview)).await()
+        }
+    }
+
+    @Test
+    fun setEnabledUseCasesAsync_withoutInitialEnabledUseCasesAndWithSessionInterop_succeeds():
+        Unit = runBlocking {
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        val customRequestOption =
+            Config.Option.create<String>(
+                "camera2.captureRequest.option.testKey",
+                String::class.java,
+            )
+        val sessionConfigWithInterop =
+            androidx.camera.core.SessionConfig.Builder(preview, image)
+                .setInterop { builder ->
+                    builder.interopMutableConfig.insertOption(customRequestOption, "value")
+                }
+                .build()
+
+        adapter.setSessionInteropConfig(sessionConfigWithInterop.interopConfig)
+        adapter.setBoundSessionConfig(sessionConfigWithInterop)
+        adapter.addUseCases(sessionConfigWithInterop.useCases)
+        adapter.attachUseCases()
+
+        adapter.cameraControl.setEnabledUseCasesAsync(listOf(preview)).await()
+        assertThat(fakeCamera.enabledUseCases).containsExactly(preview)
+        assertThat(fakeCamera.sessionInteropConfig)
+            .isEqualTo(sessionConfigWithInterop.interopConfig)
+    }
+
+    @Test
+    fun setBoundSessionConfig_withCamera2InteropNonRegularSessionType_throws() {
+        val adapter = createCameraUseCaseAdapter(fakeCamera)
+        val sessionTypeOption =
+            Config.Option.create<Int>(
+                "camera2.cameraCaptureSession.sessionType",
+                Int::class.javaObjectType,
+            )
+        val nonRegularInteropConfig =
+            androidx.camera.core.SessionConfig.Builder(preview, image)
+                .setInterop { builder ->
+                    builder.interopMutableConfig.insertOption(sessionTypeOption, 1)
+                }
+                .setInitialEnabledUseCases(preview)
+                .build()
+
+        assertThrows<IllegalArgumentException> {
+            adapter.setBoundSessionConfig(nonRegularInteropConfig)
+        }
+    }
+
+    @Test
+    fun setBoundSessionConfig_withInitialEnabledUseCases_onDisabledDevice_throws() {
+        val initialBrand = Build.BRAND
+        val initialModel = Build.MODEL
+        try {
+            ReflectionHelpers.setStaticField(Build::class.java, "BRAND", "motorola")
+            ReflectionHelpers.setStaticField(Build::class.java, "MODEL", "moto c")
+
+            val adapter = createCameraUseCaseAdapter(fakeCamera)
+            val config =
+                androidx.camera.core.SessionConfig.Builder(preview, image)
+                    .setInitialEnabledUseCases(preview)
+                    .build()
+
+            assertThrows<IllegalArgumentException> {
+                    adapter.setBoundSessionConfig(config)
+                }
+                .hasMessageThat()
+                .contains("Dynamic UseCase switching is disabled")
+        } finally {
+            ReflectionHelpers.setStaticField(Build::class.java, "BRAND", initialBrand)
+            ReflectionHelpers.setStaticField(Build::class.java, "MODEL", initialModel)
+        }
     }
 }

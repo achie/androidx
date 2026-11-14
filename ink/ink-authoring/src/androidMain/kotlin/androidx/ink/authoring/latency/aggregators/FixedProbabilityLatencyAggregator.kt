@@ -19,7 +19,8 @@ package androidx.ink.authoring.latency.aggregators
 import androidx.annotation.RestrictTo
 import androidx.annotation.UiThread
 import androidx.annotation.VisibleForTesting
-import androidx.ink.authoring.ExperimentalLatencyDataApi
+import androidx.ink.authoring.ExperimentalInkLatencyDataApi
+import java.util.concurrent.Executor
 import java.util.concurrent.ScheduledExecutorService
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
@@ -81,8 +82,8 @@ import kotlinx.coroutines.plus
  * so the result is valid only for values of `t` that are multiples of `1/r` seconds. In particular,
  * the result is negative if `t < 1/r`, but the actual probability is 0.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // NonPublicApi
-@ExperimentalLatencyDataApi
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
+@ExperimentalInkLatencyDataApi
 public class FixedProbabilityLatencyAggregator
 private constructor(
     private val sampleProbability: Float,
@@ -99,7 +100,7 @@ private constructor(
          * callback runs in the [CoroutineScope] (or, for Java clients, the
          * [ScheduledExecutorService]) passed to [create].
          */
-        public suspend fun onLatencySample(startNanos: Long, endNanos: Long): Unit
+        public suspend fun onLatencySample(startNanos: Long, endNanos: Long)
     }
 
     @UiThread
@@ -114,10 +115,12 @@ private constructor(
 
     public override fun job(): Job = supervisorJob
 
+    @ExperimentalInkLatencyDataApi
     public companion object {
         /**
          * Returns a new [FixedProbabilityLatencyAggregator]. For use by Kotlin clients. [callback]
-         * will be called in the given [scope], using its default [CoroutineContext].
+         * will be called in the given [scope], using its default
+         * [kotlin.coroutines.CoroutineContext].
          *
          * [callback] runs immediately when a sample is selected for reporting. See the
          * documentation on the [FixedProbabilityLatencyAggregator] class itself for cautions about
@@ -129,7 +132,7 @@ private constructor(
          *   should be distinct from the UI thread.
          * @param callback The [Callback] with which to report selected samples.
          */
-        @JvmSynthetic
+        @JvmStatic
         public fun create(
             sampleProbability: Float,
             scope: CoroutineScope,
@@ -151,14 +154,15 @@ private constructor(
          *
          * @param sampleProbability The probability of reporting each aggregated sample to
          *   [callback].
-         * @param executor A [ScheduledExecutorService] on which to call the callback. Should be
-         *   distinct from the UI thread.
+         * @param executor An [Executor] on which to call the callback. Should be distinct from the
+         *   UI thread. More efficient if the [Executor] is an instance of
+         *   [ScheduledExecutorService].
          * @param callback The [Callback] with which to report selected samples.
          */
         @JvmStatic
         public fun create(
             sampleProbability: Float,
-            executor: ScheduledExecutorService,
+            executor: Executor,
             callback: Callback,
         ): FixedProbabilityLatencyAggregator {
             return create(
@@ -192,8 +196,8 @@ private constructor(
         }
 
         /**
-         * Same as the other [create] that takes an [ScheduledExecutorService], but with the ability
-         * to specify a [Random] implementation.
+         * Same as the other [create] that takes an [Executor], but with the ability to specify a
+         * [Random] implementation.
          */
         @VisibleForTesting
         internal fun create(

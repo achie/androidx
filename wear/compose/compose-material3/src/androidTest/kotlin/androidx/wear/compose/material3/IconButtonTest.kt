@@ -47,7 +47,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -61,14 +61,13 @@ import androidx.wear.compose.material3.IconButtonDefaults.ExtraSmallButtonSize
 import androidx.wear.compose.material3.IconButtonDefaults.LargeButtonSize
 import androidx.wear.compose.material3.IconButtonDefaults.SmallButtonSize
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assume
 import org.junit.Rule
 import org.junit.Test
 
 class IconButtonTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun supports_testtag() {
@@ -637,6 +636,14 @@ class IconButtonTest {
                 return@verifyColors actualContentColor
             },
         )
+    }
+
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
+    @Test
+    fun draws_focus_ring_when_focused() {
+        rule.verifyFocusRingDrawnAfterFocusInteraction { modifier, interactionSource ->
+            IconButton(onClick = {}, modifier = modifier, interactionSource = interactionSource) {}
+        }
     }
 }
 

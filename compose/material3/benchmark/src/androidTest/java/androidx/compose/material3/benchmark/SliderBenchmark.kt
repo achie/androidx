@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3Api::class)
-
 package androidx.compose.material3.benchmark
 
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderState
@@ -44,7 +41,10 @@ class SliderBenchmark {
 
     @Test
     fun moveThumb() {
-        benchmarkRule.toggleStateBenchmarkComposeMeasureLayout(caseFactory = sliderTestCaseFactory)
+        benchmarkRule.toggleStateBenchmarkComposeMeasureLayout(
+            caseFactory = sliderTestCaseFactory,
+            requireRecomposition = false,
+        )
     }
 }
 
@@ -52,12 +52,11 @@ internal class SliderTestCase : LayeredComposeTestCase(), ToggleableTestCase {
 
     private lateinit var state: SliderState
 
-    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun MeasuredContent() {
         state = remember { SliderState() }
 
-        Slider(state)
+        Slider(state, onValueChange = { state.value = it })
     }
 
     @Composable

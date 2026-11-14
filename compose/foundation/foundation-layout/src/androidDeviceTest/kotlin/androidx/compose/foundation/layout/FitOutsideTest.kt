@@ -17,8 +17,6 @@ package androidx.compose.foundation.layout
 
 import android.view.View
 import androidx.activity.ComponentActivity
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.ui.ComposeUiFlags
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -30,19 +28,18 @@ import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.round
 import androidx.core.graphics.Insets
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsCompat.Type
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
-import org.junit.Assume
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -54,16 +51,15 @@ import org.junit.runners.JUnit4
 @SdkSuppress(minSdkVersion = 30)
 @RunWith(JUnit4::class)
 class FitOutsideTest {
-    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     @Before
     fun setup() {
-        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.runOnUiThread { WindowCompat.enableEdgeToEdge(rule.activity.window) }
     }
 
     @Test
     fun testFitOutsideLeft() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var outsideCoordinates: LayoutCoordinates
         lateinit var insideCoordinates: LayoutCoordinates
         lateinit var view: View
@@ -88,7 +84,6 @@ class FitOutsideTest {
 
     @Test
     fun testFitOutsideTop() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var outsideCoordinates: LayoutCoordinates
         lateinit var insideCoordinates: LayoutCoordinates
         lateinit var view: View
@@ -113,7 +108,6 @@ class FitOutsideTest {
 
     @Test
     fun testFitOutsideRight() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var outsideCoordinates: LayoutCoordinates
         lateinit var insideCoordinates: LayoutCoordinates
         lateinit var view: View
@@ -139,7 +133,6 @@ class FitOutsideTest {
 
     @Test
     fun testFitOutsideBottom() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var outsideCoordinates: LayoutCoordinates
         lateinit var insideCoordinates: LayoutCoordinates
         lateinit var view: View
@@ -165,7 +158,6 @@ class FitOutsideTest {
 
     @Test
     fun testFitOutsideNoInsets() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var insideCoordinates: LayoutCoordinates
         lateinit var view: View
         rule.setContent {
@@ -185,7 +177,6 @@ class FitOutsideTest {
 
     @Test
     fun testFitOutsideNoBounds() {
-        Assume.assumeTrue(ComposeUiFlags.areWindowInsetsRulersEnabled)
         lateinit var insideCoordinates: LayoutCoordinates
         rule.setContent {
             Box(Modifier.fillMaxSize()) {

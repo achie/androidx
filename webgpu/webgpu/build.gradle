@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.AndroidXConfig
@@ -31,6 +30,7 @@ plugins {
 
 dependencies {
     api(libs.androidx.annotation)
+    api("androidx.annotation:annotation-experimental:1.4.1")
     // Add dependencies here
     api(libs.kotlinCoroutinesCore)
 
@@ -49,6 +49,7 @@ androidComponents {
                         AndroidXConfig.getPrebuiltsRoot(project),
                         "androidx/webgpu/jni").absolutePath
         )
+        variant.sources.assets.addStaticSourceDirectory("meta")
     }
 }
 
@@ -61,6 +62,10 @@ androidx {
 
 android {
     namespace = "androidx.webgpu"
+    defaultConfig {
+        minSdk { version = release(26) }
+        consumerProguardFiles("proguard-rules.pro")
+    }
 }
 
 

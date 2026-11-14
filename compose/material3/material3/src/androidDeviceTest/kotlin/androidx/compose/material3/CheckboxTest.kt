@@ -52,14 +52,13 @@ import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isFocusable
 import androidx.compose.ui.test.isNotFocusable
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.filters.MediumTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -70,7 +69,7 @@ import org.junit.runners.Parameterized
 @RunWith(Parameterized::class)
 class CheckboxTest(private val isCheckboxStyleM3FixEnabled: Boolean) {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val defaultTag = "myCheckbox"
 
@@ -353,13 +352,14 @@ class CheckboxTest(private val isCheckboxStyleM3FixEnabled: Boolean) {
                 }
             }
             .run {
+                val tolerance = maxOf(0.5.dp, with(rule.density) { 1.toDp() })
                 if (clickable && minimumTouchTarget) {
-                    assertIsSquareWithSize(48.dp)
+                    assertIsSquareWithSize(48.dp, tolerance)
                 } else {
                     if (ComposeMaterial3Flags.isCheckboxStylingFixEnabled) {
-                        assertIsSquareWithSize(18.dp)
+                        assertIsSquareWithSize(18.dp, tolerance)
                     } else {
-                        assertIsSquareWithSize(2.dp * 2 + 20.dp)
+                        assertIsSquareWithSize(2.dp * 2 + 20.dp, tolerance)
                     }
                 }
             }

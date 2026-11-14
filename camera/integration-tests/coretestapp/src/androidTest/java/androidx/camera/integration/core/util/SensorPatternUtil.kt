@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.camera.integration.core.util
 
 import android.graphics.Bitmap
@@ -47,6 +49,7 @@ import android.hardware.camera2.params.TonemapCurve
 import android.os.Build
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
+import androidx.camera.core.CameraSelector
 import androidx.camera.testing.impl.AndroidUtil
 import androidx.camera.testing.impl.util.Camera2InteropUtil
 import androidx.camera.testing.impl.util.Camera2InteropUtil.builder
@@ -61,6 +64,8 @@ object SensorPatternUtil {
     private val LIMITED = setOf(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED)
     private val FULL = setOf(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL)
     private val LEVEL_3 = setOf(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3)
+    private val IDENTITY_COLOR_SPACE_TRANSFORM =
+        ColorSpaceTransform(intArrayOf(1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1))
 
     /** The color channel to be used for the solid color test pattern. */
     enum class ColorChannel {
@@ -102,18 +107,27 @@ object SensorPatternUtil {
         )
         // Skip for b/412262667
         assumeFalse(
-            "Emulator API 33-36 can not correctly apply solid color pattern",
-            (Build.VERSION.SDK_INT == 33 ||
-                Build.VERSION.SDK_INT == 34 ||
-                Build.VERSION.SDK_INT == 35 ||
-                Build.VERSION.SDK_INT == 36) && AndroidUtil.isEmulator(),
+            "Emulator API 33-37 can not correctly apply solid color pattern",
+            (Build.VERSION.SDK_INT in 33..37) && AndroidUtil.isEmulator(),
+        )
+        // Skip for b/558616203: Redmi 8 / 8A front camera does not output test patterns correctly.
+        assumeFalse(
+            "Redmi 8 front camera does not support reliable solid color test patterns",
+            isRedmi8FrontCamera(cameraInfo),
         )
 
         with(Camera2InteropUtil.Camera2CameraInfoWrapper.from(implName, cameraInfo)) {
             val availableTestPatterns = getCameraCharacteristic(SENSOR_AVAILABLE_TEST_PATTERN_MODES)
-            if (availableTestPatterns?.contains(SENSOR_TEST_PATTERN_MODE_SOLID_COLOR) == false) {
+            if (availableTestPatterns?.contains(SENSOR_TEST_PATTERN_MODE_SOLID_COLOR) != true) {
                 throw AssumptionViolatedException(
                     "Camera does not support solid color test pattern."
+                )
+            }
+            val hardwareLevel =
+                getCameraCharacteristic(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+            if (hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
+                throw AssumptionViolatedException(
+                    "Legacy camera devices do not support reliable solid color test patterns."
                 )
             }
         }
@@ -310,9 +324,7 @@ object SensorPatternUtil {
 
                         setCaptureRequestOption(
                             COLOR_CORRECTION_TRANSFORM,
-                            ColorSpaceTransform(
-                                intArrayOf(1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1)
-                            ),
+                            IDENTITY_COLOR_SPACE_TRANSFORM,
                         )
                     }
 
@@ -333,6 +345,15 @@ object SensorPatternUtil {
                 }
             }
             .build()
+    }
+
+    private fun isRedmi8FrontCamera(cameraInfo: CameraInfo): Boolean {
+        val isRedmi8 =
+            Build.DEVICE.equals("olive", ignoreCase = true) ||
+                Build.DEVICE.equals("olivelite", ignoreCase = true) ||
+                Build.MODEL.equals("Redmi 8", ignoreCase = true) ||
+                Build.MODEL.equals("Redmi 8A", ignoreCase = true)
+        return isRedmi8 && cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT
     }
 }
 

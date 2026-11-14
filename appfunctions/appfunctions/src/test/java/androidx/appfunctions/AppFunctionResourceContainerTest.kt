@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:OptIn(ExperimentalAppFunctionsApi::class)
 
 package androidx.appfunctions
 
@@ -63,7 +64,12 @@ class AppFunctionResourceContainerTest {
                 .setAppFunctionDataList(
                     "resources",
                     resources.map {
-                        AppFunctionData.serialize(it, AppFunctionTextResource::class.java)
+                        AppFunctionData.serialize(
+                            RESOURCE_OBJECT_TYPE_METADATA,
+                            AppFunctionComponentsMetadata(),
+                            it,
+                            AppFunctionTextResource::class.java,
+                        )
                     },
                 )
                 .build()
@@ -79,28 +85,23 @@ class AppFunctionResourceContainerTest {
     }
 
     private companion object {
+        val RESOURCE_OBJECT_TYPE_METADATA =
+            AppFunctionObjectTypeMetadata(
+                properties =
+                    mapOf(
+                        "mimeType" to
+                            AppFunctionStringTypeMetadata(isNullable = false, description = ""),
+                        "content" to
+                            AppFunctionStringTypeMetadata(isNullable = false, description = ""),
+                    ),
+                required = listOf("mimeType", "content"),
+                qualifiedName = "androidx.appfunctions.AppFunctionTextResource",
+                isNullable = false,
+                description = "",
+            )
         val RESOURCES_ARRAY_TYPE_METADATA =
             AppFunctionArrayTypeMetadata(
-                itemType =
-                    AppFunctionObjectTypeMetadata(
-                        properties =
-                            mapOf(
-                                "mimeType" to
-                                    AppFunctionStringTypeMetadata(
-                                        isNullable = false,
-                                        description = "",
-                                    ),
-                                "content" to
-                                    AppFunctionStringTypeMetadata(
-                                        isNullable = false,
-                                        description = "",
-                                    ),
-                            ),
-                        required = listOf("mimeType", "content"),
-                        qualifiedName = "androidx.appfunctions.AppFunctionTextResource",
-                        isNullable = false,
-                        description = "",
-                    ),
+                itemType = RESOURCE_OBJECT_TYPE_METADATA,
                 isNullable = false,
             )
 

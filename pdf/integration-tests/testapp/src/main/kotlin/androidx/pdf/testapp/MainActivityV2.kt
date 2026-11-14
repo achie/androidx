@@ -16,23 +16,22 @@
 
 package androidx.pdf.testapp
 
-import android.annotation.SuppressLint
+import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.View
 import android.widget.ImageButton
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.GetContent
-import androidx.annotation.RequiresExtension
-import androidx.annotation.RestrictTo
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.BundleCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
 import androidx.fragment.app.FragmentTransaction
 import androidx.pdf.testapp.ui.FeatureFlagListener
 import androidx.pdf.testapp.ui.FeaturePreferencesDialog
@@ -40,33 +39,40 @@ import androidx.pdf.testapp.ui.v2.EditablePdfHostFragment
 import androidx.pdf.testapp.ui.v2.PdfViewerFragmentExtended
 import androidx.pdf.testapp.ui.v2.StyledPdfViewerFragment
 import androidx.pdf.viewer.fragment.PdfViewerFragment
+import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 
 // TODO(b/386721657): Remove this activity once the switch to V2 completes
 
-@SuppressLint("RestrictedApiAndroidX")
 @Suppress("NewApi")
-@RestrictTo(RestrictTo.Scope.LIBRARY)
-internal class MainActivityV2 : AppCompatActivity() {
+internal class MainActivityV2 : AppCompatActivity(), EditablePdfHostFragment.FragmentListener {
 
     private lateinit var pdfViewerFragment: PdfViewerFragment
 
     private lateinit var searchButton: MaterialButton
     private lateinit var openPdfButton: MaterialButton
     private lateinit var preferenceButton: ImageButton
+    private lateinit var editToolbar: MaterialToolbar
+
+    private var currentFileName: String = SAMPLE_PDF_NAME
 
     private val settingsDialog: FeaturePreferencesDialog by lazy {
         FeaturePreferencesDialog(this, listener = pdfViewerFragment as? FeatureFlagListener)
     }
 
-    // TODO(b/461991220) : Add the save button in toolbar for EditablePdfViewerFragment.
     private lateinit var savePdfButton: MaterialButton
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
     @VisibleForTesting
     private var filePicker: ActivityResultLauncher<String> =
         registerForActivityResult(GetContent()) { uri: Uri? ->
-            uri?.let { pdfViewerFragment.documentUri = uri }
+            uri?.let {
+                if (pdfViewerFragment.documentUri != uri) {
+                    // Reset the thumbnails if a new uri is loaded.
+                    (pdfViewerFragment as? PdfViewerFragmentExtended)?.resetThumbnails()
+                }
+                pdfViewerFragment.documentUri = uri
+                currentFileName = getFileName(it)
+            }
         }
 
     private val createDocumentLauncher: ActivityResultLauncher<String> =
@@ -85,7 +91,31 @@ internal class MainActivityV2 : AppCompatActivity() {
             }
         }
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
+    private fun getFileName(uri: Uri): String {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index >= 0) {
+                        result = cursor.getString(index)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result?.substring(cut + 1)
+            }
+        }
+        return result ?: SAMPLE_PDF_NAME
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -109,26 +139,21 @@ internal class MainActivityV2 : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
     }
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
     private fun setupViews(pdfViewerFragment: PdfViewerFragment) {
         openPdfButton = findViewById(R.id.launch_button)
         searchButton = findViewById(R.id.search_pdf_button)
         preferenceButton = findViewById(R.id.preference_button)
         savePdfButton = findViewById(R.id.save_pdf_button)
-
-        if (pdfViewerFragment is EditablePdfHostFragment) {
-            savePdfButton.visibility = View.VISIBLE
-            pdfViewerFragment.onSaveCompletion = { savePdfButton.isEnabled = true }
-        } else {
-            savePdfButton.visibility = View.GONE
-        }
+        editToolbar = findViewById(R.id.pdf_edit_toolbar)
 
         openPdfButton.setOnClickListener { filePicker.launch(MIME_TYPE_PDF) }
-
         searchButton.setOnClickListener { pdfViewerFragment.isTextSearchActive = true }
+        preferenceButton.setOnClickListener { _ -> settingsDialog.show() }
 
-        preferenceButton.setOnClickListener { view -> settingsDialog.show() }
-        savePdfButton.setOnClickListener { createDocumentLauncher.launch(SAMPLE_PDF_NAME) }
+        savePdfButton.setOnClickListener { createDocumentLauncher.launch(currentFileName) }
+        editToolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
+
+        updateToolbarVisibility(pdfViewerFragment)
     }
 
     private fun setPdfView() {
@@ -144,7 +169,6 @@ internal class MainActivityV2 : AppCompatActivity() {
         }
     }
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
     private fun getFragmentForCurrentConfiguration(): PdfViewerFragment {
         val fragmentType = getFragmentTypeFromIntent()
 
@@ -155,6 +179,10 @@ internal class MainActivityV2 : AppCompatActivity() {
                 EditablePdfHostFragment()
             }
         }
+    }
+
+    private fun updateToolbarVisibility(fragment: PdfViewerFragment) {
+        editToolbar.isVisible = fragment is EditablePdfHostFragment
     }
 
     private fun getFragmentTypeFromIntent(): FragmentType {
@@ -172,9 +200,9 @@ internal class MainActivityV2 : AppCompatActivity() {
 
             // Adjust the padding of the container view to accommodate system windows
             view.setPadding(
-                view.paddingLeft,
+                systemBarsInsets.left,
                 systemBarsInsets.top,
-                view.paddingRight,
+                systemBarsInsets.right,
                 systemBarsInsets.bottom,
             )
 
@@ -182,11 +210,34 @@ internal class MainActivityV2 : AppCompatActivity() {
         }
     }
 
+    override fun onEnterEditMode() {
+        savePdfButton.visibility = View.VISIBLE
+    }
+
+    override fun onExitEditMode() {
+        savePdfButton.visibility = View.GONE
+    }
+
+    override fun onSaveComplete() {
+        savePdfButton.isEnabled = true
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        currentFileName = savedInstanceState.getString(CURRENT_FILE_NAME_KEY, SAMPLE_PDF_NAME)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(CURRENT_FILE_NAME_KEY, currentFileName)
+    }
+
     companion object {
         private const val MIME_TYPE_PDF = "application/pdf"
         private const val PDF_VIEWER_FRAGMENT_TAG = "pdf_viewer_fragment_tag"
         internal const val FRAGMENT_TYPE_KEY = "fragmentTypeKey"
         private const val SAMPLE_PDF_NAME = "Sample.pdf"
+        private const val CURRENT_FILE_NAME_KEY = "current_file_name_key"
 
         internal enum class FragmentType {
             BASIC_FRAGMENT,

@@ -21,6 +21,7 @@ import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * This class represents the JavaScript object injected by {@link
@@ -45,6 +46,9 @@ public abstract class JavaScriptReplyProxy {
      * JavaScriptReplyProxy}.
      *
      * @param message The String data to send to the JavaScript context.
+     * @throws UnsupportedOperationException if the
+     *     {@link WebViewFeature#WEB_MESSAGE_LISTENER} feature is not supported.
+     *     This should be checked before use with {@link WebViewFeature#isFeatureSupported}.
      */
     @RequiresFeature(name = WebViewFeature.WEB_MESSAGE_LISTENER,
             enforcement = "androidx.webkit.WebViewFeature#isFeatureSupported")
@@ -57,10 +61,57 @@ public abstract class JavaScriptReplyProxy {
      *
      * @param arrayBuffer The ArrayBuffer to send to the JavaScript context. An empty ArrayBuffer
      *                    is supported.
+     * @throws UnsupportedOperationException if the
+     *     {@link WebViewFeature#WEB_MESSAGE_ARRAY_BUFFER} feature is not supported.
+     *     This should be checked before use with {@link WebViewFeature#isFeatureSupported}.
      */
     @RequiresFeature(name = WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER,
             enforcement = "androidx.webkit.WebViewFeature#isFeatureSupported")
     public abstract void postMessage(byte @NonNull [] arrayBuffer);
+
+    /**
+     * Post a {@link SharedArrayBuffer} message to the injected JavaScript object which sent this
+     * {@link JavaScriptReplyProxy}.
+     * <p>
+     * Unlike {@link #postMessage(byte[])}, the contents of the buffer are not copied: writes
+     * performed by the application are visible to the JavaScript context, and vice versa, without
+     * posting another message.
+     * <p>
+     * The receiving JavaScript context has to be <a
+     * href="https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated">cross-origin
+     * isolated</a> to be able to receive a {@code SharedArrayBuffer}; see
+     * {@link Profile#setCrossOriginIsolatedAllowlist(java.util.Set)}.
+     *
+     * @param sharedArrayBuffer The {@link SharedArrayBuffer} to send to the JavaScript context.
+     * @throws UnsupportedOperationException if the
+     *     {@link WebViewFeature#WEB_MESSAGE_SHARED_ARRAY_BUFFER} feature is not supported.
+     *     This should be checked before use with {@link WebViewFeature#isFeatureSupported}.
+     */
+    @RequiresFeature(name = WebViewFeature.WEB_MESSAGE_SHARED_ARRAY_BUFFER,
+            enforcement = "androidx.webkit.WebViewFeature#isFeatureSupported")
+    public void postMessage(@NonNull SharedArrayBuffer sharedArrayBuffer) {
+        throw new UnsupportedOperationException(
+                "JavaScriptReplyProxy#postMessage is not implemented.");
+    }
+
+    /**
+     * Executes JavaScript in the frame and world that sent this {@link JavaScriptReplyProxy}. The
+     * result of the JavaScript execution will be passed to the {@link WebViewOutcomeReceiver}
+     * callback.
+     *
+     * @param script   The JavaScript to execute.
+     * @param receiver The {@link WebViewOutcomeReceiver} to receive the result of the JavaScript
+     *                 execution.
+     * @throws UnsupportedOperationException if the
+     *     {@link WebViewFeature#JS_INJECTION_IN_FRAME_AND_WORLD} feature is not supported.
+     *     This should be checked before use with {@link WebViewFeature#isFeatureSupported}.
+     */
+    @RequiresFeature(
+            name = WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD,
+            enforcement = "androidx.webkit.WebViewFeature#isFeatureSupported")
+    public abstract void executeJavaScript(
+            @NonNull String script,
+            @Nullable WebViewOutcomeReceiver<String, JavaScriptExecutionException> receiver);
 
     /**
      * This class cannot be created by applications.

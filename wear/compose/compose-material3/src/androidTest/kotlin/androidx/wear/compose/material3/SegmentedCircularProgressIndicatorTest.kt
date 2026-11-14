@@ -35,16 +35,15 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.assertRangeInfoEquals
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.filters.SdkSuppress
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 class SegmentedCircularProgressIndicatorTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun supports_testtag() {
@@ -560,7 +559,7 @@ class SegmentedCircularProgressIndicatorTest {
         rule.runOnIdle { progress.value = finalProgress }
 
         // Advance the clock to verify if reverse color animation is applied asap.
-        // When updating the progres from a value > 1f to a value < 1f,
+        // When updating the progress from a value > 1f to a value < 1f,
         // animation should be started since the very beginning. The behavior is different from
         // the case when update is done from a value < 1f to a value > 1f. In that case, colors are
         // animated after reaching the 1f threshold.

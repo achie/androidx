@@ -1,0 +1,10 @@
+// Signature format: 5.0
+// - surface=public
+package androidx.core.location.altitude {
+
+  public final class AltitudeConverterCompat {
+    method @WorkerThread public static void addMslAltitudeToLocation(android.content.Context, android.location.Location) throws java.io.IOException;
+  }
+
+}
+

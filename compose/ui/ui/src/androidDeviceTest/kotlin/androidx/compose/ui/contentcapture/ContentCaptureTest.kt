@@ -39,9 +39,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.createAndroidComposeView
 import androidx.compose.ui.platform.AndroidComposeView
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.coreshims.ViewStructureCompat
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearTextSubstitution
 import androidx.compose.ui.semantics.isShowingTextSubstitution
@@ -54,7 +54,7 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.textSubstitution
 import androidx.compose.ui.test.TestActivity
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
@@ -65,9 +65,9 @@ import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import java.util.function.Consumer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -76,9 +76,12 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.atLeast
 import org.mockito.kotlin.clearInvocations
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.doReturnConsecutively
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.spy
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoMoreInteractions
@@ -89,12 +92,12 @@ import org.mockito.kotlin.whenever
 @SdkSuppress(minSdkVersion = 31)
 @RunWith(AndroidJUnit4::class)
 class ContentCaptureTest {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     private val tag = "tag"
     private lateinit var androidComposeView: AndroidComposeView
     private lateinit var contentCaptureSessionWrapper: ContentCaptureSessionWrapper
-    private lateinit var viewStructureCompat: ViewStructureCompat
+    private lateinit var viewStructure: ViewStructure
     private val contentCaptureEventLoopIntervalMs = 100L
 
     @Test
@@ -110,11 +113,10 @@ class ContentCaptureTest {
             verify(contentCaptureSessionWrapper).newVirtualViewStructure(any(), any())
             verify(contentCaptureSessionWrapper).notifyViewAppeared(any())
             verify(contentCaptureSessionWrapper).flush()
-            verify(viewStructureCompat).setDimens(any(), any(), any(), any(), any(), any())
-            verify(viewStructureCompat, times(1)).extras
-            verify(viewStructureCompat).toViewStructure()
+            verify(viewStructure).setDimens(any(), any(), any(), any(), any(), any())
+            verify(viewStructure, times(1)).extras
             verifyNoMoreInteractions(contentCaptureSessionWrapper)
-            verifyNoMoreInteractions(viewStructureCompat)
+            verifyNoMoreInteractions(viewStructure)
         }
     }
 
@@ -133,7 +135,7 @@ class ContentCaptureTest {
                 verify(contentCaptureSessionWrapper).notifyViewDisappeared(any())
                 verify(contentCaptureSessionWrapper).flush()
                 verifyNoMoreInteractions(contentCaptureSessionWrapper)
-                verifyNoMoreInteractions(viewStructureCompat)
+                verifyNoMoreInteractions(viewStructure)
             }
         }
     }
@@ -161,7 +163,7 @@ class ContentCaptureTest {
 
         val bundle1 = Bundle()
         val bundle2 = Bundle()
-        whenever(viewStructureCompat.extras).doReturnConsecutively(listOf(bundle1, bundle2))
+        whenever(viewStructure.extras).doReturnConsecutively(listOf(bundle1, bundle2))
 
         // Act.
         rule.runOnIdle { appeared = true }
@@ -175,15 +177,15 @@ class ContentCaptureTest {
         // Assert.
         rule.runOnIdle {
             with(argumentCaptor<CharSequence>()) {
-                verify(viewStructureCompat, times(2)).setText(capture())
+                verify(viewStructure, times(2)).setText(capture())
                 assertThat(firstValue).isEqualTo("foo")
                 assertThat(secondValue).isEqualTo("bar")
             }
-            verify(viewStructureCompat, times(2)).extras
+            verify(viewStructure, times(2)).extras
             assertAdditionalIndices(bundle1, 0)
             assertAdditionalIndices(bundle2, 1)
             with(argumentCaptor<String>()) {
-                verify(viewStructureCompat, times(1)).setId(anyInt(), isNull(), isNull(), capture())
+                verify(viewStructure, times(1)).setId(anyInt(), isNull(), isNull(), capture())
                 assertThat(firstValue).isEqualTo("testTagFoo")
             }
             verify(contentCaptureSessionWrapper, times(0)).notifyViewsDisappeared(any())
@@ -337,7 +339,7 @@ class ContentCaptureTest {
             // At least 5 times(List itself + 4 children)
             verify(contentCaptureSessionWrapper, atLeast(5)).notifyViewAppeared(any())
             with(argumentCaptor<String>()) {
-                verify(viewStructureCompat, times(5)).setClassName(capture())
+                verify(viewStructure, times(5)).setClassName(capture())
                 assertThat(firstValue).isEqualTo("android.widget.ViewGroup")
                 assertThat(secondValue).isEqualTo("android.widget.TextView")
                 assertThat(thirdValue).isEqualTo("android.widget.TextView")
@@ -359,7 +361,7 @@ class ContentCaptureTest {
             }
 
             val bundle1 = Bundle()
-            whenever(viewStructureCompat.extras).thenReturn(bundle1)
+            whenever(viewStructure.extras).thenReturn(bundle1)
 
             // Act.
             rule.runOnIdle {
@@ -399,7 +401,7 @@ class ContentCaptureTest {
 
             val bundle1 = Bundle()
             val bundle2 = Bundle()
-            whenever(viewStructureCompat.extras).doReturnConsecutively(listOf(bundle1, bundle2))
+            whenever(viewStructure.extras).doReturnConsecutively(listOf(bundle1, bundle2))
             rule.runOnIdle {
                 // text_[4,5] appeared, text_[0,1] disappeared
                 scope?.launch { listState?.scrollToItem(index = 2) }
@@ -438,7 +440,7 @@ class ContentCaptureTest {
             }
 
             val bundle1 = Bundle()
-            whenever(viewStructureCompat.extras).thenReturn(bundle1)
+            whenever(viewStructure.extras).thenReturn(bundle1)
 
             // Act.
             rule.runOnIdle {
@@ -478,7 +480,7 @@ class ContentCaptureTest {
 
             val bundle1 = Bundle()
             val bundle2 = Bundle()
-            whenever(viewStructureCompat.extras).doReturnConsecutively(listOf(bundle1, bundle2))
+            whenever(viewStructure.extras).doReturnConsecutively(listOf(bundle1, bundle2))
             rule.runOnIdle {
                 // text_[1,2] appeared, text_[5,6] disappeared
                 scope?.launch { listState?.scrollToItem(index = 1) }
@@ -692,6 +694,37 @@ class ContentCaptureTest {
     }
 
     @Test
+    fun handlerUsesViewHandler() {
+        rule.setContentWithContentCaptureEnabled {
+            assertThat(androidComposeView.contentCaptureManager.handler)
+                .isSameInstanceAs(androidComposeView.handler)
+        }
+    }
+
+    @Test
+    // verify fix for b/486235925
+    fun handlerReturnsNullWhenDetached_doesntCrash() {
+        rule.setContentWithContentCaptureEnabled {
+            val view = androidComposeView
+            val manager = view.contentCaptureManager
+
+            // 1. Initial state: Attached
+            assertThat(manager.handler).isNotNull()
+
+            // 2. Action: Detach the view from the window
+            val parent = view.parent as android.view.ViewGroup
+            parent.removeView(view)
+
+            // 3. Verify: handler should now be null
+            // ensure we're reading the _attached_ handler
+            assertThat(manager.handler).isNull()
+
+            // 4. Verify: should not crash even with null handler
+            manager.onSemanticsChange()
+        }
+    }
+
+    @Test
     @SdkSuppress(minSdkVersion = 31)
     fun testOnHideTranslation() {
         // Arrange.
@@ -752,12 +785,10 @@ class ContentCaptureTest {
         content: @Composable () -> Unit,
     ) {
         contentCaptureSessionWrapper = mock()
-        viewStructureCompat = mock()
-        val viewStructure: ViewStructure = mock()
+        viewStructure = mock()
 
         whenever(contentCaptureSessionWrapper.newVirtualViewStructure(any(), any()))
-            .thenReturn(viewStructureCompat)
-        whenever(viewStructureCompat.toViewStructure()).thenReturn(viewStructure)
+            .thenReturn(viewStructure)
 
         // TODO(mnuzen): provideContentCaptureManager as a compositionLocal so that instead of
         //  casting view and getting ContentCaptureManager, retrieve it via
@@ -781,7 +812,7 @@ class ContentCaptureTest {
 
         runOnIdle {
             if (!retainInteractionsDuringInitialization) {
-                clearInvocations(contentCaptureSessionWrapper, viewStructureCompat)
+                clearInvocations(contentCaptureSessionWrapper, viewStructure)
             }
         }
     }
@@ -807,5 +838,61 @@ class ContentCaptureTest {
                 )
             )
             .isEqualTo(expected)
+    }
+
+    @Test
+    fun onViewDetachedFromWindow_nullHandler_doesNotCrash() {
+        // A newly instantiated View is not attached to a window, so view.handler is null.
+        rule.runOnUiThread {
+            val view = rule.createAndroidComposeView(coroutineContext = Dispatchers.Main)
+            val manager =
+                AndroidContentCaptureManager(view = view, onContentCaptureSession = { null })
+            manager.onViewDetachedFromWindow(view)
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 29)
+    fun onViewDetachedFromWindow_runnableExitsEarly_whenDetached() {
+        rule.runOnUiThread {
+            val rawView = rule.createAndroidComposeView(coroutineContext = Dispatchers.Main)
+            val view = spy(rawView)
+
+            // Stub isAttachedToWindow to return true initially
+            doReturn(true).whenever(view).isAttachedToWindow
+
+            val mockSession = mock<ContentCaptureSessionWrapper>()
+            val manager =
+                AndroidContentCaptureManager(view = view, onContentCaptureSession = { mockSession })
+
+            // Trigger onStart to initialize the session so isEnabled is true
+            manager.onStart(mock())
+
+            // Trigger attach
+            manager.onViewAttachedToWindow(view)
+
+            // Trigger semantics change which posts the checker
+            manager.onSemanticsChange()
+
+            // Retrieve the private contentCaptureChangeChecker runnable via reflection
+            val checkerField =
+                AndroidContentCaptureManager::class
+                    .java
+                    .getDeclaredField("contentCaptureChangeChecker")
+            checkerField.isAccessible = true
+            val contentCaptureChangeChecker = checkerField.get(manager) as Runnable
+
+            // Simulate detachment by stubbing isAttachedToWindow to false
+            doReturn(false).whenever(view).isAttachedToWindow
+
+            // Reset spy view invocations
+            clearInvocations(view)
+
+            // Run the checker (simulating looper execution)
+            contentCaptureChangeChecker.run()
+
+            // Verify that view.measureAndLayout() was never called (exited early)
+            verify(view, never()).measureAndLayout()
+        }
     }
 }

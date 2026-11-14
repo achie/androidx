@@ -1,4 +1,5 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=public
 package androidx.kruth {
 
   public final class BigDecimalSubject extends androidx.kruth.ComparableSubject<java.math.BigDecimal> {
@@ -405,6 +406,7 @@ package androidx.kruth {
     method protected String actualCustomStringRepresentation();
     method protected final androidx.kruth.StandardSubjectBuilder check();
     method protected final androidx.kruth.StandardSubjectBuilder check(String format, java.lang.Object... args);
+    method @BytecodeOnly @kotlin.PublishedApi internal final void doFail(androidx.kruth.Fact!...);
     method protected final void failWithActual(androidx.kruth.Fact first, androidx.kruth.Fact... rest);
     method protected final void failWithActual(String key, Object? value);
     method protected final void failWithoutActual(androidx.kruth.Fact first, androidx.kruth.Fact... rest);

@@ -75,9 +75,7 @@ internal class AndroidComposeTestCaseRunner<T : ComposeTestCase>(
         private set
 
     private val supportsRenderNode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-    private val supportsMRenderNode =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.P &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+    private val supportsMRenderNode = Build.VERSION.SDK_INT < Build.VERSION_CODES.P
 
     private val screenWidthSpec: Int
     private val screenHeightSpec: Int
@@ -284,6 +282,9 @@ internal class AndroidComposeTestCaseRunner<T : ComposeTestCase>(
         val rootView = activity.findViewById(android.R.id.content) as ViewGroup
         rootView.removeAllViews()
 
+        // Run and remove outOfFrameExecutor callbacks
+        owner?.runAndClearPendingCallbacks()
+
         // Dispatcher will clean up the cancelled coroutines when it advances to them
         testCoroutineDispatcher.scheduler.advanceUntilIdle()
 
@@ -331,6 +332,14 @@ internal class AndroidComposeTestCaseRunner<T : ComposeTestCase>(
 
     override fun getCoroutineLaunchedCount(): Int {
         return continuationCountInterceptor.continuationCount - InternallyLaunchedCoroutines
+    }
+
+    override fun setAccessibilityEnabled(enabled: Boolean) {
+        owner?.forceAccessibilityForTesting(enabled)
+    }
+
+    override fun updateSemantics() {
+        owner?.updateSemanticsForTest()
     }
 }
 

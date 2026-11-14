@@ -25,7 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.tooling.PreviewActivity
 import androidx.compose.ui.tooling.preview.Preview
@@ -39,9 +39,7 @@ import org.junit.Test
 
 class LazyPagingItemsPreviewTest {
 
-    @get:Rule
-    val composeTestRule =
-        createAndroidComposeRule<PreviewActivity>(effectContext = StandardTestDispatcher())
+    @get:Rule val composeTestRule = createAndroidComposeRule<PreviewActivity>()
 
     @Test
     fun pagingPreviewTest() {

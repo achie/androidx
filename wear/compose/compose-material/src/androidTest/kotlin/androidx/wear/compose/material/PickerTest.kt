@@ -34,7 +34,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.TouchInjectionScope
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
@@ -49,7 +49,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -58,7 +57,7 @@ import org.junit.runner.RunWith
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class PickerTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private var itemSizePx: Int = 20
     private var itemSizeDp: Dp = Dp.Infinity
@@ -361,7 +360,7 @@ class PickerTest {
 
     private fun scrolls_to_index_correctly(separationSign: Int, targetIndex: Int) {
         val pickerDriver = PickerDriver(separationSign = separationSign)
-        rule.setContent { pickerDriver.DrivedPicker() }
+        rule.setContent { pickerDriver.DrivenPicker() }
 
         rule.runOnIdle { runBlocking { pickerDriver.state.scrollToOption(targetIndex) } }
         rule.waitForIdle()
@@ -630,7 +629,7 @@ class PickerTest {
         val pickerDriver = PickerDriver(separationSign = 1)
         rule.setContent {
             scope = rememberCoroutineScope()
-            pickerDriver.DrivedPicker()
+            pickerDriver.DrivenPicker()
         }
 
         rule.waitForIdle()
@@ -721,7 +720,7 @@ class PickerTest {
         touchInput: (TouchInjectionScope).() -> Unit,
     ) {
         val pickerDriver = PickerDriver(separationSign)
-        rule.setContent { pickerDriver.DrivedPicker() }
+        rule.setContent { pickerDriver.DrivenPicker() }
 
         rule.waitForIdle()
         rule.onNodeWithTag(TEST_TAG).performTouchInput { touchInput() }
@@ -740,7 +739,7 @@ class PickerTest {
         private val itemsToShow = 11
 
         @Composable
-        fun DrivedPicker() {
+        fun DrivenPicker() {
             val pickerHeightDp =
                 itemSizeDp * itemsToShow + separationDp * (itemsToShow - 1) * separationSign
             pickerHeightPx = with(LocalDensity.current) { pickerHeightDp.toPx() }

@@ -30,7 +30,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMultiModalInput
 import androidx.compose.ui.test.withKeysDown
@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.test.filters.LargeTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
@@ -49,7 +48,7 @@ import org.junit.Test
 @OptIn(ExperimentalTestApi::class)
 class TextFieldShiftClickTest : FocusedWindowTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var state: TextFieldState
 
@@ -96,7 +95,7 @@ class TextFieldShiftClickTest : FocusedWindowTest {
                 key { withKeysDown(listOf(Key.ShiftLeft)) { mouse { click(centerLeft) } } }
             }
         }
-        assertThat(state.selection).isEqualTo(TextRange(0, state.value.length))
+        assertThat(state.selection).isEqualTo(TextRange(state.value.length, 0))
     }
 
     @Test
@@ -136,7 +135,7 @@ class TextFieldShiftClickTest : FocusedWindowTest {
                 key { withKeysDown(listOf(Key.ShiftLeft)) { mouse { click(centerLeft) } } }
             }
         }
-        assertThat(state.selection).isEqualTo(TextRange(0, state.value.length))
+        assertThat(state.selection).isEqualTo(TextRange(state.value.length, 0))
     }
 
     @Test
@@ -158,7 +157,7 @@ class TextFieldShiftClickTest : FocusedWindowTest {
                 key { withKeysDown(listOf(Key.ShiftLeft)) { mouse { click(centerRight) } } }
             }
         }
-        assertThat(state.selection).isEqualTo(TextRange(0, state.value.length))
+        assertThat(state.selection).isEqualTo(TextRange(state.value.length, 0))
     }
 
     @Test

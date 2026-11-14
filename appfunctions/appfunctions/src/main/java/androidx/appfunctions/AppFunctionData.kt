@@ -16,9 +16,7 @@
 
 package androidx.appfunctions
 
-import android.app.PendingIntent
 import android.app.appsearch.GenericDocument
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
@@ -28,15 +26,17 @@ import androidx.annotation.RequiresApi
 import androidx.annotation.RestrictTo
 import androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP
 import androidx.annotation.WorkerThread
+import androidx.appfunctions.internal.AppFunctionLibraryConfiguration.isLoggingEnabled
 import androidx.appfunctions.internal.AppFunctionSerializableFactory
 import androidx.appfunctions.internal.Constants.APP_FUNCTIONS_TAG
+import androidx.appfunctions.internal.getClass
+import androidx.appfunctions.internal.serializableproxies.BuiltInSerializableProxies
 import androidx.appfunctions.metadata.AppFunctionAllOfTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionComponentsMetadata
 import androidx.appfunctions.metadata.AppFunctionObjectTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionParameterMetadata
 import androidx.appfunctions.metadata.AppFunctionResponseMetadata
 import com.google.errorprone.annotations.CanIgnoreReturnValue
-import java.time.LocalDateTime
 
 /**
  * A data class to contain information to be communicated between AppFunctions apps and agents.
@@ -476,32 +476,6 @@ internal constructor(
     }
 
     /**
-     * Retrieves a [PendingIntent] value associated with the specified [key].
-     *
-     * @param key The key to retrieve the value for.
-     * @return The value associated with the [key], or null if the associated value is not found.
-     * @throws IllegalArgumentException if the [key] is not allowed or the value type is incorrect
-     *   according to the metadata specification.
-     */
-    public fun getPendingIntent(key: String): PendingIntent? {
-        return getPendingIntentOrNull(key)
-    }
-
-    // Equivalent to getPendingIntent. Provided for generated AppFunctionSerializableFactory to use
-    // without changing the access getter name based on type.
-    @RestrictTo(LIBRARY_GROUP)
-    public fun getPendingIntentOrNull(key: String): PendingIntent? {
-        val pendingIntentValue = extras.getParcelable(extrasKey(key), PendingIntent::class.java)
-        spec?.validateReadRequest(
-            key,
-            PendingIntent::class.java,
-            isCollection = false,
-            targetValue = pendingIntentValue,
-        )
-        return pendingIntentValue
-    }
-
-    /**
      * Retrieves a [Parcelable] value of type [T] associated with the specified [key].
      *
      * Returns null or fails with an exception if:
@@ -562,7 +536,7 @@ internal constructor(
     @RestrictTo(LIBRARY_GROUP)
     public fun <T : Parcelable> getParcelableOrNull(key: String, clazz: Class<T>): T? {
         val parcelable = extras.getParcelable(extrasKey(key), clazz)
-        // TODO: b/447530985 - Implement spec validation
+        spec?.validateReadRequest(key, clazz, isCollection = false, targetValue = parcelable)
         return parcelable
     }
 
@@ -771,27 +745,6 @@ internal constructor(
     }
 
     /**
-     * Retrieves a [List] of [PendingIntent] value associated with the specified [key].
-     *
-     * @param key The key to retrieve the value for.
-     * @return The value associated with the [key]. Or null if the associated value is not found.
-     * @throws IllegalArgumentException if the [key] is not allowed or the value type is incorrect
-     *   according to the metadata specification.
-     */
-    @Suppress("NullableCollection")
-    public fun getPendingIntentList(key: String): List<PendingIntent>? {
-        val pendingIntentListValue =
-            extras.getParcelableArrayList(extrasKey(key), PendingIntent::class.java)
-        spec?.validateReadRequest(
-            key,
-            PendingIntent::class.java,
-            isCollection = true,
-            targetValue = pendingIntentListValue,
-        )
-        return pendingIntentListValue
-    }
-
-    /**
      * Retrieves a [List] of [Parcelable] values of type [T] associated with the specified [key].
      *
      * For `Parcelable` types not defined by the Android platform (e.g., custom classes shared
@@ -807,7 +760,7 @@ internal constructor(
     public fun <T : Parcelable> getParcelableList(key: String, clazz: Class<T>): List<T>? {
         extras.classLoader = clazz.classLoader
         val parcelableList = extras.getParcelableArrayList(extrasKey(key), clazz)
-        // TODO: b/447530985 - Implement spec validation
+        spec?.validateReadRequest(key, clazz, isCollection = true, targetValue = parcelableList)
         if (parcelableList?.all { clazz.isInstance(it) } != true) {
             // For some reason Bundle.getParcelableArrayList doesn't return null even when type is
             // wrong.
@@ -868,11 +821,13 @@ internal constructor(
             val factory = getSerializableFactory(serializableClass)
             factory.fromAppFunctionData(this)
         } catch (e: Exception) {
-            Log.d(
-                APP_FUNCTIONS_TAG,
-                "Something went wrong while deserialize $this to $serializableClass",
-                e,
-            )
+            if (isLoggingEnabled) {
+                Log.d(
+                    APP_FUNCTIONS_TAG,
+                    "Something went wrong while deserialize $this to $serializableClass",
+                    e,
+                )
+            }
             throw IllegalArgumentException(
                 "Unable to deserialize $serializableClass. Is the class annotated with @AppFunctionSerializable?"
             )
@@ -891,7 +846,7 @@ internal constructor(
      */
     @RestrictTo(LIBRARY_GROUP)
     public fun <T : Any> deserialize(qualifiedName: String): T {
-        return deserialize<T>(getSerializableClass(qualifiedName))
+        return deserialize<T>(getClass(qualifiedName))
     }
 
     private fun <T : Any> unsafeGetProperty(key: String, arrayClass: Class<T>): T? {
@@ -970,38 +925,44 @@ internal constructor(
     @WorkerThread
     @RestrictTo(LIBRARY_GROUP)
     public fun visitAppFunctionUriGrants(visitor: (AppFunctionUriGrant) -> Unit) {
-        if (qualifiedName == AppFunctionUriGrant::class.java.canonicalName) {
+        visitGenericDocumentUriGrants(genericDocument, visitor)
+    }
+
+    private fun visitGenericDocumentUriGrants(
+        document: GenericDocument,
+        visitor: (AppFunctionUriGrant) -> Unit,
+    ) {
+        if (document.schemaType == APP_FUNCTION_URI_GRANT_QUALIFIED_NAME) {
             val uriGrant =
                 try {
-                    deserialize(AppFunctionUriGrant::class.java)
+                    AppFunctionData(document, Bundle.EMPTY)
+                        .deserialize(AppFunctionUriGrant::class.java)
                 } catch (e: Exception) {
-                    Log.d(
-                        APP_FUNCTIONS_TAG,
-                        "Unexpected error while visiting AppFunctionUriGrant",
-                        e,
-                    )
+                    if (isLoggingEnabled) {
+                        Log.d(
+                            APP_FUNCTIONS_TAG,
+                            "Unexpected error while visiting AppFunctionUriGrant",
+                            e,
+                        )
+                    }
                     null
                 }
 
             if (uriGrant != null) {
                 visitor.invoke(uriGrant)
             }
+            // AppFunctionUriGrant has no nested AppFunctionUriGrant.
+            return
         }
 
-        for (key in genericDocument.propertyNames) {
-            // AppFunctionUriGrant would only be stored as either singular AppFunctionData or list
-            // of AppFunctionData.
-            try {
-                getAppFunctionData(key)?.visitAppFunctionUriGrants(visitor)
-            } catch (_: Exception) {
-                // Swallow the exception as it is an unsafe read in the first place
-            }
-            try {
-                for (data in getAppFunctionDataList(key) ?: emptyList()) {
-                    data.visitAppFunctionUriGrants(visitor)
-                }
-            } catch (_: Exception) {
-                // Swallow the exception as it is an unsafe read in the first place
+        for (key in document.propertyNames) {
+            // Nested AppFunctionData, singular or list, is stored as an array of GenericDocument.
+            // Read it directly rather than via getAppFunctionData/getAppFunctionDataList, which
+            // throw an expensive exception for every non-document property.
+            @Suppress("UNCHECKED_CAST")
+            val childDocs = document.getProperty(key) as? Array<GenericDocument> ?: continue
+            for (childDoc in childDocs) {
+                visitGenericDocumentUriGrants(childDoc, visitor)
             }
         }
     }
@@ -1015,7 +976,7 @@ internal constructor(
      * fun callCreateNoteFunction(metadata: AppFunctionMetadata) {
      *   val appFunctionData = AppFunctionData.Builder(
      *     metadata.parameters,
-     *     metadata.components,
+     *     metadata.packageMetadata.components,
      *   ).apply {
      *     setString("title", "Note Title")
      *     // If the function doesn't accept "owner" as parameter, it would throw an error
@@ -1119,7 +1080,10 @@ internal constructor(
             componentMetadata: AppFunctionComponentsMetadata,
         ) : this(AppFunctionDataSpec.create(responseMetadata, componentMetadata))
 
-        private constructor(spec: AppFunctionDataSpec) {
+        // This constructor cannot be internal because the generated factory that does not live
+        // in the same module need to use it for data serialization/deserialization.
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+        public constructor(spec: AppFunctionDataSpec) {
             this.spec = spec
             this.qualifiedName = spec.objectQualifiedName
             genericDocumentBuilder =
@@ -1136,10 +1100,12 @@ internal constructor(
             if (SdkExtensions.getExtensionVersion(Build.VERSION_CODES.TIRAMISU) >= 13) {
                 genericDocumentBuilder.setId(id)
             } else {
-                Log.wtf(
-                    APP_FUNCTIONS_TAG,
-                    "setId method in GenericDocument isn't supported on the current device.",
-                )
+                if (isLoggingEnabled) {
+                    Log.wtf(
+                        APP_FUNCTIONS_TAG,
+                        "setId method in GenericDocument isn't supported on the current device.",
+                    )
+                }
             }
         }
 
@@ -1292,26 +1258,6 @@ internal constructor(
         }
 
         /**
-         * Sets a [PendingIntent] value for the given [key].
-         *
-         * @param key The key to set the [AppFunctionData] value for.
-         * @param value The [AppFunctionData] value to set.
-         * @throws IllegalArgumentException if the [key] is not allowed or the [value] does not
-         *   match the metadata specification associated with the [key].
-         */
-        @CanIgnoreReturnValue
-        public fun setPendingIntent(key: String, value: PendingIntent): Builder {
-            spec?.validateWriteRequest(
-                key,
-                PendingIntent::class.java,
-                isCollection = false,
-                targetValue = value,
-            )
-            extrasBuilder.putParcelable(extrasKey(key), value)
-            return this
-        }
-
-        /**
          * Sets a [Parcelable] value of type [T] for the given [key].
          *
          * For `Parcelable` types not defined by the Android platform (e.g., custom classes shared
@@ -1324,7 +1270,12 @@ internal constructor(
          */
         @CanIgnoreReturnValue
         public fun <T : Parcelable> setParcelable(key: String, value: T): Builder {
-            // TODO: b/447530985 - Implement spec validation
+            spec?.validateWriteRequest(
+                key,
+                value.javaClass,
+                isCollection = false,
+                targetValue = value,
+            )
             extrasBuilder.putParcelable(extrasKey(key), value)
             return this
         }
@@ -1508,23 +1459,22 @@ internal constructor(
         }
 
         /**
-         * Sets a [List] of [PendingIntent] value for the given [key].
+         * Sets a [List] of [Parcelable] values of type [T] for the given [key].
          *
-         * @param key The key to set the [List] of [AppFunctionData] value for.
-         * @param value The [List] of [AppFunctionData] value to set.
-         * @throws IllegalArgumentException if the [key] is not allowed or the [value] does not
-         *   match the metadata specification associated with the [key].
+         * For `Parcelable` types not defined by the Android platform (e.g., custom classes shared
+         * between agents and apps), forward and backward compatibility is **not guaranteed** by
+         * this framework. The sender and receiver of the `Parcelable` are responsible for managing
+         * any compatibility and versioning concerns.
+         *
+         * @param key The key to set the list for.
+         * @param value The [List] of [Parcelable] values of type [T] to set.
          */
         @CanIgnoreReturnValue
-        public fun setPendingIntentList(key: String, value: List<PendingIntent>): Builder {
-            spec?.validateWriteRequest(
-                key,
-                PendingIntent::class.java,
-                isCollection = true,
-                targetValue = value,
-            )
-            extrasBuilder.putParcelableArrayList(extrasKey(key), ArrayList<PendingIntent>(value))
-            return this
+        public inline fun <reified T : Parcelable> setParcelableList(
+            key: String,
+            value: List<T>,
+        ): Builder {
+            return setParcelableList(key, value, T::class.java)
         }
 
         /**
@@ -1537,10 +1487,15 @@ internal constructor(
          *
          * @param key The key to set the list for.
          * @param value The [List] of [Parcelable] values of type [T] to set.
+         * @param clazz The [Class] of the [Parcelable] list to set, of type [T].
          */
         @CanIgnoreReturnValue
-        public fun <T : Parcelable> setParcelableList(key: String, value: List<T>): Builder {
-            // TODO: b/447530985 - Implement spec validation
+        public fun <T : Parcelable> setParcelableList(
+            key: String,
+            value: List<T>,
+            clazz: Class<T>,
+        ): Builder {
+            spec?.validateWriteRequest(key, clazz, isCollection = true, targetValue = value)
             extrasBuilder.putParcelableArrayList(extrasKey(key), ArrayList(value))
             return this
         }
@@ -1575,60 +1530,150 @@ internal constructor(
         private const val DEFAULT_LONG: Long = 0L
 
         private const val LEGACY_ID_FIELD_KEY = "id"
+        // Must match the schema type written by $AppFunctionUriGrantFactory.
+        private const val APP_FUNCTION_URI_GRANT_QUALIFIED_NAME =
+            "androidx.appfunctions.AppFunctionUriGrant"
 
         private fun extrasKey(key: String) = "property/$key"
 
         private fun extrasKey(key: String, index: Int) = "property/$key[$index]"
 
-        // TODO(b/399823985): Codegen the mapping table to prevent using reflection
-        private fun <T : Any> getSerializableClass(qualifiedName: String): Class<T> {
-            return try {
-                @Suppress("UNCHECKED_CAST")
-                Class.forName(qualifiedName) as Class<T>
-            } catch (e: Exception) {
-                Log.d(APP_FUNCTIONS_TAG, "Unable to find serializable class $qualifiedName", e)
-                throw IllegalArgumentException("Unable to find serializable class $qualifiedName")
-            }
-        }
-
-        // TODO(b/399823985): Codegen the mapping table to prevent using reflection
         private fun <T : Any> getSerializableFactory(
             serializableClass: Class<T>
         ): AppFunctionSerializableFactory<T> {
-            val packageName = getPackageName(serializableClass)
+            val builtInFactory = BuiltInSerializableProxies.getFactory(serializableClass)
+            if (builtInFactory != null) {
+                return builtInFactory
+            }
+
             // Using `serializableClass.name` and not `serializableClass.simpleName` to be able to
             // reference nested classes (e.g. OuterClass$InnerClass), to avoid ambiguity between
             // inner classes of the same name.
             val serializableSimpleName = serializableClass.name.substringAfterLast('.')
-
             val factorySimpleName = "${'$'}${serializableSimpleName}Factory"
-            val factoryClassName = "${packageName}.${factorySimpleName}"
+            val packageName = serializableClass.packageName
 
             return try {
+                val factoryClassName = "$packageName.$factorySimpleName"
                 val factoryClass = Class.forName(factoryClassName)
                 @Suppress("UNCHECKED_CAST")
                 factoryClass.getDeclaredConstructor().newInstance()
                     as AppFunctionSerializableFactory<T>
             } catch (e: Exception) {
-                Log.d(
-                    APP_FUNCTIONS_TAG,
-                    "Unable to create AppFunctionSerializableFactory for $serializableClass",
-                    e,
-                )
+                if (isLoggingEnabled) {
+                    Log.d(
+                        APP_FUNCTIONS_TAG,
+                        "Unable to create AppFunctionSerializableFactory for $serializableClass",
+                        e,
+                    )
+                }
                 throw IllegalArgumentException(
                     "Unable to create AppFunctionSerializableFactory for $serializableClass"
                 )
             }
         }
 
-        private fun getPackageName(serializableClass: Class<*>): String {
-            val setOfProxyTypes = setOf(LocalDateTime::class.simpleName, Uri::class.simpleName)
-            val serializableProxyPackageName = "androidx.appfunctions.internal.serializableproxies"
-            if (setOfProxyTypes.contains(serializableClass.simpleName)) {
-                return serializableProxyPackageName
-            }
+        /**
+         * Serialize [serializable] to [AppFunctionData] representing an AllOf type object.
+         *
+         * The caller can use this to construct the [AppFunctionData] that conforms with the
+         * provided [metadata].
+         *
+         * @param metadata [AppFunctionAllOfTypeMetadata] defining the AllOf type structure.
+         * @param componentMetadata [AppFunctionComponentsMetadata] that has the shared data types.
+         * @param serializable The serializable that is annotated with [AppFunctionSerializable].
+         * @throws IllegalArgumentException if failed to serialize [serializable].
+         * @see [AppFunctionAllOfTypeMetadata]
+         * @see [AppFunctionComponentsMetadata]
+         */
+        @JvmStatic
+        public inline fun <reified T : Any> serialize(
+            metadata: AppFunctionAllOfTypeMetadata,
+            componentMetadata: AppFunctionComponentsMetadata,
+            serializable: T,
+        ): AppFunctionData {
+            return serialize(metadata, componentMetadata, serializable, T::class.java)
+        }
 
-            return serializableClass.packageName
+        /**
+         * Serialize [serializable] to [AppFunctionData] representing an AllOf type object.
+         *
+         * The caller can use this to construct the [AppFunctionData] that conforms with the
+         * provided [metadata].
+         *
+         * @param metadata [AppFunctionAllOfTypeMetadata] defining the AllOf type structure.
+         * @param componentMetadata [AppFunctionComponentsMetadata] that has the shared data types.
+         * @param serializable The serializable that is annotated with [AppFunctionSerializable].
+         * @param serializableClass The class of [serializable].
+         * @throws IllegalArgumentException if failed to serialize [serializable].
+         * @see [AppFunctionAllOfTypeMetadata]
+         * @see [AppFunctionComponentsMetadata]
+         */
+        @JvmStatic
+        public fun <T : Any> serialize(
+            metadata: AppFunctionAllOfTypeMetadata,
+            componentMetadata: AppFunctionComponentsMetadata,
+            serializable: T,
+            serializableClass: Class<T>,
+        ): AppFunctionData {
+            return serialize(
+                AppFunctionDataSpec.create(
+                    metadata.getPseudoObjectTypeMetadata(componentMetadata),
+                    componentMetadata,
+                ),
+                serializable,
+                serializableClass,
+            )
+        }
+
+        /**
+         * Serialize [serializable] to [AppFunctionData] representing an object.
+         *
+         * The caller can use this to construct the [AppFunctionData] that conforms with the
+         * provided [metadata].
+         *
+         * @param metadata [AppFunctionObjectTypeMetadata] defining the object structure.
+         * @param componentMetadata [AppFunctionComponentsMetadata] that has the shared data types.
+         * @param serializable The serializable that is annotated with [AppFunctionSerializable].
+         * @throws IllegalArgumentException if failed to serialize [serializable].
+         * @see [AppFunctionObjectTypeMetadata]
+         * @see [AppFunctionComponentsMetadata]
+         */
+        @JvmStatic
+        public inline fun <reified T : Any> serialize(
+            metadata: AppFunctionObjectTypeMetadata,
+            componentMetadata: AppFunctionComponentsMetadata,
+            serializable: T,
+        ): AppFunctionData {
+            return serialize(metadata, componentMetadata, serializable, T::class.java)
+        }
+
+        /**
+         * Serialize [serializable] to [AppFunctionData] representing an object.
+         *
+         * The caller can use this to construct the [AppFunctionData] that conforms with the
+         * provided [metadata].
+         *
+         * @param metadata [AppFunctionObjectTypeMetadata] defining the object structure.
+         * @param componentMetadata [AppFunctionComponentsMetadata] that has the shared data types.
+         * @param serializable The serializable that is annotated with [AppFunctionSerializable].
+         * @param serializableClass The class of [serializable].
+         * @throws IllegalArgumentException if failed to serialize [serializable].
+         * @see [AppFunctionObjectTypeMetadata]
+         * @see [AppFunctionComponentsMetadata]
+         */
+        @JvmStatic
+        public fun <T : Any> serialize(
+            metadata: AppFunctionObjectTypeMetadata,
+            componentMetadata: AppFunctionComponentsMetadata,
+            serializable: T,
+            serializableClass: Class<T>,
+        ): AppFunctionData {
+            return serialize(
+                AppFunctionDataSpec.create(metadata, componentMetadata),
+                serializable,
+                serializableClass,
+            )
         }
 
         /**
@@ -1641,39 +1686,35 @@ internal constructor(
          *   [AppFunctionData].
          * @see [AppFunctionSerializable]
          */
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         @JvmStatic
         public fun <T : Any> serialize(
             serializable: T,
             serializableClass: Class<T>,
         ): AppFunctionData {
+            return serialize(null, serializable, serializableClass)
+        }
+
+        internal fun <T : Any> serialize(
+            spec: AppFunctionDataSpec?,
+            serializable: T,
+            serializableClass: Class<T>,
+        ): AppFunctionData {
             return try {
                 val factory = getSerializableFactory(serializableClass)
-                factory.toAppFunctionData(serializable)
+                factory.toAppFunctionData(spec, serializable)
             } catch (e: Exception) {
-                Log.d(
-                    APP_FUNCTIONS_TAG,
-                    "Something went wrong while serialize $serializable of class $serializableClass",
-                    e,
-                )
+                if (isLoggingEnabled) {
+                    Log.d(
+                        APP_FUNCTIONS_TAG,
+                        "Something went wrong while serialize $serializable of class $serializableClass",
+                        e,
+                    )
+                }
                 throw IllegalArgumentException(
                     "Unable to serialize $serializableClass. Is the class annotated with @AppFunctionSerializable?"
                 )
             }
-        }
-
-        /**
-         * Serializes [serializable] to an [AppFunctionData].
-         *
-         * @param serializable The instance of [qualifiedName].
-         * @param qualifiedName The qualified name of the class [serializable].
-         * @return [AppFunctionData] with properties from [serializable].
-         * @throws IllegalArgumentException If unable to serialize [serializable] to an
-         *   [AppFunctionData].
-         * @see [AppFunctionSerializable]
-         */
-        @RestrictTo(LIBRARY_GROUP)
-        public fun <T : Any> serialize(serializable: T, qualifiedName: String): AppFunctionData {
-            return serialize(serializable, getSerializableClass<T>(qualifiedName))
         }
 
         /** Represents an empty [AppFunctionData]. */

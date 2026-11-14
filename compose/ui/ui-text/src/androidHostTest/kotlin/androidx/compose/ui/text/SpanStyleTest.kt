@@ -16,8 +16,10 @@
 
 package androidx.compose.ui.text
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Fill
@@ -907,5 +909,44 @@ class SpanStyleTest {
 
         assertThat(newStyle.brush).isNull()
         assertThat(newStyle.color).isEqualTo(Color.Unspecified)
+    }
+
+    @Test
+    fun lerp_shadow_start_null_interpolates() {
+        val start = Shadow(Color.Red, Offset(10f, 10f), 4f)
+        val fraction = 0.5f
+        val style1 = SpanStyle(shadow = start)
+        val style2 = SpanStyle(shadow = null)
+
+        val newSpanStyle = lerp(start = style1, stop = style2, fraction = fraction)
+
+        assertThat(newSpanStyle.shadow)
+            .isEqualTo(lerp(start, start.copy(color = start.color.copy(alpha = 0.0f)), fraction))
+    }
+
+    @Test
+    fun lerp_shadow_null_stop_interpolates() {
+        val stop = Shadow(Color.Blue, Offset(20f, 20f), 8f)
+        val fraction = 0.5f
+        val style1 = SpanStyle(shadow = null)
+        val style2 = SpanStyle(shadow = stop)
+
+        val newSpanStyle = lerp(start = style1, stop = style2, fraction = fraction)
+
+        assertThat(newSpanStyle.shadow)
+            .isEqualTo(lerp(stop.copy(color = stop.color.copy(alpha = 0.0f)), stop, fraction))
+    }
+
+    @Test
+    fun lerp_shadow_start_stop_interpolates() {
+        val start = Shadow(Color.Red, Offset(10f, 10f), 4f)
+        val stop = Shadow(Color.Blue, Offset(20f, 20f), 8f)
+        val fraction = 0.5f
+        val style1 = SpanStyle(shadow = start)
+        val style2 = SpanStyle(shadow = stop)
+
+        val newSpanStyle = lerp(start = style1, stop = style2, fraction = fraction)
+
+        assertThat(newSpanStyle.shadow).isEqualTo(lerp(start, stop, fraction))
     }
 }

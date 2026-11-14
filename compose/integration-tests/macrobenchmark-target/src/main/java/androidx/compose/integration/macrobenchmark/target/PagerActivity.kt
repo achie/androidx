@@ -17,6 +17,7 @@
 package androidx.compose.integration.macrobenchmark.target
 
 import android.os.Bundle
+import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -25,11 +26,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeContent
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -64,7 +68,9 @@ class PagerActivity : ComponentActivity() {
         setContent {
             val pagerState = rememberPagerState { ItemCount }
 
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeContent)
+            ) {
                 if (enableTab) {
                     val scope = rememberCoroutineScope()
                     Button(
@@ -121,7 +127,7 @@ class PagerActivity : ComponentActivity() {
 
     @Composable
     fun BenchmarkPagerOfWebViews(pagerState: PagerState) {
-        FullSizePager(pagerState) {
+        FullSizePager(pagerState) { page ->
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { context ->
@@ -134,7 +140,12 @@ class PagerActivity : ComponentActivity() {
                         settings.setSupportZoom(true)
                     }
                 },
-                update = { webView -> webView.loadUrl("https://www.google.com/") },
+                update = { webView ->
+                    // WebView's AccessibilityNodeProvider ignores View.contentDescription, so set
+                    // it on the parent AndroidViewHolder instead.
+                    (webView.parent as View).contentDescription = "Page $page"
+                    webView.loadUrl("https://www.google.com/")
+                },
             )
         }
     }

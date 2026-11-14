@@ -19,13 +19,12 @@ package androidx.camera.camera2.internal
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
-import android.hardware.camera2.CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW_VIDEO_STILL
-import android.os.Build
 import android.view.Surface
 import androidx.camera.camera2.adapter.SupportedSurfaceCombination
 import androidx.camera.camera2.impl.Camera2ImplConfig
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
+import androidx.camera.common.CameraId
 import androidx.camera.core.CompositionSettings
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.ImageCapture
@@ -91,11 +90,21 @@ class StreamUseCaseUtilTest {
                 return mSurfaceFuture
             }
         }
+    private var mMockSurface3: DeferrableSurface =
+        object : DeferrableSurface() {
+            private val mSurfaceFuture: ListenableFuture<Surface> = ResolvableFuture.create()
+
+            override fun provideSurface(): ListenableFuture<Surface> {
+                // Return a never complete future.
+                return mSurfaceFuture
+            }
+        }
 
     @After
     fun tearDown() {
         mMockSurface1.close()
         mMockSurface2.close()
+        mMockSurface3.close()
     }
 
     @Test
@@ -230,6 +239,280 @@ class StreamUseCaseUtilTest {
         assertThat(streamUseCaseMap.size).isEqualTo(1)
         assertThat(streamUseCaseMap[mMockSurface1])
             .isEqualTo(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong())
+    }
+
+    @Test
+    fun populateSurfaceToStreamUseCaseMapping_previewAndImageCaptureAndMeteringRepeating_fallsBackToDefault() {
+        val streamUseCaseMap: MutableMap<DeferrableSurface, Long> = mutableMapOf()
+        val previewOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
+                )
+            }
+        val imageCaptureOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                )
+            }
+        val previewSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface1)
+                .addImplementationOptions(Camera2ImplConfig(previewOptionsBundle))
+                .build()
+        val imageCaptureSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface2)
+                .addImplementationOptions(Camera2ImplConfig(imageCaptureOptionsBundle))
+                .build()
+        val meteringRepeatingSessionConfig =
+            SessionConfig.Builder().addSurface(mMockSurface3).build()
+        val previewConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.PREVIEW,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        val imageCaptureConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.IMAGE_CAPTURE,
+                imageFormat = ImageFormat.JPEG,
+            )
+        val meteringRepeatingConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.METERING_REPEATING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(previewSessionConfig, imageCaptureSessionConfig, meteringRepeatingSessionConfig),
+            listOf(previewConfig, imageCaptureConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+            allowEmptySurfaceStreamUseCase = true,
+        )
+        assertThat(streamUseCaseMap).isEmpty()
+    }
+
+    @Test
+    fun populateSurfaceToStreamUseCaseMapping_previewVideoStillAndMeteringRepeating_fallsBackToDefault() {
+        val streamUseCaseMap: MutableMap<DeferrableSurface, Long> = mutableMapOf()
+        val streamSharingOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW_VIDEO_STILL.toLong(),
+                )
+            }
+        val streamSharingSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface1)
+                .addImplementationOptions(Camera2ImplConfig(streamSharingOptionsBundle))
+                .build()
+        val meteringRepeatingSessionConfig =
+            SessionConfig.Builder().addSurface(mMockSurface2).build()
+        val streamSharingConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.STREAM_SHARING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        val meteringRepeatingConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.METERING_REPEATING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(streamSharingSessionConfig, meteringRepeatingSessionConfig),
+            listOf(streamSharingConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+            allowEmptySurfaceStreamUseCase = true,
+        )
+        assertThat(streamUseCaseMap).isEmpty()
+    }
+
+    @Test
+    fun populateSurfaceToStreamUseCaseMapping_videoRecordAndImageCaptureAndMeteringRepeating_populatesStreamUseCases() {
+        val streamUseCaseMap: MutableMap<DeferrableSurface, Long> = mutableMapOf()
+        val videoRecordOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_VIDEO_RECORD.toLong(),
+                )
+            }
+        val imageCaptureOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                )
+            }
+        val videoRecordSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface1)
+                .addImplementationOptions(Camera2ImplConfig(videoRecordOptionsBundle))
+                .build()
+        val imageCaptureSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface2)
+                .addImplementationOptions(Camera2ImplConfig(imageCaptureOptionsBundle))
+                .build()
+        val meteringRepeatingSessionConfig =
+            SessionConfig.Builder().addSurface(mMockSurface3).build()
+        val videoRecordConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.STREAM_SHARING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        val imageCaptureConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.IMAGE_CAPTURE,
+                imageFormat = ImageFormat.JPEG,
+            )
+        val meteringRepeatingConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.METERING_REPEATING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(
+                videoRecordSessionConfig,
+                imageCaptureSessionConfig,
+                meteringRepeatingSessionConfig,
+            ),
+            listOf(videoRecordConfig, imageCaptureConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+        )
+        assertThat(streamUseCaseMap)
+            .containsExactly(
+                mMockSurface1,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_VIDEO_RECORD.toLong(),
+                mMockSurface2,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                mMockSurface3,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
+            )
+    }
+
+    @Test
+    fun populateSurfaceToStreamUseCaseMapping_noSurfacePreviewAndImageCaptureAndMeteringRepeating_populatesStreamUseCases() {
+        val streamUseCaseMap: MutableMap<DeferrableSurface, Long> = mutableMapOf()
+        val previewOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
+                )
+            }
+        val imageCaptureOptionsBundle =
+            MutableOptionsBundle.create().apply {
+                insertOption(
+                    StreamUseCaseUtil.STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                    CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                )
+            }
+        // Preview has no surface (e.g. no SurfaceProvider set).
+        val previewSessionConfig =
+            SessionConfig.Builder()
+                .addImplementationOptions(Camera2ImplConfig(previewOptionsBundle))
+                .build()
+        val imageCaptureSessionConfig =
+            SessionConfig.Builder()
+                .addSurface(mMockSurface1)
+                .addImplementationOptions(Camera2ImplConfig(imageCaptureOptionsBundle))
+                .build()
+        val meteringRepeatingSessionConfig =
+            SessionConfig.Builder().addSurface(mMockSurface2).build()
+        val previewConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.PREVIEW,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        val imageCaptureConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.IMAGE_CAPTURE,
+                imageFormat = ImageFormat.JPEG,
+            )
+        val meteringRepeatingConfig =
+            getFakeUseCaseConfigWithOptions(
+                camera2InteropOverride = true,
+                isZslDisabled = false,
+                isZslCaptureMode = false,
+                captureType = CaptureType.METERING_REPEATING,
+                imageFormat = ImageFormat.PRIVATE,
+            )
+        // Without allowEmptySurfaceStreamUseCase (default non-fast-switch behavior), a zero-surface
+        // SessionConfig in first position carrying STREAM_USE_CASE_STREAM_SPEC_OPTION aborts and
+        // leaves the map empty.
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(previewSessionConfig, imageCaptureSessionConfig, meteringRepeatingSessionConfig),
+            listOf(previewConfig, imageCaptureConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+        )
+        assertThat(streamUseCaseMap).isEmpty()
+
+        // Without allowEmptySurfaceStreamUseCase, when a single-surface SessionConfig precedes a
+        // zero-surface Preview (e.g. bindToLifecycle(imageCapture, preview) before
+        // setSurfaceProvider), baseline behavior populates the active surfaces.
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(imageCaptureSessionConfig, previewSessionConfig, meteringRepeatingSessionConfig),
+            listOf(imageCaptureConfig, previewConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+        )
+        assertThat(streamUseCaseMap)
+            .containsExactly(
+                mMockSurface1,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                mMockSurface2,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
+            )
+        streamUseCaseMap.clear()
+
+        // With allowEmptySurfaceStreamUseCase = true (dynamic UseCase switching), stream use cases
+        // are populated for the active surfaces regardless of ordering.
+        StreamUseCaseUtil.populateSurfaceToStreamUseCaseMapping(
+            listOf(previewSessionConfig, imageCaptureSessionConfig, meteringRepeatingSessionConfig),
+            listOf(previewConfig, imageCaptureConfig, meteringRepeatingConfig),
+            streamUseCaseMap,
+            allowEmptySurfaceStreamUseCase = true,
+        )
+        assertThat(streamUseCaseMap)
+            .containsExactly(
+                mMockSurface1,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
+                mMockSurface2,
+                CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
+            )
     }
 
     @Test
@@ -664,6 +947,7 @@ class StreamUseCaseUtilTest {
                 CompositionSettings.DEFAULT,
                 CompositionSettings.DEFAULT,
                 children,
+                emptyList(),
                 useCaseConfigFactory,
             )
         val surfaceConfigAttachedSurfaceInfoMap: Map<Int, AttachedSurfaceInfo> = mutableMapOf()
@@ -928,22 +1212,15 @@ class StreamUseCaseUtilTest {
     private fun getCameraMetadata(
         noAvailableStreamUseCase: Boolean
     ): androidx.camera.camera2.pipe.CameraMetadata {
-        val characteristicsMap: MutableMap<CameraCharacteristics.Key<*>, Any?> = mutableMapOf()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !noAvailableStreamUseCase) {
-            val uc =
-                longArrayOf(
-                    CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT.toLong(),
-                    CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong(),
-                    SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW_VIDEO_STILL.toLong(),
-                    CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES_STILL_CAPTURE.toLong(),
-                    CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES_VIDEO_CALL.toLong(),
-                    CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES_VIDEO_RECORD.toLong(),
-                )
-            characteristicsMap[CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES] = uc
-        }
-        return FakeCameraMetadata(
+        return FakeCameraMetadata.fromTemplate(
+            template = HighEndDeviceTemplate,
             cameraId = CameraId.fromCamera2Id(CAMERA_ID_0),
-            characteristics = characteristicsMap,
+            characteristicsOverrides =
+                if (noAvailableStreamUseCase) {
+                    mapOf(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES to null)
+                } else {
+                    emptyMap()
+                },
         )
     }
 

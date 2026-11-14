@@ -22,15 +22,12 @@ plugins {
 android {
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles(
-                    getDefaultProguardFile("proguard-android-optimize.txt"),
-                    "proguard-rules.pro"
-            )
+            optimization {
+                enable = true
+            }
         }
     }
-    compileSdk = 35
+    compileSdk { version = release(35) }
     namespace = "androidx.benchmark.integration.macrobenchmark.target"
 }
 
@@ -41,6 +38,7 @@ dependencies {
     implementation(project(":profileinstaller:profileinstaller"))
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation(project(":tracing:tracing-ktx"))
+    implementation(project(":tracing:tracing-wire"))
     implementation(project(":tracing:tracing-perfetto"))
     implementation(libs.material)
 

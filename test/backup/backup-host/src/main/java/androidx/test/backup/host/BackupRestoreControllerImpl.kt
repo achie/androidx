@@ -1,0 +1,1205 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.test.backup.host
+
+import androidx.test.backup.host.BackupActionWireProtocol.MAX_INLINE_COMMAND_BYTES
+import com.android.adblib.AdbSession
+import com.android.backup.BackupProgressListener
+import com.android.backup.BackupResult
+import com.android.backup.BackupService as Service
+import com.android.backup.BackupType as ServiceType
+import com.android.backup.ErrorCode
+import com.google.common.util.concurrent.ListenableFuture
+import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import java.util.Locale
+import java.util.logging.Logger
+import java.util.zip.ZipFile
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.time.Duration as KotlinDuration
+import kotlin.time.toKotlinDuration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * The [BackupRestoreController] of [applicationId] on the device [serialNumber].
+ *
+ * @param testApplicationId the package of the test APK whose runner runs device actions, or null to
+ *   look the runner up on the device
+ */
+internal class BackupRestoreControllerImpl(
+    private val adbSession: AdbSession,
+    override val serialNumber: String,
+    override val apiLevel: Int,
+    override val applicationId: String,
+    private val testApplicationId: String? = null,
+    private val telemetryPublisher: ((key: String, value: String) -> Unit)? = null,
+    private val cleanupTimeout: KotlinDuration = DEFAULT_CLEANUP_TIMEOUT,
+    backupServiceProvider: () -> Service = { createBackupService(adbSession) },
+) : BackupRestoreController {
+
+    @Volatile
+    internal var lastExecutionSummary: BackupExecutionSummary? = null
+        private set
+
+    @Volatile internal var explicitRole: String = ""
+
+    @Volatile internal var cachedDeviceFacts: DeviceFacts? = null
+
+    /**
+     * Whether the device library in the test APK predates the action that runs several storage
+     * actions in one device run.
+     */
+    @Volatile private var lacksStorageBatch = false
+
+    private val logger = Logger.getLogger(BackupRestoreControllerImpl::class.java.name)
+
+    private val shell = BackupDeviceShell(adbSession, serialNumber)
+
+    internal val deviceShell: BackupDeviceShell
+        get() = shell
+
+    private val localTransport = BackupLocalTransport(shell, applicationId, cleanupTimeout)
+
+    private val backupService: Service by lazy(backupServiceProvider)
+
+    override suspend fun runBackupRestoreFlow(
+        storage: StorageDomain,
+        outputDir: Path,
+        mode: BackupTransportMode,
+        restoreOn: BackupRestoreController,
+    ): BackupRestoreController = runBackupRestoreFlow(listOf(storage), outputDir, mode, restoreOn)
+
+    override suspend fun runBackupRestoreFlow(
+        storages: List<StorageDomain>,
+        outputDir: Path,
+        mode: BackupTransportMode,
+        restoreOn: BackupRestoreController,
+    ): BackupRestoreController {
+        val tracker = BackupExecutionTracker(mode, storages.size)
+        val capture = ActiveCaptureContext.current()
+        capture?.captureFirstCallSiteIfNeeded()
+        val flowContext = capture?.coroutineContext() ?: EmptyCoroutineContext
+        return withContext(flowContext) {
+            try {
+                require(storages.isNotEmpty()) { "At least one StorageDomain must be provided." }
+                require(storages.any { it !is StorageDomain.ExcludedData }) {
+                    "All storages are ExcludedData, so the flow can't verify that the restore " +
+                        "happened. Add a domain that the restore brings back."
+                }
+                require(restoreOn.applicationId == applicationId) {
+                    "restoreOn applicationId (${restoreOn.applicationId}) must match this " +
+                        "controller's applicationId ($applicationId)."
+                }
+                require(
+                    mode != BackupTransportMode.LOCAL || restoreOn.serialNumber == serialNumber
+                ) {
+                    "A LOCAL backup stays in the local transport of $serialNumber, so " +
+                        "${restoreOn.serialNumber} can't restore it. To restore on another device, use " +
+                        "a cloud or device-to-device mode."
+                }
+
+                if (capture != null) {
+                    capture.recordStorages(storages)
+                    capture.recordFlowEndpoints(mode, serialNumber, restoreOn.serialNumber)
+                    if (restoreOn is BackupRestoreControllerImpl) {
+                        capture.addParticipant(restoreOn)
+                    }
+                }
+
+                val stageSpecs =
+                    listOf(
+                        FlowStageSpec(
+                            TestExecutionCapture.StepKind.SEED_ACTION,
+                            "Setup",
+                            this@BackupRestoreControllerImpl,
+                            formatFlowDomainCall("Seed", storages),
+                        ),
+                        FlowStageSpec(
+                            TestExecutionCapture.StepKind.BACKUP,
+                            "Backup",
+                            this@BackupRestoreControllerImpl,
+                            "performBackup($mode)",
+                        ),
+                        FlowStageSpec(
+                            TestExecutionCapture.StepKind.CLEAR_DATA,
+                            "Clear",
+                            restoreOn,
+                            "clearAppData()",
+                        ),
+                        FlowStageSpec(
+                            TestExecutionCapture.StepKind.RESTORE,
+                            "Restore",
+                            restoreOn,
+                            "performRestore(backupFile)",
+                        ),
+                        FlowStageSpec(
+                            TestExecutionCapture.StepKind.VERIFY_ACTION,
+                            "Verify",
+                            restoreOn,
+                            formatFlowDomainCall("Verify", storages),
+                        ),
+                    )
+
+                suspend fun <T> runStage(index: Int, block: suspend () -> T): T {
+                    val spec = stageSpecs[index]
+                    if (capture == null) {
+                        return tracker.stage(spec.stage, block)
+                    }
+                    return capture.runStep(
+                        isNumbered = true,
+                        kind = spec.kind,
+                        name = spec.name,
+                        controller = spec.controller,
+                        call = spec.call,
+                        durationMillisOverride = { tracker.durationOf(spec.stage).toMillis() },
+                        onStepFailed = {
+                            for (skippedIdx in (index + 1) until stageSpecs.size) {
+                                val skipped = stageSpecs[skippedIdx]
+                                capture.addStep(
+                                    isNumbered = true,
+                                    kind = skipped.kind,
+                                    name = skipped.name,
+                                    controller = skipped.controller,
+                                    call = skipped.call,
+                                    durationMs = 0L,
+                                    status = TestDetailRecord.STATUS_SKIPPED,
+                                )
+                            }
+                        },
+                    ) {
+                        tracker.stage(spec.stage, block)
+                    }
+                }
+
+                logger.info(
+                    "Executing standard backup and restore flow for $applicationId across " +
+                        "${storages.size} storage domains..."
+                )
+                val runs = BackupActionWireProtocol.deviceRuns(storages)
+                val verifyCalls =
+                    runStage(0) {
+                        runs.map { domains ->
+                            domains.forEach { logger.info("Seeding data on device for $it...") }
+                            val data =
+                                runStorageActions(
+                                    domains,
+                                    domains.map { BackupActionWireProtocol.populateCall(it) },
+                                )
+                            domains.zip(data, BackupActionWireProtocol::verifyCall)
+                        }
+                    }
+                val backupFile =
+                    runStage(1) {
+                        capture?.markBackupStarted(serialNumber, mode)
+                        logger.info("Performing backup via performBackup ($mode)...")
+                        performBackup(mode, outputDir)
+                    }
+                recordBackupArchive(capture, mode, backupFile)
+                runStage(2) {
+                    logger.info("Clearing app sandbox via clearAppData...")
+                    restoreOn.clearAppData()
+                }
+                runStage(3) {
+                    capture?.markRestoreStarted(restoreOn.serialNumber, mode)
+                    logger.info("Restoring data via performRestore...")
+                    restoreOn.performRestore(backupFile)
+                }
+                runStage(4) {
+                    runs.zip(verifyCalls).forEach { (domains, calls) ->
+                        domains.forEach {
+                            logger.info("Verifying restored data on device for $it...")
+                        }
+                        restoreOn.runStorageActions(domains, calls)
+                    }
+                }
+            } catch (e: Exception) {
+                // A cancelled flow has no outcome to report. A CancellationException thrown while
+                // the flow is still active, such as the timeout of an inner withTimeout, is a
+                // failure.
+                if (e !is CancellationException || currentCoroutineContext().isActive) {
+                    record(tracker.failed(e), capture)
+                }
+                throw e
+            }
+            val summary = tracker.succeeded()
+            record(summary, capture)
+            logger.info(
+                "Standard backup and restore flow executed successfully across all storage " +
+                    "domains with 100% data integrity! (${summary.totalDuration.toMillis()}ms)"
+            )
+            this@BackupRestoreControllerImpl
+        }
+    }
+
+    /**
+     * Runs [calls], the device action calls of [domains] in the same order, and throws if an action
+     * fails. Returns the data of each action, which is empty for actions that ran in a batch.
+     */
+    /*
+     * NOTE: Several calls are calls of the built-in storage actions, whose data nothing reads. They
+     * run in one device run, as one call of the batch action, which names the call that failed.
+     *
+     * A batch that fails without naming a call says nothing about its calls: the device library
+     * predates the batch action, or the run timed out or crashed. Its calls then run one by one,
+     * so that the call that fails reports its own failure. A controller of another implementation
+     * always runs them one by one.
+     */
+    private suspend fun BackupRestoreController.runStorageActions(
+        domains: List<StorageDomain>,
+        calls: List<Pair<String, Map<String, String>>>,
+    ): List<Map<String, String>> {
+        val controller = this as? BackupRestoreControllerImpl
+        if (calls.size > 1 && controller != null && !controller.lacksStorageBatch) {
+            val (batchAction, batchArgs) = BackupActionWireProtocol.storageBatchCall(calls)
+            val result = runOnDevice(batchAction, batchArgs)
+            if (result !is BackupActionResult.Failure) return calls.map { emptyMap() }
+            val failedCall = BackupActionWireProtocol.failedBatchCall(result)
+            if (failedCall != null && failedCall in calls.indices) {
+                throw storageActionFailure(domains[failedCall], calls[failedCall].first, result)
+            }
+            if (BackupActionWireProtocol.isStorageBatchMissing(result)) {
+                controller.lacksStorageBatch = true
+                logger.info(
+                    "The test APK on ${controller.serialNumber} has a version of " +
+                        "androidx.test.backup:backup that can't run several storage actions in " +
+                        "one device run, so they run one by one. Update it to the version of " +
+                        "androidx.test.backup:backup-host to seed and verify storage domains " +
+                        "faster."
+                )
+            } else {
+                logger.info(
+                    "Running ${calls.size} storage actions on ${controller.serialNumber} one by " +
+                        "one, because running them in one device run failed: " +
+                        result.errorMessage
+                )
+            }
+        }
+        return domains.zip(calls) { domain, (actionClassName, args) ->
+            val result = runOnDevice(actionClassName, args)
+            if (result is BackupActionResult.Failure) {
+                throw storageActionFailure(domain, actionClassName, result)
+            }
+            result.data
+        }
+    }
+
+    /**
+     * Returns the failure of the flow for [failure] of the action [actionClassName] of [domain].
+     */
+    private fun storageActionFailure(
+        domain: StorageDomain,
+        actionClassName: String,
+        failure: BackupActionResult.Failure,
+    ) =
+        IOException(
+            "${actionClassName.substringAfterLast('.')} failed for $domain: " + failure.errorMessage
+        )
+
+    /** Stores [summary] as the latest one and publishes it; publishing never fails the flow. */
+    private fun record(summary: BackupExecutionSummary, capture: TestExecutionCapture? = null) {
+        lastExecutionSummary = summary
+        (capture ?: ActiveCaptureContext.current())?.publishedFlowTelemetry = true
+        val publisher = telemetryPublisher ?: return
+        try {
+            summary.publishTo(publisher)
+        } catch (e: Throwable) {
+            logger.warning("Failed to publish telemetry: ${e.message}")
+        }
+    }
+
+    /**
+     * Returns the result of [block], or null when it does not complete within [timeout].
+     *
+     * On timeout, force-stops the app, so that nothing [block] started keeps running on the device.
+     * Cancellation of the caller is propagated, not reported as a timeout.
+     */
+    private suspend fun <T : Any> withinTimeout(timeout: Duration, block: suspend () -> T): T? {
+        require(!timeout.isNegative && !timeout.isZero) { "Timeout must be positive: $timeout" }
+        // The kotlin.time overload rounds a sub-millisecond remainder up instead of truncating it.
+        val result = withTimeoutOrNull(timeout.toKotlinDuration()) { block() }
+        if (result == null) {
+            logger.warning(
+                "Timed out after ${timeout.toKotlinDuration()}; force-stopping $applicationId."
+            )
+            try {
+                withTimeoutOrNull(cleanupTimeout) { stopApp() }
+                    ?: logger.warning("Force-stopping $applicationId did not complete.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warning("Failed to force-stop $applicationId: ${e.message}")
+            }
+        }
+        return result
+    }
+
+    override suspend fun runOnDevice(
+        actionClassName: String,
+        args: Map<String, String>,
+        timeout: Duration,
+        waitForDebugger: Boolean,
+    ): BackupActionResult =
+        recordControllerCall(
+            kindProvider = {
+                when {
+                    !it.hasSeenBackup -> TestExecutionCapture.StepKind.SEED_ACTION
+                    it.hasSeenRestore -> TestExecutionCapture.StepKind.VERIFY_ACTION
+                    else -> TestExecutionCapture.StepKind.OTHER
+                }
+            },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = formatRunOnDeviceCall(actionClassName),
+            beforeRun = { it.recordActionArgs(args) },
+            actionFailureExtractor = { (it as? BackupActionResult.Failure)?.errorMessage },
+        ) {
+            withinTimeout(timeout) { runAction(actionClassName, args, waitForDebugger) }
+                ?: BackupActionResult.Failure("Timed out after ${timeout.toKotlinDuration()}")
+        }
+
+    private suspend fun runAction(
+        actionClassName: String,
+        args: Map<String, String>,
+        waitForDebugger: Boolean,
+    ): BackupActionResult {
+        val instrumentationArgs =
+            BackupActionWireProtocol.instrumentationArgs(actionClassName, args, waitForDebugger)
+        val runners = installedRunners()
+        val runner =
+            findRunner(runners) ?: return BackupActionResult.Failure(noRunnerMessage(runners))
+        val command = BackupDeviceShell.instrumentCommand(runner, instrumentationArgs)
+        val stdout =
+            if (command.toByteArray(Charsets.UTF_8).size <= MAX_INLINE_COMMAND_BYTES) {
+                shell.instrument(runner, instrumentationArgs)
+            } else {
+                instrumentWithArgsFile(runner, actionClassName, args, waitForDebugger)
+            }
+        val report = BackupRunnerReport.parse(stdout)
+        val payloadPath = report.payloadPath
+        val payloadJson =
+            when {
+                payloadPath != null ->
+                    try {
+                        pullOverflowPayload(payloadPath)
+                    } catch (e: Exception) {
+                        return BackupActionResult.Failure(
+                            "Failed to pull Binder overflow payload: " + e.message
+                        )
+                    }
+                // A failure with no payload is a crash or a runner error; nothing more to read. A
+                // failure that does carry a payload is an action reporting its own failure, and the
+                // payload is still read: it names the specific error, and an overflow file must not
+                // be left behind.
+                report.inlinePayload == null && report.runnerFailure != null ->
+                    return report.runnerFailure
+                else ->
+                    report.inlinePayload.orEmpty().also {
+                        logger.info("Executed $actionClassName on device.")
+                        if (it.isNotEmpty()) logger.fine("Payload returned: $it")
+                    }
+            }
+        return report.resultFor(payloadJson, actionClassName)
+    }
+
+    /**
+     * Runs [actionClassName] with the instrumentation [runner], passing it [args] in a file that is
+     * pushed to the device and deleted afterwards, and returns what the instrumentation printed.
+     */
+    private suspend fun instrumentWithArgsFile(
+        runner: String,
+        actionClassName: String,
+        args: Map<String, String>,
+        waitForDebugger: Boolean,
+    ): String {
+        val argsFile = BackupActionWireProtocol.newArgsFilePath()
+        val hostFile = Files.createTempFile("backup_args_", ".json")
+        try {
+            Files.write(hostFile, BackupActionWireProtocol.encodeArgsFile(args).toByteArray())
+            return withCleanup(cleanup = { shell.removeFile(argsFile) }, cleanupTimeout) {
+                logger.info("Pushing the arguments of $actionClassName to $argsFile...")
+                shell.pushFile(hostFile, argsFile, BackupDeviceShell.SHELL_ONLY_FILE_MODE)
+                shell.instrument(
+                    runner,
+                    BackupActionWireProtocol.argsFileInstrumentationArgs(
+                        actionClassName,
+                        argsFile,
+                        waitForDebugger,
+                    ),
+                )
+            }
+        } finally {
+            Files.deleteIfExists(hostFile)
+        }
+    }
+
+    /**
+     * Reads the payload that a runner of an older version wrote to [devicePath], then deletes it.
+     */
+    private suspend fun pullOverflowPayload(devicePath: String): String {
+        val localFile = File.createTempFile("overflow_", ".json")
+        try {
+            shell.pullFile(devicePath, localFile.toPath())
+            shell.removeFile(devicePath)
+            return BackupRunnerReport.parseOverflowFile(localFile.readText())
+        } finally {
+            localFile.delete()
+        }
+    }
+
+    /** Returns the instrumentation components of the runners installed for the app. */
+    private suspend fun installedRunners(): List<String> =
+        shell.listInstrumentations(applicationId).filter {
+            it.substringAfter('/') == BackupActionWireProtocol.RUNNER_CLASS
+        }
+
+    /**
+     * Returns the instrumentation component of the runner among [runners], the runners installed
+     * for the app: the one of [testApplicationId] when it is set, or null if it isn't among them,
+     * or else the only runner, or else the one AGP gives the test APK.
+     *
+     * Without any installed runner, `am instrument` then reports that the test APK is missing.
+     */
+    private fun findRunner(runners: List<String>): String? {
+        testApplicationId?.let {
+            return "$it/${BackupActionWireProtocol.RUNNER_CLASS}"
+                .takeIf { runner -> runner in runners }
+        }
+        val defaultRunner = BackupActionWireProtocol.runnerComponent(applicationId)
+        if (runners.size > 1 && defaultRunner !in runners) {
+            logger.warning("Several test APKs have a runner for $applicationId: $runners")
+        }
+        return runners.singleOrNull() ?: defaultRunner
+    }
+
+    /**
+     * Returns why [testApplicationId] can't run device actions, naming the test APKs of [runners].
+     */
+    private fun noRunnerMessage(runners: List<String>): String {
+        val testApks = runners.map { it.substringBefore('/') }.ifEmpty { listOf("none") }
+        return "Test APK $testApplicationId isn't installed or has no " +
+            "${BackupActionWireProtocol.RUNNER_CLASS} for $applicationId. Test APKs with one: " +
+            testApks.joinToString()
+    }
+
+    override suspend fun performBackup(
+        mode: BackupTransportMode,
+        outputDir: Path,
+        timeout: Duration,
+    ): Path =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.BACKUP },
+            stepNameProvider = { "Backup" },
+            callLabel = "performBackup($mode)",
+            beforeRun = { it.markBackupStarted(serialNumber, mode) },
+            afterStepRecorded = { cap, path -> recordBackupArchive(cap, mode, path) },
+        ) {
+            withinTimeout(timeout) { backup(mode, outputDir) }
+                ?: throw IOException("Backup ($mode) timed out after ${timeout.toKotlinDuration()}")
+        }
+
+    private suspend fun backup(mode: BackupTransportMode, outputDir: Path): Path {
+        if (mode == BackupTransportMode.LOCAL) {
+            val archive = prepareBackupFile(outputDir, mode)
+            localTransport.backup(archive)
+            return archive.toPath()
+        }
+        val serviceType =
+            when (mode) {
+                BackupTransportMode.DEVICE_TO_DEVICE -> ServiceType.DEVICE_TO_DEVICE
+                BackupTransportMode.CLOUD_ENCRYPTED -> ServiceType.CLOUD
+                BackupTransportMode.CLOUD_UNENCRYPTED -> ServiceType.CLOUD_UNENCRYPTED
+                else -> throw IllegalArgumentException("Unsupported backup transport mode: $mode")
+            }
+        val backupFile = prepareBackupFile(outputDir, mode)
+        shell.unstopPackage(applicationId)
+
+        logger.info(
+            "Attempting full-fidelity production backup via BackupService for type $mode..."
+        )
+        val result =
+            backupService.backup(
+                serialNumber = serialNumber,
+                applicationId = applicationId,
+                type = serviceType,
+                backupFile = backupFile.toPath(),
+                listener = progressListener("Backup"),
+            )
+        when (result) {
+            is BackupResult.Success -> {
+                logger.info(
+                    "BackupService successfully created production backup archive: " +
+                        backupFile.absolutePath
+                )
+                return backupFile.toPath()
+            }
+            // The archive holds only data that is kept even for apps that opt out of backups,
+            // such as Block Store data, so restoring it cannot restore the app's own data.
+            is BackupResult.WithoutAppData -> {
+                backupFile.delete()
+                throw IOException(
+                    "Backup ($mode) of $applicationId contains no app data, because the app " +
+                        "does not allow backups (android:allowBackup=\"false\")"
+                )
+            }
+            is BackupResult.Error -> throw serviceFailure(result, BackupErrorCode.BACKUP_FAILED)
+        }
+    }
+
+    private fun recordBackupArchive(
+        capture: TestExecutionCapture?,
+        mode: BackupTransportMode,
+        backupFile: Path,
+    ) {
+        val active = capture ?: return
+        if (mode == BackupTransportMode.LOCAL) {
+            active.recordArchive(
+                fileName = backupFile.fileName.toString(),
+                summaryValues = mapOf("storage" to LOCAL_ARCHIVE_SUMMARY),
+                rawSourceFile = null,
+                includeRawCopy = false,
+            )
+        } else {
+            val file = backupFile.toFile()
+            active.recordArchive(
+                fileName = file.name,
+                summaryValues = inspectBackupArchive(file),
+                rawSourceFile = backupFile,
+                includeRawCopy = active.effectiveIncludeRawArchives,
+            )
+        }
+    }
+
+    override suspend fun performRestore(
+        backupFile: Path,
+        timeout: Duration,
+    ): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.RESTORE },
+            stepNameProvider = { "Restore" },
+            callLabel = "performRestore(backupFile)",
+        ) {
+            withinTimeout(timeout) { restore(backupFile) }
+                ?: throw BackupRestoreException(
+                    BackupErrorCode.RESTORE_POLL_TIMEOUT,
+                    "Restore timed out after ${timeout.toKotlinDuration()}",
+                )
+            this
+        }
+
+    private suspend fun restore(backupFile: Path) {
+        val localBackup = BackupLocalTransport.localBackupOf(backupFile)
+        if (localBackup != null) {
+            val activeCapture = ActiveCaptureContext.current()
+            activeCapture?.markRestoreStarted(serialNumber, BackupTransportMode.LOCAL)
+            localTransport.restore(backupFile, localBackup)
+            activeCapture?.markRestoreCompleted()
+            return
+        }
+        val activeCapture = ActiveCaptureContext.current()
+        if (activeCapture != null) {
+            val detectedMode =
+                if (!activeCapture.hasOwnTransportMode) {
+                    detectTransportModeFromArchive(backupFile)
+                } else {
+                    null
+                }
+            activeCapture.markRestoreStarted(serialNumber, detectedMode)
+        }
+        requireGmsRestoreSupport()
+        // Moves any foreground activity to the background so the restore agent can bind.
+        shell.pressHome()
+        val restoreStart = deviceTimeOrNull()
+
+        logger.info(
+            "Attempting full-fidelity production restore via BackupService for file: " +
+                "${backupFile.toAbsolutePath()}..."
+        )
+        val result =
+            backupService.restore(
+                serialNumber = serialNumber,
+                backupFile = backupFile,
+                listener = progressListener("Restore"),
+            )
+        when (result) {
+            is BackupResult.Success -> {
+                restoreStart?.let { checkRestoreNotSkipped(backupFile, it) }
+                activeCapture?.markRestoreCompleted()
+                logger.info("BackupService successfully executed production restore.")
+            }
+            is BackupResult.WithoutAppData ->
+                throw IOException(
+                    "Restore of $applicationId from ${backupFile.fileName} restored no app data"
+                )
+            is BackupResult.Error -> throw serviceFailure(result, BackupErrorCode.RESTORE_FAILED)
+        }
+    }
+
+    /** Returns the time since the epoch on the device clock, or null if it cannot be read. */
+    private suspend fun deviceTimeOrNull(): Duration? =
+        try {
+            shell.timeSinceEpoch()
+        } catch (e: IOException) {
+            logger.warning("Failed to read the device clock: ${e.message}")
+            null
+        }
+
+    /**
+     * Throws if Google Play services on the device is too old to restore cloud and device-to-device
+     * backups: on Android 16 QPR2 (API level 36.1) and higher, versions lower than 26.33.30 take
+     * them for cross-platform restores, so the restore fails. A device without Google Play services
+     * is left to the backup service, which reports it.
+     */
+    private suspend fun requireGmsRestoreSupport() {
+        // Reads the minor API level as Build.VERSION.SDK_INT_FULL does.
+        val isApi36Point1OrHigher =
+            apiLevel > 36 ||
+                (apiLevel == 36 &&
+                    (shell.getProperty("ro.build.version.sdk_minor")?.toIntOrNull() ?: 0) > 0)
+        if (!isApi36Point1OrHigher) return
+        val versionCode = shell.packageVersionCode("com.google.android.gms") ?: return
+        if (versionCode >= MIN_GMS_VERSION_CODE_API_36_1) return
+        val versionName = DeviceFactsReader.gmsVersionName(versionCode)
+        throw BackupRestoreException(
+            BackupErrorCode.GMSCORE_OUTDATED_OR_MISSING,
+            "Can't restore the backup on $serialNumber: Google Play services $versionName is too " +
+                "old. On Android 16 QPR2 (API level 36.1) and higher, restoring cloud and " +
+                "device-to-device backups requires Google Play services 26.33.30 or higher. " +
+                "Update Google Play services through the Play Store on the device, or use a " +
+                "system image that comes with a newer version",
+        )
+    }
+
+    /**
+     * Throws if Google Play services logged since [start] that it skipped the restore of the app.
+     *
+     * It reports a restore that skipped the app as successful, so only its log tells. When logcat
+     * cannot be read, the restore is taken as successful.
+     *
+     * @throws IOException that tells why the app was skipped
+     */
+    private suspend fun checkRestoreNotSkipped(backupFile: Path, start: Duration) {
+        val logcat =
+            try {
+                shell.dumpLogcatSince(start)
+            } catch (e: IOException) {
+                logger.warning("Failed to read logcat to check the restore: ${e.message}")
+                return
+            }
+        val reason = restoreSkipReason(logcat, applicationId) ?: return
+        throw IOException(
+            "Restore of $applicationId from ${backupFile.fileName} restored no app data: $reason"
+        )
+    }
+
+    override suspend fun fetchDeviceLogs(
+        destinationPath: Path,
+        duration: Duration,
+    ): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = "fetchDeviceLogs(\"${destinationPath.fileName}\")",
+        ) {
+            Files.write(destinationPath, shell.dumpLogcat(duration).toByteArray(Charsets.UTF_8))
+            this
+        }
+
+    /**
+     * Writes device logcat within [duration] to [destinationPath], capped at [maxBytes] UTF-8
+     * bytes.
+     *
+     * Returns whether the logcat output was truncated.
+     */
+    internal suspend fun saveBoundedDeviceLogs(
+        destinationPath: Path,
+        duration: Duration,
+        maxBytes: Int,
+    ): Boolean {
+        val raw = shell.dumpLogcat(duration)
+        val bounded = capUtf8TailBounded(raw, maxBytes)
+        Files.write(destinationPath, bounded.bytes)
+        return bounded.truncated
+    }
+
+    override suspend fun clearDeviceLogs(): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = "clearDeviceLogs()",
+        ) {
+            shell.clearLogcat()
+            this
+        }
+
+    override suspend fun clearAppData(): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.CLEAR_DATA },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = true) },
+            callLabel = "clearAppData()",
+        ) {
+            shell.clearPackageData(applicationId)
+            this
+        }
+
+    override suspend fun pullFile(
+        devicePath: String,
+        hostDestination: Path,
+    ): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = "pullFile(\"${devicePath.substringAfterLast('/')}\")",
+        ) {
+            shell.pullFile(devicePath, hostDestination)
+            this
+        }
+
+    override suspend fun installApk(apkFile: Path, options: List<String>): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = "installApk(\"${apkFile.fileName}\")",
+        ) {
+            shell.installPackage(apkFile, options)
+            this
+        }
+
+    override suspend fun uninstallApp(): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = {
+                if (it.hasSeenBackup && !it.hasSeenRestore) TestExecutionCapture.StepKind.CLEAR_DATA
+                else TestExecutionCapture.StepKind.OTHER
+            },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = true) },
+            callLabel = "uninstallApp()",
+        ) {
+            shell.uninstallPackage(applicationId)
+            this
+        }
+
+    /**
+     * Returns the installed APK paths of the app, of the other packages whose name contains its
+     * application ID, such as its test APK, and of the other packages with an instrumentation that
+     * targets the app, or null if none of them is installed.
+     *
+     * The paths change whenever one of these packages is installed again.
+     */
+    suspend fun installedApkPaths(): List<String>? {
+        val otherTestPackages =
+            shell
+                .listInstrumentations(applicationId)
+                .map { it.substringBefore('/') }
+                .filterNot { it.contains(applicationId) }
+                .distinct()
+        val paths =
+            shell.listPackagePaths(applicationId) +
+                otherTestPackages.flatMap { shell.listPackagePaths(it) }
+        return paths.distinct().sorted().ifEmpty { null }
+    }
+
+    /** Turns the screen on and dismisses the keyguard. */
+    suspend fun wakeAndDismissKeyguard() {
+        shell.wakeAndDismissKeyguard()
+    }
+
+    override suspend fun launchApp(
+        activityClass: String?,
+        intentExtras: Map<String, String>,
+        action: String?,
+    ): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel =
+                if (activityClass != null) "launchApp(\"${activityClass.substringAfterLast('.')}\")"
+                else "launchApp()",
+        ) {
+            // Keeps the launched app visible on the device screen.
+            shell.wakeAndDismissKeyguard()
+            val component =
+                when {
+                    activityClass != null -> qualifyActivity(activityClass)
+                    action == null -> shell.resolveLauncherActivity(applicationId)
+                    else -> null
+                }
+            shell.startActivity(
+                action = action ?: BackupDeviceShell.ACTION_MAIN,
+                category = if (action == null) BackupDeviceShell.CATEGORY_LAUNCHER else null,
+                component = component,
+                packageName = applicationId,
+                stringExtras = intentExtras,
+            )
+            this
+        }
+
+    /** Returns [activityClass] as a `package/class` component of the app under test. */
+    private fun qualifyActivity(activityClass: String): String =
+        when {
+            activityClass.contains("/") -> activityClass
+            activityClass.startsWith(".") -> "$applicationId/$activityClass"
+            !activityClass.contains(".") -> "$applicationId/.$activityClass"
+            else -> "$applicationId/$activityClass"
+        }
+
+    override suspend fun stopApp(): BackupRestoreController =
+        recordControllerCall(
+            kindProvider = { TestExecutionCapture.StepKind.OTHER },
+            stepNameProvider = { it.deriveStepPhase(isClearLike = false) },
+            callLabel = "stopApp()",
+        ) {
+            shell.forceStop(applicationId)
+            this
+        }
+
+    private suspend fun <T> recordControllerCall(
+        kindProvider: (TestExecutionCapture) -> TestExecutionCapture.StepKind,
+        stepNameProvider: (TestExecutionCapture) -> String,
+        callLabel: String,
+        beforeRun: ((TestExecutionCapture) -> Unit)? = null,
+        afterStepRecorded: ((TestExecutionCapture, T) -> Unit)? = null,
+        actionFailureExtractor: ((T) -> String?)? = null,
+        block: suspend () -> T,
+    ): T {
+        val capture = ActiveCaptureContext.current()
+        if (capture == null || currentCoroutineContext()[InsideCompositeStepKey] != null) {
+            return block()
+        }
+        capture.captureFirstCallSiteIfNeeded()
+        val kind = kindProvider(capture)
+        val stepName = stepNameProvider(capture)
+        beforeRun?.invoke(capture)
+        val result =
+            capture.runStep(
+                isNumbered = true,
+                kind = kind,
+                name = stepName,
+                controller = this,
+                call = callLabel,
+                actionFailureExtractor = actionFailureExtractor,
+                block = block,
+            )
+        afterStepRecorded?.invoke(capture, result)
+        return result
+    }
+
+    private fun progressListener(operation: String): BackupProgressListener =
+        BackupProgressListener { step ->
+            logger.fine("$operation step ${step.step}/${step.totalSteps}: ${step.text}")
+        }
+
+    // --- ListenableFuture / Java interoperability implementations ---
+
+    private fun <T> asFuture(block: suspend () -> T): ListenableFuture<T> =
+        adbSession.scope.future(ActiveCaptureContext.contextElement()) { block() }
+
+    override fun runOnDeviceAsync(actionClassName: String): ListenableFuture<BackupActionResult> =
+        asFuture {
+            runOnDevice(actionClassName)
+        }
+
+    override fun runOnDeviceAsync(
+        actionClassName: String,
+        args: Map<String, String>,
+    ): ListenableFuture<BackupActionResult> = asFuture { runOnDevice(actionClassName, args) }
+
+    override fun runOnDeviceAsync(
+        actionClassName: String,
+        args: Map<String, String>,
+        timeout: Duration,
+    ): ListenableFuture<BackupActionResult> = asFuture {
+        runOnDevice(actionClassName, args, timeout)
+    }
+
+    override fun runOnDeviceAsync(
+        actionClassName: String,
+        args: Map<String, String>,
+        timeout: Duration,
+        waitForDebugger: Boolean,
+    ): ListenableFuture<BackupActionResult> = asFuture {
+        runOnDevice(actionClassName, args, timeout, waitForDebugger)
+    }
+
+    override fun runBackupRestoreFlowAsync(
+        storage: StorageDomain,
+        outputDir: Path,
+        mode: BackupTransportMode,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        runBackupRestoreFlow(storage, outputDir, mode)
+    }
+
+    override fun runBackupRestoreFlowAsync(
+        storage: StorageDomain,
+        outputDir: Path,
+        mode: BackupTransportMode,
+        restoreOn: BackupRestoreController,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        runBackupRestoreFlow(storage, outputDir, mode, restoreOn)
+    }
+
+    override fun runBackupRestoreFlowAsync(
+        storages: List<StorageDomain>,
+        outputDir: Path,
+        mode: BackupTransportMode,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        runBackupRestoreFlow(storages, outputDir, mode)
+    }
+
+    override fun runBackupRestoreFlowAsync(
+        storages: List<StorageDomain>,
+        outputDir: Path,
+        mode: BackupTransportMode,
+        restoreOn: BackupRestoreController,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        runBackupRestoreFlow(storages, outputDir, mode, restoreOn)
+    }
+
+    override fun performBackupAsync(
+        mode: BackupTransportMode,
+        outputDir: Path,
+    ): ListenableFuture<Path> = asFuture { performBackup(mode, outputDir) }
+
+    override fun performBackupAsync(
+        mode: BackupTransportMode,
+        outputDir: Path,
+        timeout: Duration,
+    ): ListenableFuture<Path> = asFuture { performBackup(mode, outputDir, timeout) }
+
+    override fun performRestoreAsync(backupFile: Path): ListenableFuture<BackupRestoreController> =
+        asFuture {
+            performRestore(backupFile)
+        }
+
+    override fun performRestoreAsync(
+        backupFile: Path,
+        timeout: Duration,
+    ): ListenableFuture<BackupRestoreController> = asFuture { performRestore(backupFile, timeout) }
+
+    override fun fetchDeviceLogsAsync(
+        destinationPath: Path
+    ): ListenableFuture<BackupRestoreController> = asFuture { fetchDeviceLogs(destinationPath) }
+
+    override fun fetchDeviceLogsAsync(
+        destinationPath: Path,
+        duration: Duration,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        fetchDeviceLogs(destinationPath, duration)
+    }
+
+    override fun clearDeviceLogsAsync(): ListenableFuture<BackupRestoreController> = asFuture {
+        clearDeviceLogs()
+    }
+
+    override fun clearAppDataAsync(): ListenableFuture<BackupRestoreController> = asFuture {
+        clearAppData()
+    }
+
+    override fun pullFileAsync(
+        devicePath: String,
+        hostDestination: Path,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        pullFile(devicePath, hostDestination)
+    }
+
+    override fun installApkAsync(apkFile: Path): ListenableFuture<BackupRestoreController> =
+        asFuture {
+            installApk(apkFile)
+        }
+
+    override fun installApkAsync(
+        apkFile: Path,
+        options: List<String>,
+    ): ListenableFuture<BackupRestoreController> = asFuture { installApk(apkFile, options) }
+
+    override fun uninstallAppAsync(): ListenableFuture<BackupRestoreController> = asFuture {
+        uninstallApp()
+    }
+
+    override fun launchAppAsync(): ListenableFuture<BackupRestoreController> = asFuture {
+        launchApp()
+    }
+
+    override fun launchAppAsync(activityClass: String?): ListenableFuture<BackupRestoreController> =
+        asFuture {
+            launchApp(activityClass)
+        }
+
+    override fun launchAppAsync(
+        activityClass: String?,
+        intentExtras: Map<String, String>,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        launchApp(activityClass, intentExtras)
+    }
+
+    override fun launchAppAsync(
+        activityClass: String?,
+        intentExtras: Map<String, String>,
+        action: String?,
+    ): ListenableFuture<BackupRestoreController> = asFuture {
+        launchApp(activityClass, intentExtras, action)
+    }
+
+    override fun stopAppAsync(): ListenableFuture<BackupRestoreController> = asFuture { stopApp() }
+
+    override fun close() {
+        // Holds no resources of its own. The ADB session can be shared, and its owner closes it.
+    }
+
+    private class FlowStageSpec(
+        val kind: TestExecutionCapture.StepKind,
+        val name: String,
+        val controller: BackupRestoreController,
+        val call: String,
+    ) {
+        val stage: BackupExecutionStage = checkNotNull(kind.stage)
+    }
+
+    internal companion object {
+        /**
+         * Minimum Google Play Services (GmsCore) version code (24.09.13) required by the underlying
+         * backup transport emulation service library.
+         */
+        const val MIN_GMS_VERSION = 240913000
+
+        /**
+         * The lowest version code of Google Play services, 26.33.30, that restores cloud and
+         * device-to-device backups on Android 16 QPR2 (API level 36.1) and higher.
+         */
+        const val MIN_GMS_VERSION_CODE_API_36_1 = 263330000L
+
+        private const val LOCAL_ARCHIVE_SUMMARY = "Stored on the device"
+
+        fun createBackupService(adbSession: AdbSession): Service =
+            Service.getInstance(
+                adbSession,
+                BackupServiceLogger(BackupRestoreControllerImpl::class.java.name),
+                MIN_GMS_VERSION,
+            )
+
+        /**
+         * Returns [error] of the backup service as the [IOException] that [BackupRestoreController]
+         * documents: a [BackupRestoreException] with the message of the failure, and the cause that
+         * the error code of the service names, or else [fallback]. Cancellations and errors are
+         * returned unchanged, so a timeout still cancels the call.
+         */
+        fun serviceFailure(error: BackupResult.Error, fallback: BackupErrorCode): Throwable =
+            when (val failure = error.throwable) {
+                is CancellationException,
+                is Error -> failure
+                else ->
+                    BackupRestoreException(
+                        causeOf(error.errorCode) ?: fallback,
+                        failure.message,
+                        failure,
+                    )
+            }
+
+        /** Returns the cause that [errorCode] of the backup service names, if it names one. */
+        private fun causeOf(errorCode: ErrorCode): BackupErrorCode? =
+            when (errorCode) {
+                ErrorCode.GMSCORE_NOT_FOUND,
+                ErrorCode.GMSCORE_IS_TOO_OLD,
+                ErrorCode.GMSCORE_IS_TOO_OLD_NO_PLAY_STORE,
+                ErrorCode.PLAY_STORE_NOT_INSTALLED -> BackupErrorCode.GMSCORE_OUTDATED_OR_MISSING
+                ErrorCode.CANNOT_ENABLE_BMGR,
+                ErrorCode.BACKUP_NOT_SUPPORTED,
+                ErrorCode.BACKUP_NOT_ACTIVATED,
+                ErrorCode.BACKUP_MANAGER_IS_NOT_RUNNING,
+                ErrorCode.TRANSPORT_NOT_SELECTED,
+                ErrorCode.TRANSPORT_INIT_FAILED -> BackupErrorCode.BMGR_INIT_FAILED
+                else -> null
+            }
+
+        fun backupFileName(mode: BackupTransportMode): String =
+            "backup_${mode.toString().lowercase(Locale.ROOT)}_device.zip"
+
+        /** Returns a fresh location in [outputDir] for the backup archive of [mode]. */
+        fun prepareBackupFile(outputDir: Path, mode: BackupTransportMode): File {
+            val file = File(outputDir.toFile(), backupFileName(mode))
+            if (file.exists()) {
+                file.delete()
+            }
+            file.parentFile?.mkdirs()
+            return file
+        }
+
+        internal fun formatRunOnDeviceCall(actionClassName: String): String =
+            if ('.' in actionClassName) {
+                "runOnDevice(\"\u2026${actionClassName.substringAfterLast('.')}\")"
+            } else {
+                "runOnDevice(\"$actionClassName\")"
+            }
+
+        internal fun formatFlowDomainCall(verb: String, storages: List<StorageDomain>): String =
+            if (storages.size == 1) {
+                "$verb ${describeDomain(storages.single())}"
+            } else {
+                "$verb ${storages.size} storage domains"
+            }
+
+        private fun describeDomain(domain: StorageDomain): String =
+            when (domain) {
+                is StorageDomain.Preference -> "Preference(\"${domain.prefName}\")"
+                is StorageDomain.DataStorePreference ->
+                    "DataStorePreference(\"${domain.dataStoreName}\")"
+                is StorageDomain.Database -> "Database(\"${domain.dbName}\")"
+                is StorageDomain.TextFile -> "TextFile(\"${domain.path}\")"
+                is StorageDomain.BinaryFile -> "BinaryFile(\"${domain.path}\")"
+                is StorageDomain.CustomData ->
+                    "CustomData(\"${domain.populateAction.substringAfterLast('.')}\")"
+                is StorageDomain.ExcludedData -> "ExcludedData(${describeDomain(domain.domain)})"
+                else -> domain.javaClass.simpleName
+            }
+
+        internal fun inspectBackupArchive(backupFile: File): Map<String, String> {
+            if (!backupFile.isFile) return emptyMap()
+            return try {
+                ZipFile(backupFile).use { zip ->
+                    val entries = LinkedHashMap<String, String>()
+                    val enumeration = zip.entries()
+                    while (enumeration.hasMoreElements()) {
+                        val entry = enumeration.nextElement()
+                        if (entry.isDirectory) continue
+                        entries[entry.name] = formatByteSize(entry.size.coerceAtLeast(0L))
+                    }
+                    entries.ifEmpty {
+                        mapOf(backupFile.name to formatByteSize(backupFile.length()))
+                    }
+                }
+            } catch (_: Exception) {
+                mapOf(backupFile.name to formatByteSize(backupFile.length()))
+            }
+        }
+
+        internal fun detectTransportModeFromArchive(backupFile: Path): BackupTransportMode? =
+            try {
+                when (Service.getMetadata(backupFile).backupType) {
+                    ServiceType.DEVICE_TO_DEVICE -> BackupTransportMode.DEVICE_TO_DEVICE
+                    ServiceType.CLOUD -> BackupTransportMode.CLOUD_ENCRYPTED
+                    ServiceType.CLOUD_UNENCRYPTED -> BackupTransportMode.CLOUD_UNENCRYPTED
+                }
+            } catch (_: Exception) {
+                null
+            }
+    }
+}

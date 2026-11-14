@@ -21,10 +21,15 @@ import android.hardware.camera2.CameraExtensionSession
 import android.os.Build
 import android.view.Surface
 import androidx.annotation.GuardedBy
+import androidx.camera.camera2.pipe.CameraError
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraph.Flags.FinalizeSessionOnCloseBehavior
 import androidx.camera.camera2.pipe.CameraSurfaceManager
+import androidx.camera.camera2.pipe.GraphState
+import androidx.camera.camera2.pipe.OutputId
+import androidx.camera.camera2.pipe.StreamGraph
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.camera2.pipe.StrictMode
 import androidx.camera.camera2.pipe.core.Debug
 import androidx.camera.camera2.pipe.core.Log
 import androidx.camera.camera2.pipe.core.Threads
@@ -36,6 +41,9 @@ import androidx.camera.camera2.pipe.graph.GraphListener
 import androidx.camera.camera2.pipe.graph.GraphRequestProcessor
 import java.util.Collections.synchronizedMap
 import java.util.concurrent.CountDownLatch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -68,6 +76,8 @@ internal class CaptureSessionState(
     private val timeSource: TimeSource,
     private val cameraGraphFlags: CameraGraph.Flags,
     private val concurrentSessionSequencer: ConcurrentSessionSequencer?,
+    private val streamGraph: StreamGraph,
+    private val strictMode: StrictMode,
     private val threads: Threads,
     private val scope: CoroutineScope,
 ) : CameraCaptureSessionWrapper.StateCallback {
@@ -75,7 +85,9 @@ internal class CaptureSessionState(
     private val lock = Any()
     private val finalized = atomic<Boolean>(false)
 
-    private val activeSurfaceMap = synchronizedMap(HashMap<StreamId, Surface>())
+    private val activeStreamSurfaceMap = synchronizedMap(HashMap<StreamId, Surface>())
+    private val activeOutputSurfaceMap = synchronizedMap(HashMap<OutputId, Surface>())
+
     private var sessionCreatingTimestamp: TimestampNs? = null
     private val sessionSequencer = concurrentSessionSequencer?.let { SessionSequencer(it) }
 
@@ -107,6 +119,7 @@ internal class CaptureSessionState(
         PENDING,
         CREATING,
         CREATED,
+        STARTED,
         CLOSING,
         CLOSED,
     }
@@ -172,6 +185,9 @@ internal class CaptureSessionState(
     override fun onConfigureFailed(session: CameraCaptureSessionWrapper) {
         Log.warn { "$this Configuration Failed" }
         Debug.traceStart { "$this#onConfigureFailed" }
+        graphListener.onGraphError(
+            GraphState.GraphStateError(CameraError.ERROR_GRAPH_CONFIG, willAttemptRetry = false)
+        )
         shutdown()
         captureSessionAttemptCompleted.countDown()
         sessionSequencer?.release()
@@ -214,14 +230,17 @@ internal class CaptureSessionState(
         if (finalized.compareAndSet(expect = false, update = true)) {
             Log.debug { "$this session finalizing" }
             Debug.traceStart { "$this#onSessionFinalized" }
+            // It is possible that the session configuration fails before us making the framework
+            // createCaptureSession() call. In such cases, we need to mark the capture session
+            // attempt as completed, too.
+            captureSessionAttemptCompleted.countDown()
             shutdown()
-            finalizeSession(0L)
+            finalizeSession()
             Debug.traceStop()
         }
     }
 
     private fun configure(session: CameraCaptureSessionWrapper?) {
-        val captureSession: ConfiguredCameraCaptureSession?
         var tryConfigureDeferred = false
 
         // This block is designed to do two things:
@@ -231,29 +250,39 @@ internal class CaptureSessionState(
         synchronized(lock) {
             if (cameraCaptureSession == null && session != null) {
                 val captureSequenceProcessor =
-                    captureSequenceProcessorFactory.create(session, activeSurfaceMap)
-                if (captureSequenceProcessor is Camera2CaptureSequenceProcessor) {
-                    captureSession =
+                    captureSequenceProcessorFactory.create(
+                        session,
+                        activeStreamSurfaceMap,
+                        activeOutputSurfaceMap,
+                    )
+                cameraCaptureSession =
+                    if (captureSequenceProcessor is Camera2CaptureSequenceProcessor) {
                         ConfiguredCameraCaptureSession(
                             session,
                             GraphRequestProcessor.from(captureSequenceProcessor),
                             captureSequenceProcessor,
                         )
-                } else {
-                    captureSession =
+                    } else {
                         ConfiguredCameraCaptureSession(
                             session,
                             GraphRequestProcessor.from(captureSequenceProcessor),
                             null,
                         )
-                }
-                cameraCaptureSession = captureSession
-            } else {
-                captureSession = cameraCaptureSession
+                    }
+            }
+            val captureSession = cameraCaptureSession ?: return
+
+            if (state != State.CREATED && state != State.STARTED) {
+                return
             }
 
-            if (state != State.CREATED || captureSession == null) {
-                return
+            if (state == State.CREATED) {
+                Log.info {
+                    val duration = Timestamps.now(timeSource) - sessionCreatingTimestamp!!
+                    "Configured $this in ${duration.formatMs()}"
+                }
+                graphListener.onGraphStarted(captureSession.processor)
+                state = State.STARTED
             }
 
             // Finalize deferredConfigs if finalizeOutputConfigurations was previously invoked.
@@ -263,18 +292,7 @@ internal class CaptureSessionState(
         }
 
         if (tryConfigureDeferred) {
-            finalizeOutputsIfAvailable(retryAllowed = false)
-        }
-
-        synchronized(lock) {
-            captureSession?.let {
-                Log.info {
-                    val duration = Timestamps.now(timeSource) - sessionCreatingTimestamp!!
-                    "Configured $this in ${duration.formatMs()}"
-                }
-
-                graphListener.onGraphStarted(it.processor)
-            }
+            finalizeOutputsIfAvailable()
         }
     }
 
@@ -320,7 +338,7 @@ internal class CaptureSessionState(
             // observed that both onConfigured() and onClosed() may not be called at all by the
             // camera framework. If we really cannot get a configured session after a timeout, just
             // proceed with the rest of the shutdown.
-            threads.runBlockingCheckedOrNull(CAPTURE_SESSION_TIMEOUT_MS) {
+            threads.runBlockingCheckedOrNull(CAPTURE_SESSION_TIMEOUT) {
                 captureSessionAttemptCompleted.await()
             } ?: Log.error { "Waiting for CameraCaptureSession configuration timed out" }
 
@@ -358,10 +376,10 @@ internal class CaptureSessionState(
             // [1] b/287020251
             // [2] b/379855962
             if (cameraGraphFlags.abortCapturesOnStop) {
-                threads.runBlockingCheckedOrNull(ABORT_CAPTURES_TIMEOUT_MS) {
+                threads.runBlockingCheckedOrNull(ABORT_CAPTURES_TIMEOUT) {
                     Debug.trace("$this stopRepeating") { graphProcessor.stopRepeating() }
                     Debug.trace("$this abortCaptures") { graphProcessor.abortCaptures() }
-                } ?: Log.error { "Failed to abort captures in ${ABORT_CAPTURES_TIMEOUT_MS}ms" }
+                } ?: Log.error { "Failed to abort captures in $ABORT_CAPTURES_TIMEOUT" }
             }
 
             // Explicitly release ImageWriter resources for the edge case when two capture sessions
@@ -386,15 +404,12 @@ internal class CaptureSessionState(
             // [2] b/277675483
             // [3] b/307594946 - [ANR] at Camera2CameraController.disconnectSessionAndCamera
             if (cameraGraphFlags.closeCaptureSessionOnDisconnect) {
-                threads.runBlockingCheckedOrNull(CLOSE_SESSION_TIMEOUT_MS) {
+                threads.runBlockingCheckedOrNull(CLOSE_SESSION_TIMEOUT) {
                     Debug.trace("$this CameraCaptureSessionWrapper#close") {
                         Log.debug { "Closing capture session for $this" }
                         captureSession.session.close()
                     }
-                }
-                    ?: Log.error {
-                        "Failed to close the capture session in ${CLOSE_SESSION_TIMEOUT_MS}ms"
-                    }
+                } ?: Log.error { "Failed to close the capture session in $CLOSE_SESSION_TIMEOUT" }
             }
 
             Debug.traceStart { "$graphListener#onGraphStopped" }
@@ -423,7 +438,7 @@ internal class CaptureSessionState(
         disconnect()
 
         var shouldFinalizeSession = false
-        var finalizeSessionDelayMs = 0L
+        var finalizeSessionDelay = 0.milliseconds
         synchronized(lock) {
             // If the CameraDevice is never opened, the session will never be created. For cleanup
             // reasons, make sure the session is finalized after shutdown if the cameraDevice was
@@ -438,7 +453,7 @@ internal class CaptureSessionState(
                         }
                         FinalizeSessionOnCloseBehavior.TIMEOUT -> {
                             shouldFinalizeSession = true
-                            finalizeSessionDelayMs = 2000L
+                            finalizeSessionDelay = 2.seconds
                         }
                     }
                 }
@@ -448,16 +463,16 @@ internal class CaptureSessionState(
         }
 
         if (shouldFinalizeSession) {
-            finalizeSession(finalizeSessionDelayMs)
+            finalizeSession(finalizeSessionDelay)
         }
     }
 
-    internal fun finalizeSession(delayMs: Long = 0L) {
-        if (delayMs != 0L) {
+    internal fun finalizeSession(delay: Duration = 0.milliseconds) {
+        if (delay != 0.milliseconds) {
             scope.launch {
-                Log.debug { "Finalizing $this in $delayMs ms" }
-                delay(delayMs)
-                finalizeSession(0L)
+                Log.debug { "Finalizing $this in $delay" }
+                delay(delay)
+                finalizeSession()
             }
         } else {
             Log.debug { "Finalizing $this" }
@@ -471,7 +486,7 @@ internal class CaptureSessionState(
         }
     }
 
-    private fun finalizeOutputsIfAvailable(retryAllowed: Boolean = true) {
+    private fun finalizeOutputsIfAvailable() {
         val captureSession: ConfiguredCameraCaptureSession?
         val pendingOutputs: Map<StreamId, OutputConfigurationWrapper>?
         val pendingSurfaces: Map<StreamId, Surface>?
@@ -479,42 +494,64 @@ internal class CaptureSessionState(
             captureSession = cameraCaptureSession
             pendingOutputs = pendingOutputMap
             pendingSurfaces = pendingSurfaceMap
-        }
 
-        if (captureSession != null && pendingOutputs != null && pendingSurfaces != null) {
-            Debug.traceStart { "$this#finalizeOutputConfigurations" }
-            val finalizedStartTime = Timestamps.now(timeSource)
-            for ((streamId, outputConfig) in pendingOutputs) {
-                // TODO: Consider adding support for experimental libraries on older devices.
-
-                val surface = checkNotNull(pendingSurfaces[streamId])
-                outputConfig.addSurface(surface)
+            // Cannot finalize the output configuration just yet. Return.
+            if (captureSession == null || pendingOutputs == null || pendingSurfaces == null) {
+                return
             }
 
-            // It's possible that more than one stream maps to the same output configuration since
-            // output configurations support multiple surfaces. If this happens, we may have more
-            // deferred outputs than outputConfiguration objects.
-            val distinctOutputs = pendingOutputs.mapTo(mutableSetOf()) { it.value }.toList()
-            captureSession.session.finalizeOutputConfigurations(distinctOutputs)
+            // The capture session is configured and pending outputs and surfaces are available.
+            // Clear out the pending variables so that they are not used again
+            // (finalizeOutputsIfAvailable may be invoked in parallel).
+            pendingOutputMap = null
+            pendingSurfaceMap = null
+        }
 
-            var tryResubmit = false
-            synchronized(lock) {
-                if (state == State.CREATED) {
-                    activeSurfaceMap.putAll(pendingSurfaces)
-                    Log.info {
-                        val finalizationTime = Timestamps.now(timeSource) - finalizedStartTime
-                        "Finalized ${pendingOutputs.map { it.key }} for $this in " +
-                            finalizationTime.formatMs()
+        // If any of these were null, we would've returned early. These checks are made to make
+        // the Kotlin compiler happy.
+        checkNotNull(captureSession)
+        checkNotNull(pendingOutputs)
+        checkNotNull(pendingSurfaces)
+
+        Debug.traceStart { "$this#finalizeOutputConfigurations" }
+        val finalizedStartTime = Timestamps.now(timeSource)
+        for ((streamId, outputConfig) in pendingOutputs) {
+            // TODO: Consider adding support for experimental libraries on older devices.
+
+            val surface = checkNotNull(pendingSurfaces[streamId])
+            outputConfig.addSurface(surface)
+        }
+
+        // It's possible that more than one stream maps to the same output configuration since
+        // output configurations support multiple surfaces. If this happens, we may have more
+        // deferred outputs than outputConfiguration objects.
+        val distinctOutputs = pendingOutputs.mapTo(mutableSetOf()) { it.value }.toList()
+        captureSession.session.finalizeOutputConfigurations(distinctOutputs)
+
+        var tryResubmit = false
+        synchronized(lock) {
+            if (state == State.CREATED || state == State.STARTED) {
+                activeStreamSurfaceMap.putAll(pendingSurfaces)
+                for ((streamId, surface) in pendingSurfaces) {
+                    val cameraStream = checkNotNull(streamGraph[streamId])
+                    check(cameraStream.outputs.size == 1) {
+                        "Cannot finalize a multi-output stream!"
                     }
-                    tryResubmit = true
+                    activeOutputSurfaceMap[cameraStream.outputs.single().id] = surface
                 }
+                Log.info {
+                    val finalizationTime = Timestamps.now(timeSource) - finalizedStartTime
+                    "Finalized ${pendingOutputs.map { it.key }} for $this in " +
+                        finalizationTime.formatMs()
+                }
+                tryResubmit = true
             }
-
-            if (tryResubmit && retryAllowed) {
-                graphListener.onGraphModified(captureSession.processor)
-            }
-            Debug.traceStop()
         }
+
+        if (tryResubmit) {
+            graphListener.onGraphModified(captureSession.processor)
+        }
+        Debug.traceStop()
     }
 
     private suspend fun tryCreateCaptureSession() {
@@ -547,12 +584,17 @@ internal class CaptureSessionState(
         // Create the capture session and return a Map of StreamId -> OutputConfiguration for any
         // outputs that were not initially available. These will be configured later.
         Log.info {
-            "Creating CameraCaptureSession from ${device?.cameraId} using $this with $surfaces"
+            "Creating CameraCaptureSession from ${device?.cameraId} using $this with: \n" +
+                Debug.formatSurfaceMap(surfaces!!)
         }
-        val deferred =
+        val result =
             Debug.trace("CameraDevice-${device?.cameraId?.value}#createCaptureSession") {
                 captureSessionFactory.create(device!!, surfaces!!, this)
             }
+        if (result !is CaptureSessionFactory.Result.Success) {
+            Log.error { "Failed to create capture session for $this!" }
+            return
+        }
 
         synchronized(lock) {
             if (state == State.CLOSING || state == State.CLOSED) {
@@ -562,7 +604,10 @@ internal class CaptureSessionState(
             check(state == State.CREATING) { "Unexpected state: $state" }
             state = State.CREATED
 
-            activeSurfaceMap.putAll(surfaces!!)
+            activeStreamSurfaceMap.putAll(surfaces!!)
+            activeOutputSurfaceMap.putAll(result.outputSurfaceMap)
+
+            val deferred = result.deferred
             if (deferred.isNotEmpty()) {
                 Log.info {
                     "Created $this with ${surfaces.keys.toList()}. " +
@@ -619,8 +664,8 @@ internal class CaptureSessionState(
     )
 
     private companion object {
-        const val CAPTURE_SESSION_TIMEOUT_MS = 3_000L
-        const val ABORT_CAPTURES_TIMEOUT_MS = 2_000L
-        const val CLOSE_SESSION_TIMEOUT_MS = 3_000L
+        val CAPTURE_SESSION_TIMEOUT = 3.seconds
+        val ABORT_CAPTURES_TIMEOUT = 2.seconds
+        val CLOSE_SESSION_TIMEOUT = 3.seconds
     }
 }

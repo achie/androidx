@@ -16,36 +16,49 @@
 
 package androidx.build
 
+import androidx.build.pinneddependencies.DependencyExemption
+import androidx.build.pinneddependencies.LibraryCoordinates
+import androidx.build.pinneddependencies.findVerificationErrors
 import androidx.build.uptodatedness.cacheEvenIfNoOutputs
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Project
-import org.gradle.api.artifacts.Configuration
 import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.artifacts.ProjectDependency
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.TaskProvider
-import org.gradle.kotlin.dsl.setProperty
 
 /**
  * Task for verifying the androidx dependency-stability-suffix rule (A library is only as stable as
- * its least stable dependency)
+ * its least stable dependency), and that dependencies on libraries that release separately are
+ * pinned to a non-alpha released version or listed in
+ * [androidx.build.pinneddependencies.EXEMPTIONS_FILE_NAME].
  */
 @CacheableTask
-abstract class VerifyDependencyVersionsTask : DefaultTask() {
+internal abstract class VerifyDependencyVersionsTask : DefaultTask() {
 
     init {
         group = "Verification"
-        description = "Task for verifying the androidx dependency-stability-suffix rule"
+        description =
+            "Task for verifying the androidx dependency-stability-suffix rule and that " +
+                "dependencies on separately released libraries are pinned to a non-alpha " +
+                "version or exempted"
     }
 
-    @get:Input abstract val version: Property<String>
+    @get:Input abstract val library: Property<LibraryCoordinates>
 
-    @get:Input
-    val androidXDependencySet: SetProperty<AndroidXDependency> = project.objects.setProperty()
+    @get:Input abstract val androidXDependencySet: SetProperty<AndroidXDependency>
+
+    @get:Input abstract val exemptionCandidates: SetProperty<LibraryCoordinates>
+
+    @get:Input abstract val exemptions: ListProperty<DependencyExemption>
 
     /**
      * Iterate through the dependencies of the project and ensure none of them are of an inferior
@@ -57,10 +70,23 @@ abstract class VerifyDependencyVersionsTask : DefaultTask() {
     @TaskAction
     fun verifyDependencyVersions() {
         androidXDependencySet.get().forEach { dependency -> verifyDependencyVersion(dependency) }
+        val exemptionCandidates = exemptionCandidates.get()
+        if (exemptionCandidates.isEmpty()) return
+
+        val errors =
+            findVerificationErrors(
+                library = library.get(),
+                dependencies = exemptionCandidates,
+                exemptions = exemptions.get(),
+            )
+        if (errors.isEmpty()) return
+
+        val report = errors.joinToString(separator = "\n\n")
+        throw GradleException(report)
     }
 
     private fun verifyDependencyVersion(dependency: AndroidXDependency) {
-        val projectVersion = version.get()
+        val projectVersion = library.get().version.toString()
         val dependencyVersion = dependency.version
         val projectReleasePhase = releasePhase(projectVersion)
         if (projectReleasePhase < 0) {
@@ -75,7 +101,7 @@ abstract class VerifyDependencyVersionsTask : DefaultTask() {
         }
         if (dependencyReleasePhase < projectReleasePhase) {
             throw GradleException(
-                "Project with version ${version.get()} may " +
+                "Project with version $projectVersion may " +
                     "not take a dependency on less-stable artifact ${dependency.group}:" +
                     "${dependency.name}:${dependency.version} for configuration " +
                     "${dependency.configurationName}. Dependency versions must be at least as " +
@@ -90,7 +116,7 @@ abstract class VerifyDependencyVersionsTask : DefaultTask() {
         // unspecified then any non alpha project won't be able to depend on it to ensure safety.
         val version =
             if (versionString != AndroidXExtension.DEFAULT_UNSPECIFIED_VERSION) {
-                Version(versionString)
+                Version.parse(versionString)
             } else {
                 return 1
             }
@@ -115,33 +141,39 @@ data class AndroidXDependency(
     }
 }
 
-internal fun Project.createVerifyDependencyVersionsTask():
-    TaskProvider<VerifyDependencyVersionsTask> {
+internal fun Project.createVerifyDependencyVersionsTask(
+    libraryVersionsService: Provider<LibraryVersionsService>
+): TaskProvider<VerifyDependencyVersionsTask> {
     val usingMaxDepsVersions = project.usingMaxDepVersions()
     val taskProvider =
         tasks.register("verifyDependencyVersions", VerifyDependencyVersionsTask::class.java) { task
             ->
-            task.version.set(project.version.toString())
+            val library = getLibraryCoordinates(libraryVersionsService)
+            task.library.set(library)
             task.androidXDependencySet.set(
                 project.provider {
-                    val dependencies = mutableSetOf<AndroidXDependency>()
-                    project.configurations.filter(project::shouldVerifyConfiguration).forEach {
-                        configuration ->
-                        configuration.allDependencies.filter(::shouldVerifyDependency).forEach {
-                            dependency ->
-                            dependencies.add(
+                    project.configurations
+                        .matching { it.isCanBeConsumed }
+                        .flatMap { configuration ->
+                            configuration.allDependencies.filter(::shouldVerifyDependency).map {
+                                dependency ->
                                 AndroidXDependency(
                                     dependency.group!!,
                                     dependency.name,
                                     dependency.version!!,
                                     configuration.name,
                                 )
-                            )
+                            }
                         }
-                    }
-                    dependencies
                 }
             )
+            task.exemptionCandidates.set(getExemptionCandidates(libraryVersionsService))
+            task.exemptions.set(
+                library.zip(libraryVersionsService) { lib, service ->
+                    service.exemptionsFor(lib.coordinate)
+                }
+            )
+
             task.onlyIf {
                 /**
                  * Ignore -Pandroidx.useMaxDepVersions when verifying dependency versions because it
@@ -157,113 +189,10 @@ internal fun Project.createVerifyDependencyVersionsTask():
     return taskProvider
 }
 
-internal fun Project.shouldVerifyConfiguration(configuration: Configuration): Boolean {
-    // Only verify configurations that are exported to POM. In an ideal world, this would be an
-    // inclusion derived from the mappings used by the Maven Publish Plugin; however, since we
-    // don't have direct access to those, this should remain an exclusion list.
-    val name = configuration.name
-
-    // Don't check any Android-specific variants of Java plugin configurations -- releaseApi for
-    // api, debugImplementation for implementation, etc. -- or test configurations.
-    if (name.startsWith("androidTest")) return false
-    if (name.startsWith("androidAndroidTest")) return false
-    if (name.startsWith("androidCommonTest")) return false
-    if (name.startsWith("androidDeviceTest")) return false
-    if (name.startsWith("androidReleaseUnitTest")) return false
-    if (name.startsWith("androidHostTest")) return false
-    if (name.startsWith("debug")) return false
-    if (name.startsWith("androidDebug")) return false
-    if (name.startsWith("releaseAndroidTest")) return false
-    if (name.startsWith("releaseAnnotationProcessor")) return false
-    // releaseApi, and releaseImplementation are for declaring dependencies
-    // for the release variant. They extend the releaseCompileClasspath and
-    // releaseRuntimeClasspath (both resolvable configurations) respectively.
-    if (name.startsWith("releaseApi")) return false
-    if (name.startsWith("releaseImplementation")) return false
-    if (name.startsWith("releaseTest")) return false
-    if (name.startsWith("releaseUnitTest")) return false
-
-    if (name.startsWith("test")) return false
-    if (name.startsWith("jvmTest")) return false
-    if (name.startsWith("_agp_internal")) return false
-
-    // Don't check any tooling configurations.
-    if (name == "annotationProcessor") return false
-    if (name == "errorprone") return false
-    if (name.startsWith("lint")) return false
-    if (name.endsWith("LintChecksClasspath")) return false
-    if (name == "metalava") return false
-    if (name.startsWith("kotlinBuild")) return false
-    if (name.startsWith("kotlinCompiler")) return false
-    if (name.startsWith("kotlinKaptWorkerDependencies")) return false
-    if (name.startsWith("kotlinKlib")) return false
-    if (name.startsWith("kapt")) return false
-    if (name.startsWith("ksp")) return false
-
-    // Don't check bundled inspector configurations.
-    if (name == "consumeInspector") return false
-    if (name == "importInspectorImplementation") return false
-
-    // Don't check any configurations that directly bundle the dependencies with the output
-    if (name == "bundleInside") return false
-    if (name == "embedThemesDebug") return false
-    if (name == "embedThemesRelease") return false
-
-    // Don't check any compile-only configurations
-    if (name.startsWith("compile")) return false
-
-    // allow tip of tree compose compiler
-    if (name.startsWith("kotlinPlugin")) return false
-
-    // Don't check Hilt compile-only configurations
-    if (name.startsWith("hiltCompileOnly")) return false
-
-    // Don't check Desktop configurations since we don't publish them anyway
-    if (name.startsWith("desktop")) return false
-    if (name.startsWith("skiko")) return false
-
-    // Doesn't affect the .pom / .module
-    // https://github.com/JetBrains/kotlin/blob/v1.9.10/libraries/tools/kotlin-gradle-plugin/src/common/kotlin/org/jetbrains/kotlin/gradle/plugin/mpp/resolvableMetadataConfiguration.kt#L102
-    if (name.endsWith("DependenciesMetadata")) return false
-
-    // Don't check KGP internal configuration used for tooling
-    if (name == "kotlinInternalAbiValidation") return false
-
-    // don't verify test configurations of KMP projects
-    if (name.contains("TestCompilation")) return false
-    if (name.contains("TestCompile")) return false
-    if (name.contains("commonTest", ignoreCase = true)) return false
-    if (name.contains("nativeTest", ignoreCase = true)) return false
-    if (name.contains("TestCInterop", ignoreCase = true)) return false
-    if (
-        multiplatformExtension?.targets?.any {
-            name.contains("${it.name}Test", ignoreCase = true)
-        } == true
-    ) {
-        return false
-    }
-
-    // don't verify swift export because we don't have any libraries that use it
-    if (name == "swiftExportClasspathResolvable") return false
-
-    // don't verify baseline profile generating project dependencies
-    if (name == "baselineProfile") return false
-    if (name == "releaseBaselineProfile") return false
-
-    // Only used to run kotlinx benchmarks. Artifacts are not published by this configuration.
-    if (name == "benchmarkGenerator.resolver") return false
-
-    // don't verify samples
-    if (name == "samples") return false
-
-    return true
-}
-
 private fun shouldVerifyDependency(dependency: Dependency): Boolean {
     // Only verify dependencies within the scope of our versioning policies.
     if (dependency.group == null) return false
     if (!dependency.group!!.startsWith("androidx.")) return false
-    if (dependency.name == "annotation-sampled") return false
     if (dependency.version == SNAPSHOT_MARKER) {
         // This only happens in playground builds where this magic version gets replaced with
         // the version from the snapshotBuildId defined in playground-common/playground.properties.
@@ -273,4 +202,68 @@ private fun shouldVerifyDependency(dependency: Dependency): Boolean {
     }
 
     return true
+}
+
+internal fun Project.getLibraryCoordinates(
+    libraryVersionsService: Provider<LibraryVersionsService>
+): Provider<LibraryCoordinates> {
+    val projectPath = path
+    val projectVersion = Version.parse(version.toString())
+    val projectGroup = group.toString()
+    val projectArtifact = name
+    val mavenVersionGroup = parse().mavenVersionGroup
+    return libraryVersionsService.map { service ->
+        LibraryCoordinates(
+            projectPath = projectPath,
+            groupId = projectGroup,
+            artifactId = projectArtifact,
+            version = projectVersion,
+            versionGroup = service.versionGroupFor(projectPath, projectGroup, mavenVersionGroup),
+        )
+    }
+}
+
+internal fun Project.getExemptionCandidates(
+    libraryVersionService: Provider<LibraryVersionsService>
+): Provider<Set<LibraryCoordinates>> {
+    val declaredDependencies =
+        project.configurations
+            .matching { it.isCanBeConsumed }
+            .flatMap { configuration -> configuration.allDependencies }
+            .filter(::shouldVerifyDependency)
+            .mapNotNull { dependency ->
+                when (dependency) {
+                    is ProjectDependency ->
+                        LibraryCoordinates(
+                            projectPath = dependency.path,
+                            groupId = dependency.group!!,
+                            artifactId = dependency.name,
+                            versionGroup =
+                                parseBuildFile(project(dependency.path).buildFile)
+                                    .mavenVersionGroup,
+                        )
+                    is ExternalModuleDependency ->
+                        LibraryCoordinates(
+                            projectPath = null,
+                            groupId = dependency.group,
+                            artifactId = dependency.name,
+                            version = dependency.version?.let { Version.parseOrNull(it) },
+                        )
+                    else -> null
+                }
+            }
+            .toSet()
+
+    return libraryVersionService.map { service ->
+        declaredDependencies
+            .map { dependency ->
+                dependency.copy(
+                    versionGroup =
+                        dependency.projectPath?.let {
+                            service.versionGroupFor(it, dependency.groupId, dependency.versionGroup)
+                        }
+                )
+            }
+            .toSet()
+    }
 }

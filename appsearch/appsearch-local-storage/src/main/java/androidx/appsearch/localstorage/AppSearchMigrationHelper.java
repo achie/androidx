@@ -110,7 +110,8 @@ class AppSearchMigrationHelper implements Closeable {
                             .addFilterSchemas(migrators.keySet())
                             .setTermMatch(SearchSpec.TERM_MATCH_EXACT_ONLY)
                             .build(),
-                    /*logger=*/ null,
+                    /*callerAccess=*/ null,
+                    /*queryStatsBuilder=*/ null,
                     /*callStatsBuilder=*/null);
             while (!searchResultPage.getResults().isEmpty()) {
                 for (int i = 0; i < searchResultPage.getResults().size(); i++) {
@@ -150,7 +151,9 @@ class AppSearchMigrationHelper implements Closeable {
                 codedOutputStream.flush();
                 mTotalNeedMigratedDocumentCount += searchResultPage.getResults().size();
                 searchResultPage = mAppSearchImpl.getNextPage(mPackageName,
-                        searchResultPage.getNextPageToken(), /*queryStatsBuilder=*/ null,
+                        searchResultPage.getNextPageToken(),
+                        /* maxResults= */ Integer.MAX_VALUE,
+                        /*queryStatsBuilder=*/ null,
                         /*callStatsBuilder=*/null);
                 outputStream.flush();
             }

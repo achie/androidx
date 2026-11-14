@@ -33,6 +33,7 @@ import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.SessionConfig;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.ZoomState;
+import androidx.camera.core.internal.CalculatedUseCaseInfo;
 import androidx.core.util.Consumer;
 import androidx.lifecycle.LiveData;
 
@@ -106,6 +107,16 @@ public class ForwardingCameraInfo implements CameraInfoInternal {
     }
 
     @Override
+    public boolean isNightModeIndicatorSupported() {
+        return mCameraInfoInternal.isNightModeIndicatorSupported();
+    }
+
+    @Override
+    public @NonNull LiveData<Integer> getNightModeIndicator() {
+        return mCameraInfoInternal.getNightModeIndicator();
+    }
+
+    @Override
     public @NonNull LiveData<ZoomState> getZoomState() {
         return mCameraInfoInternal.getZoomState();
     }
@@ -165,14 +176,14 @@ public class ForwardingCameraInfo implements CameraInfoInternal {
     }
 
     @Override
-    public @NonNull Set<Range<Integer>> getSupportedFrameRateRanges() {
-        return mCameraInfoInternal.getSupportedFrameRateRanges();
+    @ExperimentalZeroShutterLag
+    public boolean canSupportZsl(@NonNull List<Size> sizes) {
+        return mCameraInfoInternal.canSupportZsl(sizes);
     }
 
     @Override
-    public @NonNull Set<Range<Integer>> getSupportedFrameRateRanges(
-            @NonNull SessionConfig sessionConfig) {
-        return mCameraInfoInternal.getSupportedFrameRateRanges(sessionConfig);
+    public @NonNull Set<Range<Integer>> getSupportedFrameRateRanges() {
+        return mCameraInfoInternal.getSupportedFrameRateRanges();
     }
 
     @Override
@@ -199,6 +210,17 @@ public class ForwardingCameraInfo implements CameraInfoInternal {
     @Override
     public void removeSessionCaptureCallback(@NonNull CameraCaptureCallback callback) {
         mCameraInfoInternal.removeSessionCaptureCallback(callback);
+    }
+
+    @Override
+    public void addSessionLifecycleCallback(@NonNull Executor executor,
+            @NonNull CameraSessionLifecycleCallback callback) {
+        mCameraInfoInternal.addSessionLifecycleCallback(executor, callback);
+    }
+
+    @Override
+    public void removeSessionLifecycleCallback(@NonNull CameraSessionLifecycleCallback callback) {
+        mCameraInfoInternal.removeSessionLifecycleCallback(callback);
     }
 
     @Override
@@ -322,5 +344,39 @@ public class ForwardingCameraInfo implements CameraInfoInternal {
     @Override
     public @NonNull Set<Integer> getAvailableCapabilities() {
         return mCameraInfoInternal.getAvailableCapabilities();
+    }
+
+    @Override
+    public @NonNull Set<Integer> getSupportedExtensions() {
+        return mCameraInfoInternal.getSupportedExtensions();
+    }
+
+    @Override
+    public boolean isExtensionSupported(int extensionMode) {
+        return mCameraInfoInternal.isExtensionSupported(extensionMode);
+    }
+
+    @Override
+    public @Nullable CameraExtensionCapabilities getCameraExtensionCapabilities(
+            int extensionMode) {
+        return mCameraInfoInternal.getCameraExtensionCapabilities(extensionMode);
+    }
+
+    @Override
+    public boolean isRepeatingStreamForced() {
+        return mCameraInfoInternal.isRepeatingStreamForced();
+    }
+
+    @Override
+    public @Nullable ResolvedStreamInfo resolveRepeatingStream(
+            @NonNull CalculatedUseCaseInfo unionInfo,
+            @NonNull List<@NonNull ResolvedStreamInfo> streams) {
+        return mCameraInfoInternal.resolveRepeatingStream(unionInfo, streams);
+    }
+
+    @Override
+    public @NonNull HardwareConfigQueryResult queryFastSwitchHardwareSupport(
+            @NonNull SessionConfig config, @NonNull List<ResolvedStreamInfo> streams) {
+        return mCameraInfoInternal.queryFastSwitchHardwareSupport(config, streams);
     }
 }

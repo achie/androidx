@@ -31,21 +31,18 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
 public class CardBehaviourTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun supports_test_tag() {
@@ -158,9 +155,7 @@ public class CardBehaviourTest {
 }
 
 public class AppCardTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun responds_to_click_when_enabled() {
@@ -208,9 +203,7 @@ public class AppCardTest {
 }
 
 public class TitleCardTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun responds_to_click_when_enabled() {
@@ -256,9 +249,7 @@ public class TitleCardTest {
 }
 
 public class CardSizeTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun gives_base_card_correct_default_max_height(): Unit =
@@ -278,9 +269,7 @@ public class CardSizeTest {
 }
 
 public class CardColorTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun gives_enabled_default_colors(): Unit =
@@ -379,9 +368,7 @@ public class CardColorTest {
 }
 
 public class CardFontTest {
-    @get:Rule
-    public val rule: ComposeContentTestRule =
-        createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule public val rule: ComposeContentTestRule = createComposeRule()
 
     @Test
     public fun gives_correct_text_style_base() {
@@ -404,7 +391,7 @@ public class CardFontTest {
         var actualAppTextStyle = TextStyle.Default
         var actualTimeTextStyle = TextStyle.Default
         var actualTitleTextStyle = TextStyle.Default
-        var actuaContentTextStyle = TextStyle.Default
+        var actualContentTextStyle = TextStyle.Default
         var expectedAppTextStyle = TextStyle.Default
         var expectedTimeTextStyle = TextStyle.Default
         var expectedTitleTextStyle = TextStyle.Default
@@ -423,20 +410,20 @@ public class CardFontTest {
                 title = { actualTitleTextStyle = LocalTextStyle.current },
                 modifier = Modifier.testTag(TEST_TAG),
             ) {
-                actuaContentTextStyle = LocalTextStyle.current
+                actualContentTextStyle = LocalTextStyle.current
             }
         }
         assertEquals(expectedAppTextStyle, actualAppTextStyle)
         assertEquals(expectedTimeTextStyle, actualTimeTextStyle)
         assertEquals(expectedTitleTextStyle, actualTitleTextStyle)
-        assertEquals(expectedContentTextStyle, actuaContentTextStyle)
+        assertEquals(expectedContentTextStyle, actualContentTextStyle)
     }
 
     @Test
     public fun title_card_gives_correct_text_style_base() {
         var actualTimeTextStyle = TextStyle.Default
         var actualTitleTextStyle = TextStyle.Default
-        var actuaContentTextStyle = TextStyle.Default
+        var actualContentTextStyle = TextStyle.Default
         var expectedTimeTextStyle = TextStyle.Default
         var expectedTitleTextStyle = TextStyle.Default
         var expectedContentTextStyle = TextStyle.Default
@@ -452,12 +439,12 @@ public class CardFontTest {
                 title = { actualTitleTextStyle = LocalTextStyle.current },
                 modifier = Modifier.testTag(TEST_TAG),
             ) {
-                actuaContentTextStyle = LocalTextStyle.current
+                actualContentTextStyle = LocalTextStyle.current
             }
         }
         assertEquals(expectedTimeTextStyle, actualTimeTextStyle)
         assertEquals(expectedTitleTextStyle, actualTitleTextStyle)
-        assertEquals(expectedContentTextStyle, actuaContentTextStyle)
+        assertEquals(expectedContentTextStyle, actualContentTextStyle)
     }
 }
 

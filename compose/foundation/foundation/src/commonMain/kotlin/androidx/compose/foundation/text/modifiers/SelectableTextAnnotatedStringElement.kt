@@ -26,14 +26,18 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextStyleScope
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.TextOverflow
 
 /** Element for any text that is in a selection container. */
 internal class SelectableTextAnnotatedStringElement(
     private val text: AnnotatedString,
-    private val style: TextStyle,
+    private val style: TextStyle?,
+    private val styleProvider: (TextStyleScope.() -> Unit)?,
     private val fontFamilyResolver: FontFamily.Resolver,
+    private val defaultLocaleList: LocaleList,
     private val onTextLayout: ((TextLayoutResult) -> Unit)? = null,
     private val overflow: TextOverflow = TextOverflow.Clip,
     private val softWrap: Boolean = true,
@@ -46,39 +50,143 @@ internal class SelectableTextAnnotatedStringElement(
     private val autoSize: TextAutoSize? = null,
 ) : ModifierNodeElement<SelectableTextAnnotatedStringNode>() {
 
+    constructor(
+        text: AnnotatedString,
+        style: TextStyle,
+        fontFamilyResolver: FontFamily.Resolver,
+        defaultLocaleList: LocaleList,
+        onTextLayout: ((TextLayoutResult) -> Unit)? = null,
+        overflow: TextOverflow = TextOverflow.Clip,
+        softWrap: Boolean = true,
+        maxLines: Int = Int.MAX_VALUE,
+        minLines: Int = DefaultMinLines,
+        placeholders: List<AnnotatedString.Range<Placeholder>>? = null,
+        onPlaceholderLayout: ((List<Rect?>) -> Unit)? = null,
+        selectionController: SelectionController? = null,
+        color: ColorProducer? = null,
+        autoSize: TextAutoSize? = null,
+    ) : this(
+        text = text,
+        style = style,
+        styleProvider = null,
+        fontFamilyResolver = fontFamilyResolver,
+        defaultLocaleList = defaultLocaleList,
+        onTextLayout = onTextLayout,
+        overflow = overflow,
+        softWrap = softWrap,
+        maxLines = maxLines,
+        minLines = minLines,
+        placeholders = placeholders,
+        onPlaceholderLayout = onPlaceholderLayout,
+        selectionController = selectionController,
+        color = color,
+        autoSize = autoSize,
+    )
+
+    constructor(
+        text: AnnotatedString,
+        styleProvider: (TextStyleScope.() -> Unit)?,
+        fontFamilyResolver: FontFamily.Resolver,
+        defaultLocaleList: LocaleList,
+        onTextLayout: ((TextLayoutResult) -> Unit)? = null,
+        overflow: TextOverflow = TextOverflow.Clip,
+        softWrap: Boolean = true,
+        maxLines: Int = Int.MAX_VALUE,
+        minLines: Int = DefaultMinLines,
+        placeholders: List<AnnotatedString.Range<Placeholder>>? = null,
+        onPlaceholderLayout: ((List<Rect?>) -> Unit)? = null,
+        selectionController: SelectionController? = null,
+        autoSize: TextAutoSize? = null,
+    ) : this(
+        text = text,
+        style = null,
+        styleProvider = styleProvider,
+        fontFamilyResolver = fontFamilyResolver,
+        defaultLocaleList = defaultLocaleList,
+        onTextLayout = onTextLayout,
+        overflow = overflow,
+        softWrap = softWrap,
+        maxLines = maxLines,
+        minLines = minLines,
+        placeholders = placeholders,
+        onPlaceholderLayout = onPlaceholderLayout,
+        selectionController = selectionController,
+        color = null,
+        autoSize = autoSize,
+    )
+
     override fun create(): SelectableTextAnnotatedStringNode =
-        SelectableTextAnnotatedStringNode(
-            text,
-            style,
-            fontFamilyResolver,
-            onTextLayout,
-            overflow,
-            softWrap,
-            maxLines,
-            minLines,
-            placeholders,
-            onPlaceholderLayout,
-            selectionController,
-            color,
-            autoSize,
-        )
+        if (style != null) {
+            SelectableTextAnnotatedStringNode(
+                text = text,
+                style = style,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                onTextLayout = onTextLayout,
+                overflow = overflow,
+                softWrap = softWrap,
+                maxLines = maxLines,
+                minLines = minLines,
+                placeholders = placeholders,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = selectionController,
+                overrideColor = color,
+                autoSize = autoSize,
+            )
+        } else {
+            SelectableTextAnnotatedStringNode(
+                text = text,
+                styleProvider = styleProvider,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                onTextLayout = onTextLayout,
+                overflow = overflow,
+                softWrap = softWrap,
+                maxLines = maxLines,
+                minLines = minLines,
+                placeholders = placeholders,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = selectionController,
+                autoSize = autoSize,
+            )
+        }
 
     override fun update(node: SelectableTextAnnotatedStringNode) {
-        node.update(
-            text = text,
-            style = style,
-            placeholders = placeholders,
-            minLines = minLines,
-            maxLines = maxLines,
-            softWrap = softWrap,
-            fontFamilyResolver = fontFamilyResolver,
-            overflow = overflow,
-            onTextLayout = onTextLayout,
-            onPlaceholderLayout = onPlaceholderLayout,
-            selectionController = selectionController,
-            color = color,
-            autoSize = autoSize,
-        )
+        if (style != null) {
+            node.update(
+                text = text,
+                style = style,
+                placeholders = placeholders,
+                minLines = minLines,
+                maxLines = maxLines,
+                softWrap = softWrap,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                overflow = overflow,
+                onTextLayout = onTextLayout,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = selectionController,
+                color = color,
+                autoSize = autoSize,
+            )
+        } else {
+            node.update(
+                text = text,
+                styleProvider = styleProvider,
+                placeholders = placeholders,
+                minLines = minLines,
+                maxLines = maxLines,
+                softWrap = softWrap,
+                fontFamilyResolver = fontFamilyResolver,
+                defaultLocaleList = defaultLocaleList,
+                overflow = overflow,
+                onTextLayout = onTextLayout,
+                onPlaceholderLayout = onPlaceholderLayout,
+                selectionController = selectionController,
+                color = color,
+                autoSize = autoSize,
+            )
+        }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -90,10 +198,12 @@ internal class SelectableTextAnnotatedStringElement(
         if (color != other.color) return false
         if (text != other.text) return false
         if (style != other.style) return false
+        if (styleProvider !== other.styleProvider) return false
         if (placeholders != other.placeholders) return false
 
         // these are equally unlikely to change
         if (fontFamilyResolver != other.fontFamilyResolver) return false
+        if (defaultLocaleList != other.defaultLocaleList) return false
         if (autoSize != other.autoSize) return false
         if (onTextLayout !== other.onTextLayout) return false
         if (overflow != other.overflow) return false
@@ -110,8 +220,9 @@ internal class SelectableTextAnnotatedStringElement(
 
     override fun hashCode(): Int {
         var result = text.hashCode()
-        result = 31 * result + style.hashCode()
+        result = 31 * result + (style?.hashCode() ?: styleProvider?.hashCode() ?: 0)
         result = 31 * result + fontFamilyResolver.hashCode()
+        result = 31 * result + defaultLocaleList.hashCode()
         result = 31 * result + (onTextLayout?.hashCode() ?: 0)
         result = 31 * result + overflow.hashCode()
         result = 31 * result + softWrap.hashCode()

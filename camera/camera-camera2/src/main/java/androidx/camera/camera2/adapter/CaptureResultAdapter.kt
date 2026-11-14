@@ -25,9 +25,10 @@ import androidx.camera.camera2.impl.Camera2Logger
 import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.FrameInfo
 import androidx.camera.camera2.pipe.FrameMetadata
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.RequestMetadata
-import androidx.camera.camera2.pipe.UnsafeWrapper
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.UnsafeWrapper
+import androidx.camera.common.unwrapAs
 import androidx.camera.core.impl.CameraCaptureMetaData.AeMode
 import androidx.camera.core.impl.CameraCaptureMetaData.AeState
 import androidx.camera.core.impl.CameraCaptureMetaData.AfMode
@@ -38,12 +39,12 @@ import androidx.camera.core.impl.CameraCaptureMetaData.FlashState
 import androidx.camera.core.impl.CameraCaptureResult
 import androidx.camera.core.impl.TagBundle
 import androidx.camera.core.impl.utils.ExifData
+import java.lang.Class
 import java.nio.BufferUnderflowException
-import kotlin.reflect.KClass
 
 public class PartialCaptureResultAdapter(
     private val requestMetadata: RequestMetadata,
-    private val frameNumber: FrameNumber,
+    private val frameNumber: CameraFrameNumber,
     private val result: FrameMetadata,
 ) : CameraCaptureResult, UnsafeWrapper {
     override fun getAfMode(): AfMode = result.getAfMode()
@@ -72,15 +73,15 @@ public class PartialCaptureResultAdapter(
     }
 
     override fun getCaptureResult(): CaptureResult =
-        checkNotNull(unwrapAs(CaptureResult::class)) { "Failed to unwrap $this as CaptureResult" }
+        checkNotNull(unwrapAs<CaptureResult>()) { "Failed to unwrap $this as CaptureResult" }
 
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? = result.unwrapAs(type)
+    override fun <T : Any> unwrapAs(type: Class<T>): T? = result.unwrapAs(type)
 }
 
 /** Adapts the [CameraCaptureResult] interface to [CameraPipe]. */
 public class CaptureResultAdapter(
     private val requestMetadata: RequestMetadata,
-    private val frameNumber: FrameNumber,
+    private val frameNumber: CameraFrameNumber,
     internal val result: FrameInfo,
 ) : CameraCaptureResult, UnsafeWrapper {
     override fun getAfMode(): AfMode = result.metadata.getAfMode()
@@ -109,14 +110,14 @@ public class CaptureResultAdapter(
     }
 
     override fun getCaptureResult(): CaptureResult =
-        checkNotNull(unwrapAs(TotalCaptureResult::class)) {
+        checkNotNull(unwrapAs<TotalCaptureResult>()) {
             "Failed to unwrap $this as TotalCaptureResult"
         }
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? {
+    override fun <T : Any> unwrapAs(type: Class<T>): T? {
         return when (type) {
-            FrameInfo::class -> result as T
+            FrameInfo::class.java -> result as T
             else -> result.unwrapAs(type)
         }
     }

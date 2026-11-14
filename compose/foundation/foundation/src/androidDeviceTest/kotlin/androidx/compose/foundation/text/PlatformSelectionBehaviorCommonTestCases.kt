@@ -37,7 +37,7 @@ import androidx.compose.ui.test.MouseInjectionScope
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.AfterClass
 import org.junit.BeforeClass
 import org.junit.Rule
@@ -59,7 +58,7 @@ import org.junit.runners.model.Statement
 @SdkSuppress(minSdkVersion = 28)
 @OptIn(ExperimentalFoundationApi::class)
 abstract class PlatformSelectionBehaviorCommonTestCases : FocusedWindowTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
     @get:Rule val platformSelectionBehaviorsRule = PlatformSelectionBehaviorsRule()
     internal val TAG = "SelectableText"
 

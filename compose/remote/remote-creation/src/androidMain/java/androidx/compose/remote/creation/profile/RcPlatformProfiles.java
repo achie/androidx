@@ -19,7 +19,6 @@ package androidx.compose.remote.creation.profile;
 import androidx.annotation.RestrictTo;
 import androidx.compose.remote.core.CoreDocument;
 import androidx.compose.remote.core.RcProfiles;
-import androidx.compose.remote.creation.ExperimentalRemoteCreationApi;
 import androidx.compose.remote.creation.RemoteComposeWriterAndroid;
 import androidx.compose.remote.creation.platform.AndroidxRcPlatformServices;
 
@@ -28,16 +27,61 @@ import org.jspecify.annotations.NonNull;
 public class RcPlatformProfiles {
     /**
      * Profile for Glance Widgets for Platform 16.
-     * <p>
-     * This will be moved to the glance module when creation APIs are public, before
-     * stable APIs.
+     *
+     * <p>This will be moved to the glance module when creation APIs are public, before stable APIs.
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    @ExperimentalRemoteCreationApi
     public static final @NonNull Profile WIDGETS_V6 =
-            new Profile(6, 0, new AndroidxRcPlatformServices(),
+            new Profile(
+                    6,
+                    0,
+                    new AndroidxRcPlatformServices(),
                     (creationDisplayInfo, profile, callback) ->
                             new WidgetsProfileWriterV6(creationDisplayInfo, null, profile));
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public static final @NonNull Profile WIDGETS_V7 =
+            new Profile(
+                    7,
+                    RcProfiles.PROFILE_WIDGETS,
+                    new AndroidxRcPlatformServices(),
+                    (creationDisplayInfo, profile, callback) ->
+                            new RemoteComposeWriterAndroid(creationDisplayInfo, null, profile));
+
+
+    /**
+     * A profile for creating Remote Compose UIs for use with the embedded AndroidX Player.
+     *
+     * <p>It uses the {@link RemoteComposeWriterAndroid} to serialize the UI tree.
+     */
+    public static final @NonNull Profile ANDROIDX7 = new Profile(7,
+            RcProfiles.PROFILE_ANDROIDX, new AndroidxRcPlatformServices(),
+            (creationDisplayInfo, profile, callback) ->
+                    new RemoteComposeWriterAndroid(
+                            creationDisplayInfo, null, profile, callback));
+
+    /**
+     * A profile for creating Remote Compose UIs for use with the embedded AndroidX Player.
+     *
+     * <p>It uses the {@link RemoteComposeWriterAndroid} to serialize the UI tree.
+     */
+    public static final @NonNull Profile ANDROIDX8 = new Profile(8,
+            RcProfiles.PROFILE_ANDROIDX, new AndroidxRcPlatformServices(),
+            (creationDisplayInfo, profile, callback) ->
+                    new RemoteComposeWriterAndroid(
+                            creationDisplayInfo, null, profile, callback));
+
+    /**
+     * A profile for creating Remote Compose UIs for use with the embedded AndroidX Player.
+     *
+     * <p>It uses the {@link RemoteComposeWriterAndroid} to serialize the UI tree.
+     */
+    public static final @NonNull Profile ANDROIDX9 = new Profile(9,
+            RcProfiles.PROFILE_ANDROIDX, new AndroidxRcPlatformServices(),
+            (creationDisplayInfo, profile, callback) ->
+                    new RemoteComposeWriterAndroid(
+                            creationDisplayInfo, null, profile, callback));
+
 
     /**
      * A profile for creating Remote Compose UIs for use with the embedded AndroidX Player.
@@ -45,20 +89,8 @@ public class RcPlatformProfiles {
      * <p>It uses the {@link RemoteComposeWriterAndroid} to serialize the UI tree.
      */
     public static final @NonNull Profile ANDROIDX = new Profile(CoreDocument.DOCUMENT_API_LEVEL,
-            RcProfiles.PROFILE_ANDROIDX, new AndroidxRcPlatformServices(),
-            (creationDisplayInfo, profile, callback) ->
-                    new RemoteComposeWriterAndroid(
-                            creationDisplayInfo, null, profile, callback));
-
-    /**
-     * Profile for Wear OS widgets.
-     * <p>
-     * This will be moved to the glance:wear:wear module when creation APIs are public, before
-     * stable APIs.
-     */
-    @ExperimentalRemoteCreationApi
-    public static final @NonNull Profile WEAR_WIDGETS = new Profile(CoreDocument.DOCUMENT_API_LEVEL,
-            RcProfiles.PROFILE_WEAR_WIDGETS, new AndroidxRcPlatformServices(),
+            RcProfiles.PROFILE_ANDROIDX,
+            new AndroidxRcPlatformServices(),
             (creationDisplayInfo, profile, callback) ->
                     new RemoteComposeWriterAndroid(
                             creationDisplayInfo, null, profile, callback));

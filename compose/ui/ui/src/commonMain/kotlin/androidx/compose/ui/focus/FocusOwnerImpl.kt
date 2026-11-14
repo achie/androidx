@@ -18,9 +18,10 @@ package androidx.compose.ui.focus
 
 import androidx.collection.MutableLongSet
 import androidx.collection.MutableObjectList
+import androidx.collection.mutableObjectListOf
 import androidx.compose.ui.ComposeUiFlags
-import androidx.compose.ui.ComposeUiFlags.isOptimizedFocusEventDispatchEnabled
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.InteractionBarrierNode
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.CustomDestinationResult.Cancelled
 import androidx.compose.ui.focus.CustomDestinationResult.None
@@ -71,6 +72,23 @@ internal class FocusOwnerImpl(
     private val platformFocusOwner: PlatformFocusOwner,
     private val owner: Owner,
 ) : FocusOwner {
+
+    override val activeInteractionBarriers = mutableObjectListOf<InteractionBarrierNode>()
+
+    override fun registerInteractionBarrier(node: InteractionBarrierNode) {
+        activeInteractionBarriers.add(node)
+    }
+
+    override fun unregisterInteractionBarrier(node: InteractionBarrierNode) {
+        activeInteractionBarriers.remove(node)
+    }
+
+    override fun onBarrierPositionChanged() {
+        val activeTarget = activeFocusTargetNode
+        if (activeTarget != null && activeTarget.isOccludedByInteractionBarrier()) {
+            clearFocus(force = true)
+        }
+    }
 
     // The root focus target is not focusable, and acts like a focus group.
     internal var rootFocusNode = FocusTargetNode(focusability = Focusability.Never)
@@ -143,16 +161,9 @@ internal class FocusOwnerImpl(
      * hierarchy.
      */
     override fun releaseFocus() {
-        rootFocusNode.clearFocus(forced = true, refreshFocusEvents = true)
-
-        // When the optimized focus change is enabled, the [FocusTargetNode.clearFocus()] call above
-        // no longer clears activeFocusTargetNode and dispatches focus callbacks. We now have to
-        // trigger the callbacks ourselves here and in other locations. By doing this, we can delay
-        // calling Compose's onFocusChanged() multiple times for a single change (and cache the
-        // previous focus node), and then actually trigger the callback with both the previous and
-        // current focused nodes in one call (vs. two calls).
-        @OptIn(ExperimentalComposeUiApi::class)
-        if (isOptimizedFocusEventDispatchEnabled && activeFocusTargetNode != null) {
+        rootFocusNode.prepareToClearFocus(forced = true, refreshFocusEvents = true)
+        // After preparing to clear focus above, we can now release focus directly.
+        if (activeFocusTargetNode != null) {
             val previousActive = activeFocusTargetNode
             activeFocusTargetNode = null
             previousActive?.dispatchFocusCallbacks(previousState = Active, newState = Inactive)
@@ -343,13 +354,7 @@ internal class FocusOwnerImpl(
                     Default -> {
                         /* Do Nothing */
                     }
-                    else ->
-                        @OptIn(ExperimentalComposeUiApi::class)
-                        return if (ComposeUiFlags.isRequestFocusOnNonFocusableFocusTargetEnabled) {
-                            customDest.findFocusTarget(onFound)
-                        } else {
-                            customDest.findFocusTargetNode(onFound)
-                        }
+                    else -> return customDest.findFocusTarget(onFound)
                 }
             }
 
@@ -374,7 +379,7 @@ internal class FocusOwnerImpl(
 
             val activeFocusTarget = findFocusTargetNode()
             val focusedKeyInputNode =
-                activeFocusTarget?.lastLocalKeyInputNode()
+                activeFocusTarget?.lastLocalNode(Nodes.KeyInput)
                     ?: activeFocusTarget?.nearestAncestorIncludingSelf(Nodes.KeyInput)?.node
                     ?: rootFocusNode.nearestAncestor(Nodes.KeyInput)?.node
 
@@ -398,10 +403,9 @@ internal class FocusOwnerImpl(
             return false
         }
 
+        val activeFocusTarget = rootFocusNode.findActiveFocusNode()
         val focusedSoftKeyboardInterceptionNode =
-            rootFocusNode
-                .findActiveFocusNode()
-                ?.nearestAncestorIncludingSelf(Nodes.SoftKeyboardKeyInput)
+            activeFocusTarget?.nearestAncestorIncludingSelf(Nodes.SoftKeyboardKeyInput)
 
         focusedSoftKeyboardInterceptionNode?.traverseAncestorsIncludingSelf(
             type = Nodes.SoftKeyboardKeyInput,
@@ -425,8 +429,9 @@ internal class FocusOwnerImpl(
             return false
         }
 
+        val activeFocusTarget = findFocusTargetNode()
         val focusedRotaryInputNode =
-            findFocusTargetNode()?.nearestAncestorIncludingSelf(Nodes.RotaryInput)
+            activeFocusTarget?.nearestAncestorIncludingSelf(Nodes.RotaryInput)
 
         focusedRotaryInputNode?.traverseAncestorsIncludingSelf(
             type = Nodes.RotaryInput,
@@ -448,7 +453,7 @@ internal class FocusOwnerImpl(
         }
 
         val focusedIndirectPointerInputNode =
-            activeFocusTargetNode?.nearestAncestorIncludingSelf(Nodes.IndirectPointerInput)
+            activeFocusTargetNode?.focusedIndirectPointerInputNode()
 
         focusedIndirectPointerInputNode?.let { node ->
             val ancestors = node.ancestors(Nodes.IndirectPointerInput)
@@ -457,17 +462,23 @@ internal class FocusOwnerImpl(
             ancestors?.fastForEachReversed {
                 it.onIndirectPointerEvent(event, PointerEventPass.Initial)
             }
-            node.onIndirectPointerEvent(event, PointerEventPass.Initial)
+            node.dispatchForKind(Nodes.IndirectPointerInput) {
+                it.onIndirectPointerEvent(event, PointerEventPass.Initial)
+            }
 
             // Main pass (bubbling)
-            node.onIndirectPointerEvent(event, PointerEventPass.Main)
+            node.dispatchForKind(Nodes.IndirectPointerInput) {
+                it.onIndirectPointerEvent(event, PointerEventPass.Main)
+            }
             ancestors?.fastForEach { it.onIndirectPointerEvent(event, PointerEventPass.Main) }
 
             // Final pass (tunneling)
             ancestors?.fastForEachReversed {
                 it.onIndirectPointerEvent(event, PointerEventPass.Final)
             }
-            node.onIndirectPointerEvent(event, PointerEventPass.Final)
+            node.dispatchForKind(Nodes.IndirectPointerInput) {
+                it.onIndirectPointerEvent(event, PointerEventPass.Final)
+            }
         }
 
         val isConsumed = event.changes.fastAny { it.isConsumed }
@@ -476,13 +487,13 @@ internal class FocusOwnerImpl(
 
     override fun dispatchIndirectPointerCancel() {
         val focusedIndirectPointerInputNode =
-            activeFocusTargetNode?.nearestAncestorIncludingSelf(Nodes.IndirectPointerInput)
+            activeFocusTargetNode?.focusedIndirectPointerInputNode()
 
         focusedIndirectPointerInputNode?.let { node ->
             val ancestors = node.ancestors(Nodes.IndirectPointerInput)
 
             // Triggers cancel from main focused node to highest ancestor (bubbling)
-            node.onCancelIndirectPointerInput()
+            node.dispatchForKind(Nodes.IndirectPointerInput) { it.onCancelIndirectPointerInput() }
             ancestors?.fastForEach { it.onCancelIndirectPointerInput() }
         }
     }
@@ -584,15 +595,9 @@ internal class FocusOwnerImpl(
             field = value
         }
 
-    private fun DelegatableNode.lastLocalKeyInputNode(): Modifier.Node? {
-        var focusedKeyInputNode: Modifier.Node? = null
-        visitLocalDescendants(Nodes.FocusTarget or Nodes.KeyInput) { modifierNode ->
-            if (modifierNode.isKind(Nodes.FocusTarget)) return focusedKeyInputNode
-
-            focusedKeyInputNode = modifierNode
-        }
-        return focusedKeyInputNode
-    }
+    private fun FocusTargetNode.focusedIndirectPointerInputNode(): Modifier.Node? =
+        lastLocalNode(Nodes.IndirectPointerInput)
+            ?: nearestAncestorIncludingSelf(Nodes.IndirectPointerInput)?.node
 
     // TODO(b/307580000) Factor this out into a class to manage key inputs.
     private fun validateKeyEvent(keyEvent: KeyEvent): Boolean {
@@ -629,3 +634,13 @@ internal fun FocusDirection.is1dFocusSearch(): Boolean =
         Previous -> true
         else -> false
     }
+
+internal fun DelegatableNode.lastLocalNode(type: NodeKind<*>): Modifier.Node? {
+    var focusedNode: Modifier.Node? = null
+    visitLocalDescendants(Nodes.FocusTarget or type) { modifierNode ->
+        if (modifierNode.isKind(Nodes.FocusTarget)) return focusedNode
+
+        focusedNode = modifierNode
+    }
+    return focusedNode
+}

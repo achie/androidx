@@ -16,28 +16,43 @@
 
 package androidx.camera.camera2.pipe.compat
 
-import android.graphics.SurfaceTexture
+import android.util.Size
 import android.view.Surface
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraph.Flags.FinalizeSessionOnCloseBehavior
+import androidx.camera.camera2.pipe.CameraStream
 import androidx.camera.camera2.pipe.CameraSurfaceManager
 import androidx.camera.camera2.pipe.CaptureSequenceProcessor
+import androidx.camera.camera2.pipe.MemoryEstimator
+import androidx.camera.camera2.pipe.OutputId
+import androidx.camera.camera2.pipe.OutputStream
 import androidx.camera.camera2.pipe.Request
+import androidx.camera.camera2.pipe.StreamFormat
+import androidx.camera.camera2.pipe.StreamGraph
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.camera2.pipe.StrictMode
 import androidx.camera.camera2.pipe.core.SystemTimeSource
 import androidx.camera.camera2.pipe.graph.GraphListener
+import androidx.camera.camera2.pipe.graph.StreamGraphImpl
+import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
 import androidx.camera.camera2.pipe.testing.FakeCaptureSequence
 import androidx.camera.camera2.pipe.testing.FakeCaptureSequenceProcessor
 import androidx.camera.camera2.pipe.testing.FakeCaptureSessionFactory
+import androidx.camera.camera2.pipe.testing.FakeSurfaces
 import androidx.camera.camera2.pipe.testing.FakeThreads
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.pipe.testing.RobolectricCameraPipeTestRunner
+import androidx.camera.common.CameraId
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
@@ -59,7 +74,8 @@ class CaptureSessionStateTest {
         object : Camera2CaptureSequenceProcessorFactory {
             override fun create(
                 session: CameraCaptureSessionWrapper,
-                surfaceMap: Map<StreamId, Surface>,
+                streamToSurfaceMap: Map<StreamId, Surface>,
+                outputToSurfaceMap: Map<OutputId, Surface>,
             ): CaptureSequenceProcessor<Request, FakeCaptureSequence> = fakeCaptureSequenceProcessor
         }
     private val timeSource = SystemTimeSource()
@@ -69,11 +85,34 @@ class CaptureSessionStateTest {
             closeCaptureSessionOnDisconnect = false,
         )
 
-    private val surface1: Surface = Surface(SurfaceTexture(1))
-    private val surface2: Surface = Surface(SurfaceTexture(2))
-    private val stream1: StreamId = StreamId(1)
-    private val stream2: StreamId = StreamId(2)
-    private val stream3Deferred: StreamId = StreamId(3)
+    private val fakeSurfaces = FakeSurfaces()
+    private val surface1: Surface = fakeSurfaces.createFakeSurface()
+    private val surface2: Surface = fakeSurfaces.createFakeSurface()
+    private val surface3: Surface = fakeSurfaces.createFakeSurface()
+
+    private val cameraId = CameraId("1")
+    private val streamConfig1 =
+        CameraStream.Config.create(Size(1280, 720), StreamFormat.YUV_420_888, cameraId)
+    private val streamConfig2 =
+        CameraStream.Config.create(Size(1280, 720), StreamFormat.JPEG, cameraId)
+    private val streamConfig3 =
+        CameraStream.Config.create(
+            Size(1280, 720),
+            StreamFormat.UNKNOWN,
+            cameraId,
+            OutputStream.OutputType.SURFACE_TEXTURE,
+        )
+    private val graphConfig =
+        CameraGraph.Config(cameraId, listOf(streamConfig1, streamConfig2, streamConfig3))
+
+    private val fakeCameraMetadata =
+        FakeCameraMetadata.fromTemplate(template = HighEndDeviceTemplate, cameraId = cameraId)
+    private val streamGraph: StreamGraph =
+        StreamGraphImpl(fakeCameraMetadata, graphConfig, mock(), mock(), MemoryEstimator.create())
+
+    private val stream1: StreamId = streamGraph[streamConfig1]!!.id
+    private val stream2: StreamId = streamGraph[streamConfig2]!!.id
+    private val stream3Deferred: StreamId = streamGraph[streamConfig3]!!.id
 
     private val captureSessionFactory =
         FakeCaptureSessionFactory(
@@ -86,8 +125,7 @@ class CaptureSessionStateTest {
 
     @After
     fun teardown() {
-        surface1.release()
-        surface2.release()
+        fakeSurfaces.close()
     }
 
     @Test
@@ -102,6 +140,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -128,6 +168,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -148,6 +190,55 @@ class CaptureSessionStateTest {
     }
 
     @Test
+    fun createCaptureSessionInvokesGraphStartedOnceAndGraphModifiedWhenDeferredSurfaceIsAvailable() =
+        runTest {
+            val fakeThreads = FakeThreads.fromTestScope(this)
+            val state =
+                CaptureSessionState(
+                    fakeGraphListener,
+                    captureSessionFactory,
+                    captureSequenceProcessorFactory,
+                    cameraSurfaceManager,
+                    timeSource,
+                    cameraGraphFlags,
+                    concurrentSessionSequencer = null,
+                    streamGraph,
+                    StrictMode(true),
+                    fakeThreads,
+                    this,
+                )
+
+            // When surfaces are configured
+            state.configureSurfaceMap(mapOf(stream1 to surface1, stream2 to surface2))
+            verify(fakeSurfaceListener, times(1)).onSurfaceActive(eq(surface1))
+            verify(fakeSurfaceListener, times(1)).onSurfaceActive(eq(surface2))
+
+            // And a device is set
+            state.cameraDevice = fakeCameraDevice
+
+            // Advance to make sure a capture session is created.
+            advanceUntilIdle()
+
+            // Feed a fake capture session
+            state.onConfigured(fakeCaptureSession)
+
+            // The graph should be started (making request processor is active)
+            verify(fakeGraphListener, times(1)).onGraphStarted(any())
+
+            // Now provide the deferred Surface.
+            state.configureSurfaceMap(
+                mapOf(stream1 to surface1, stream2 to surface2, stream3Deferred to surface3)
+            )
+            advanceUntilIdle()
+
+            // The graph should be started only once.
+            verify(fakeGraphListener, times(1)).onGraphStarted(any())
+
+            // The graph should be modified (to retry any pending requests).
+            verify(fakeGraphListener, times(1)).onGraphModified(any())
+        }
+
+    @Test
     fun shutdownAfterCaptureSessionDoesNotCallOnSurfaceInactive() = runTest {
         val fakeThreads = FakeThreads.fromTestScope(this)
         val state =
@@ -159,6 +250,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -196,6 +289,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -223,6 +318,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -233,6 +330,7 @@ class CaptureSessionStateTest {
 
         // Then fakeSurfaceListener marks surfaces as inactive.
         advanceUntilIdle()
+        verify(fakeGraphListener, times(1)).onGraphError(any())
         verify(fakeGraphListener, times(1)).onGraphStopped(isNull())
         verify(fakeSurfaceListener, times(1)).onSurfaceInactive(eq(surface1))
         verify(fakeSurfaceListener, times(1)).onSurfaceInactive(eq(surface2))
@@ -250,6 +348,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 cameraGraphFlags,
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(true),
                 fakeThreads,
                 this,
             )
@@ -277,6 +377,8 @@ class CaptureSessionStateTest {
                 timeSource,
                 CameraGraph.Flags(closeCaptureSessionOnDisconnect = true),
                 concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(false),
                 fakeThreads,
                 this,
             )
@@ -301,5 +403,51 @@ class CaptureSessionStateTest {
         // Then make sure we do close the capture session.
         advanceUntilIdle()
         verify(fakeCaptureSession, times(1)).close()
+    }
+
+    @Test
+    fun captureSessionStateSkipsAwaitSessionWhenSessionCreationFails() = runTest {
+        val fakeThreads = FakeThreads.fromTestScope(this, Dispatchers.IO)
+
+        // Create a fake capture session factory that fails session creation early.
+        val fakeSessionFactory =
+            object : CaptureSessionFactory {
+                override fun create(
+                    cameraDevice: CameraDeviceWrapper,
+                    surfaces: Map<StreamId, Surface>,
+                    captureSessionState: CaptureSessionState,
+                ): CaptureSessionFactory.Result {
+                    // When session configuration fails, the factory would invoke onSessionFinalized
+                    // before returning the failed result.
+                    captureSessionState.onSessionFinalized()
+                    return CaptureSessionFactory.Result.Failed
+                }
+            }
+        val state =
+            CaptureSessionState(
+                fakeGraphListener,
+                fakeSessionFactory,
+                captureSequenceProcessorFactory,
+                cameraSurfaceManager,
+                timeSource,
+                CameraGraph.Flags(closeCaptureSessionOnDisconnect = true),
+                concurrentSessionSequencer = null,
+                streamGraph,
+                StrictMode(false),
+                fakeThreads,
+                this,
+            )
+
+        // Simulate a sequence that would trigger capture session creation at the session factory.
+        state.cameraDevice = fakeCameraDevice
+        state.configureSurfaceMap(mapOf(stream1 to surface1, stream2 to surface2))
+
+        // When CaptureSessionState is finalized, and closing the capture session is needed, we'll
+        // wait for the capture session creation for 3s. However, if session creation fails early,
+        // we should skip the wait early. Use 1s here, which should get us past the shutdown if
+        // the wait was skipped.
+        advanceTimeBy(1.seconds)
+        verify(fakeGraphListener, times(1)).onGraphStopping()
+        verify(fakeGraphListener, times(1)).onGraphStopped(null)
     }
 }

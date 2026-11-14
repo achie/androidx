@@ -40,7 +40,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -55,7 +55,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,11 +63,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AnnotatedStringFromHtmlTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     // pre-N block-level elements were separated with two new lines
-    @SdkSuppress(minSdkVersion = 24)
+    @SdkSuppress(minSdkVersion = 25)
     fun buildAnnotatedString_fromHtml() {
         rule.setContent {
             val expected = buildAnnotatedString {
@@ -194,8 +193,8 @@ class AnnotatedStringFromHtmlTest {
             val actual =
                 AnnotatedString.fromHtml(
                     """
-                <annotation key1="value1" key2=value2 keyThree="valueThree">a</annotation>
-            """
+                    <annotation key1="value1" key2=value2 keyThree="valueThree">a</annotation>
+                    """
                         .trimIndent()
                 )
 
@@ -215,8 +214,8 @@ class AnnotatedStringFromHtmlTest {
             val actual =
                 AnnotatedString.fromHtml(
                     """
-                <annotation key1=val1>a</annotation>a<annotation key2="val2">a</annotation>
-                """
+                    <annotation key1=val1>a</annotation>a<annotation key2="val2">a</annotation>
+                    """
                         .trimIndent()
                 )
 

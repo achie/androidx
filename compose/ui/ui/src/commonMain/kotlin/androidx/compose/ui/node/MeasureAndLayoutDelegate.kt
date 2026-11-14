@@ -16,7 +16,9 @@
 
 package androidx.compose.ui.node
 
-import androidx.compose.runtime.collection.mutableVectorOf
+import androidx.collection.mutableObjectListOf
+import androidx.compose.runtime.tooling.ComposeToolingApi
+import androidx.compose.runtime.tooling.ComposeToolingFlags
 import androidx.compose.ui.internal.checkPrecondition
 import androidx.compose.ui.internal.requirePrecondition
 import androidx.compose.ui.layout.OnGloballyPositionedModifier
@@ -30,6 +32,7 @@ import androidx.compose.ui.node.LayoutNode.UsageByParent.InMeasureBlock
 import androidx.compose.ui.node.LayoutNode.UsageByParent.NotUsed
 import androidx.compose.ui.node.RootForTest.UncaughtExceptionHandler
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.util.trace
 
 /**
  * Keeps track of [LayoutNode]s which needs to be remeasured or relaid out.
@@ -64,7 +67,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
     private val onPositionedDispatcher = OnPositionedDispatcher()
 
     /** List of listeners that must be called after layout has completed. */
-    private val onLayoutCompletedListeners = mutableVectorOf<Owner.OnLayoutCompletedListener>()
+    private val onLayoutCompletedListeners = mutableObjectListOf<Owner.OnLayoutCompletedListener>()
 
     /**
      * The current measure iteration. The value is incremented during the [measureAndLayout]
@@ -85,7 +88,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
      * the previous measure/layout pass and they were already measured as part of it. See
      * [requestRemeasure] for more details.
      */
-    private val postponedMeasureRequests = mutableVectorOf<PostponedRequest>()
+    private val postponedMeasureRequests = mutableObjectListOf<PostponedRequest>()
 
     private var rootConstraints: Constraints? = null
 
@@ -98,6 +101,8 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
                 "updateRootConstraints called while measuring"
             }
             rootConstraints = constraints
+            if (!root.isAttached) return
+
             if (root.lookaheadRoot != null) {
                 root.markLookaheadMeasurePending()
             }
@@ -118,6 +123,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
             LayoutTreeConsistencyChecker(
                 root,
                 relayoutNodes,
+                @Suppress("AsCollectionCall") // Debug-only consistency checker takes a List.
                 postponedMeasureRequests.asMutableList(),
             )
         } else {
@@ -399,19 +405,27 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
             if (relayoutNodes.isNotEmpty()) {
                 relayoutNodes.popEach { layoutNode, affectsLookahead, relayoutNeeded ->
                     val sizeChanged =
-                        remeasureAndRelayoutIfNeeded(layoutNode, affectsLookahead, relayoutNeeded)
-                    if (!relayoutNeeded) {
-                        // If relayout is deferred, it means we are invalidating measurements that
-                        // could affect lookahead. We need to make sure any placement invalidation
-                        // from measure/lookaheadMeasure of the layoutNode above is tracked and
-                        // properly deferred.
-                        if (layoutNode.lookaheadLayoutPending) {
-                            relayoutNodes.add(layoutNode, Invalidation.LookaheadPlacement)
+                        if (relayoutNeeded) {
+                            remeasureAndRelayoutIfNeeded(layoutNode, affectsLookahead)
+                        } else {
+                            val sizeChanged =
+                                remeasureIfNeeded(
+                                    layoutNode,
+                                    affectsLookahead,
+                                    shouldTraceMeasure = true,
+                                )
+                            // If relayout is deferred, it means we are invalidating measurements
+                            // that could affect lookahead. We need to make sure any placement
+                            // invalidation from measure/lookaheadMeasure of the layoutNode above is
+                            // tracked and properly deferred.
+                            if (layoutNode.lookaheadLayoutPending) {
+                                relayoutNodes.add(layoutNode, Invalidation.LookaheadPlacement)
+                            }
+                            if (layoutNode.layoutPending) {
+                                relayoutNodes.add(layoutNode, Invalidation.Placement)
+                            }
+                            sizeChanged
                         }
-                        if (layoutNode.layoutPending) {
-                            relayoutNodes.add(layoutNode, Invalidation.Placement)
-                        }
-                    }
                     if (layoutNode === root && sizeChanged) {
                         rootNodeResized = true
                     }
@@ -430,20 +444,24 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
     fun measureOnly() {
         if (relayoutNodes.isNotEmpty()) {
             performMeasureAndLayout(fullPass = false) {
-                if (relayoutNodes.affectsLookaheadMeasure) {
-                    if (root.lookaheadRoot != null) {
-                        // This call will walk the tree to look for lookaheadMeasurePending nodes
-                        // and
-                        // do a lookahead remeasure for those nodes only.
-                        remeasureOnly(root, affectsLookahead = true)
-                    } else {
-                        // First do a lookahead remeasure pass for all the lookaheadMeasurePending
-                        // nodes,
-                        // followed by a remeasure pass for the rest of the tree.
-                        remeasureLookaheadRootsInSubtree(root)
+                traceMeasureLayout("Compose:lookaheadRemeasure") {
+                    if (relayoutNodes.affectsLookaheadMeasure) {
+                        if (root.lookaheadRoot != null) {
+                            // This call will walk the tree to look for lookaheadMeasurePending
+                            // nodes and do a lookahead remeasure for those nodes only.
+                            remeasureOnly(root, affectsLookahead = true)
+                        } else {
+                            // First do a lookahead remeasure pass for all the
+                            // lookaheadMeasurePending
+                            // nodes, followed by a remeasure pass for the rest of the tree.
+                            remeasureLookaheadRootsInSubtree(root)
+                        }
                     }
                 }
-                remeasureOnly(root, affectsLookahead = false)
+
+                traceMeasureLayout("Compose:remeasure") {
+                    remeasureOnly(root, affectsLookahead = false)
+                }
             }
         }
     }
@@ -561,53 +579,49 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
     private fun remeasureAndRelayoutIfNeeded(
         layoutNode: LayoutNode,
         affectsLookahead: Boolean = true,
-        relayoutNeeded: Boolean = true,
     ): Boolean {
         var sizeChanged = false
         if (layoutNode.isDeactivated) {
             // we don't remeasure or relayout deactivated nodes.
             return false
         }
-        if (
-            layoutNode.isPlaced || // the root node doesn't have isPlacedByParent = true
-                layoutNode.isPlacedByParent ||
-                layoutNode.canAffectPlacedParent ||
-                layoutNode.isPlacedInLookahead == true ||
-                layoutNode.canAffectParentInLookahead ||
-                layoutNode.alignmentLinesRequired
-        ) {
+        if (layoutNode.isUsedInMeasureOrLayout) {
             val constraints = if (layoutNode === root) rootConstraints!! else null
             if (affectsLookahead) {
                 // Only do lookahead invalidation when affectsLookahead is true
                 if (layoutNode.lookaheadMeasurePending) {
-                    sizeChanged = doLookaheadRemeasure(layoutNode, constraints)
+                    sizeChanged =
+                        traceMeasureLayout("Compose:lookaheadMeasure") {
+                            doLookaheadRemeasure(layoutNode, constraints)
+                        }
                 }
-                if (relayoutNeeded) {
-                    if (
-                        (sizeChanged || layoutNode.lookaheadLayoutPending) &&
-                            layoutNode.isPlacedInLookahead == true
-                    ) {
-                        layoutNode.lookaheadReplace()
-                    }
+                if (
+                    (sizeChanged || layoutNode.lookaheadLayoutPending) &&
+                        layoutNode.isPlacedInLookahead == true
+                ) {
+                    traceMeasureLayout("Compose:lookaheadLayout") { layoutNode.lookaheadReplace() }
                 }
             } else {
                 if (layoutNode.measurePending) {
-                    sizeChanged = doRemeasure(layoutNode, constraints)
+                    sizeChanged =
+                        traceMeasureLayout("Compose:measure") {
+                            doRemeasure(layoutNode, constraints)
+                        }
                 }
-                if (relayoutNeeded) {
-                    if (layoutNode.layoutPending) {
-                        val isPlacedByPlacedParent =
-                            layoutNode === root ||
-                                (layoutNode.parent?.isPlaced == true && layoutNode.isPlacedByParent)
-                        if (isPlacedByPlacedParent) {
+                if (layoutNode.layoutPending) {
+                    val isPlacedByPlacedParent =
+                        layoutNode === root ||
+                            (layoutNode.parent?.isPlaced == true && layoutNode.isPlacedByParent)
+                    if (isPlacedByPlacedParent) {
+                        traceMeasureLayout("Compose:layout") {
                             if (layoutNode === root) {
                                 layoutNode.place(0, 0)
                             } else {
                                 layoutNode.replace()
                             }
-                            onPositionedDispatcher.onNodePositioned(layoutNode)
-                            consistencyChecker?.assertConsistent()
                         }
+                        onPositionedDispatcher.onNodePositioned(layoutNode)
+                        consistencyChecker?.assertConsistent()
                     }
                 }
             }
@@ -615,6 +629,66 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
         }
         return sizeChanged
     }
+
+    /**
+     * Similar to [remeasureAndRelayoutIfNeeded], but only does remeasure. The [layoutNode] should
+     * be already removed from [relayoutNodes] before running it.
+     *
+     * When [affectsLookahead] is false, we'll skip lookahead measure & layout, and only measure as
+     * needed. This is needed because we don't want [forceMeasureTheSubtree] that doesn't affect
+     * lookahead to leak into lookahead and start doing lookahead measure/layout. That would prevent
+     * some of the lookahead remeasure requests from being properly handled as the starting node of
+     * [forceMeasureTheSubtree] would be in [LayoutNode.LayoutState.Measuring] until it returns.
+     *
+     * Note, when [affectsLookahead] is true, we will only do lookahead measure and layout.
+     *
+     * [shouldTraceMeasure] is used here to distinguish between calls from the invalidated node and
+     * the [forceMeasureTheSubtree]. As the subtree is measured recursively, it is already included
+     * in the trace.
+     *
+     * @return true if the [LayoutNode] size has been changed.
+     */
+    private fun remeasureIfNeeded(
+        layoutNode: LayoutNode,
+        affectsLookahead: Boolean = true,
+        shouldTraceMeasure: Boolean = false,
+    ): Boolean {
+        var sizeChanged = false
+        if (layoutNode.isDeactivated) {
+            // we don't remeasure or relayout deactivated nodes.
+            return false
+        }
+        if (layoutNode.isUsedInMeasureOrLayout) {
+            val constraints = if (layoutNode === root) rootConstraints!! else null
+            if (affectsLookahead) {
+                // Only do lookahead invalidation when affectsLookahead is true
+                if (layoutNode.lookaheadMeasurePending) {
+                    sizeChanged =
+                        traceMeasureLayoutIf(shouldTraceMeasure, "Compose:lookaheadMeasure") {
+                            doLookaheadRemeasure(layoutNode, constraints)
+                        }
+                }
+            } else {
+                if (layoutNode.measurePending) {
+                    sizeChanged =
+                        traceMeasureLayoutIf(shouldTraceMeasure, "Compose:measure") {
+                            doRemeasure(layoutNode, constraints)
+                        }
+                }
+            }
+            drainPostponedMeasureRequests()
+        }
+        return sizeChanged
+    }
+
+    private val LayoutNode.isUsedInMeasureOrLayout
+        get(): Boolean =
+            isPlaced || // the root node doesn't have isPlacedByParent = true
+                isPlacedByParent ||
+                canAffectPlacedParent ||
+                isPlacedInLookahead == true ||
+                canAffectParentInLookahead ||
+                alignmentLinesRequired
 
     private fun drainPostponedMeasureRequests() {
         if (postponedMeasureRequests.isNotEmpty()) {
@@ -680,7 +754,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
             // not be removed from `relayoutNodes` in order to be visited again during
             // the regular pass. it is important as the parent of this node can decide
             // to not place this child, so the child relayout should be skipped.
-            remeasureAndRelayoutIfNeeded(node, affectsLookahead, relayoutNeeded = false)
+            remeasureIfNeeded(node, affectsLookahead)
         }
     }
 
@@ -701,7 +775,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
                     // lookahead subtree while the "applyChanges" is a part of the ancestor's
                     // subcomposition in the measure pass.
                     if (child.lookaheadMeasurePending && relayoutNodes.contains(child, true)) {
-                        remeasureAndRelayoutIfNeeded(child, true, relayoutNeeded = false)
+                        remeasureIfNeeded(child, true)
                     } else {
                         forceMeasureTheSubtree(child, true)
                     }
@@ -726,7 +800,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
     }
 
     /**
-     * Dispatch [OnPositionedModifier] callbacks for the nodes affected by the previous
+     * Dispatch [OnPositionedDispatcher] callbacks for the nodes affected by the previous
      * [measureAndLayout] execution.
      *
      * @param forceDispatch true means the whole tree should dispatch the callback (for example when
@@ -737,7 +811,7 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
             onPositionedDispatcher.onRootNodePositioned(root)
         }
         if (onPositionedDispatcher.isNotEmpty()) {
-            onPositionedDispatcher.dispatch()
+            trace("Compose:onPositionedCallbacks") { onPositionedDispatcher.dispatch() }
         }
     }
 
@@ -746,6 +820,15 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
      * was detached.
      */
     fun onNodeDetached(node: LayoutNode) {
+        relayoutNodes.remove(node)
+        onPositionedDispatcher.remove(node)
+    }
+
+    /**
+     * Removes [node] from the list of LayoutNodes being scheduled for the remeasure/relayout as it
+     * was deactivated.
+     */
+    fun onNodeDeactivated(node: LayoutNode) {
         relayoutNodes.remove(node)
         onPositionedDispatcher.remove(node)
     }
@@ -794,6 +877,22 @@ internal class MeasureAndLayoutDelegate(private val root: LayoutNode) {
 
     class PostponedRequest(val node: LayoutNode, val isLookahead: Boolean, val isForced: Boolean)
 }
+
+internal inline fun <T> traceMeasureLayout(label: String, block: () -> T) =
+    @OptIn(ComposeToolingApi::class)
+    if (ComposeToolingFlags.isVerboseTracingEnabled) {
+        trace(label, block)
+    } else {
+        block()
+    }
+
+internal inline fun <T> traceMeasureLayoutIf(condition: Boolean, label: String, block: () -> T) =
+    @OptIn(ComposeToolingApi::class)
+    if (ComposeToolingFlags.isVerboseTracingEnabled && condition) {
+        trace(label, block)
+    } else {
+        block()
+    }
 
 internal enum class Invalidation {
     LookaheadMeasurement,

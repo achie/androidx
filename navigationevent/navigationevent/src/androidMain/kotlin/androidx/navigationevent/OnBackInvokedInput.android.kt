@@ -73,8 +73,8 @@ public sealed class OnBackInvokedInput(
         updateBackInvokedCallbackState(false)
     }
 
-    override fun onHasEnabledHandlersChanged(hasEnabledHandlers: Boolean) {
-        updateBackInvokedCallbackState(hasEnabledHandlers)
+    override fun onHasEnabledBackHandlersChanged(hasEnabledBackHandlers: Boolean) {
+        updateBackInvokedCallbackState(hasEnabledBackHandlers)
     }
 
     private fun updateBackInvokedCallbackState(shouldBeRegistered: Boolean) {
@@ -94,11 +94,11 @@ public sealed class OnBackInvokedInput(
     private fun createOnBackAnimationCallback(): OnBackInvokedCallback {
         return object : OnBackAnimationCallback {
             override fun onBackStarted(backEvent: BackEvent) {
-                dispatchOnBackStarted(NavigationEvent(backEvent))
+                dispatchOnBackStarted(backEvent.toNavigationEvent())
             }
 
             override fun onBackProgressed(backEvent: BackEvent) {
-                dispatchOnBackProgressed(NavigationEvent(backEvent))
+                dispatchOnBackProgressed(backEvent.toNavigationEvent())
             }
 
             override fun onBackInvoked() {

@@ -34,7 +34,7 @@ class ListItemTest {
         val listItem = ListItem(label, selected)
 
         assertEquals(label, listItem.label)
-        assertEquals(selected, listItem.selected)
+        assertEquals(selected, listItem.isSelected)
     }
 
     @Test
@@ -117,13 +117,13 @@ class ListItemTest {
     fun listItem_createFromParcel_nullLabel_createsInstanceWithEmptyLabel() {
         val parcel = Parcel.obtain()
         parcel.writeString(null)
-        parcel.writeBoolean(true)
+        parcel.writeInt(1)
         parcel.setDataPosition(0)
 
         val createdListItem = ListItem.CREATOR.createFromParcel(parcel)
 
         assertEquals("", createdListItem.label)
-        assertEquals(true, createdListItem.selected)
+        assertEquals(true, createdListItem.isSelected)
         parcel.recycle()
     }
 

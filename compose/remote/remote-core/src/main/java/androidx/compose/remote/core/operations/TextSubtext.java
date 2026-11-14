@@ -52,6 +52,11 @@ public class TextSubtext extends Operation implements VariableSupport, Serializa
         mOutLen = mLen = len;
     }
 
+    /** Returns {@code mTextId}, the id of the text this operation produces. */
+    public int getTextId() {
+        return mTextId;
+    }
+
     @Override
     public void write(@NonNull WireBuffer buffer) {
         apply(buffer, mTextId, mSrcId1, mStart, mLen);
@@ -107,12 +112,11 @@ public class TextSubtext extends Operation implements VariableSupport, Serializa
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int textId = buffer.readInt();
-        int srcId1 = buffer.readInt();
-        float start = buffer.readFloat();
-        float len = buffer.readFloat();
-
-        operations.add(new TextSubtext(textId, srcId1, start, len));
+        int id = buffer.declareId();
+        int textId = buffer.readId();
+        float start = buffer.readNanId();
+        float end = buffer.readNanId();
+        operations.add(new TextSubtext(id, textId, start, end));
     }
 
     /**
@@ -121,12 +125,13 @@ public class TextSubtext extends Operation implements VariableSupport, Serializa
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Data Operations", OP_CODE, CLASS_NAME)
-                .description("Merge two string into one")
-                .field(DocumentedOperation.INT, "textId", "id of the text")
-                .field(INT, "srcTextId1", "id of the path")
-                .field(FLOAT, "start", "the start of the subrange")
-                .field(FLOAT, "end", "the end of the subrange exclusive -1 for end of string");
+        doc.operation("Text Operations", OP_CODE, CLASS_NAME)
+                .addedVersion(7)
+                .description("Extract a substring from a source string")
+                .field(DocumentedOperation.INT, "textId", "The ID of the resulting substring")
+                .field(INT, "srcId1", "The ID of the source string")
+                .field(FLOAT, "start", "The start index of the substring")
+                .field(FLOAT, "len", "The length of the substring (or -1 for remainder)");
     }
 
     @Override

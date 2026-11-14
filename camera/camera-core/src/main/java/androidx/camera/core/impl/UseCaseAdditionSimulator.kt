@@ -16,6 +16,7 @@
 
 package androidx.camera.core.impl
 
+import android.util.Range
 import androidx.camera.core.CameraUseCaseAdapterProvider
 import androidx.camera.core.SessionConfig
 import androidx.camera.core.featuregroup.impl.ResolvedFeatureGroup
@@ -59,10 +60,14 @@ public object UseCaseAdditionSimulator {
      *   If there are any unresolved configurations in the session config (e.g.
      *   [SessionConfig.preferredFeatureGroup]]), they will be resolved in the same manner as actual
      *   binding flow.
-     * @param findMaxSupportedFrameRate Whether to find the maximum supported frame rate during the
-     *   simulation, false by default to improve latency in cases where this info is not required.
-     *   This info will be able available through the [StreamSpecQueryResult]s of the returned
+     * @param findSupportedFrameRateRanges Whether to find the supported frame rate ranges during
+     *   the simulation, false by default to improve latency in cases where this info is not
+     *   required. This info will be available through the [StreamSpecQueryResult]s of the returned
      *   [CalculatedUseCaseInfo].
+     * @param resolvedFeatureGroup The pre-resolved feature group to apply, or `null` to resolve
+     *   from [sessionConfig].
+     * @param targetFrameRate The target frame rate range to apply when
+     *   [findSupportedFrameRateRanges] is `false`. Defaults to [SessionConfig.frameRateRange].
      * @return A [CalculatedUseCaseInfo] object containing the simulated configuration result.
      * @throws IllegalStateException If a [CameraUseCaseAdapterProvider] has not been set yet.
      * @throws IllegalArgumentException If the underlying camera capabilities don't support the
@@ -76,23 +81,34 @@ public object UseCaseAdditionSimulator {
     public fun simulateAddUseCases(
         cameraInfoInternal: CameraInfoInternal,
         sessionConfig: SessionConfig,
-        findMaxSupportedFrameRate: Boolean = false,
+        findSupportedFrameRateRanges: Boolean = false,
         resolvedFeatureGroup: ResolvedFeatureGroup? = null,
+        targetFrameRate: Range<Int> = sessionConfig.frameRateRange,
     ): CalculatedUseCaseInfo {
         check(::cameraUseCaseAdapterProvider.isInitialized) {
             "mCameraUseCaseAdapterProvider must be initialized first!"
         }
 
         val cameraUseCaseAdapter = cameraUseCaseAdapterProvider.provide(cameraInfoInternal.cameraId)
+        if (sessionConfig.isInitialEnabledUseCasesSet) {
+            cameraUseCaseAdapter.setBoundSessionConfig(sessionConfig)
+        }
         cameraUseCaseAdapter.viewPort = sessionConfig.viewPort
         cameraUseCaseAdapter.effects = sessionConfig.effects
         cameraUseCaseAdapter.sessionType = sessionConfig.sessionType
-        cameraUseCaseAdapter.frameRate = sessionConfig.frameRateRange
+        // The target frame rate of the session config must not constrain the query for its
+        // supported frame rate ranges, see CameraInfo#getSupportedFrameRateRanges(SessionConfig).
+        cameraUseCaseAdapter.frameRate =
+            if (findSupportedFrameRateRanges) {
+                StreamSpec.FRAME_RATE_RANGE_UNSPECIFIED
+            } else {
+                targetFrameRate
+            }
 
         return cameraUseCaseAdapter.simulateAddUseCases(
             sessionConfig.useCases,
             resolvedFeatureGroup ?: sessionConfig.resolveFeatureGroup(cameraInfoInternal),
-            /*findMaxSupportedFrameRate=*/ findMaxSupportedFrameRate,
+            /*findSupportedFrameRateRanges=*/ findSupportedFrameRateRanges,
         )
     }
 }

@@ -18,15 +18,12 @@ package androidx.compose.foundation.lazy.layout
 
 import androidx.collection.mutableScatterMapOf
 import androidx.collection.mutableScatterSetOf
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.GraphicsContext
-import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.node.DrawModifierNode
-import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
-import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -53,6 +50,10 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
     // keeps the index of the first visible item index.
     private var firstVisibleIndex = 0
 
+    // Keeps track of the previous size of the main axis of the layout recorded
+    // at the point where placement animations were started.
+    private var previousMainAxisLayoutSize = 0
+
     // stored to not allocate it every pass.
     private val movingAwayKeys = mutableScatterSetOf<Any>()
     private val movingInFromStartBound = mutableListOf<T>()
@@ -60,7 +61,7 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
     private val movingAwayToStartBound = mutableListOf<T>()
     private val movingAwayToEndBound = mutableListOf<T>()
     private val disappearingItems = mutableListOf<LazyLayoutItemAnimation>()
-    private var displayingNode: DrawModifierNode? = null
+    var displayingNode: DrawModifierNode? = null
 
     /**
      * Should be called after the measuring so we can detect position changes and start animations.
@@ -82,9 +83,35 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
         layoutMaxOffset: Int,
         coroutineScope: CoroutineScope,
         graphicsContext: GraphicsContext,
+        shouldRunItemAnimation: Boolean,
+        reverseLayout: Boolean = false,
     ) {
         val previousKeyToIndexMap = this.keyIndexMap
         this.keyIndexMap = keyIndexMap
+
+        // Only setup animations when we have access to target value in the current pass, which
+        // means lookahead pass, or regular pass when not in a lookahead scope.
+        val shouldSetupAnimation = isLookingAhead || !hasLookaheadOccurred
+
+        val mainAxisLayoutSize = if (isVertical) layoutHeight else layoutWidth
+
+        // In reverse layouts offsets are relative to the end of the layout
+        // (visual = layoutSize - offset - itemSize), so resizing the layout shifts every offset
+        // by the size delta even though the items may not have moved visually.
+        // We need to remove this delta component when assessing if we need to
+        // re-setup placement animations.
+        val layoutSizeOffset =
+            if (shouldSetupAnimation && reverseLayout) {
+                    mainAxisLayoutSize - previousMainAxisLayoutSize
+                } else {
+                    0
+                }
+                .apply {
+                    if (shouldSetupAnimation) previousMainAxisLayoutSize = mainAxisLayoutSize
+                }
+                .let {
+                    if (isVertical) IntOffset(0, it) else IntOffset(it, 0)
+                }
 
         val hasAnimations = positionedItems.fastAny { it.hasAnimations }
         if (!hasAnimations && keyToItemInfoMap.isEmpty()) {
@@ -104,9 +131,6 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                 IntOffset(consumedScroll, 0)
             }
 
-        // Only setup animations when we have access to target value in the current pass, which
-        // means lookahead pass, or regular pass when not in a lookahead scope.
-        val shouldSetupAnimation = isLookingAhead || !hasLookaheadOccurred
         // first add all items we had in the previous run
         keyToItemInfoMap.forEachKey { movingAwayKeys.add(it) }
         // iterate through the items which are visible (without animated offsets)
@@ -116,7 +140,8 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             if (item.hasAnimations) {
                 val itemInfo = keyToItemInfoMap[item.key]
                 val previousIndex = previousKeyToIndexMap?.getIndex(item.key) ?: -1
-                val shouldAnimateAppearance = previousIndex == -1 && previousKeyToIndexMap != null
+                val shouldAnimateAppearance =
+                    previousIndex == -1 && previousKeyToIndexMap != null && shouldRunItemAnimation
                 // there is no state associated with this item yet
                 if (itemInfo == null) {
                     val newItemInfo = ItemInfo()
@@ -126,6 +151,7 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                         graphicsContext,
                         layoutMinOffset,
                         layoutMaxOffset,
+                        isVertical,
                     )
                     keyToItemInfoMap[item.key] = newItemInfo
                     if (item.index != previousIndex && previousIndex != -1) {
@@ -138,11 +164,12 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                     } else {
                         initializeAnimation(
                             item,
-                            item.getOffset(0).let { if (item.isVertical) it.y else it.x },
+                            item.getOffset(0).let { if (isVertical) it.y else it.x },
                             newItemInfo,
+                            isVertical,
                         )
                         if (shouldAnimateAppearance) {
-                            newItemInfo.animations.forEach { it?.animateAppearance() }
+                            newItemInfo.animations.forEach { it?.animateEnterTransition() }
                         }
                     }
                 } else {
@@ -153,27 +180,31 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                             graphicsContext,
                             layoutMinOffset,
                             layoutMaxOffset,
+                            isVertical,
                         )
                         itemInfo.animations.forEach { animation ->
                             if (
                                 animation != null &&
-                                    animation.rawOffset != LazyLayoutItemAnimation.NotInitialized
+                                    animation.targetOffset != LazyLayoutItemAnimation.NotInitialized
                             ) {
-                                animation.rawOffset += scrollOffset
+                                animation.applyScrollOffset(scrollOffset)
                             }
                         }
                         if (shouldAnimateAppearance) {
                             itemInfo.animations.forEach {
                                 if (it != null) {
-                                    if (it.isDisappearanceAnimationInProgress) {
+                                    if (
+                                        it.isDisappearanceAnimationInProgress ||
+                                            it.isDisappearanceAnimationFinished
+                                    ) {
                                         disappearingItems.remove(it)
                                         displayingNode?.invalidateDraw()
                                     }
-                                    it.animateAppearance()
+                                    it.animateEnterTransition()
                                 }
                             }
                         }
-                        startPlacementAnimationsIfNeeded(item)
+                        startPlacementAnimationsIfNeeded(item, layoutSizeOffset = layoutSizeOffset)
                     }
                 }
             } else {
@@ -183,13 +214,14 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
         }
 
         val accumulatedOffsetPerLane = IntArray(laneCount)
-        if (shouldSetupAnimation && previousKeyToIndexMap != null) {
+        if (shouldSetupAnimation && previousKeyToIndexMap != null && shouldRunItemAnimation) {
             if (movingInFromStartBound.isNotEmpty()) {
                 movingInFromStartBound.sortByDescending { previousKeyToIndexMap.getIndex(it.key) }
                 movingInFromStartBound.fastForEach { item ->
-                    val accumulatedOffset = accumulatedOffsetPerLane.updateAndReturnOffsetFor(item)
+                    val accumulatedOffset =
+                        accumulatedOffsetPerLane.updateAndReturnOffsetFor(item, isVertical)
                     val mainAxisOffset = layoutMinOffset - accumulatedOffset
-                    initializeAnimation(item, mainAxisOffset)
+                    initializeAnimation(item, mainAxisOffset, isVertical = isVertical)
                     startPlacementAnimationsIfNeeded(item)
                 }
                 accumulatedOffsetPerLane.fill(0)
@@ -197,10 +229,12 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             if (movingInFromEndBound.isNotEmpty()) {
                 movingInFromEndBound.sortBy { previousKeyToIndexMap.getIndex(it.key) }
                 movingInFromEndBound.fastForEach { item ->
-                    val accumulatedOffset = accumulatedOffsetPerLane.updateAndReturnOffsetFor(item)
+                    val accumulatedOffset =
+                        accumulatedOffsetPerLane.updateAndReturnOffsetFor(item, isVertical)
                     val mainAxisOffset =
-                        layoutMaxOffset + accumulatedOffset - item.mainAxisSizeWithSpacings
-                    initializeAnimation(item, mainAxisOffset)
+                        layoutMaxOffset + accumulatedOffset -
+                            item.mainAxisSizeWithSpacings(isVertical)
+                    initializeAnimation(item, mainAxisOffset, isVertical = isVertical)
                     startPlacementAnimationsIfNeeded(item)
                 }
                 accumulatedOffsetPerLane.fill(0)
@@ -234,7 +268,7 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                             displayingNode?.invalidateDraw()
                         } else {
                             if (animation.layer != null) {
-                                animation.animateDisappearance()
+                                animation.animateExitTransition()
                             }
                             if (animation.isDisappearanceAnimationInProgress) {
                                 disappearingItems.add(animation)
@@ -259,7 +293,7 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                         span = info.span,
                     )
 
-                item.nonScrollableItem = true
+                item.makeNonScrollable()
                 // check if we have any active placement animation on the item
                 val inProgress = info.animations.any { it?.isPlacementAnimationInProgress == true }
                 if ((!inProgress && newIndex == previousKeyToIndexMap?.getIndex(key))) {
@@ -267,14 +301,17 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                 } else {
                     // anytime we compose a new item, and we use it,
                     // we need to update our item info mapping
-                    info.updateAnimation(
-                        item,
-                        coroutineScope,
-                        graphicsContext,
-                        layoutMinOffset,
-                        layoutMaxOffset,
-                        crossAxisOffset = info.crossAxisOffset,
-                    )
+                    if (shouldSetupAnimation) {
+                        info.updateAnimation(
+                            item,
+                            coroutineScope,
+                            graphicsContext,
+                            layoutMinOffset,
+                            layoutMaxOffset,
+                            isVertical,
+                            crossAxisOffset = info.crossAxisOffset,
+                        )
+                    }
                     if (newIndex < firstVisibleIndex) {
                         movingAwayToStartBound.add(item)
                     } else {
@@ -288,22 +325,27 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             movingAwayToStartBound.sortByDescending { keyIndexMap.getIndex(it.key) }
             movingAwayToStartBound.fastForEach { item ->
                 val itemInfo = keyToItemInfoMap[item.key]!!
-                val accumulatedOffset = accumulatedOffsetPerLane.updateAndReturnOffsetFor(item)
+                val accumulatedOffset =
+                    accumulatedOffsetPerLane.updateAndReturnOffsetFor(item, isVertical)
                 val mainAxisOffset =
                     if (isLookingAhead) {
-                        positionedItems.first().mainAxisOffset
+                        positionedItems.first().mainAxisOffset(isVertical)
                     } else {
                         itemInfo.layoutMinOffset
                     } - accumulatedOffset
 
                 item.position(
-                    mainAxisOffset = mainAxisOffset,
-                    crossAxisOffset = itemInfo.crossAxisOffset,
+                    horizontalAxisOffset = mainAxisOffset,
+                    verticalAxisOffset = itemInfo.crossAxisOffset,
                     layoutWidth = layoutWidth,
                     layoutHeight = layoutHeight,
                 )
                 if (shouldSetupAnimation) {
-                    startPlacementAnimationsIfNeeded(item, isMovingAway = true)
+                    startPlacementAnimationsIfNeeded(
+                        item,
+                        isMovingAway = true,
+                        layoutSizeOffset = layoutSizeOffset,
+                    )
                 }
             }
             accumulatedOffsetPerLane.fill(0)
@@ -313,19 +355,25 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             movingAwayToEndBound.sortBy { keyIndexMap.getIndex(it.key) }
             movingAwayToEndBound.fastForEach { item ->
                 val itemInfo = keyToItemInfoMap[item.key]!!
-                val accumulatedOffset = accumulatedOffsetPerLane.updateAndReturnOffsetFor(item)
+                val accumulatedOffset =
+                    accumulatedOffsetPerLane.updateAndReturnOffsetFor(item, isVertical)
                 val mainAxisOffset =
-                    itemInfo.layoutMaxOffset - item.mainAxisSizeWithSpacings + accumulatedOffset
+                    itemInfo.layoutMaxOffset - item.mainAxisSizeWithSpacings(isVertical) +
+                        accumulatedOffset
 
                 item.position(
-                    mainAxisOffset = mainAxisOffset,
-                    crossAxisOffset = itemInfo.crossAxisOffset,
+                    horizontalAxisOffset = mainAxisOffset,
+                    verticalAxisOffset = itemInfo.crossAxisOffset,
                     layoutWidth = layoutWidth,
                     layoutHeight = layoutHeight,
                 )
 
                 if (shouldSetupAnimation) {
-                    startPlacementAnimationsIfNeeded(item, isMovingAway = true)
+                    startPlacementAnimationsIfNeeded(
+                        item,
+                        isMovingAway = true,
+                        layoutSizeOffset = layoutSizeOffset,
+                    )
                 }
             }
         }
@@ -363,17 +411,20 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             }
             keyToItemInfoMap.clear()
         }
+        disappearingItems.fastForEach { it.release() }
+        disappearingItems.clear()
     }
 
     private fun initializeAnimation(
         item: T,
         mainAxisOffset: Int,
         itemInfo: ItemInfo = keyToItemInfoMap[item.key]!!,
+        isVertical: Boolean,
     ) {
         val firstPlaceableOffset = item.getOffset(0)
 
         val targetFirstPlaceableOffset =
-            if (item.isVertical) {
+            if (isVertical) {
                 firstPlaceableOffset.copy(y = mainAxisOffset)
             } else {
                 firstPlaceableOffset.copy(x = mainAxisOffset)
@@ -384,37 +435,50 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             if (animation != null) {
                 val diffToFirstPlaceableOffset =
                     item.getOffset(placeableIndex) - firstPlaceableOffset
-                animation.rawOffset = targetFirstPlaceableOffset + diffToFirstPlaceableOffset
+                animation.targetOffset = targetFirstPlaceableOffset + diffToFirstPlaceableOffset
             }
         }
     }
 
-    private fun startPlacementAnimationsIfNeeded(item: T, isMovingAway: Boolean = false) {
+    /**
+     * Starts placement animations for the placeables of [item] whose offset changed since the
+     * previous pass. [layoutSizeOffset] is the part of the offset change caused purely by the
+     * layout being resized (non-zero only in reverse layouts); it is not a visual movement and is
+     * therefore excluded from the animated delta.
+     */
+    private fun startPlacementAnimationsIfNeeded(
+        item: T,
+        isMovingAway: Boolean = false,
+        layoutSizeOffset: IntOffset = IntOffset.Zero,
+    ) {
         val itemInfo = keyToItemInfoMap[item.key]!!
         itemInfo.animations.forEachIndexed { placeableIndex, animation ->
             if (animation != null) {
                 val newTarget = item.getOffset(placeableIndex)
-                val currentTarget = animation.rawOffset
+                val currentTarget = animation.targetOffset
                 if (
                     currentTarget != LazyLayoutItemAnimation.NotInitialized &&
                         currentTarget != newTarget
                 ) {
-                    animation.animatePlacementDelta(newTarget - currentTarget, isMovingAway)
+                    val delta = newTarget - currentTarget - layoutSizeOffset
+                    if (delta != IntOffset.Zero) {
+                        animation.animatePlacementDelta(delta, isMovingAway)
+                    }
                 }
-                animation.rawOffset = newTarget
+                animation.targetOffset = newTarget
             }
         }
     }
 
     fun getAnimation(key: Any, placeableIndex: Int): LazyLayoutItemAnimation? =
-        keyToItemInfoMap[key]?.animations?.get(placeableIndex)
+        keyToItemInfoMap[key]?.animations?.getOrNull(placeableIndex)
 
-    private fun IntArray.updateAndReturnOffsetFor(item: T): Int {
+    private fun IntArray.updateAndReturnOffsetFor(item: T, isVertical: Boolean): Int {
         val lane = item.lane
         val span = item.span
         var maxOffset = 0
         for (i in lane until lane + span) {
-            this[i] += item.mainAxisSizeWithSpacings
+            this[i] += item.mainAxisSizeWithSpacings(isVertical)
             maxOffset = maxOf(maxOffset, this[i])
         }
         return maxOffset
@@ -428,15 +492,13 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                 if (layer != null) {
                     size =
                         IntSize(
-                            width = maxOf(size.width, it.rawOffset.x + layer.size.width),
-                            height = maxOf(size.height, it.rawOffset.y + layer.size.height),
+                            width = maxOf(size.width, it.targetOffset.x + layer.size.width),
+                            height = maxOf(size.height, it.targetOffset.y + layer.size.height),
                         )
                 }
             }
             return size
         }
-
-    val modifier: Modifier = DisplayingDisappearingItemsElement(this)
 
     private val T.hasAnimations: Boolean
         get() {
@@ -449,11 +511,11 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             return false
         }
 
-    private val LazyLayoutMeasuredItem.mainAxisOffset
-        get() = getOffset(0).let { if (isVertical) it.y else it.x }
+    private fun LazyLayoutMeasuredItem.mainAxisOffset(isVertical: Boolean) =
+        getOffset(0).let { if (isVertical) it.y else it.x }
 
-    private val LazyLayoutMeasuredItem.crossAxisOffset
-        get() = getOffset(0).let { if (!isVertical) it.y else it.x }
+    private fun LazyLayoutMeasuredItem.crossAxisOffset(isVertical: Boolean) =
+        getOffset(0).let { if (!isVertical) it.y else it.x }
 
     private inner class ItemInfo {
         /**
@@ -483,7 +545,8 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
             graphicsContext: GraphicsContext,
             layoutMinOffset: Int,
             layoutMaxOffset: Int,
-            crossAxisOffset: Int = positionedItem.crossAxisOffset,
+            isVertical: Boolean,
+            crossAxisOffset: Int = positionedItem.crossAxisOffset(isVertical),
         ) {
             if (!isRunningPlacement) {
                 this.layoutMinOffset = layoutMinOffset
@@ -516,58 +579,29 @@ internal class LazyLayoutItemAnimator<T : LazyLayoutMeasuredItem> {
                                     onLayerPropertyChanged = { displayingNode?.invalidateDraw() },
                                 )
                                 .also { animations[index] = it }
-                    animation.fadeInSpec = specs.fadeInSpec
+                    animation.enterTransition = specs.enterTransition
+                    animation.exitTransition = specs.exitTransition
                     animation.placementSpec = specs.placementSpec
-                    animation.fadeOutSpec = specs.fadeOutSpec
+                    when (animation) {
+                        is BooleanBasedLazyLayoutItemAnimation -> Unit
+                        is StateBasedLazyLayoutItemAnimation -> {
+                            val placeable = positionedItem.placeables[index]
+                            animation.itemSize = IntSize(placeable.width, placeable.height)
+                        }
+                    }
                 }
             }
         }
     }
 
-    private data class DisplayingDisappearingItemsElement(
-        private val animator: LazyLayoutItemAnimator<*>
-    ) : ModifierNodeElement<DisplayingDisappearingItemsNode>() {
-        override fun create() = DisplayingDisappearingItemsNode(animator)
-
-        override fun update(node: DisplayingDisappearingItemsNode) {
-            node.setAnimator(animator)
-        }
-
-        override fun InspectorInfo.inspectableProperties() {
-            name = "DisplayingDisappearingItemsElement"
-        }
-    }
-
-    private data class DisplayingDisappearingItemsNode(
-        private var animator: LazyLayoutItemAnimator<*>
-    ) : Modifier.Node(), DrawModifierNode {
-        override fun ContentDrawScope.draw() {
-            animator.disappearingItems.fastForEach {
-                val layer = it.layer ?: return@fastForEach
-                val x = it.finalOffset.x.toFloat()
-                val y = it.finalOffset.y.toFloat()
-                translate(x - layer.topLeft.x.toFloat(), y - layer.topLeft.y.toFloat()) {
-                    drawLayer(layer)
-                }
-            }
-            drawContent()
-        }
-
-        override fun onAttach() {
-            animator.displayingNode = this
-        }
-
-        override fun onDetach() {
-            animator.reset()
-        }
-
-        fun setAnimator(animator: LazyLayoutItemAnimator<*>) {
-            if (this.animator != animator) {
-                if (node.isAttached) {
-                    this.animator.reset()
-                    animator.displayingNode = this
-                    this.animator = animator
-                }
+    fun DrawScope.onDrawDisappearingItems() {
+        disappearingItems.fastForEach {
+            val layer = it.layer ?: return@fastForEach
+            if (it.isDisappearanceAnimationFinished) return@fastForEach
+            val x = it.placementOffset.x.toFloat()
+            val y = it.placementOffset.y.toFloat()
+            translate(x - layer.topLeft.x.toFloat(), y - layer.topLeft.y.toFloat()) {
+                drawLayer(layer)
             }
         }
     }

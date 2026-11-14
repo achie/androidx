@@ -17,12 +17,13 @@
 package androidx.camera.camera2.pipe.graph
 
 import android.hardware.camera2.CaptureResult
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.RequestNumber
+import androidx.camera.camera2.pipe.testing.FakeFrameInfo
 import androidx.camera.camera2.pipe.testing.FakeFrameMetadata
 import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
 import androidx.camera.camera2.pipe.testing.RobolectricCameraPipeTestRunner
 import androidx.camera.camera2.pipe.testing.UpdateCounting3AStateListener
+import androidx.camera.common.CameraFrameNumber
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,7 +48,7 @@ internal class Listener3ATest {
         listener3A.onRequestSequenceCreated(FakeRequestMetadata(requestNumber = RequestNumber(1)))
 
         val requestMetadata = FakeRequestMetadata(requestNumber = RequestNumber(1))
-        val frameNumber = FrameNumber(1L)
+        val frameNumber = CameraFrameNumber(1L)
         val captureResult =
             FakeFrameMetadata(
                 mapOf(CaptureResult.CONTROL_AF_MODE to CaptureResult.CONTROL_AF_MODE_AUTO)
@@ -88,13 +89,13 @@ internal class Listener3ATest {
                         CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 )
             )
-        listener3A.onPartialCaptureResult(requestMetadata, FrameNumber(1), captureResult)
-        assertThat(result3AStateListener.updateCount).isEqualTo(1)
+        listener3A.onPartialCaptureResult(requestMetadata, CameraFrameNumber(1), captureResult)
+        assertThat(result3AStateListener.partialUpdateCount).isEqualTo(1)
 
         // Since the first update didn't have the right key and it's desired value, the second
-        // update should also be supplies to the result3AListener.
-        listener3A.onPartialCaptureResult(requestMetadata, FrameNumber(2), captureResult1)
-        assertThat(result3AStateListener.updateCount).isEqualTo(2)
+        // update should also be supplied to the result3AListener.
+        listener3A.onPartialCaptureResult(requestMetadata, CameraFrameNumber(2), captureResult1)
+        assertThat(result3AStateListener.partialUpdateCount).isEqualTo(2)
     }
 
     @Test
@@ -121,27 +122,29 @@ internal class Listener3ATest {
         listener3A.addListener(result3AStateListener2)
 
         val requestMetadata = FakeRequestMetadata(requestNumber = RequestNumber(1))
-        val frameNumber = FrameNumber(1L)
+        val frameNumber = CameraFrameNumber(1L)
         val captureResult =
             FakeFrameMetadata(
                 mapOf(CaptureResult.CONTROL_AF_MODE to CaptureResult.CONTROL_AF_MODE_AUTO)
             )
+        val totalResult = FakeFrameInfo(metadata = captureResult)
 
         // There should be no update to either of the listeners right now.
-        assertThat(result3AStateListener1.updateCount).isEqualTo(0)
-        assertThat(result3AStateListener2.updateCount).isEqualTo(0)
+        assertThat(result3AStateListener1.totalUpdateCount).isEqualTo(0)
+        assertThat(result3AStateListener2.totalUpdateCount).isEqualTo(0)
 
         listener3A.onRequestSequenceCreated(FakeRequestMetadata(requestNumber = RequestNumber(1)))
 
-        // Once the metadata for correct AF mode is updated, the listener3A should broadcast it to
-        // the result3AState listeners added to it, making result3AStateListener1 complete.
-        listener3A.onPartialCaptureResult(requestMetadata, frameNumber, captureResult)
-        assertThat(result3AStateListener1.updateCount).isEqualTo(1)
-        assertThat(result3AStateListener2.updateCount).isEqualTo(1)
+        // Once the total metadata for correct AF mode is updated, the listener3A should broadcast
+        // it to the result3AState listeners added to it, making result3AStateListener1 complete and
+        // REMOVED.
+        listener3A.onTotalCaptureResult(requestMetadata, frameNumber, totalResult)
+        assertThat(result3AStateListener1.totalUpdateCount).isEqualTo(1)
+        assertThat(result3AStateListener2.totalUpdateCount).isEqualTo(1)
 
         // Once the metadata for correct AE mode is updated, the listener3A should broadcast it to
         // the result3AState listeners added to it, making result3AStateListener2 complete. Since
-        // result3AStateListener1 was already completed it will not be updated again.
+        // result3AStateListener1 was already completed AND removed, it will not be updated again.
         val captureResult1 =
             FakeFrameMetadata(
                 mapOf(
@@ -149,14 +152,16 @@ internal class Listener3ATest {
                     CaptureResult.CONTROL_AE_MODE to CaptureResult.CONTROL_AE_MODE_OFF,
                 )
             )
-        listener3A.onPartialCaptureResult(requestMetadata, frameNumber, captureResult1)
-        assertThat(result3AStateListener1.updateCount).isEqualTo(1)
-        assertThat(result3AStateListener2.updateCount).isEqualTo(2)
+        val totalResult1 = FakeFrameInfo(metadata = captureResult1)
 
-        // Since both result3AStateListener1 and result3AStateListener2 are complete, they will not
-        // receive further updates.
-        listener3A.onPartialCaptureResult(requestMetadata, frameNumber, captureResult1)
-        assertThat(result3AStateListener1.updateCount).isEqualTo(1)
-        assertThat(result3AStateListener2.updateCount).isEqualTo(2)
+        listener3A.onTotalCaptureResult(requestMetadata, frameNumber, totalResult1)
+        assertThat(result3AStateListener1.totalUpdateCount).isEqualTo(1) // Still 1!
+        assertThat(result3AStateListener2.totalUpdateCount).isEqualTo(2)
+
+        // Since both result3AStateListener1 and result3AStateListener2 are complete/removed, they
+        // will not receive further updates.
+        listener3A.onTotalCaptureResult(requestMetadata, frameNumber, totalResult1)
+        assertThat(result3AStateListener1.totalUpdateCount).isEqualTo(1)
+        assertThat(result3AStateListener2.totalUpdateCount).isEqualTo(2)
     }
 }

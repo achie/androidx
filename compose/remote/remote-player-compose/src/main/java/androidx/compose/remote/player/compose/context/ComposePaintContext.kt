@@ -28,14 +28,18 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
+import androidx.compose.remote.core.CustomContext
 import androidx.compose.remote.core.PaintContext
 import androidx.compose.remote.core.RcPlatformServices
 import androidx.compose.remote.core.operations.ClipPath
 import androidx.compose.remote.core.operations.layout.managers.TextLayout
 import androidx.compose.remote.core.operations.layout.modifiers.GraphicsLayerModifierOperation
 import androidx.compose.remote.core.operations.paint.PaintBundle
+import androidx.compose.remote.core.operations.utilities.IntMap
+import androidx.compose.remote.player.compose.custom.ComposeCustomSupport
 import androidx.compose.remote.player.compose.utils.FloatsToPath
 import androidx.compose.remote.player.compose.utils.copy
+import androidx.compose.remote.player.compose.utils.getPath
 import androidx.compose.remote.player.core.platform.AndroidComputedTextLayout
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -45,7 +49,6 @@ import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.asImageBitmap
@@ -55,12 +58,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * A [PaintContext] implementation for [androidx.compose.remote.player.compose.RemoteComposePlayer].
+ * A [PaintContext] implementation for
+ * [androidx.compose.remote.player.compose.impl.RemoteComposePlayer].
  */
 internal class ComposePaintContext(
     remoteContext: ComposeRemoteContext,
     private var canvas: Canvas,
-) : PaintContext(remoteContext) {
+) : PaintContext(remoteContext), CustomContext {
 
     var paint = Paint()
     var paintList: MutableList<Paint> = mutableListOf()
@@ -71,7 +75,12 @@ internal class ComposePaintContext(
     var canvasCache: MutableMap<Bitmap, Canvas> = mutableMapOf()
     private var cachedFontMetrics: android.graphics.Paint.FontMetrics? = null
     private val cachedPaintChanges =
-        ComposePaintChanges(remoteContext = remoteContext, getPaint = { this.paint })
+        ComposePaintChanges(getContext = { this.mContext }, getPaint = { this.paint })
+    private var customSupport: ComposeCustomSupport? = null
+
+    private val matrixStack = mutableListOf(Matrix())
+    private val currentMatrix: Matrix
+        get() = matrixStack.last()
 
     override fun drawBitmap(
         imageId: Int,
@@ -85,19 +94,63 @@ internal class ComposePaintContext(
         dstBottom: Int,
         cdId: Int,
     ) {
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         if (androidContext.mRemoteComposeState.containsId(imageId)) {
             val bitmap = androidContext.mRemoteComposeState.getFromId(imageId) as Bitmap?
             bitmap?.let {
+                @Suppress("DEPRECATION", "DEPRECATION_ERROR")
+                val nativePaint = paint.asFrameworkPaint()
                 nativeCanvas()
                     .drawBitmap(
                         bitmap,
                         Rect(srcLeft, srcTop, srcRight, srcBottom),
                         Rect(dstLeft, dstTop, dstRight, dstBottom),
-                        paint.asFrameworkPaint(),
+                        nativePaint,
                     )
             }
         }
+    }
+
+    override fun setCustomSupport(customSupport: CustomContext) {
+        this.customSupport = customSupport as? ComposeCustomSupport
+        this.customSupport?.setRemoteContext(mContext)
+        this.customSupport?.setCanvas(this.canvas)
+    }
+
+    override fun createCustom(id: Int, config: String) {
+        customSupport?.createCustom(id, config)
+    }
+
+    override fun configureCustom(id: Int, type: Int, value: String) {
+        customSupport?.configureCustom(id, type, value)
+    }
+
+    override fun configureCustom(id: Int, type: Int, value: Int) {
+        customSupport?.configureCustom(id, type, value)
+    }
+
+    override fun configureCustom(id: Int, type: Int, value: Float) {
+        customSupport?.configureCustom(id, type, value)
+    }
+
+    override fun measureCustom(id: Int, bounds: FloatArray) {
+        customSupport?.measureCustom(id, bounds)
+    }
+
+    override fun layoutCustom(id: Int, bounds: FloatArray) {
+        customSupport?.layoutCustom(id, bounds)
+    }
+
+    override fun touchCustom(id: Int, type: Int, x: Float, y: Float): Boolean {
+        return customSupport?.touchCustom(id, type, x, y) ?: false
+    }
+
+    override fun drawCustom(id: Int) {
+        val origin = currentMatrix.map(Offset.Zero)
+        customSupport?.updateBounds(id, origin.x, origin.y)
+        customSupport?.drawCustom(id)
     }
 
     override fun scale(scaleX: Float, scaleY: Float) {
@@ -106,6 +159,7 @@ internal class ComposePaintContext(
 
     override fun translate(translateX: Float, translateY: Float) {
         canvas.translate(translateX, translateY)
+        currentMatrix.translate(translateX, translateY)
     }
 
     override fun drawArc(
@@ -131,12 +185,15 @@ internal class ComposePaintContext(
     }
 
     override fun drawBitmap(id: Int, left: Float, top: Float, right: Float, bottom: Float) {
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         if (androidContext.mRemoteComposeState.containsId(id)) {
             val bitmap = androidContext.mRemoteComposeState.getFromId(id) as Bitmap?
             val src = Rect(0, 0, bitmap!!.getWidth(), bitmap.getHeight())
             val dst = RectF(left, top, right, bottom)
-            nativeCanvas().drawBitmap(bitmap, src, dst, paint.asFrameworkPaint())
+            @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
+            nativeCanvas().drawBitmap(bitmap, src, dst, nativePaint)
         }
     }
 
@@ -153,7 +210,7 @@ internal class ComposePaintContext(
     }
 
     override fun drawPath(id: Int, start: Float, end: Float) {
-        canvas.drawPath(getPath(id, start, end), paint)
+        canvas.drawPath(mContext.mRemoteComposeState.getPath(id, start, end), paint)
     }
 
     override fun drawRect(left: Float, top: Float, right: Float, bottom: Float) {
@@ -169,7 +226,9 @@ internal class ComposePaintContext(
     }
 
     override fun replacePaint(paint: PaintBundle) {
-        this.paint.asFrameworkPaint().reset()
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR")
+        val nativePaint = this.paint.asFrameworkPaint()
+        nativePaint.reset()
         applyPaint(paint)
     }
 
@@ -185,13 +244,14 @@ internal class ComposePaintContext(
     }
 
     override fun drawTextOnPath(textId: Int, pathId: Int, hOffset: Float, vOffset: Float) {
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
         nativeCanvas()
             .drawTextOnPath(
                 getText(textId)!!,
                 getNativePath(pathId, 0f, 1f),
                 hOffset,
                 vOffset,
-                paint.asFrameworkPaint(),
+                nativePaint,
             )
     }
 
@@ -203,7 +263,7 @@ internal class ComposePaintContext(
                 str!!.length
             } else end
 
-        val paint = paint.asFrameworkPaint()
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val paint = paint.asFrameworkPaint()
         if (cachedFontMetrics == null) {
             cachedFontMetrics = paint.getFontMetrics()
         }
@@ -260,35 +320,61 @@ internal class ComposePaintContext(
             } else end
 
         val textPaint = TextPaint()
-        textPaint.set(paint.asFrameworkPaint())
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
+        textPaint.set(nativePaint)
         val staticLayoutBuilder =
             StaticLayout.Builder.obtain(str, start, endSanitized, textPaint, maxWidth.toInt())
         when (alignment) {
             TextLayout.TEXT_ALIGN_RIGHT,
             TextLayout.TEXT_ALIGN_END ->
                 staticLayoutBuilder.setAlignment(Layout.Alignment.ALIGN_OPPOSITE)
+
             TextLayout.TEXT_ALIGN_CENTER ->
                 staticLayoutBuilder.setAlignment(Layout.Alignment.ALIGN_CENTER)
+
             else -> staticLayoutBuilder.setAlignment(Layout.Alignment.ALIGN_NORMAL)
         }
         when (overflow) {
             TextLayout.OVERFLOW_ELLIPSIS ->
                 staticLayoutBuilder.setEllipsize(TextUtils.TruncateAt.END)
+
             TextLayout.OVERFLOW_MIDDLE_ELLIPSIS ->
                 staticLayoutBuilder.setEllipsize(TextUtils.TruncateAt.MIDDLE)
+
             TextLayout.OVERFLOW_START_ELLIPSIS ->
                 staticLayoutBuilder.setEllipsize(TextUtils.TruncateAt.START)
+
             else -> {}
         }
         staticLayoutBuilder.setMaxLines(maxLines)
         staticLayoutBuilder.setIncludePad(false)
 
         val staticLayout = staticLayoutBuilder.build()
+        val lineCount = staticLayout.lineCount
+        var minLeft = Float.MAX_VALUE
+        var maxRight = 0f
+        for (i in 0 until lineCount) {
+            val lineLeft = staticLayout.getLineLeft(i)
+            val lineRight = staticLayout.getLineRight(i)
+            if (lineLeft < minLeft) {
+                minLeft = lineLeft
+            }
+            if (lineRight > maxRight) {
+                maxRight = lineRight
+            }
+        }
+        if (minLeft == Float.MAX_VALUE) {
+            minLeft = 0f
+        }
+        val left = minLeft
+        val width = kotlin.math.ceil(maxRight - minLeft)
+
         return AndroidComputedTextLayout(
             staticLayout,
-            staticLayout.width.toFloat(),
+            left,
+            width,
             staticLayout.height.toFloat(),
-            staticLayout.getLineCount(),
+            staticLayout.lineCount,
             false,
         )
     }
@@ -317,15 +403,24 @@ internal class ComposePaintContext(
             textToPaint = textToPaint.substring(start, end)
         }
 
-        nativeCanvas().drawText(textToPaint, x, y, paint.asFrameworkPaint())
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
+        nativeCanvas().drawText(textToPaint, x, y, nativePaint)
     }
 
     override fun drawComplexText(computedTextLayout: RcPlatformServices.ComputedTextLayout?) {
         if (computedTextLayout == null) {
             return
         }
-        val staticLayout = (computedTextLayout as AndroidComputedTextLayout).get()
-        staticLayout.draw(nativeCanvas())
+        val androidLayout = computedTextLayout as AndroidComputedTextLayout
+        val staticLayout = androidLayout.get()
+        val left = androidLayout.left
+        if (left != 0f) {
+            nativeCanvas().translate(-left, 0f)
+            staticLayout.draw(nativeCanvas())
+            nativeCanvas().translate(left, 0f)
+        } else {
+            staticLayout.draw(nativeCanvas())
+        }
     }
 
     override fun drawTweenPath(
@@ -340,13 +435,15 @@ internal class ComposePaintContext(
 
     override fun tweenPath(out: Int, path1: Int, path2: Int, tween: Float) {
         val p: FloatArray = getPathArray(path1, path2, tween)
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         androidContext.mRemoteComposeState.putPathData(out, p)
     }
 
     override fun combinePath(out: Int, path1: Int, path2: Int, operation: Byte) {
-        val p1 = getPath(path1, 0f, 1f)
-        val p2 = getPath(path2, 0f, 1f)
+        val p1 = mContext.mRemoteComposeState.getPath(id = path1, start = 0f, end = 1f)
+        val p2 = mContext.mRemoteComposeState.getPath(id = path2, start = 0f, end = 1f)
         val op =
             arrayOf(
                 PathOperation.Difference,
@@ -357,7 +454,9 @@ internal class ComposePaintContext(
             )
         val p = Path.combine(op[operation.toInt()], p1, p2)
 
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         androidContext.mRemoteComposeState.putPath(out, p)
     }
 
@@ -375,6 +474,7 @@ internal class ComposePaintContext(
 
     override fun matrixTranslate(translateX: Float, translateY: Float) {
         canvas.translate(translateX, translateY)
+        currentMatrix.translate(translateX, translateY)
     }
 
     override fun matrixSkew(skewX: Float, skewY: Float) {
@@ -391,10 +491,26 @@ internal class ComposePaintContext(
 
     override fun matrixSave() {
         canvas.save()
+        matrixStack.add(Matrix(currentMatrix.values.clone()))
+    }
+
+    private val layerPaint = Paint()
+
+    override fun saveLayer(x: Float, y: Float, width: Float, height: Float) {
+        layerPaint.alpha = paint.alpha
+        canvas.saveLayer(
+            androidx.compose.ui.geometry.Rect(x, y, x + width, y + height),
+            layerPaint,
+        )
+        matrixStack.add(Matrix(currentMatrix.values.clone()))
+        paint.alpha = 1f
     }
 
     override fun matrixRestore() {
         canvas.restore()
+        if (matrixStack.size > 1) {
+            matrixStack.removeAt(matrixStack.lastIndex)
+        }
     }
 
     override fun clipRect(left: Float, top: Float, right: Float, bottom: Float) {
@@ -402,7 +518,7 @@ internal class ComposePaintContext(
     }
 
     override fun clipPath(pathId: Int, regionOp: Int) {
-        val path = getPath(pathId, 0f, 1f)
+        val path = mContext.mRemoteComposeState.getPath(id = pathId, start = 0f, end = 1f)
         if (regionOp == ClipPath.DIFFERENCE) {
             canvas.clipPath(path, ClipOp.Difference)
         } else {
@@ -435,13 +551,15 @@ internal class ComposePaintContext(
     }
 
     override fun reset() {
-        with(paint.asFrameworkPaint()) {
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
+        with(nativePaint) {
             // With out calling setTypeface before or after paint is reset()
             // Variable type fonts corrupt memory resulting in a
             // segmentation violation
             setTypeface(Typeface.DEFAULT)
             reset()
         }
+        releaseOffscreenBitmaps()
     }
 
     override fun startGraphicsLayer(w: Int, h: Int) {
@@ -467,24 +585,33 @@ internal class ComposePaintContext(
                     GraphicsLayerModifierOperation.ROTATION_Z -> node.rotationZ = value as Float
                     GraphicsLayerModifierOperation.TRANSFORM_ORIGIN_X ->
                         node.pivotX = value as Float * node.width
+
                     GraphicsLayerModifierOperation.TRANSFORM_ORIGIN_Y ->
-                        node.pivotY = value as Float * node.width
+                        node.pivotY = value as Float * node.height
+
                     GraphicsLayerModifierOperation.TRANSLATION_X ->
                         node.translationX = value as Float
+
                     GraphicsLayerModifierOperation.TRANSLATION_Y ->
                         node.translationY = value as Float
+
                     GraphicsLayerModifierOperation.TRANSLATION_Z ->
                         node.translationZ = value as Float
+
                     GraphicsLayerModifierOperation.SHAPE -> hasOutline = true
                     GraphicsLayerModifierOperation.SHADOW_ELEVATION ->
                         node.elevation = value as Float
+
                     GraphicsLayerModifierOperation.ALPHA -> node.alpha = value as Float
                     GraphicsLayerModifierOperation.CAMERA_DISTANCE ->
                         node.setCameraDistance(value as Float)
+
                     GraphicsLayerModifierOperation.SPOT_SHADOW_COLOR ->
                         node.spotShadowColor = value as Int
+
                     GraphicsLayerModifierOperation.AMBIENT_SHADOW_COLOR ->
                         node.ambientShadowColor = value as Int
+
                     GraphicsLayerModifierOperation.HAS_BLUR -> hasBlurEffect = (value as Int?) != 0
                 }
             }
@@ -531,12 +658,14 @@ internal class ComposePaintContext(
                 when (blurTileMode) {
                     GraphicsLayerModifierOperation.TILE_MODE_CLAMP ->
                         tileMode = Shader.TileMode.CLAMP
+
                     GraphicsLayerModifierOperation.TILE_MODE_DECAL ->
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) { // REMOVE IN PLATFORM
                             tileMode = Shader.TileMode.DECAL
                         } // REMOVE IN PLATFORM
                     GraphicsLayerModifierOperation.TILE_MODE_MIRROR ->
                         tileMode = Shader.TileMode.MIRROR
+
                     GraphicsLayerModifierOperation.TILE_MODE_REPEATED ->
                         tileMode = Shader.TileMode.REPEAT
                 }
@@ -569,7 +698,7 @@ internal class ComposePaintContext(
     }
 
     override fun matrixFromPath(pathId: Int, fraction: Float, vOffset: Float, flags: Int) {
-        val path = getPath(pathId, 0f, 1f)
+        val path = mContext.mRemoteComposeState.getPath(pathId, 0f, 1f)
         if (path.isEmpty) return
 
         val measure = PathMeasure()
@@ -581,6 +710,153 @@ internal class ComposePaintContext(
         canvas.concat(matrix)
     }
 
+    /** Geometry for one 2D mesh, already in the shape `Canvas.drawVertices` wants. */
+    private class Mesh2D(
+        val layout: Int,
+        val uCount: Int,
+        val vCount: Int,
+        val verts: FloatArray,
+        val uv: FloatArray,
+        val colors: IntArray?,
+        val indices: ShortArray,
+    )
+
+    private val meshCache = IntMap<Mesh2D>()
+    private val meshShaderCache = IntMap<android.graphics.BitmapShader>()
+
+    override fun setMesh(
+        meshId: Int,
+        layout: Int,
+        uCount: Int,
+        vCount: Int,
+        verts: FloatArray,
+        uv: FloatArray,
+        colors: IntArray,
+        indices: IntArray,
+    ) {
+        // Android's drawVertices takes short[] indices, so narrow once here rather than per frame.
+        val shortIndices = ShortArray(indices.size) { indices[it].toShort() }
+        meshCache.put(
+            meshId,
+            Mesh2D(
+                layout,
+                uCount,
+                vCount,
+                verts.copyOf(),
+                uv.copyOf(),
+                if (colors.isNotEmpty()) colors.copyOf() else null,
+                shortIndices,
+            ),
+        )
+    }
+
+    override fun drawMesh(meshId: Int, blend: Int, imageId: Int) {
+        val mesh = meshCache[meshId] ?: return
+        if (mesh.verts.isEmpty() || mesh.indices.isEmpty()) return
+
+        // Compose's Canvas has no vertex primitive, so drop to the framework canvas - the same
+        // escape hatch the bitmap path already uses.
+        @Suppress("DEPRECATION", "DEPRECATION_ERROR") val nativePaint = paint.asFrameworkPaint()
+        val previousShader = nativePaint.shader
+        var shaderInstalled = false
+        var texs: FloatArray? = null
+
+        try {
+            if (imageId != 0 && mesh.uv.size == mesh.verts.size) {
+                var bitmap = mContext.mRemoteComposeState.getFromId(imageId) as? Bitmap
+                if (bitmap != null) {
+                    var shader = meshShaderCache.get(imageId)
+                    if (shader == null) {
+                        shader =
+                            android.graphics.BitmapShader(
+                                bitmap,
+                                Shader.TileMode.CLAMP,
+                                Shader.TileMode.CLAMP,
+                            )
+                        meshShaderCache.put(imageId, shader)
+                    }
+                    nativePaint.shader = shader
+                    shaderInstalled = true
+
+                    // uv is 0..1 with (0,0) at the top left; both Android and Skia want image
+                    // pixels, so this is a plain multiply with no flip.
+                    val width = bitmap.width
+                    val height = bitmap.height
+                    texs =
+                        FloatArray(mesh.uv.size) { i ->
+                            if (i % 2 == 0) mesh.uv[i] * width else mesh.uv[i] * height
+                        }
+                }
+            }
+
+            if (blend == 0) {
+                // colours only: ignore any texture and let the vertex colours through
+                texs = null
+                if (shaderInstalled) {
+                    nativePaint.shader = previousShader
+                    shaderInstalled = false
+                }
+            }
+
+            nativeCanvas()
+                .drawVertices(
+                    android.graphics.Canvas.VertexMode.TRIANGLES,
+                    mesh.verts.size,
+                    mesh.verts,
+                    0,
+                    texs,
+                    0,
+                    mesh.colors,
+                    0,
+                    mesh.indices,
+                    0,
+                    mesh.indices.size,
+                    nativePaint,
+                )
+        } finally {
+            // Paint is canvas state; a backend that borrows it must give it back.
+            if (shaderInstalled) {
+                nativePaint.shader = previousShader
+            }
+        }
+    }
+
+    override fun matrixFromMesh(meshId: Int, u: Float, v: Float, flags: Int) {
+        val mesh = meshCache[meshId] ?: return
+        val affine = FloatArray(6)
+        if (
+            !androidx.compose.remote.core.operations.utilities.Mesh2DGenerator
+                .computeMatrixFromMesh(
+                    mesh.layout,
+                    mesh.uCount,
+                    mesh.vCount,
+                    mesh.verts,
+                    u,
+                    v,
+                    flags,
+                    affine,
+                )
+        ) {
+            return
+        }
+        val m = android.graphics.Matrix()
+        // [duX, duY, dvX, dvY, originX, originY] -> the 3x3 Android wants, row major
+        m.setValues(
+            floatArrayOf(
+                affine[0],
+                affine[2],
+                affine[4],
+                affine[1],
+                affine[3],
+                affine[5],
+                0f,
+                0f,
+                1f,
+            )
+        )
+        nativeCanvas().concat(m)
+    }
+
     override fun drawToBitmap(bitmapId: Int, mode: Int, color: Int) {
         if (mainCanvas == null) {
             mainCanvas = canvas
@@ -589,6 +865,7 @@ internal class ComposePaintContext(
             canvas = mainCanvas!!
             return
         }
+        paint.alpha = 1f
         val bitmap = mContext.mRemoteComposeState.getFromId(bitmapId)!! as Bitmap
         if (canvasCache.containsKey(bitmap)) {
             canvas = canvasCache[bitmap]!!
@@ -617,27 +894,10 @@ internal class ComposePaintContext(
         return path
     }
 
-    private fun getPath(id: Int, start: Float, end: Float): Path {
-        val p: Path? = mContext.mRemoteComposeState.getPath(id) as Path?
-        val w: Int = mContext.mRemoteComposeState.getPathWinding(id)
-        if (p != null) {
-            return p
-        }
-        val path = Path()
-        val pathData: FloatArray? = mContext.mRemoteComposeState.getPathData(id)
-        if (pathData != null) {
-            FloatsToPath.genPath(path, pathData, start, end)
-            if (w == 1) {
-                path.fillType = PathFillType.EvenOdd
-            }
-            mContext.mRemoteComposeState.putPath(id, path)
-        }
-
-        return path
-    }
-
     private fun getNativePath(id: Int, start: Float, end: Float): android.graphics.Path {
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         val p = androidContext.mRemoteComposeState.getPath(id) as? android.graphics.Path
         if (p != null) {
             return p
@@ -658,7 +918,9 @@ internal class ComposePaintContext(
     }
 
     private fun getPathArray(path1Id: Int, path2Id: Int, tween: Float): FloatArray {
-        val androidContext = mContext as ComposeRemoteContext
+        // Embedded documents (rcDoc) paint with their own RemoteContext, so only rely on the
+        // base RemoteContext API here.
+        val androidContext = mContext
         if (tween == 0.0f) {
             return androidContext.mRemoteComposeState.getPathData(path1Id)!!
         }

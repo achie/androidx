@@ -24,6 +24,7 @@ import android.os.Parcelable
 import android.util.Size
 import android.util.SizeF
 import android.util.SparseArray
+import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -65,6 +66,19 @@ class DisposableSaveableStateRegistryTest {
 
     @UiThreadTest
     @Test
+    fun performSaveResultPassesCanBeSaved() {
+        val platformRegistry = DisposableSaveableStateRegistry(ContainerKey, TestOwner())
+
+        val registry = SaveableStateRegistry(null) { true }
+        registry.registerProvider(SaveKey) { SaveValue }
+
+        val savedState = registry.performSave()
+
+        assertTrue(platformRegistry.canBeSaved(savedState))
+    }
+
+    @UiThreadTest
+    @Test
     fun saveAndRestoreWhenTwoParentsShareTheSameStateArray() {
         val owner1 = TestOwner()
         // This emulates two different AndroidComposeViews used inside the same Activity
@@ -92,6 +106,28 @@ class DisposableSaveableStateRegistryTest {
         val registryToRestore2 = DisposableSaveableStateRegistry(parentKey2, owner2)
         val restoredValue2 = registryToRestore2.consumeRestored(SaveKey)
         assertEquals(value2, restoredValue2)
+    }
+
+    @UiThreadTest
+    @Test
+    fun disposingSecondRegistryWithSameIdDoesNotUnregisterFirst() {
+        val owner1 = TestOwner()
+        val value1 = 1
+        val value2 = 2
+
+        val registry1 = DisposableSaveableStateRegistry(ContainerKey, owner1)
+        registry1.registerProvider(SaveKey) { value1 }
+
+        val registry2 = DisposableSaveableStateRegistry(ContainerKey, owner1)
+        registry2.registerProvider(SaveKey) { value2 }
+
+        // Disposing the second registry with a duplicate id should not remove the first
+        // registry's container from the parent SavedStateRegistry.
+        registry2.dispose()
+
+        val owner2 = TestOwner(owner1.save())
+        val restoredRegistry = DisposableSaveableStateRegistry(ContainerKey, owner2)
+        assertEquals(value1, restoredRegistry.consumeRestored(SaveKey))
     }
 
     @UiThreadTest

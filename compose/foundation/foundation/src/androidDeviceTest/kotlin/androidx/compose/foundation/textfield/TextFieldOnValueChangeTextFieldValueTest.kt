@@ -23,14 +23,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasSetTextAction
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -45,7 +44,7 @@ import org.mockito.kotlin.verify
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class TextFieldOnValueChangeTextFieldValueTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val inputMethodInterceptor = InputMethodInterceptor(rule)
     private val onValueChange: (TextFieldValue) -> Unit = mock()
@@ -54,6 +53,7 @@ class TextFieldOnValueChangeTextFieldValueTest {
     fun setUp() {
         inputMethodInterceptor.setContent {
             val state = remember { mutableStateOf(TextFieldValue("abcde", TextRange.Zero)) }
+            @Suppress("DEPRECATION") // b/552879150
             BasicTextField(
                 value = state.value,
                 onValueChange = {

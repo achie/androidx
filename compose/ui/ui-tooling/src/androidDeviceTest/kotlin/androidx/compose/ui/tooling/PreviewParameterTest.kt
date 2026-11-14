@@ -16,14 +16,15 @@
 
 package androidx.compose.ui.tooling
 
-import androidx.compose.material.Colors
-import androidx.compose.material.darkColors
-import androidx.compose.material.lightColors
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.tooling.preview.datasource.CollectionPreviewParameterProvider
 import androidx.compose.ui.tooling.preview.datasource.LoremIpsum
 import androidx.compose.ui.tooling.test.R
 import androidx.test.filters.MediumTest
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -71,7 +72,9 @@ class PreviewParameterTest {
     }
 
     private class MyColorsProvider :
-        CollectionPreviewParameterProvider<Colors>(listOf(lightColors(), darkColors()))
+        CollectionPreviewParameterProvider<ColorScheme>(
+            listOf(lightColorScheme(), darkColorScheme())
+        )
 
     @Test
     fun checkColorsProvider() {
@@ -129,5 +132,32 @@ class PreviewParameterTest {
                 debugViewInfos = true,
             )
         }
+    }
+
+    @JvmInline private value class StringValueClass(val value: String)
+
+    @JvmInline
+    private value class ValueClassWithCompanion(val value: String) {
+        companion object {
+            val Default = ValueClassWithCompanion("default")
+        }
+    }
+
+    private class StringValueClassProvider :
+        CollectionPreviewParameterProvider<StringValueClass>(
+            listOf(StringValueClass("hello"), StringValueClass("world"))
+        )
+
+    @Test
+    fun checkReferenceTypeValueClassUnwrapping() {
+        assertEquals("hello", unwrapIfInline(StringValueClass("hello")))
+        assertEquals("companionTest", unwrapIfInline(ValueClassWithCompanion("companionTest")))
+        assertEquals(CornerRadius(5f, 10f).packedValue, unwrapIfInline(CornerRadius(5f, 10f)))
+
+        val singleParams = getPreviewProviderParameters(StringValueClassProvider::class.java, 0)
+        assertEquals("hello", singleParams.single())
+
+        val allParams = getPreviewProviderParameters(StringValueClassProvider::class.java, -1)
+        assertEquals(listOf("hello", "world"), allParams.toList())
     }
 }

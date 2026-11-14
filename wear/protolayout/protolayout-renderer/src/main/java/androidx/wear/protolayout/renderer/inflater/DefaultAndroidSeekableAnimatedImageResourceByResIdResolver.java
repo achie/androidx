@@ -16,7 +16,12 @@
 
 package androidx.wear.protolayout.renderer.inflater;
 
+import static androidx.wear.protolayout.renderer.inflater.XmlDrawableValidator.ANDROID_NAMESPACE;
+import static androidx.wear.protolayout.renderer.inflater.XmlDrawableValidator.ATTR_DRAWABLE;
+import static androidx.wear.protolayout.renderer.inflater.XmlDrawableValidator.TAG_ANIMATED_VECTOR;
+
 import android.content.res.Resources;
+import android.content.res.XmlResourceParser;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -33,6 +38,7 @@ import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
+import java.util.Objects;
 
 /** Resource resolver for seekable Android animated resources. */
 public class DefaultAndroidSeekableAnimatedImageResourceByResIdResolver
@@ -52,12 +58,12 @@ public class DefaultAndroidSeekableAnimatedImageResourceByResIdResolver
     }
 
     @Override
+    @SuppressWarnings("KotlinInternal")
     public @NonNull Drawable getDrawableOrThrow(
             @NonNull AndroidSeekableAnimatedImageResourceByResId resource)
             throws ResourceAccessException {
         if (resource.getAnimatedImageFormat() == AnimatedImageFormat.ANIMATED_IMAGE_FORMAT_AVD) {
-            try {
-                final XmlPullParser parser = mAndroidResources.getXml(resource.getResourceId());
+            try (XmlResourceParser parser = mAndroidResources.getXml(resource.getResourceId())) {
                 final AttributeSet attrs = Xml.asAttributeSet(parser);
                 int type;
                 do {
@@ -65,6 +71,16 @@ public class DefaultAndroidSeekableAnimatedImageResourceByResIdResolver
                 } while (type != XmlPullParser.START_TAG && type != XmlPullParser.END_DOCUMENT);
                 if (type != XmlPullParser.START_TAG) {
                     throw new XmlPullParserException("No start tag found");
+                }
+                if (!Objects.equals(parser.getName(), TAG_ANIMATED_VECTOR)) {
+                    throw new IllegalArgumentException(
+                            "Only <animated-vector> drawables are supported to prevent unbounded"
+                                    + " memory allocation.");
+                }
+                int drawableResId =
+                        attrs.getAttributeResourceValue(ANDROID_NAMESPACE, ATTR_DRAWABLE, 0);
+                if (drawableResId != 0) {
+                    XmlDrawableValidator.verifyVectorDrawableXml(mAndroidResources, drawableResId);
                 }
                 return SeekableAnimatedVectorDrawable.createFromXmlInner(
                         mAndroidResources, parser, attrs, null);

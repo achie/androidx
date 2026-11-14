@@ -25,7 +25,6 @@ import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.documentation.DocumentationBuilder;
 import androidx.compose.remote.core.operations.layout.ActionOperation;
-import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.utilities.StringSerializer;
 import androidx.compose.remote.core.serialize.MapSerializer;
 import androidx.compose.remote.core.serialize.Serializable;
@@ -91,15 +90,12 @@ public class HostNamedActionOperation extends Operation implements ActionOperati
     }
 
     @Override
-    public void write(@NonNull WireBuffer buffer) {}
+    public void write(@NonNull WireBuffer buffer) {
+        apply(buffer, mTextId, mType, mValueId);
+    }
 
     @Override
-    public void runAction(
-            @NonNull RemoteContext context,
-            @NonNull CoreDocument document,
-            @NonNull Component component,
-            float x,
-            float y) {
+    public void runAction(@NonNull RemoteContext context, @NonNull CoreDocument document) {
         Object value = null;
         if (mValueId != -1) {
             if (mType == INT_TYPE) {
@@ -137,9 +133,9 @@ public class HostNamedActionOperation extends Operation implements ActionOperati
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int textId = buffer.readInt();
+        int textId = buffer.readId();
         int type = buffer.readInt();
-        int valueId = buffer.readInt();
+        int valueId = buffer.readId();
         operations.add(new HostNamedActionOperation(textId, type, valueId));
     }
 
@@ -180,5 +176,20 @@ public class HostNamedActionOperation extends Operation implements ActionOperati
             default:
                 return "INVALID_TYPE";
         }
+    }
+
+    /** Returns {@code mTextId}. */
+    public int getTextId() {
+        return mTextId;
+    }
+
+    /** Returns {@code mType}. */
+    public int getType() {
+        return mType;
+    }
+
+    /** Returns {@code mValueId}. */
+    public int getValueId() {
+        return mValueId;
     }
 }

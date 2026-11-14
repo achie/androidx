@@ -19,15 +19,17 @@ package androidx.camera.viewfinder.core
 import androidx.camera.viewfinder.core.impl.ImplementationModeCompat
 
 /** Provides default values and configurations for viewfinder components. */
-object ViewfinderDefaults {
+public object ViewfinderDefaults {
     /**
      * The default [ImplementationMode] chosen based on device compatibility.
      *
      * This value is determined by checking for known device quirks and API level limitations. It
      * will be [ImplementationMode.EMBEDDED] on devices with known issues (such as on API level 24
-     * and below), and the higher-performance [ImplementationMode.EXTERNAL] otherwise.
+     * and below), and the higher-performance [ImplementationMode.EXTERNAL] otherwise. Note that
+     * `Viewfinder` and `ViewfinderView` also fall back to [ImplementationMode.EMBEDDED] by default
+     * on API levels below 29 for [TransformationMode.PRE_APPLIED] sources.
      */
     @JvmStatic
-    val implementationMode: ImplementationMode
+    public val implementationMode: ImplementationMode
         get() = ImplementationModeCompat.chooseCompatibleMode()
 }

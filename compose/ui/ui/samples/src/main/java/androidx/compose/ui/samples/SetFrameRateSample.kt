@@ -19,15 +19,16 @@ package androidx.compose.ui.samples
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.annotation.RequiresApi
 import androidx.annotation.Sampled
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.Button
-import androidx.compose.material.LocalContentColor
-import androidx.compose.material.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +53,7 @@ internal inline fun <reified T> findOwner(context: Context): T? {
 }
 
 @Sampled
+@RequiresApi(35)
 @Composable
 fun SetFrameRateSample() {
     var targetAlpha by remember { mutableFloatStateOf(1f) }

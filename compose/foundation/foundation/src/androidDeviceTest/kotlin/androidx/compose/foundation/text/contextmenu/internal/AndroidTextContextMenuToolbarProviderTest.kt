@@ -51,7 +51,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
@@ -63,12 +63,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 class AndroidTextContextMenuToolbarProviderTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun whenDefault_expectedItemsAppear() = runTest {
@@ -170,7 +169,7 @@ class AndroidTextContextMenuToolbarProviderTest {
         val innerContentTestTag = "inner"
         val smallerSize = 50
         val largerSize = 100
-        var expectedConstraints =
+        val expectedConstraints =
             Constraints(
                 minWidth = smallerSize,
                 minHeight = smallerSize,

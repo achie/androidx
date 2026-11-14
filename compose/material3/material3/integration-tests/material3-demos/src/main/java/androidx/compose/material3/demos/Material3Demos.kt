@@ -23,14 +23,51 @@ val Material3Demos =
     DemoCategory(
         "Material 3",
         listOf(
+            DemoCategory(
+                "Buttons",
+                listOf(
+                    ComposableDemo("Button variants") { ButtonVariantsDemo() },
+                    ComposableDemo("Button sizes") { ButtonSizesDemo() },
+                ),
+            ),
             ComposableDemo("Button Groups") { ButtonGroupDemos() },
-            ComposableDemo("Carousel") { FadingMultiAspectCarouselLazyRowDemo() },
+            ComposableDemo("Card") { CardDemo() },
+            DemoCategory(
+                "Carousel",
+                listOf(
+                    ComposableDemo("CarouselParallaxScrollEffectColumn") {
+                        CarouselParallaxScrollEffectColumnDemo()
+                    },
+                    ComposableDemo("FadingCarouselParallaxScrollEffectRow") {
+                        FadingCarouselParallaxScrollEffectRowDemo()
+                    },
+                    ComposableDemo("CarouselParallaxScrollEffectHorizontalGrid") {
+                        CarouselParallaxScrollEffectHorizontalGridDemo()
+                    },
+                    ComposableDemo("CarouselParallaxScrollEffectVerticalGrid") {
+                        CarouselParallaxScrollEffectVerticalGridDemo()
+                    },
+                ),
+            ),
             ComposableDemo("Color Scheme") { ColorSchemeDemo() },
             ComposableDemo("FAB Menu") { FloatingActionButtonMenuDemo() },
             ComposableDemo("Pull To Refresh") { PullToRefreshDemo() },
             ComposableDemo("Swipe To Dismiss") { SwipeToDismissDemo() },
             ComposableDemo("Tooltip") { TooltipDemo() },
             ComposableDemo("Toggle Buttons") { ToggleButtonDemos() },
+            DemoCategory(
+                "Transitions",
+                listOf(
+                    ComposableDemo("Horizontal Shared Axis") {
+                        HorizontalSharedAxisTransitionDemo()
+                    },
+                    ComposableDemo("Fade Through") { FadeThroughTransitionDemo() },
+                ),
+            ),
+            DemoCategory(
+                "Sliders",
+                listOf(ComposableDemo("Volume Slider") { SysUiVolumeSliderDemo() }),
+            ),
             ComposableDemo("Text fields") { MaterialTextFieldDemo() },
             DemoCategory(
                 "Icon Buttons",

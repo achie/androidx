@@ -21,7 +21,6 @@ package androidx.camera.camera2.pipe.graph
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import androidx.camera.camera2.pipe.FrameMetadata
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.RequestNumber
 import androidx.camera.camera2.pipe.Result3A
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
@@ -29,8 +28,11 @@ import androidx.camera.camera2.pipe.testing.FakeCaptureSequenceProcessor.Compani
 import androidx.camera.camera2.pipe.testing.FakeFrameMetadata
 import androidx.camera.camera2.pipe.testing.FakeGraphProcessor
 import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.pipe.testing.RobolectricCameraPipeTestRunner
+import androidx.camera.common.CameraFrameNumber
 import com.google.common.truth.Truth.assertThat
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -51,7 +53,12 @@ class Controller3AForCaptureTest {
 
     private val listener3A = Listener3A()
     private val controller3A =
-        Controller3A(graphProcessor, FakeCameraMetadata(), graphState3A, listener3A)
+        Controller3A(
+            graphProcessor,
+            FakeCameraMetadata.fromTemplate(HighEndDeviceTemplate),
+            graphState3A,
+            listener3A,
+        )
 
     @After
     fun teardown() {
@@ -63,7 +70,12 @@ class Controller3AForCaptureTest {
         val graphProcessor2 = FakeGraphProcessor()
         val graphState3A2 = GraphState3A()
         val controller3A =
-            Controller3A(graphProcessor2, FakeCameraMetadata(), graphState3A2, listener3A)
+            Controller3A(
+                graphProcessor2,
+                FakeCameraMetadata.fromTemplate(HighEndDeviceTemplate),
+                graphState3A2,
+                listener3A,
+            )
         val result = controller3A.lock3AForCapture()
         assertThat(result.await().status).isEqualTo(Result3A.Status.SUBMIT_FAILED)
     }
@@ -414,9 +426,9 @@ class Controller3AForCaptureTest {
                 )
                 listener3A.onPartialCaptureResult(
                     FakeRequestMetadata(requestNumber = RequestNumber(1)),
-                    FrameNumber(frameNumber),
+                    CameraFrameNumber(frameNumber),
                     FakeFrameMetadata(
-                        frameNumber = FrameNumber(frameNumber++),
+                        frameNumber = CameraFrameNumber(frameNumber++),
                         resultMetadata =
                             mapOf(
                                 CaptureResult.CONTROL_AF_STATE to
@@ -424,7 +436,7 @@ class Controller3AForCaptureTest {
                             ),
                     ),
                 )
-                delay(FRAME_RATE_MS)
+                delay(FRAME_RATE)
             }
         }
         repeatingJob.await()
@@ -434,9 +446,9 @@ class Controller3AForCaptureTest {
         listener3A.onRequestSequenceCreated(FakeRequestMetadata(requestNumber = RequestNumber(1)))
         listener3A.onPartialCaptureResult(
             FakeRequestMetadata(requestNumber = RequestNumber(1)),
-            FrameNumber(120L),
+            CameraFrameNumber(120L),
             FakeFrameMetadata(
-                frameNumber = FrameNumber(120L),
+                frameNumber = CameraFrameNumber(120L),
                 resultMetadata =
                     mapOf(
                         CaptureResult.CONTROL_AF_STATE to
@@ -452,15 +464,15 @@ class Controller3AForCaptureTest {
 
     @Test
     fun testUnlock3APostCapture() {
-        testUnlock3APostCaptureAndroidMAndAbove()
+        testUnlock3APostCapture(cancelAf = true)
     }
 
     @Test
     fun testUnlock3APostCapture_whenAfNotTriggered() {
-        testUnlock3APostCaptureAndroidMAndAbove(false)
+        testUnlock3APostCapture(cancelAf = false)
     }
 
-    private fun testUnlock3APostCaptureAndroidMAndAbove(cancelAf: Boolean = true) = runTest {
+    private fun testUnlock3APostCapture(cancelAf: Boolean) = runTest {
         val result = controller3A.unlock3APostCapture(cancelAf)
         assertThat(result.isCompleted).isFalse()
 
@@ -472,9 +484,9 @@ class Controller3AForCaptureTest {
             )
             listener3A.onPartialCaptureResult(
                 FakeRequestMetadata(requestNumber = RequestNumber(1)),
-                FrameNumber(101L),
+                CameraFrameNumber(101L),
                 FakeFrameMetadata(
-                    frameNumber = FrameNumber(101L),
+                    frameNumber = CameraFrameNumber(101L),
                     resultMetadata =
                         mapOf(
                             CaptureResult.CONTROL_AF_STATE to
@@ -502,9 +514,9 @@ class Controller3AForCaptureTest {
             )
             listener3A.onPartialCaptureResult(
                 FakeRequestMetadata(requestNumber = RequestNumber(1)),
-                FrameNumber(101L),
+                CameraFrameNumber(101L),
                 FakeFrameMetadata(
-                    frameNumber = FrameNumber(101L),
+                    frameNumber = CameraFrameNumber(101L),
                     resultMetadata =
                         mapOf(
                             CaptureResult.CONTROL_AF_STATE to
@@ -555,7 +567,7 @@ class Controller3AForCaptureTest {
 
     companion object {
         // The time duration in milliseconds between two frame results.
-        private const val FRAME_RATE_MS = 33L
+        private val FRAME_RATE = 33.milliseconds
     }
 }
 
@@ -567,7 +579,7 @@ private fun Listener3A.sendPartialCaptureResult(
     onRequestSequenceCreated(FakeRequestMetadata(requestNumber = RequestNumber(requestNumber)))
     onPartialCaptureResult(
         FakeRequestMetadata(requestNumber = RequestNumber(requestNumber)),
-        FrameNumber(frameNumber),
-        FakeFrameMetadata(frameNumber = FrameNumber(101L), resultMetadata = resultMetadata),
+        CameraFrameNumber(frameNumber),
+        FakeFrameMetadata(frameNumber = CameraFrameNumber(101L), resultMetadata = resultMetadata),
     )
 }

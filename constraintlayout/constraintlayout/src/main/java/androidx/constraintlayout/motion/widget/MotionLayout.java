@@ -1074,7 +1074,7 @@ public class MotionLayout extends ConstraintLayout implements
     int mDebugPath = 0;
     // variable used in painting the debug
     static final int MAX_KEY_FRAMES = 50;
-    DevModeDraw mDevModeDraw;
+    private DevModeDraw mDevModeDraw;
     private boolean mTemporalInterpolator = false;
     private StopLogic mStopLogic = new StopLogic();
     private DecelerateInterpolator mDecelerateLogic = new DecelerateInterpolator();
@@ -3255,9 +3255,9 @@ public class MotionLayout extends ConstraintLayout implements
         return false;
     }
 
-    ////////////////////////////////////////////////////////////////////////////////////////
-    // Used to draw debugging lines
-    ////////////////////////////////////////////////////////////////////////////////////////
+    /**
+     * Used to draw debugging lines
+     */
     private class DevModeDraw {
         private static final int DEBUG_PATH_TICKS_PER_MS = 16;
         float[] mPoints;

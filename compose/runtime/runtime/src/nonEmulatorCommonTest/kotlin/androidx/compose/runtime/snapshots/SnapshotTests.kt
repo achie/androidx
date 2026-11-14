@@ -44,10 +44,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.coroutines.test.runTest
 
 class SnapshotTests {
     @Test
@@ -221,11 +224,10 @@ class SnapshotTests {
     fun appliesCanBeObserved() {
         val state = mutableIntStateOf(0)
         var observedSnapshot: Snapshot? = null
-        val unregister =
-            Snapshot.registerApplyObserver { changed, snapshot ->
-                assertTrue(state in changed)
-                observedSnapshot = snapshot
-            }
+        val unregister = Snapshot.registerApplyObserver { changed, snapshot ->
+            assertTrue(state in changed)
+            observedSnapshot = snapshot
+        }
         val snapshot = takeMutableSnapshot()
         try {
             snapshot.enter { state.intValue = 2 }
@@ -245,11 +247,10 @@ class SnapshotTests {
         Snapshot.notifyObjectsInitialized()
 
         var applyObserved = false
-        val unregister =
-            Snapshot.registerApplyObserver { changed, _ ->
-                assertTrue(state in changed)
-                applyObserved = true
-            }
+        val unregister = Snapshot.registerApplyObserver { changed, _ ->
+            assertTrue(state in changed)
+            applyObserved = true
+        }
         try {
             state.intValue = 2
 
@@ -270,10 +271,9 @@ class SnapshotTests {
         val state = mutableIntStateOf(0)
 
         var notificationsPendingWhileObserving = false
-        val unregister =
-            Snapshot.registerApplyObserver { _, _ ->
-                notificationsPendingWhileObserving = Snapshot.isApplyObserverNotificationPending
-            }
+        val unregister = Snapshot.registerApplyObserver { _, _ ->
+            notificationsPendingWhileObserving = Snapshot.isApplyObserverNotificationPending
+        }
 
         try {
             // Normally not pending
@@ -828,11 +828,10 @@ class SnapshotTests {
     @Test
     fun canTakeNestedSnapshotsFromApplyObserver() {
         var takenSnapshot: Snapshot? = null
-        val observer =
-            Snapshot.registerApplyObserver { _, snapshot ->
-                if (takenSnapshot != null) error("already took a nested snapshot")
-                takenSnapshot = snapshot.takeNestedSnapshot()
-            }
+        val observer = Snapshot.registerApplyObserver { _, snapshot ->
+            if (takenSnapshot != null) error("already took a nested snapshot")
+            takenSnapshot = snapshot.takeNestedSnapshot()
+        }
 
         try {
             var state by mutableStateOf("initial")
@@ -852,13 +851,12 @@ class SnapshotTests {
     @Test
     fun canTakeNestedMutableSnapshotsFromApplyObserver() {
         var takenSnapshot: MutableSnapshot? = null
-        val observer =
-            Snapshot.registerApplyObserver { _, snapshot ->
-                if (takenSnapshot != null) error("already took a nested snapshot")
-                takenSnapshot =
-                    (snapshot as? MutableSnapshot)?.takeNestedMutableSnapshot()
-                        ?: error("Applied snapshot was not mutable")
-            }
+        val observer = Snapshot.registerApplyObserver { _, snapshot ->
+            if (takenSnapshot != null) error("already took a nested snapshot")
+            takenSnapshot =
+                (snapshot as? MutableSnapshot)?.takeNestedMutableSnapshot()
+                    ?: error("Applied snapshot was not mutable")
+        }
 
         try {
             var state by mutableStateOf("initial")
@@ -1229,6 +1227,104 @@ class SnapshotTests {
         assertEquals(1, current.writeCount)
     }
 
+    @Test
+    fun testWithoutReadObservationReusesTransparentSnapshot() {
+        var firstSnapshot: Snapshot? = null
+        var secondSnapshot: Snapshot? = null
+
+        Snapshot.withoutReadObservation {
+            firstSnapshot = currentSnapshot()
+        }
+
+        Snapshot.withoutReadObservation {
+            secondSnapshot = currentSnapshot()
+        }
+
+        assertNotNull(firstSnapshot)
+        assertNotNull(secondSnapshot)
+        assertSame(firstSnapshot, secondSnapshot)
+        assertTrue(firstSnapshot is TransparentObserverMutableSnapshot)
+    }
+
+    @Test
+    fun testNestedWithoutReadObservationReusedInPlace() {
+        var outerSnapshot: Snapshot? = null
+        var innerSnapshot: Snapshot? = null
+
+        Snapshot.withoutReadObservation {
+            outerSnapshot = currentSnapshot()
+            Snapshot.withoutReadObservation {
+                innerSnapshot = currentSnapshot()
+            }
+        }
+
+        assertSame(outerSnapshot, innerSnapshot)
+    }
+
+    @Test
+    fun testObserveReusesTransparentSnapshot() {
+        var firstSnapshot: Snapshot? = null
+        var secondSnapshot: Snapshot? = null
+
+        Snapshot.observe({}) {
+            firstSnapshot = currentSnapshot()
+        }
+
+        Snapshot.observe({}) {
+            secondSnapshot = currentSnapshot()
+        }
+
+        assertSame(firstSnapshot, secondSnapshot)
+        assertTrue(firstSnapshot is TransparentObserverMutableSnapshot)
+    }
+
+    @Test
+    fun testTransparentSnapshotReusedAcrossDifferentParentSnapshots() {
+        var snapshotInParent1: Snapshot? = null
+        var snapshotInParent2: Snapshot? = null
+
+        val parent1 = takeMutableSnapshot()
+        try {
+            parent1.enter {
+                Snapshot.withoutReadObservation {
+                    snapshotInParent1 = currentSnapshot()
+                }
+            }
+        } finally {
+            parent1.dispose()
+        }
+
+        val parent2 = takeMutableSnapshot()
+        try {
+            parent2.enter {
+                Snapshot.withoutReadObservation {
+                    snapshotInParent2 = currentSnapshot()
+                }
+            }
+        } finally {
+            parent2.dispose()
+        }
+
+        assertSame(snapshotInParent1, snapshotInParent2)
+    }
+
+    @Test
+    fun testTransparentSnapshotDisposalCleansUpObservers() {
+        var observed = false
+        val state = mutableStateOf(0)
+        var snapshot: Snapshot? = null
+        Snapshot.observe({ observed = true }) {
+            snapshot = currentSnapshot()
+            assertTrue(snapshot is TransparentObserverMutableSnapshot)
+            assertNotNull((snapshot as TransparentObserverMutableSnapshot).readObserver)
+            state.value
+        }
+        assertTrue(observed)
+        val transparentSnapshot = snapshot as TransparentObserverMutableSnapshot
+        assertNull(transparentSnapshot.readObserver)
+        assertNull(transparentSnapshot.writeObserver)
+    }
+
     @Suppress("AutoboxingStateValueProperty") // The point of this test
     @Test
     fun testSnapshotStateIsBornAccessible() {
@@ -1392,12 +1488,254 @@ class SnapshotTests {
         }
     }
 
+    @Test
+    fun readOnly_returnsResultOfBlock() {
+        val result = Snapshot.readOnly {
+            42
+        }
+        assertEquals(42, result)
+
+        val snapshot = takeMutableSnapshot()
+        try {
+            val resultMutable = snapshot.enter {
+                Snapshot.readOnly {
+                    "hello"
+                }
+            }
+            assertEquals("hello", resultMutable)
+        } finally {
+            snapshot.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_globalSnapshot_prohibitsWritesDuringBlockOnly() {
+        val state = mutableStateOf(0)
+        state.value = 1
+        assertEquals(1, state.value)
+
+        assertFailsWith<IllegalStateException> {
+            Snapshot.readOnly {
+                state.value = 2
+            }
+        }
+        assertEquals(1, state.value)
+
+        state.value = 3
+        assertEquals(3, state.value)
+    }
+
+    @Test
+    fun readOnly_mutableSnapshot_prohibitsWritesDuringBlockOnly() {
+        val state = mutableStateOf(0)
+        val snapshot = takeMutableSnapshot()
+        try {
+            snapshot.enter {
+                state.value = 1
+                assertEquals(1, state.value)
+
+                assertFailsWith<IllegalStateException> {
+                    Snapshot.readOnly {
+                        state.value = 2
+                    }
+                }
+                assertEquals(1, state.value)
+
+                state.value = 3
+                assertEquals(3, state.value)
+            }
+        } finally {
+            snapshot.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_readOnlySnapshot_prohibitsWrites() {
+        val state = mutableStateOf(0)
+        val snapshot = takeSnapshot()
+        try {
+            snapshot.enter {
+                val result = Snapshot.readOnly {
+                    assertFailsWith<IllegalStateException> {
+                        state.value = 1
+                    }
+                    state.value
+                }
+                assertEquals(0, result)
+            }
+        } finally {
+            snapshot.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_insideReadOnlySnapshot() {
+        val state = mutableStateOf(0)
+        val snapshot = takeSnapshot()
+        try {
+            snapshot.enter {
+                assertFailsWith<IllegalStateException> {
+                    Snapshot.readOnly {
+                        state.value = 1
+                    }
+                }
+            }
+        } finally {
+            snapshot.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_nestedMutableSnapshot_prohibitsWritesDuringBlockOnly() {
+        val state = mutableStateOf(0)
+        val parent = takeMutableSnapshot()
+        try {
+            val nested = parent.takeNestedMutableSnapshot()
+            try {
+                nested.enter {
+                    state.value = 1
+                    assertEquals(1, state.value)
+
+                    assertFailsWith<IllegalStateException> {
+                        Snapshot.readOnly {
+                            state.value = 2
+                        }
+                    }
+                    assertEquals(1, state.value)
+
+                    state.value = 3
+                    assertEquals(3, state.value)
+                }
+            } finally {
+                nested.dispose()
+            }
+        } finally {
+            parent.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_nestedReadOnlySnapshot_prohibitsWrites() {
+        val state = mutableStateOf(0)
+        val parent = takeMutableSnapshot()
+        try {
+            val nested = parent.takeNestedSnapshot()
+            try {
+                nested.enter {
+                    assertFailsWith<IllegalStateException> {
+                        Snapshot.readOnly {
+                            state.value = 1
+                        }
+                    }
+                }
+            } finally {
+                nested.dispose()
+            }
+        } finally {
+            parent.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_transparentObserverSnapshot_prohibitsWritesDuringBlockOnly() {
+        val state = mutableStateOf(0)
+        Snapshot.observe(readObserver = {}) {
+            state.value = 1
+            assertEquals(1, state.value)
+
+            assertFailsWith<IllegalStateException> {
+                Snapshot.readOnly {
+                    state.value = 2
+                }
+            }
+            assertEquals(1, state.value)
+
+            state.value = 3
+            assertEquals(3, state.value)
+        }
+    }
+
+    @Test
+    fun readOnly_transparentObserverSnapshotFromReadOnly_prohibitsWrites() {
+        val state = mutableStateOf(0)
+        val snapshot = takeSnapshot()
+        try {
+            snapshot.enter {
+                Snapshot.withoutReadObservation {
+                    assertFailsWith<IllegalStateException> {
+                        Snapshot.readOnly {
+                            state.value = 1
+                        }
+                    }
+                }
+            }
+        } finally {
+            snapshot.dispose()
+        }
+    }
+
+    @Test
+    fun readOnly_nestedReadOnlyBlocks() {
+        val state = mutableStateOf(0)
+        Snapshot.readOnly {
+            assertFailsWith<IllegalStateException> {
+                state.value = 1
+            }
+
+            Snapshot.readOnly {
+                assertFailsWith<IllegalStateException> {
+                    state.value = 2
+                }
+            }
+
+            assertFailsWith<IllegalStateException> {
+                state.value = 3
+            }
+        }
+
+        state.value = 4
+        assertEquals(4, state.value)
+    }
+
+    @Test
+    fun readOnly_exceptionInBlockReleasesReadOnly() {
+        val state = mutableStateOf(0)
+        class CustomTestException : Exception()
+
+        assertFailsWith<CustomTestException> {
+            Snapshot.readOnly {
+                throw CustomTestException()
+            }
+        }
+
+        // Writes should succeed after block threw
+        state.value = 1
+        assertEquals(1, state.value)
+    }
+
+    @Test
+    fun readOnly_clearsParentSnapshotOnRelease() {
+        val parent = takeMutableSnapshot(readObserver = {})
+        try {
+            val readOnlySnapshot = obtainTransparentReadOnlySnapshot(parent)!!
+            assertSame(parent.readObserver, readOnlySnapshot.readObserver)
+            assertFalse(readOnlySnapshot.disposed)
+
+            releaseTransparentReadOnlySnapshot(readOnlySnapshot)
+
+            assertNull(readOnlySnapshot.readObserver)
+            assertTrue(readOnlySnapshot.disposed)
+        } finally {
+            parent.dispose()
+        }
+    }
+
     @Test // b/442791065 -- test adapted from the report.
     fun testMergePolicy() {
         var mergeCalled = false
-        var lastSeenPrevious = -1
-        var lastSeenCurrent = -1
-        var lastSeenApplied = -1
+        var lastSeenPrevious: Int
+        var lastSeenCurrent: Int
+        var lastSeenApplied: Int
 
         fun myPolicy(): SnapshotMutationPolicy<Int> =
             object : SnapshotMutationPolicy<Int> {
@@ -1472,6 +1810,259 @@ class SnapshotTests {
         )
     }
 
+    // regression test for b/451479063
+    @Test
+    fun stateWrittenToBeforeSnapshotApplied() = runTest {
+        var state: MutableState<Int>? = null
+
+        val snapshot1 = takeMutableSnapshot()
+        snapshot1.enter { state = mutableIntStateOf(0) }
+
+        val snapshot2 = takeMutableSnapshot()
+        var stateObserved = false
+        val handle = Snapshot.registerApplyObserver { changed, _ ->
+            if (state!! in changed) {
+                stateObserved = true
+            }
+        }
+
+        try {
+            snapshot2.enter {
+                if (state != null) {
+                    state.value = 1
+                }
+            }
+
+            snapshot1.apply().check()
+            snapshot2.apply().check()
+
+            Snapshot.sendApplyNotifications()
+
+            assertEquals(1, state?.value)
+            assertTrue(stateObserved, "Apply observer should have been triggered")
+        } finally {
+            snapshot1.dispose()
+            snapshot2.dispose()
+            handle.dispose()
+        }
+    }
+
+    @Test
+    fun nestedMutableSnapshotMergeWithEqualValuesDoesNotLeakOpenSnapshot() {
+        val state = mutableStateOf(0)
+        val parent = takeMutableSnapshot()
+        try {
+            val child = parent.takeNestedMutableSnapshot()
+            try {
+                parent.enter { state.value = 1 }
+                child.enter { state.value = 1 }
+                child.apply().check()
+            } finally {
+                child.dispose()
+            }
+            parent.enter { assertEquals(1, state.value) }
+            parent.apply().check()
+        } finally {
+            parent.dispose()
+        }
+        assertEquals(1, state.value)
+
+        // Verify that openNonGlobalSnapshots was cleanly closed so reuseLimit advances
+        // and subsequent transactions reuse unreachable StateRecords instead of leaking them.
+        repeat(5) { i ->
+            atomic { state.value = i + 2 }
+        }
+        assertTrue(
+            usedRecords(state as StateObject) <= 2,
+            "Expected StateRecords to be garbage collected after nested merge apply",
+        )
+    }
+
+    @Test
+    fun nestedMutableSnapshotCustomPolicyMergeAppliesMergedValueToParent() {
+        val sumPolicy =
+            object : SnapshotMutationPolicy<Int> {
+                override fun equivalent(a: Int, b: Int): Boolean = a == b
+
+                override fun merge(previous: Int, current: Int, applied: Int): Int =
+                    current + applied - previous
+            }
+        val state = mutableStateOf(1, sumPolicy)
+        val parent = takeMutableSnapshot()
+        try {
+            val child = parent.takeNestedMutableSnapshot()
+            try {
+                // Advance child so child.snapshotId > parent.snapshotId before writing
+                child.takeNestedSnapshot().dispose()
+                parent.enter { state.value += 10 }
+                child.enter { state.value += 100 }
+                child.apply().check()
+            } finally {
+                child.dispose()
+            }
+            // Parent must observe the merged value (1 + 10 + 100 = 111), not child's unmerged 101
+            parent.enter { assertEquals(111, state.value) }
+            parent.apply().check()
+        } finally {
+            parent.dispose()
+        }
+        assertEquals(111, state.value)
+    }
+
+    @Test
+    fun disposingParentMutableSnapshotWhileNestedSnapshotIsActiveDoesNotCorruptState() {
+        // 1. NestedMutableSnapshot active after parent.dispose()
+        val state = mutableIntStateOf(0)
+        val parent = takeMutableSnapshot()
+        parent.enter { state.intValue = 99 }
+        val child = parent.takeNestedMutableSnapshot()
+        parent.dispose()
+
+        try {
+            assertEquals(99, child.enter { state.intValue })
+            child.enter { state.intValue = 100 }
+            assertEquals(100, child.enter { state.intValue })
+            assertEquals(0, state.intValue)
+        } finally {
+            child.dispose()
+        }
+        assertEquals(0, state.intValue)
+
+        // 2. NestedReadonlySnapshot active after parent.dispose()
+        val roState = mutableIntStateOf(0)
+        val roParent = takeMutableSnapshot()
+        roParent.enter { roState.intValue = 50 }
+        val roChild = roParent.takeNestedSnapshot()
+        roParent.dispose()
+
+        try {
+            assertEquals(50, roChild.enter { roState.intValue })
+            roState.intValue = 1
+            assertEquals(1, roState.intValue)
+            assertEquals(50, roChild.enter { roState.intValue })
+        } finally {
+            roChild.dispose()
+        }
+        assertEquals(1, roState.intValue)
+
+        // 3. Three-level nesting: parent and child disposed while grandchild is active
+        val deepState = mutableIntStateOf(0)
+        val root = takeMutableSnapshot()
+        root.enter { deepState.intValue = 10 }
+        val middle = root.takeNestedMutableSnapshot()
+        middle.enter { deepState.intValue = 20 }
+        val leaf = middle.takeNestedMutableSnapshot()
+        root.dispose()
+        middle.dispose()
+
+        try {
+            assertEquals(20, leaf.enter { deepState.intValue })
+            leaf.enter { deepState.intValue = 30 }
+            assertEquals(30, leaf.enter { deepState.intValue })
+            assertEquals(0, deepState.intValue)
+        } finally {
+            leaf.dispose()
+        }
+        assertEquals(0, deepState.intValue)
+    }
+
+    @Test // b/573222121
+    fun globalWriteToNewlyCreatedObject() {
+        val state = Snapshot.withMutableSnapshot {
+            Snapshot.withMutableSnapshot {
+                val state = mutableIntStateOf(1)
+                Snapshot.global { state.intValue = 2 }
+                state
+            }
+        }
+        assertEquals(2, state.intValue)
+    }
+
+    @Test // b/573222121
+    fun nestedThreadWrite() {
+        fun direct() {
+            // Direct case from 573222121
+            val state = Snapshot.withMutableSnapshot {
+                Snapshot.withMutableSnapshot {
+                    val state = mutableIntStateOf(1)
+                    Snapshot.global { state.intValue = 2 }
+                    state
+                }
+            }
+            assertEquals(2, state.intValue)
+        }
+
+        fun simulateComposition(
+            preCreatedState: MutableState<String?>? = null
+        ): MutableState<String?> = atomic {
+            preCreatedState ?: mutableStateOf(null)
+        }
+
+        fun simulateBackgroundThread(block: () -> Unit) {
+            // Simulate work in a background thread by switch to the global snapshot synchronously.
+            Snapshot.global(block)
+        }
+
+        fun runCase(
+            composeInNestedSnapshot: Boolean,
+            bgWrite: (MutableState<String?>) -> Unit,
+            preCreatedState: MutableState<String?>? = null,
+        ): State<String?> {
+            lateinit var state: MutableState<String?>
+            if (composeInNestedSnapshot) {
+                atomic {
+                    state = simulateComposition(preCreatedState)
+                    simulateBackgroundThread { bgWrite(state) }
+                }
+            } else {
+                state = simulateComposition(preCreatedState)
+                simulateBackgroundThread { bgWrite(state) }
+            }
+            return state
+        }
+
+        // Directly reproduce 573222121
+        direct()
+
+        val backgroundValue = "from background"
+        val plain: (MutableState<String?>) -> Unit = { it.value = backgroundValue }
+        val inSnapshot: (MutableState<String?>) -> Unit = { s ->
+            atomic { s.value = backgroundValue }
+        }
+
+        // Ensure all related cases are equivalent (caseB is the equivalent of direct() above)
+        val caseA = runCase(composeInNestedSnapshot = false, bgWrite = plain)
+        assertEquals(backgroundValue, caseA.value)
+        val caseB = runCase(composeInNestedSnapshot = true, bgWrite = plain)
+        assertEquals(backgroundValue, caseB.value)
+        val caseC = runCase(composeInNestedSnapshot = false, bgWrite = inSnapshot)
+        assertEquals(backgroundValue, caseC.value)
+        val caseD = runCase(composeInNestedSnapshot = true, bgWrite = inSnapshot)
+        assertEquals(backgroundValue, caseD.value)
+
+        val preCreatedValue: MutableState<String?> = mutableStateOf(null)
+        runCase(composeInNestedSnapshot = false, bgWrite = plain, preCreatedState = preCreatedValue)
+        assertEquals(backgroundValue, preCreatedValue.value)
+        preCreatedValue.value = null
+        runCase(composeInNestedSnapshot = true, bgWrite = plain, preCreatedState = preCreatedValue)
+        assertEquals(backgroundValue, preCreatedValue.value)
+        preCreatedValue.value = null
+        runCase(
+            composeInNestedSnapshot = false,
+            bgWrite = inSnapshot,
+            preCreatedState = preCreatedValue,
+        )
+        assertEquals(backgroundValue, preCreatedValue.value)
+        preCreatedValue.value = null
+        runCase(
+            composeInNestedSnapshot = true,
+            bgWrite = inSnapshot,
+            preCreatedState = preCreatedValue,
+        )
+        assertEquals(backgroundValue, preCreatedValue.value)
+        preCreatedValue.value = null
+    }
+
     private fun usedRecords(state: StateObject): Int {
         var used = 0
         var current: StateRecord? = state.firstStateRecord
@@ -1500,8 +2091,9 @@ class SnapshotTests {
 
 internal fun <T> changesOf(state: State<T>, block: () -> Unit): Int {
     var changes = 0
-    val removeObserver =
-        Snapshot.registerApplyObserver { states, _ -> if (states.contains(state)) changes++ }
+    val removeObserver = Snapshot.registerApplyObserver { states, _ ->
+        if (states.contains(state)) changes++
+    }
     try {
         block()
         Snapshot.sendApplyNotifications()
@@ -1513,10 +2105,9 @@ internal fun <T> changesOf(state: State<T>, block: () -> Unit): Int {
 
 internal fun observeChanges(snapshot: Snapshot, block: () -> Unit): Set<Any> {
     var changes = setOf<Any>()
-    val removeObserver =
-        Snapshot.registerApplyObserver { states, changedSnapshot ->
-            if (changedSnapshot == snapshot) changes = states
-        }
+    val removeObserver = Snapshot.registerApplyObserver { states, changedSnapshot ->
+        if (changedSnapshot == snapshot) changes = states
+    }
     try {
         block()
         Snapshot.sendApplyNotifications()

@@ -16,17 +16,29 @@
 
 package androidx.glance.appwidget.layout
 
+import android.app.Activity
 import android.os.Bundle
 import androidx.glance.ExperimentalGlanceApi
+import androidx.glance.GlanceModifier
+import androidx.glance.action.ActionModifier
+import androidx.glance.action.LambdaAction
+import androidx.glance.action.actionStartActivity
+import androidx.glance.action.clickable
 import androidx.glance.appwidget.lazy.EmittableLazyColumn
 import androidx.glance.appwidget.lazy.EmittableLazyListItem
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.ReservedItemIdRangeEnd
 import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.lazy.itemsIndexed
+import androidx.glance.appwidget.normalizeCompositionTree
 import androidx.glance.appwidget.runTestingComposition
+import androidx.glance.appwidget.updateLambdaActionKeys
+import androidx.glance.findModifier
+import androidx.glance.layout.Box
+import androidx.glance.layout.EmittableBox
 import androidx.glance.layout.EmittableRow
 import androidx.glance.layout.Row
+import androidx.glance.layout.Spacer
 import androidx.glance.text.EmittableText
 import androidx.glance.text.Text
 import com.google.common.truth.Truth.assertThat
@@ -47,216 +59,324 @@ class LazyColumnTest {
     }
 
     @Test
-    fun emptyLazyColumn_addsLazyColumnToTree() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition { LazyColumn {} }
+    fun emptyLazyColumn_addsLazyColumnToTree() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition { LazyColumn {} }
 
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            assertThat(column.children).isEmpty()
-        }
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        assertThat(column.children).isEmpty()
+    }
 
     @Test
-    fun items_createsListItemsEachWithChild() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    items(2, { it * 2L }) { index -> Text("Item $index") }
-                    item(4L) { Text("Item 2") }
-                    item(6L) { Text("Item 3") }
+    fun items_createsListItemsEachWithChild() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(2, { it * 2L }) { index -> Text("Item $index") }
+                item(4L) { Text("Item 2") }
+                item(6L) { Text("Item 3") }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems).hasSize(4)
+        assertThat(column.getTextAtChild(0)).isEqualTo("Item 0")
+        assertThat(column.getTextAtChild(1)).isEqualTo("Item 1")
+        assertThat(column.getTextAtChild(2)).isEqualTo("Item 2")
+        assertThat(column.getTextAtChild(3)).isEqualTo("Item 3")
+    }
+
+    @Test
+    fun item_multipleChildren_createsListItemWithChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                item {
+                    Text("First")
+                    Row { Text("Second") }
                 }
             }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems).hasSize(4)
-            assertThat(column.getTextAtChild(0)).isEqualTo("Item 0")
-            assertThat(column.getTextAtChild(1)).isEqualTo("Item 1")
-            assertThat(column.getTextAtChild(2)).isEqualTo("Item 2")
-            assertThat(column.getTextAtChild(3)).isEqualTo("Item 3")
         }
 
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItem = assertIs<EmittableLazyListItem>(column.children.single())
+        assertThat(listItem.children).hasSize(2)
+        assertIs<EmittableText>(listItem.children[0])
+        assertIs<EmittableRow>(listItem.children[1])
+    }
+
     @Test
-    fun item_multipleChildren_createsListItemWithChildren() =
+    fun items_withItemId_addsChildrenWithIds() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(2, { it * 2L }) { index -> Text("Item $index") }
+                item(4L) { Text("Item 2") }
+                item(6L) { Text("Item 3") }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(0L)
+        assertThat(listItems[1].itemId).isEqualTo(2L)
+        assertThat(listItems[2].itemId).isEqualTo(4L)
+        assertThat(listItems[3].itemId).isEqualTo(6L)
+    }
+
+    @Test
+    fun items_withoutItemId_addsItemsWithConsecutiveReservedIds() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(2) { index -> Text("Item $index") }
+                item { Text("Item 2") }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
+        assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
+        assertThat(listItems[2].itemId).isEqualTo(ReservedItemIdRangeEnd - 2)
+    }
+
+    @Test
+    fun items_someWithItemIds_addsChildrenWithIds() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(1, { 5L }) { Text("Item 0") }
+                item { Text("Item 1") }
+                items(1) { Text("Item 2") }
+                item(6L) { Text("Item 3") }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(5L)
+        assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
+        assertThat(listItems[2].itemId).isEqualTo(ReservedItemIdRangeEnd - 2)
+        assertThat(listItems[3].itemId).isEqualTo(6L)
+    }
+
+    @Test
+    fun items_listItemsWithoutItemIds_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn { items(people) { person -> Text(person.name) } }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
+        assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
+        assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
+    }
+
+    @Test
+    fun items_listItemsWithItemIds_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(people, itemId = { person -> person.userId }) { person ->
+                    Text(person.name)
+                }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(101)
+        assertThat(listItems[1].itemId).isEqualTo(202)
+        assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
+    }
+
+    @Test
+    fun itemsIndexed_listItems_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                itemsIndexed(people) { index, person -> Text("${index + 1} - ${person.name}") }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        assertThat(column.getTextAtChild(0)).isEqualTo("1 - Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("2 - Bob")
+    }
+
+    @Test
+    fun items_arrayItemsWithoutItemIds_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn { items(people.toTypedArray()) { person -> Text(person.name) } }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
+        assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
+        assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
+    }
+
+    @Test
+    fun items_arrayItemsWithItemIds_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                items(people.toTypedArray(), itemId = { person -> person.userId }) { person ->
+                    Text(person.name)
+                }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItems = assertAre<EmittableLazyListItem>(column.children)
+        assertThat(listItems[0].itemId).isEqualTo(101)
+        assertThat(listItems[1].itemId).isEqualTo(202)
+        assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
+    }
+
+    @Test
+    fun itemsIndexed_arrayItems_addsChildren() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                itemsIndexed(people.toTypedArray()) { index, person ->
+                    Text("${index + 1} - ${person.name}")
+                }
+            }
+        }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        assertThat(column.getTextAtChild(0)).isEqualTo("1 - Alice")
+        assertThat(column.getTextAtChild(1)).isEqualTo("2 - Bob")
+    }
+
+    @OptIn(ExperimentalGlanceApi::class)
+    @Test
+    fun canTranslateActivityOptions() = fakeCoroutineScope.runTest {
+        val options = Bundle()
+        val root = runTestingComposition { LazyColumn(activityOptions = options) {} }
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        assertThat(column.activityOptions).isSameInstanceAs(options)
+    }
+
+    @Test
+    fun normalizeLazyListItem_singleAction_hoistsActionToListItem() = fakeCoroutineScope.runTest {
+        val root = runTestingComposition {
+            LazyColumn {
+                item {
+                    Row(modifier = GlanceModifier.clickable(actionStartActivity<Activity>())) {
+                        Text("Row item")
+                    }
+                }
+            }
+        }
+        normalizeCompositionTree(root, backendOverrideRequest = null)
+
+        val column = assertIs<EmittableLazyColumn>(root.children.single())
+        val listItem = assertIs<EmittableLazyListItem>(column.children.single())
+
+        // ActionModifier should be hoisted to the EmittableLazyListItem
+        assertThat(listItem.modifier.findModifier<ActionModifier>()).isNotNull()
+
+        // Inner wrapper EmittableBox and child Row should have ActionModifier removed
+        val innerBox = assertIs<EmittableBox>(listItem.children.single())
+        assertThat(innerBox.modifier.findModifier<ActionModifier>()).isNull()
+        val innerRow = assertIs<EmittableRow>(innerBox.children.single())
+        assertThat(innerRow.modifier.findModifier<ActionModifier>()).isNull()
+    }
+
+    @Test
+    fun normalizeLazyListItem_singleActionWithSpacers_hoistsActionToListItem() =
         fakeCoroutineScope.runTest {
             val root = runTestingComposition {
                 LazyColumn {
                     item {
-                        Text("First")
-                        Row { Text("Second") }
+                        Spacer()
+                        Row(modifier = GlanceModifier.clickable(actionStartActivity<Activity>())) {
+                            Text("Row item")
+                        }
+                        Spacer()
                     }
                 }
             }
+            normalizeCompositionTree(root, backendOverrideRequest = null)
 
             val column = assertIs<EmittableLazyColumn>(root.children.single())
             val listItem = assertIs<EmittableLazyListItem>(column.children.single())
-            assertThat(listItem.children).hasSize(2)
-            assertIs<EmittableText>(listItem.children[0])
-            assertIs<EmittableRow>(listItem.children[1])
+
+            assertThat(listItem.modifier.findModifier<ActionModifier>()).isNotNull()
+            val innerBox = assertIs<EmittableBox>(listItem.children.single())
+            assertThat(innerBox.modifier.findModifier<ActionModifier>()).isNull()
+            assertThat(innerBox.children).hasSize(3)
+            val innerRow = assertIs<EmittableRow>(innerBox.children[1])
+            assertThat(innerRow.modifier.findModifier<ActionModifier>()).isNull()
         }
 
     @Test
-    fun items_withItemId_addsChildrenWithIds() =
+    fun normalizeLazyListItem_nestedBoxesWithRow_hoistsActionToListItem() =
         fakeCoroutineScope.runTest {
             val root = runTestingComposition {
                 LazyColumn {
-                    items(2, { it * 2L }) { index -> Text("Item $index") }
-                    item(4L) { Text("Item 2") }
-                    item(6L) { Text("Item 3") }
-                }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(0L)
-            assertThat(listItems[1].itemId).isEqualTo(2L)
-            assertThat(listItems[2].itemId).isEqualTo(4L)
-            assertThat(listItems[3].itemId).isEqualTo(6L)
-        }
-
-    @Test
-    fun items_withoutItemId_addsItemsWithConsecutiveReservedIds() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    items(2) { index -> Text("Item $index") }
-                    item { Text("Item 2") }
-                }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
-            assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
-            assertThat(listItems[2].itemId).isEqualTo(ReservedItemIdRangeEnd - 2)
-        }
-
-    @Test
-    fun items_someWithItemIds_addsChildrenWithIds() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    items(1, { 5L }) { Text("Item 0") }
-                    item { Text("Item 1") }
-                    items(1) { Text("Item 2") }
-                    item(6L) { Text("Item 3") }
-                }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(5L)
-            assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
-            assertThat(listItems[2].itemId).isEqualTo(ReservedItemIdRangeEnd - 2)
-            assertThat(listItems[3].itemId).isEqualTo(6L)
-        }
-
-    @Test
-    fun items_listItemsWithoutItemIds_addsChildren() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn { items(people) { person -> Text(person.name) } }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
-            assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
-            assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
-        }
-
-    @Test
-    fun items_listItemsWithItemIds_addsChildren() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    items(people, itemId = { person -> person.userId }) { person ->
-                        Text(person.name)
+                    item {
+                        Box {
+                            Box {
+                                Row(
+                                    modifier =
+                                        GlanceModifier.clickable(actionStartActivity<Activity>())
+                                ) {
+                                    Text("Row item")
+                                }
+                            }
+                        }
                     }
                 }
             }
+            normalizeCompositionTree(root, backendOverrideRequest = null)
 
             val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(101)
-            assertThat(listItems[1].itemId).isEqualTo(202)
-            assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
+            val listItem = assertIs<EmittableLazyListItem>(column.children.single())
+
+            // 1. ActionModifier should be hoisted to the EmittableLazyListItem
+            assertThat(listItem.modifier.findModifier<ActionModifier>()).isNotNull()
+
+            // 2. Verify all wrapper and nested boxes, and Row have ActionModifier removed
+            val wrapperBox = assertIs<EmittableBox>(listItem.children.single())
+            assertThat(wrapperBox.modifier.findModifier<ActionModifier>()).isNull()
+            val outerBox = assertIs<EmittableBox>(wrapperBox.children.single())
+            assertThat(outerBox.modifier.findModifier<ActionModifier>()).isNull()
+            val innerBox = assertIs<EmittableBox>(outerBox.children.single())
+            assertThat(innerBox.modifier.findModifier<ActionModifier>()).isNull()
+            val innerRow = assertIs<EmittableRow>(innerBox.children.single())
+            assertThat(innerRow.modifier.findModifier<ActionModifier>()).isNull()
         }
 
     @Test
-    fun itemsIndexed_listItems_addsChildren() =
+    fun normalizeLazyListItem_lambdaAction_updatesActionKeysWithIndex() =
         fakeCoroutineScope.runTest {
             val root = runTestingComposition {
                 LazyColumn {
-                    itemsIndexed(people) { index, person -> Text("${index + 1} - ${person.name}") }
-                }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            assertThat(column.getTextAtChild(0)).isEqualTo("1 - Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("2 - Bob")
-        }
-
-    @Test
-    fun items_arrayItemsWithoutItemIds_addsChildren() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn { items(people.toTypedArray()) { person -> Text(person.name) } }
-            }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(ReservedItemIdRangeEnd)
-            assertThat(listItems[1].itemId).isEqualTo(ReservedItemIdRangeEnd - 1)
-            assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
-        }
-
-    @Test
-    fun items_arrayItemsWithItemIds_addsChildren() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    items(people.toTypedArray(), itemId = { person -> person.userId }) { person ->
-                        Text(person.name)
+                    items(2) { index ->
+                        Row(modifier = GlanceModifier.clickable { /* action */ }) {
+                            Text("Item $index")
+                        }
                     }
                 }
             }
+            normalizeCompositionTree(root, backendOverrideRequest = null)
+            val actions = root.updateLambdaActionKeys()
 
             val column = assertIs<EmittableLazyColumn>(root.children.single())
-            val listItems = assertAre<EmittableLazyListItem>(column.children)
-            assertThat(listItems[0].itemId).isEqualTo(101)
-            assertThat(listItems[1].itemId).isEqualTo(202)
-            assertThat(column.getTextAtChild(0)).isEqualTo("Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("Bob")
-        }
+            val item0 = assertIs<EmittableLazyListItem>(column.children[0])
+            val item1 = assertIs<EmittableLazyListItem>(column.children[1])
 
-    @Test
-    fun itemsIndexed_arrayItems_addsChildren() =
-        fakeCoroutineScope.runTest {
-            val root = runTestingComposition {
-                LazyColumn {
-                    itemsIndexed(people.toTypedArray()) { index, person ->
-                        Text("${index + 1} - ${person.name}")
-                    }
-                }
-            }
+            val action0 = item0.modifier.findModifier<ActionModifier>()?.action as? LambdaAction
+            val action1 = item1.modifier.findModifier<ActionModifier>()?.action as? LambdaAction
 
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            assertThat(column.getTextAtChild(0)).isEqualTo("1 - Alice")
-            assertThat(column.getTextAtChild(1)).isEqualTo("2 - Bob")
-        }
-
-    @OptIn(ExperimentalGlanceApi::class)
-    @Test
-    fun canTranslateActivityOptions() =
-        fakeCoroutineScope.runTest {
-            val options = Bundle()
-            val root = runTestingComposition { LazyColumn(activityOptions = options) {} }
-
-            val column = assertIs<EmittableLazyColumn>(root.children.single())
-            assertThat(column.activityOptions).isSameInstanceAs(options)
+            assertThat(action0).isNotNull()
+            assertThat(action1).isNotNull()
+            assertThat(action0!!.key).endsWith("+0")
+            assertThat(action1!!.key).endsWith("+1")
+            assertThat(action0.key).isNotEqualTo(action1.key)
+            assertThat(actions).hasSize(2)
         }
 
     private fun EmittableLazyColumn.getTextAtChild(index: Int): String =

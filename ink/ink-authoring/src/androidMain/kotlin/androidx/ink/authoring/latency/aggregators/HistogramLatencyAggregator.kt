@@ -20,9 +20,9 @@ import android.util.Log
 import androidx.annotation.RestrictTo
 import androidx.annotation.UiThread
 import androidx.annotation.VisibleForTesting
-import androidx.ink.authoring.ExperimentalLatencyDataApi
+import androidx.ink.authoring.ExperimentalInkLatencyDataApi
 import androidx.ink.authoring.latency.aggregators.internal.runEvery
-import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.Executor
 import kotlin.collections.ArrayDeque
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -71,41 +71,45 @@ import kotlinx.coroutines.sync.withLock
  * }
  * ```
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // NonPublicApi
-@ExperimentalLatencyDataApi
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
+@ExperimentalInkLatencyDataApi
 public class HistogramLatencyAggregator
 private constructor(private val implementationHelper: ImplementationHelper) : LatencyAggregator {
 
     public fun interface Callback {
         /**
-         * Callback invoked at most once per [window] in the [CoroutineScope] (or, for Java clients,
-         * on the [ScheduledExecutorService]) passed to [create].
+         * Callback invoked at most once per [ImplementationHelper.window] in the [CoroutineScope]
+         * (or, for Java clients, on the [Executor]) passed to [create].
          *
          * @param bucketCounts An array of counts for each bucket (one more than the size of
-         *   [inclusiveLowerBoundsNanos]), giving the number of latency samples that fell in each
-         *   bucket in the last reporting window. Do not hold a reference to this array after
-         *   returning from the callback; it will be recycled (overwritten in place) immediately for
-         *   use in a future callback.
+         *   [ImplementationHelper.inclusiveLowerBoundsNanos]), giving the number of latency samples
+         *   that fell in each bucket in the last reporting window. Do not hold a reference to this
+         *   array after returning from the callback; it will be recycled (overwritten in place)
+         *   immediately for use in a future callback.
          */
-        public suspend fun onLatencyBuckets(bucketCounts: IntArray): Unit
+        public suspend fun onLatencyBuckets(bucketCounts: IntArray)
     }
 
     @UiThread
-    public override fun aggregate(startNanos: Long, endNanos: Long): Unit =
+    public override fun aggregate(startNanos: Long, endNanos: Long) {
         implementationHelper.aggregate(startNanos, endNanos)
+    }
 
     @UiThread
-    public override fun reportSynchronously(): Unit = implementationHelper.reportSynchronously()
+    public override fun reportSynchronously() {
+        implementationHelper.reportSynchronously()
+    }
 
     public override fun job(): Job = implementationHelper.supervisorJob
 
     @VisibleForTesting
     internal fun numLateHistogramAllocations() = implementationHelper.numLateHistogramAllocations
 
+    @ExperimentalInkLatencyDataApi
     public companion object {
         /**
          * Returns a new [HistogramLatencyAggregator]. For use by Kotlin clients. [callback] will be
-         * called in the given [scope], using its default [CoroutineContext].
+         * called in the given [scope], using its default [kotlin.coroutines.CoroutineContext].
          *
          * @param window The length of the consecutive time windows in which to compute and report a
          *   histogram.
@@ -119,7 +123,9 @@ private constructor(private val implementationHelper: ImplementationHelper) : La
          *   associated context should be distinct from the UI thread.
          * @param callback The [Callback] with which to report the histogram.
          */
-        @JvmSynthetic
+        @JvmStatic
+        @JvmName("createFromDuration")
+        @Suppress("ExecutorRegistration") // Takes a CouroutineScope instead
         public fun create(
             window: Duration,
             inclusiveLowerBoundsNanos: List<Long>,
@@ -144,15 +150,16 @@ private constructor(private val implementationHelper: ImplementationHelper) : La
          *   boundaries of 1ms and 5ms, giving three buckets: (-inf, 1ms), [1ms, 5ms), and [5ms,
          *   +inf). An empty boundary list is valid and produces just 1 bucket. Otherwise, boundary
          *   values must be finite and strictly increasing.
-         * @param executor A [ScheduledExecutorService] on which to compute and report histograms.
-         *   Should be distinct from the UI thread.
+         * @param executor An [Executor] on which to compute and report histograms. Should be
+         *   distinct from the UI thread. More efficient if the [Executor] is an instance of
+         *   [java.util.concurrent.ScheduledExecutorService].
          * @param callback The [Callback] with which to report the histogram.
          */
         @JvmStatic
         public fun create(
             windowMilliseconds: Int,
             inclusiveLowerBoundsNanos: List<Long>,
-            executor: ScheduledExecutorService,
+            executor: Executor,
             callback: Callback,
         ): HistogramLatencyAggregator {
             return create(
@@ -202,7 +209,7 @@ private constructor(private val implementationHelper: ImplementationHelper) : La
          * to it constantly, but [reportAndResetHistogram] swaps it out for a new one from time to
          * time.
          */
-        private var currentHistogramMutex = Mutex()
+        private val currentHistogramMutex = Mutex()
 
         /**
          * Pool of recycled arrays for storing and reporting latency histograms. After initial
@@ -250,7 +257,7 @@ private constructor(private val implementationHelper: ImplementationHelper) : La
         private suspend fun continuallyIncrementBucketCounts() {
             // As latencies come in on the channel, increment the appropriate bucket for each one.
             while (true) {
-                var bucketIndex = getBucketIndex(latencyNanosChannel.receive())
+                val bucketIndex = getBucketIndex(latencyNanosChannel.receive())
                 currentHistogramMutex.withLock { currentHistogram[bucketIndex] += 1 }
             }
         }

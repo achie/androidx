@@ -158,8 +158,8 @@ class ShellTest {
             "foo\n",
             Shell.executeScriptCaptureStdout(
                 """
-                    echo foo > /data/local/tmp/foofile
-                    cat /data/local/tmp/foofile
+                echo foo > /data/local/tmp/foofile
+                cat /data/local/tmp/foofile
                 """
                     .trimIndent()
             ),
@@ -172,8 +172,8 @@ class ShellTest {
             "foo\n",
             Shell.executeScriptCaptureStdout(
                 """
-                    xargs echo $1 > /data/local/tmp/foofile
-                    cat /data/local/tmp/foofile
+                xargs echo $1 > /data/local/tmp/foofile
+                cat /data/local/tmp/foofile
                 """
                     .trimIndent(),
                 stdin = "foo",
@@ -188,8 +188,8 @@ class ShellTest {
             "foo\n",
             Shell.executeScriptCaptureStdout(
                 """
-                    echo $(</dev/stdin) > /data/local/tmp/foofile
-                    cat /data/local/tmp/foofile
+                echo $(</dev/stdin) > /data/local/tmp/foofile
+                cat /data/local/tmp/foofile
                 """
                     .trimIndent(),
                 stdin = "foo",
@@ -333,6 +333,62 @@ class ShellTest {
     }
 
     @Test
+    fun isSubpackageInstalled() {
+        val installedPackages =
+            setOf(
+                "com.example.app",
+                "com.example.app.plugin",
+                "com.example.app.feature.history",
+                "com.example.app.test",
+            )
+        val isInstalled: (String) -> Boolean = { it in installedPackages }
+
+        // Dot-separated subprocesses of an app are NOT separate installed packages
+        assertFalse(
+            Shell.isSubpackageInstalled(
+                "com.example.app",
+                "com.example.app.persistent",
+                isInstalled,
+            )
+        )
+        assertFalse(
+            Shell.isSubpackageInstalled("com.example.app", "com.example.app.ui", isInstalled)
+        )
+        assertFalse(
+            Shell.isSubpackageInstalled("com.example.app", "com.example.app.unstable", isInstalled)
+        )
+
+        // Separate installed packages sharing the prefix ARE identified as subpackages
+        assertTrue(
+            Shell.isSubpackageInstalled("com.example.app", "com.example.app.plugin", isInstalled)
+        )
+        assertTrue(
+            Shell.isSubpackageInstalled(
+                "com.example.app",
+                "com.example.app.feature.history",
+                isInstalled,
+            )
+        )
+        assertTrue(
+            Shell.isSubpackageInstalled(
+                "com.example.app",
+                "com.example.app.feature.history:bg",
+                isInstalled,
+            )
+        )
+        assertTrue(
+            Shell.isSubpackageInstalled(
+                "com.example.app",
+                "com.example.app.feature.history.sub",
+                isInstalled,
+            )
+        )
+        assertTrue(
+            Shell.isSubpackageInstalled("com.example.app", "com.example.app.test", isInstalled)
+        )
+    }
+
+    @Test
     fun checkRootStatus() {
         if (Shell.isSessionRooted()) {
             assertContains(Shell.executeScriptCaptureStdout("id"), "uid=0(root)")
@@ -359,12 +415,11 @@ class ShellTest {
     fun getChecksum() {
         val emptyPaths = listOf("/data/local/tmp/emptyfile1", "/data/local/tmp/emptyfile2")
         try {
-            val checksums =
-                emptyPaths.map {
-                    Shell.executeScriptSilent("rm -f $it")
-                    Shell.executeScriptSilent("touch $it")
-                    Shell.getChecksum(it)
-                }
+            val checksums = emptyPaths.map {
+                Shell.executeScriptSilent("rm -f $it")
+                Shell.executeScriptSilent("touch $it")
+                Shell.getChecksum(it)
+            }
 
             assertEquals(checksums.first(), checksums.last())
             if (Build.VERSION.SDK_INT < 23) {
@@ -408,13 +463,13 @@ class ShellTest {
                 Shell.parseCompilationMode(
                     26,
                     """
-                      Dexopt state:
-                          [androidx.benchmark.test]
-                            Instruction Set: x86
-                              path: /data/app/androidx.benchmark.test-C3VDUG1iLystEGyQTxcspA==/base.apk
-                              status: /data/app/androidx.benchmark.test-C3VDUG1iLystEGyQTxcspA==/oat/x86/base.odex[status=kOatUpToDate, compilat
-                              ion_filter=quicken]
-        """
+                    Dexopt state:
+                        [androidx.benchmark.test]
+                          Instruction Set: x86
+                            path: /data/app/androidx.benchmark.test-C3VDUG1iLystEGyQTxcspA==/base.apk
+                            status: /data/app/androidx.benchmark.test-C3VDUG1iLystEGyQTxcspA==/oat/x86/base.odex[status=kOatUpToDate, compilat
+                            ion_filter=quicken]
+                    """
                         .trimIndent(),
                 ),
         )
@@ -430,7 +485,7 @@ class ShellTest {
                       [androidx.compose.foundation.layout.benchmark.test]
                         path: /data/app/androidx.compose.foundation.layout.benchmark.test-pBhSh_spHfjDL-5jgzu_Jg==/base.apk
                           arm64: /data/app/androidx.compose.foundation.layout.benchmark.test-pBhSh_spHfjDL-5jgzu_Jg==/oat/arm64/base.odex[status=kOatUpToDate, compilation_filter=speed]
-        """
+                    """
                         .trimIndent(),
                 ),
         )
@@ -442,15 +497,15 @@ class ShellTest {
                 Shell.parseCompilationMode(
                     29,
                     """
-                Dexopt state:
-                 [com.android.settings]
-                   path: .../SettingsGoogle.apk
-                     arm64: [status=verify] [reason=vdex] [primary-abi]
-                       [location is .../SettingsGoogle.vdex]
+                    Dexopt state:
+                     [com.android.settings]
+                       path: .../SettingsGoogle.apk
+                         arm64: [status=verify] [reason=vdex] [primary-abi]
+                           [location is .../SettingsGoogle.vdex]
 
-                ## These lines added for test purposes
-                ## status=0 []
-        """
+                    ## These lines added for test purposes
+                    ## status=0 []
+                    """
                         .trimIndent(),
                 ),
         )
@@ -462,11 +517,11 @@ class ShellTest {
                 Shell.parseCompilationMode(
                     32,
                     """
-                Dexopt state:
-                  [androidx.benchmark.test]
-                    path: /data/app/~~coMYW_NCkevOuZyH32n5Ag==/androidx.benchmark.test-kcNBMDGJ58lezaNWmNyTzQ==/base.apk
-                      x86_64: [status=run-from-apk] [reason=unknown]
-                """
+                    Dexopt state:
+                      [androidx.benchmark.test]
+                        path: /data/app/~~coMYW_NCkevOuZyH32n5Ag==/androidx.benchmark.test-kcNBMDGJ58lezaNWmNyTzQ==/base.apk
+                          x86_64: [status=run-from-apk] [reason=unknown]
+                    """
                         .trimIndent(),
                 ),
         )

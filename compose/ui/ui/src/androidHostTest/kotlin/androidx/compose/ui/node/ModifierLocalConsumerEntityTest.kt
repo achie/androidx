@@ -20,7 +20,7 @@ package androidx.compose.ui.node
 
 import androidx.collection.IntObjectMap
 import androidx.collection.intObjectMapOf
-import androidx.compose.runtime.collection.mutableVectorOf
+import androidx.collection.mutableObjectListOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.retain.RetainedValuesStore
@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.PlatformTextInputSessionScope
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.TaskDispatchers
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.WindowInfo
@@ -58,6 +59,7 @@ import androidx.compose.ui.spatial.RectManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextInputService
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -299,9 +301,9 @@ class ModifierLocalConsumerEntityTest {
 
     @OptIn(InternalComposeUiApi::class)
     private class FakeOwner : Owner {
-        val listeners = mutableVectorOf<() -> Unit>()
+        val listeners = mutableObjectListOf<() -> Unit>()
 
-        @OptIn(InternalCoreApi::class) override var showLayoutBounds: Boolean = false
+        override var showLayoutBounds: Boolean = false
         override val snapshotObserver: OwnerSnapshotObserver = OwnerSnapshotObserver { it.invoke() }
 
         override val modifierLocalManager: ModifierLocalManager = ModifierLocalManager(this)
@@ -391,7 +393,13 @@ class ModifierLocalConsumerEntityTest {
         override val retainedValuesStore: RetainedValuesStore
             get() = TODO("Not yet implemented")
 
+        override val localeList: LocaleList
+            get() = TODO("Not yet implemented")
+
         override val windowInfo: WindowInfo
+            get() = TODO("Not yet implemented")
+
+        override val taskDispatchers: TaskDispatchers
             get() = TODO("Not yet implemented")
 
         override val rectManager: RectManager = RectManager()

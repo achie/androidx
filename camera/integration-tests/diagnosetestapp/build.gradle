@@ -20,7 +20,7 @@ plugins {
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
 
     defaultConfig {
         applicationId = "androidx.camera.integration.diagnose"
@@ -52,6 +52,7 @@ dependencies {
     implementation(project(":camera:camera-testing")) {
         // Ensure camera-testing does not pull in androidx.test dependencies
         exclude(group:"androidx.test")
+        exclude(group:"androidx.test.espresso", module:"espresso-core")
     }
     testImplementation("androidx.test:core:1.4.0")
     testImplementation("junit:junit:4.12")
@@ -65,16 +66,15 @@ dependencies {
     debugImplementation(libs.testCore)
     
     // Transitive dependencies
-    implementation 'androidx.lifecycle:lifecycle-common:2.3.1'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.3.0'
+    implementation "androidx.lifecycle:lifecycle-common:2.10.0"
+    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.10.0"
     implementation("com.google.android.gms:play-services-mlkit-barcode-scanning:18.0.0")
     implementation("com.google.mlkit:barcode-scanning-common:17.0.0")
-    implementation 'com.google.mlkit:vision-interfaces:16.0.0'
+    implementation "com.google.mlkit:vision-interfaces:16.0.0"
     implementation libs.androidx.annotation
     implementation libs.androidx.core
     implementation libs.kotlinCoroutinesCore
-    implementation project(':camera:camera-video')
-    testImplementation 'org.robolectric:annotations:4.14'
+    implementation project(":camera:camera-video")
 }
 
 androidx {

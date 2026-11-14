@@ -21,24 +21,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.xr.arcore.runtime.PerceptionRuntime
 import androidx.xr.runtime.Session
-import java.util.Collections
-import java.util.WeakHashMap
 
 /** Get the Lifecycle associated with the [Activity] attached to the [Session]. */
 private val Activity.lifecycle: Lifecycle
     get() = (this as LifecycleOwner).lifecycle
-private val perceptionRuntimeCache =
-    Collections.synchronizedMap(WeakHashMap<Session, PerceptionRuntime>())
 
 internal val Session.perceptionRuntime: PerceptionRuntime
     get() = checkAndGetPerceptionRuntime(this)
 
 private fun checkAndGetPerceptionRuntime(session: Session): PerceptionRuntime {
-    check(session.activity.lifecycle.currentState != Lifecycle.State.DESTROYED) {
+    check(session.lifecycleOwner.lifecycle.currentState != Lifecycle.State.DESTROYED) {
         "Session has been destroyed."
     }
-    return perceptionRuntimeCache.getOrPut(session) {
-        // This lambda is executed only once per session instance.
-        session.runtimes.filterIsInstance<PerceptionRuntime>().single()
-    }
+    return session.runtimes.filterIsInstance<PerceptionRuntime>().single()
 }

@@ -26,14 +26,15 @@ import androidx.compose.ui.node.ComposeUiNode.Companion.SetCompositeKeyHash
 import androidx.compose.ui.node.ComposeUiNode.Companion.SetMeasurePolicy
 import androidx.compose.ui.node.LayoutNode
 
+@Suppress("BanRestrictTo")
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 @Deprecated(
     "It is a test API, do not use it in the real applications",
     level = DeprecationLevel.ERROR,
 )
 /*@VisibleForTesting*/
-class TestModifierUpdater internal constructor(private val node: LayoutNode) {
-    fun updateModifier(modifier: Modifier) {
+public class TestModifierUpdater internal constructor(private val node: LayoutNode) {
+    public fun updateModifier(modifier: Modifier) {
         node.modifier = modifier
     }
 }
@@ -45,8 +46,8 @@ class TestModifierUpdater internal constructor(private val node: LayoutNode) {
 )
 /*@VisibleForTesting*/
 @Composable
-@Suppress("DEPRECATION_ERROR")
-fun TestModifierUpdaterLayout(onAttached: (TestModifierUpdater) -> Unit) {
+@Suppress("DEPRECATION_ERROR", "BanRestrictTo")
+public fun TestModifierUpdaterLayout(onAttached: (TestModifierUpdater) -> Unit) {
     val compositeKeyHash = currentCompositeKeyHashCode.hashCode()
     val measurePolicy = MeasurePolicy { _, constraints ->
         layout(constraints.maxWidth, constraints.maxHeight) {}
@@ -55,7 +56,7 @@ fun TestModifierUpdaterLayout(onAttached: (TestModifierUpdater) -> Unit) {
         factory = LayoutNode.Constructor,
         update = {
             set(measurePolicy, SetMeasurePolicy)
-            init(compositeKeyHash, SetCompositeKeyHash)
+            set(compositeKeyHash, SetCompositeKeyHash)
             init { onAttached(TestModifierUpdater(this)) }
         },
     )

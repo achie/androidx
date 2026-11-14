@@ -71,7 +71,7 @@ public class SystemJobInfoConverterTest extends WorkManagerTest {
     @Before
     public void setUp() {
         mConverter = new SystemJobInfoConverter(
-                ApplicationProvider.getApplicationContext(), new SystemClock(), true);
+                ApplicationProvider.getApplicationContext(), new SystemClock(), true, false);
     }
 
     @Test
@@ -91,6 +91,28 @@ public class SystemJobInfoConverterTest extends WorkManagerTest {
     public void testConvert_setPersistedByDefault() {
         JobInfo jobInfo = mConverter.convert(
                 new WorkSpec("id", TestWorker.class.getName()), JOB_ID);
+        assertThat(jobInfo.isPersisted(), is(false));
+    }
+
+    @Test
+    @SmallTest
+    public void testConvert_setPersistedWhenPersistenceEnabled() {
+        SystemJobInfoConverter converter = new SystemJobInfoConverter(
+                ApplicationProvider.getApplicationContext(), new SystemClock(), true, true);
+        JobInfo jobInfo = converter.convert(
+                new WorkSpec("id", TestWorker.class.getName()), JOB_ID);
+        assertThat(jobInfo.isPersisted(), is(true));
+    }
+
+    @Test
+    @SmallTest
+    public void testConvert_notPersistedWhenContentUriTriggersPresent() {
+        SystemJobInfoConverter converter = new SystemJobInfoConverter(
+                ApplicationProvider.getApplicationContext(), new SystemClock(), true, true);
+        WorkSpec workSpec = getTestWorkSpecWithConstraints(new Constraints.Builder()
+                .addContentUriTrigger(Uri.parse("TEST_URI"), true)
+                .build());
+        JobInfo jobInfo = converter.convert(workSpec, JOB_ID);
         assertThat(jobInfo.isPersisted(), is(false));
     }
 
@@ -243,7 +265,7 @@ public class SystemJobInfoConverterTest extends WorkManagerTest {
     @SdkSuppress(minSdkVersion = 29)
     public void testConvert_setImportantWhileForeground_respectFlag() {
         mConverter = new SystemJobInfoConverter(
-                ApplicationProvider.getApplicationContext(), new SystemClock(), false);
+                ApplicationProvider.getApplicationContext(), new SystemClock(), false, false);
         WorkSpec workSpec = getTestWorkSpecWithConstraints(new Constraints.Builder().build());
         workSpec.lastEnqueueTime = System.currentTimeMillis();
         JobInfo jobInfo = mConverter.convert(workSpec, JOB_ID);
@@ -382,7 +404,7 @@ public class SystemJobInfoConverterTest extends WorkManagerTest {
         assertTrue(networkRequest.hasCapability(NET_CAPABILITY_TEMPORARILY_NOT_METERED));
     }
 
-    @SdkSuppress(minSdkVersion = 24) // b/452723223
+    @SdkSuppress(minSdkVersion = 25) // b/452723223
     @Test
     @SmallTest
     public void testNetworkRequest() {

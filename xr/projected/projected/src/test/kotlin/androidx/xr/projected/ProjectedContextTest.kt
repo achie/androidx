@@ -27,17 +27,31 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.xr.projected.ProjectedContext.PROJECTED_DEVICE_NAME
 import androidx.xr.projected.experimental.ExperimentalProjectedApi
+import androidx.xr.projected.testing.ProjectedTestRule
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertThrows
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowDisplayManager
-import org.robolectric.util.ReflectionHelpers
-import org.robolectric.util.ReflectionHelpers.ClassParameter
+import org.robolectric.shadows.ShadowVirtualDeviceManager
+import org.robolectric.shadows.VirtualDeviceParamsBuilder
 
 @Config(sdk = [Build.VERSION_CODES.BAKLAVA])
 @RunWith(AndroidJUnit4::class)
@@ -45,7 +59,8 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter
 @OptIn(ExperimentalProjectedApi::class)
 class ProjectedContextTest {
 
-    private var virtualDisplay: VirtualDisplay? = null
+    @get:Rule() val projectedTestRule = ProjectedTestRule()
+
     val context: ContextWrapper = ApplicationProvider.getApplicationContext()
     val virtualDeviceManager =
         context.getSystemService(Context.VIRTUAL_DEVICE_SERVICE) as VirtualDeviceManager
@@ -55,16 +70,102 @@ class ProjectedContextTest {
 
     @Test
     fun createProjectedDeviceContext_hasVirtualDevice_returnsContext() {
-        createVirtualDevice()
-
         assertThat(ProjectedContext.createProjectedDeviceContext(context)).isNotNull()
     }
 
     @Test
     fun createProjectedDeviceContext_noVirtualDevice_throwsIllegalStateException() {
+        projectedTestRule.isDeviceConnected = false
+
         assertThrows(IllegalStateException::class.java) {
             assertThat(ProjectedContext.createProjectedDeviceContext(context)).isNull()
         }
+    }
+
+    @Test
+    fun createProjectedDeviceContext_reconnectedVirtualDevice_returnsContext() {
+        projectedTestRule.isDeviceConnected = false
+        assertThat(projectedTestRule.isDeviceConnected).isFalse()
+
+        projectedTestRule.isDeviceConnected = true
+        assertThat(projectedTestRule.isDeviceConnected).isTrue()
+
+        assertThat(ProjectedContext.createProjectedDeviceContext(context)).isNotNull()
+    }
+
+    @Test
+    fun createProjectedDeviceContext_invalidDeviceId_throwsIllegalStateException() {
+        val cause = IllegalArgumentException("Invalid device ID")
+        val failingContext =
+            object : ContextWrapper(context) {
+                override fun createDeviceContext(deviceId: Int): Context {
+                    throw cause
+                }
+            }
+
+        val exception =
+            assertThrows(IllegalStateException::class.java) {
+                ProjectedContext.createProjectedDeviceContext(failingContext)
+            }
+
+        assertThat(exception).hasMessageThat().isEqualTo("Projected device not found.")
+        assertThat(exception).hasCauseThat().isSameInstanceAs(cause)
+    }
+
+    @Test
+    fun createProjectedDeviceContext_staleDeviceWithoutDisplay_returnsDeviceWithActiveDisplay() {
+        clearVirtualDevices()
+        createVirtualDevice()
+        val staleDeviceId = virtualDeviceManager.virtualDevices.last().deviceId
+        val activeDevice = createVirtualDevice()
+        val activeDeviceId = virtualDeviceManager.virtualDevices.last().deviceId
+        val activeDisplay = createVirtualDisplayForDevice(activeDevice)
+
+        val projectedContext = ProjectedContext.createProjectedDeviceContext(context)
+        val activityOptions = ProjectedContext.createProjectedActivityOptions(context)
+
+        assertThat(projectedContext.deviceId).isNotEqualTo(staleDeviceId)
+        assertThat(projectedContext.deviceId).isEqualTo(activeDeviceId)
+        assertThat(activityOptions.launchDisplayId).isEqualTo(activeDisplay.display.displayId)
+    }
+
+    @Test
+    fun createProjectedDeviceContext_newerDeviceWithoutDisplay_prefersDeviceWithActiveDisplay() {
+        val activeDeviceId = virtualDeviceManager.virtualDevices.single().deviceId
+        createVirtualDevice()
+        val deviceWithoutDisplayId = virtualDeviceManager.virtualDevices.last().deviceId
+
+        val projectedContext = ProjectedContext.createProjectedDeviceContext(context)
+
+        assertThat(projectedContext.deviceId).isNotEqualTo(deviceWithoutDisplayId)
+        assertThat(projectedContext.deviceId).isEqualTo(activeDeviceId)
+    }
+
+    @Test
+    fun createProjectedDeviceContext_multipleDevicesWithoutDisplays_returnsMostRecentlyCreatedDevice() {
+        clearVirtualDevices()
+        createVirtualDevice()
+        val olderDeviceId = virtualDeviceManager.virtualDevices.last().deviceId
+        createVirtualDevice()
+        val newerDeviceId = virtualDeviceManager.virtualDevices.last().deviceId
+
+        val projectedContext = ProjectedContext.createProjectedDeviceContext(context)
+
+        assertThat(projectedContext.deviceId).isNotEqualTo(olderDeviceId)
+        assertThat(projectedContext.deviceId).isEqualTo(newerDeviceId)
+    }
+
+    @Test
+    fun createProjectedDeviceContext_multipleDevicesWithDisplays_returnsMostRecentlyCreatedDevice() {
+        val olderDeviceId = virtualDeviceManager.virtualDevices.single().deviceId
+        val newerDevice = createVirtualDevice()
+        val newerDeviceId = virtualDeviceManager.virtualDevices.last().deviceId
+        createVirtualDisplayForDevice(newerDevice)
+
+        val projectedContext = ProjectedContext.createProjectedDeviceContext(context)
+
+        assertThat(projectedContext.deviceId).isNotEqualTo(olderDeviceId)
+        assertThat(projectedContext.deviceId).isEqualTo(newerDeviceId)
     }
 
     @Test
@@ -75,16 +176,12 @@ class ProjectedContextTest {
 
     @Test
     fun getProjectedDeviceName_projectedDeviceContext_returnsName() {
-        createVirtualDevice()
-
         assertThat(ProjectedContext.getProjectedDeviceName(projectedDeviceContext))
             .isEqualTo(PROJECTED_DEVICE_NAME)
     }
 
     @Test
     fun getProjectedDeviceName_anotherContext_throwsIllegalArgumentException() {
-        createVirtualDevice()
-
         assertThrows(IllegalArgumentException::class.java) {
             ProjectedContext.getProjectedDeviceName(context)
         }
@@ -92,22 +189,16 @@ class ProjectedContextTest {
 
     @Test
     fun isProjectedDeviceContext_returnsTrue() {
-        createVirtualDevice()
-
         assertThat(ProjectedContext.isProjectedDeviceContext(projectedDeviceContext)).isTrue()
     }
 
     @Test
     fun isProjectedDeviceContext_returnsFalse() {
-        createVirtualDevice()
-
         assertThat(ProjectedContext.isProjectedDeviceContext(context)).isFalse()
     }
 
     @Test
     fun createProjectedActivityOptions_projectedDisplayAvailable_projectedDeviceContext_returnsActivityOptionsWithLaunchDisplayId() {
-        createVirtualDevice()
-
         val activityOptions =
             ProjectedContext.createProjectedActivityOptions(projectedDeviceContext)
 
@@ -116,8 +207,6 @@ class ProjectedContextTest {
 
     @Test
     fun createProjectedActivityOptions_projectedDisplayAvailable_anotherContext_returnsActivityOptionsWithLaunchDisplayId() {
-        createVirtualDevice()
-
         val activityOptions = ProjectedContext.createProjectedActivityOptions(context)
 
         assertThat(activityOptions.launchDisplayId).isEqualTo(1)
@@ -125,6 +214,10 @@ class ProjectedContextTest {
 
     @Test
     fun createProjectedActivityOptions_projectedDisplayUnavailable_throwsIllegalStateException() {
+        ShadowDisplayManager.removeDisplay(
+            virtualDeviceManager.virtualDevices.first().displayIds[0]
+        )
+
         assertThrows(IllegalStateException::class.java) {
             ProjectedContext.createProjectedActivityOptions(context)
         }
@@ -132,7 +225,9 @@ class ProjectedContextTest {
 
     @Test
     fun createProjectedActivityOptions_projectedDisplayDoesNotBelongToProjectedDevice_throwsIllegalStateException() {
-        createVirtualDevice(shouldCreateVirtualDisplay = false)
+        ShadowDisplayManager.removeDisplay(
+            virtualDeviceManager.virtualDevices.first().displayIds[0]
+        )
 
         // Create a display with the Projected display name that belongs to another device.
         ShadowDisplayManager.addDisplay("", ProjectedContext.PROJECTED_DISPLAY_NAME)
@@ -145,8 +240,6 @@ class ProjectedContextTest {
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
     @Test
     fun isProjectedDeviceConnected_projectedDeviceCreated_isTrue() = runBlocking {
-        createVirtualDevice()
-
         assertThat(ProjectedContext.isProjectedDeviceConnected(context, coroutineContext).first())
             .isTrue()
     }
@@ -154,7 +247,7 @@ class ProjectedContextTest {
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
     @Test
     fun isProjectedDeviceConnected_displayAddedLater_isTrue() = runBlocking {
-        val virtualDevice = createVirtualDevice(shouldCreateVirtualDisplay = false)
+        val virtualDevice = createVirtualDevice()
         val flow = ProjectedContext.isProjectedDeviceConnected(context, coroutineContext)
         createVirtualDisplayForDevice(virtualDevice)
 
@@ -164,11 +257,12 @@ class ProjectedContextTest {
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
     @Test
     fun isProjectedDeviceConnected_displayRemoved_isFalse() = runBlocking {
-        createVirtualDevice(shouldCreateVirtualDisplay = true)
         val flow = ProjectedContext.isProjectedDeviceConnected(context, coroutineContext)
         assertThat(flow.first()).isTrue()
 
-        virtualDisplay?.release()
+        ShadowDisplayManager.removeDisplay(
+            virtualDeviceManager.virtualDevices.first().displayIds[0]
+        )
 
         assertThat(flow.first()).isFalse()
     }
@@ -176,54 +270,214 @@ class ProjectedContextTest {
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
     @Test
     fun isProjectedDeviceConnected_projectedDeviceNotCreated_isFalse() = runBlocking {
+        projectedTestRule.isDeviceConnected = false
+
         assertThat(ProjectedContext.isProjectedDeviceConnected(context, coroutineContext).first())
             .isFalse()
     }
 
-    private fun createVirtualDevice(shouldCreateVirtualDisplay: Boolean = true): Any? {
-        val virtualDeviceParamsBuilderClass =
-            Class.forName("android.companion.virtual.VirtualDeviceParams\$Builder")
-        val virtualDeviceParamsClass =
-            Class.forName("android.companion.virtual.VirtualDeviceParams")
-        var virtualDeviceParamsBuilder =
-            ReflectionHelpers.callConstructor(virtualDeviceParamsBuilderClass)
-        virtualDeviceParamsBuilder =
-            ReflectionHelpers.callInstanceMethod(
-                virtualDeviceParamsBuilder,
-                "setName",
-                ClassParameter(String::class.java, PROJECTED_DEVICE_NAME),
-            )
-        virtualDeviceParamsBuilder =
-            ReflectionHelpers.callInstanceMethod(virtualDeviceParamsBuilder, "build")
-        val virtualDevice =
-            ReflectionHelpers.callInstanceMethod<Any?>(
-                virtualDeviceManager,
-                "createVirtualDevice",
-                ClassParameter(Int::class.javaPrimitiveType, 1),
-                ClassParameter(virtualDeviceParamsClass, virtualDeviceParamsBuilder),
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
+    @Test
+    fun isProjectedDeviceConnected_withProjectedDeviceContext_displayRemoved_isFalse() =
+        runBlocking {
+            val flow =
+                ProjectedContext.isProjectedDeviceConnected(
+                    projectedDeviceContext,
+                    coroutineContext,
+                )
+            assertThat(flow.first()).isTrue()
+
+            ShadowDisplayManager.removeDisplay(
+                virtualDeviceManager.virtualDevices.first().displayIds[0]
             )
 
-        if (shouldCreateVirtualDisplay) {
-            virtualDisplay = createVirtualDisplayForDevice(virtualDevice)
+            assertThat(flow.first()).isFalse()
         }
-        return virtualDevice
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
+    @Test
+    fun isProjectedDeviceConnected_displayRemovedWhileCollecting_emitsFalse() = runTest {
+        val emissions = Channel<Boolean>(Channel.UNLIMITED)
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            ProjectedContext.isProjectedDeviceConnected(context, coroutineContext).collect {
+                emissions.send(it)
+            }
+        }
+        assertThat(emissions.receive()).isTrue()
+
+        // Unlike in the tests above, the display is removed while the flow is being collected, so
+        // the new value can only come from the display listener.
+        ShadowDisplayManager.removeDisplay(
+            virtualDeviceManager.virtualDevices.first().displayIds[0]
+        )
+
+        assertThat(emissions.receive()).isFalse()
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
+    @Test
+    fun isProjectedDeviceConnected_slowCollector_conflatesIntermediateEmissions() = runTest {
+        val emissions = Channel<Boolean>(Channel.UNLIMITED)
+        val allowNextCollection = CompletableDeferred<Unit>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            ProjectedContext.isProjectedDeviceConnected(context, coroutineContext).collect {
+                emissions.send(it)
+                allowNextCollection.await()
+            }
+        }
+        check(emissions.receive())
+
+        // While the collector is suspended on the initial emission, flip the display state multiple
+        // times (false -> true -> false) so intermediate states are conflated.
+        ShadowDisplayManager.removeDisplay(
+            virtualDeviceManager.virtualDevices.first().displayIds[0]
+        )
+        val replacementDisplay = createVirtualDisplayForDevice(createVirtualDevice())
+        ShadowDisplayManager.removeDisplay(replacementDisplay.display.displayId)
+        allowNextCollection.complete(Unit)
+
+        assertThat(emissions.receive()).isFalse()
+        assertThat(emissions.tryReceive().getOrNull()).isNull()
+    }
+
+    /**
+     * Verifies that callbacks delivered on different threads evaluate and emit the state one at a
+     * time. Otherwise a slow callback can emit a stale value after a newer callback already emitted
+     * the current one, leaving the flow stuck on the stale value.
+     *
+     * The first callback is parked in the middle of evaluating the state. A second callback is then
+     * delivered on another thread and must block on the lock instead of evaluating the state before
+     * the first callback is released.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
+    @Test
+    fun isProjectedDeviceConnected_concurrentCallbacks_areSerialized() = runTest {
+        val testThread = Thread.currentThread()
+        val firstCallbackThread = AtomicReference<Thread?>()
+        val secondCallbackThread = CompletableDeferred<Thread>()
+        val firstCallbackParked = CompletableDeferred<Unit>()
+        val secondCallbackEntered = CompletableDeferred<Unit>()
+        val releaseFirstCallback = CountDownLatch(1)
+        val callbackExecutor = Executors.newFixedThreadPool(2)
+        val callbackDispatcher = Executor { command ->
+            callbackExecutor.execute {
+                val currentThread = Thread.currentThread()
+                if (
+                    !firstCallbackThread.compareAndSet(null, currentThread) &&
+                        currentThread !== firstCallbackThread.get()
+                ) {
+                    secondCallbackThread.complete(currentThread)
+                }
+                command.run()
+            }
+        }
+            .asCoroutineDispatcher()
+
+        // Evaluating the state looks up system services. Park the first callback there and note
+        // whether a second callback enters while the first one is still parked.
+        val testContext =
+            HostContextInterceptor(context) {
+                if (Thread.currentThread() !== testThread) {
+                    if (Thread.currentThread() === firstCallbackThread.get()) {
+                        firstCallbackParked.complete(Unit)
+                        releaseFirstCallback.await()
+                    } else {
+                        secondCallbackEntered.complete(Unit)
+                    }
+                }
+            }
+        val emissions = Channel<Boolean>(Channel.UNLIMITED)
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            ProjectedContext.isProjectedDeviceConnected(testContext, callbackDispatcher).collect {
+                emissions.send(it)
+            }
+        }
+
+        try {
+            // The flow is collected on this thread, so the listeners are registered by now.
+            assertThat(emissions.receive()).isTrue()
+
+            // Remove the projected display to trigger the first callback and park it
+            // mid-evaluation.
+            ShadowDisplayManager.removeDisplay(
+                virtualDeviceManager.virtualDevices.first().displayIds[0]
+            )
+            firstCallbackParked.await()
+
+            // Trigger a second callback on the other executor thread while the first callback holds
+            // the lock.
+            ShadowDisplayManager.addDisplay("")
+            val secondThread = secondCallbackThread.await()
+
+            // Wait for the second thread to enter the BLOCKED state on the lock.
+            while (secondThread.state != Thread.State.BLOCKED) {
+                assertWithMessage(
+                        "Second thread did not enter the BLOCKED state, it proceeded past the" +
+                            " first thread"
+                    )
+                    .that(secondCallbackEntered.isCompleted)
+                    .isFalse()
+                Thread.yield()
+            }
+
+            // Release the first callback so it finishes and releases the lock, then wait for the
+            // second callback to acquire the lock and evaluate the state before checking the
+            // emitted disconnected state.
+            releaseFirstCallback.countDown()
+            secondCallbackEntered.await()
+            assertThat(emissions.receive()).isFalse()
+        } finally {
+            releaseFirstCallback.countDown()
+            callbackExecutor.shutdownNow()
+        }
+    }
+
+    private fun clearVirtualDevices() {
+        projectedTestRule.isDeviceConnected = false
+    }
+
+    private fun createVirtualDevice(): Any =
+        Shadow.extract<ShadowVirtualDeviceManager>(virtualDeviceManager)
+            .createVirtualDevice(
+                /* associationId= */ 1,
+                VirtualDeviceParamsBuilder.newBuilder().setName(PROJECTED_DEVICE_NAME).build(),
+            )
 
     class LocalContextWrapper(context: Context, private val deviceId: Int) :
         ContextWrapper(context) {
         override fun getDeviceId() = deviceId
     }
 
-    private fun createVirtualDisplayForDevice(virtualDevice: Any?): VirtualDisplay {
-        val virtualDisplayConfig =
-            VirtualDisplayConfig.Builder(ProjectedContext.PROJECTED_DISPLAY_NAME, 10, 10, 10)
-                .build()
-        return ReflectionHelpers.callInstanceMethod(
-            virtualDevice,
-            "createVirtualDisplay",
-            ClassParameter(VirtualDisplayConfig::class.java, virtualDisplayConfig),
-            ClassParameter(Executor::class.java, null),
-            ClassParameter(VirtualDisplay.Callback::class.java, null),
-        )
+    /**
+     * Runs [onSystemServiceLookup] before every system service lookup on a created device context.
+     */
+    private class HostContextInterceptor(
+        context: Context,
+        private val onSystemServiceLookup: () -> Unit,
+    ) : ContextWrapper(context) {
+        override fun createDeviceContext(deviceId: Int): Context =
+            object : ContextWrapper(super.createDeviceContext(deviceId)) {
+                override fun getSystemService(name: String): Any? {
+                    onSystemServiceLookup()
+                    return super.getSystemService(name)
+                }
+            }
     }
+
+    private fun createVirtualDisplayForDevice(virtualDevice: Any): VirtualDisplay =
+        Shadow.extract<ShadowVirtualDeviceManager.ShadowVirtualDevice>(virtualDevice)
+            .createVirtualDisplay(
+                VirtualDisplayConfig.Builder(
+                        ProjectedContext.PROJECTED_DISPLAY_NAME,
+                        /* width = */ 10,
+                        /* height = */ 10,
+                        /* densityDpi = */ 10,
+                    )
+                    .build(),
+                /* executor= */ null,
+                /* callback= */ null,
+            )
 }

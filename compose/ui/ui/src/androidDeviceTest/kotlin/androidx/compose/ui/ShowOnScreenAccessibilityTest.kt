@@ -33,7 +33,7 @@ import androidx.compose.ui.semantics.semanticsId
 import androidx.compose.ui.test.TestActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.core.view.ViewCompat
@@ -44,7 +44,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -54,8 +53,7 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalMaterialApi::class)
 @RunWith(AndroidJUnit4::class)
 class ShowOnScreenAccessibilityTest {
-    @get:Rule
-    val rule = createAndroidComposeRule<ShowOnScreenRecyclerViewActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<ShowOnScreenRecyclerViewActivity>()
 
     private lateinit var lastItemComposeView: AndroidComposeView
     private lateinit var lastItemProvider: AccessibilityNodeProviderCompat

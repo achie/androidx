@@ -13,11 +13,14 @@ import kotlin.Long
 import kotlin.String
 import kotlin.Suppress
 import kotlin.Unit
+import kotlin.collections.LinkedHashMap
 import kotlin.collections.List
+import kotlin.collections.Map
+import kotlin.collections.MutableMap
 import kotlin.reflect.KClass
 
 @Generated(value = ["androidx.room3.RoomProcessor"])
-@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL"])
+@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL", "OPT_IN_USAGE_ERROR", "OPT_IN_USAGE", "MemberExtensionConflict", "CAN_BE_VAL"])
 internal class MyDao_Impl(
   __db: RoomDatabase,
 ) : MyDao {
@@ -154,6 +157,37 @@ internal class MyDao_Impl(
     }
   }
 
+  public override fun getValueClassMap(): Map<LongValueClass, GenericValueClass<String>> {
+    val _sql: String = "SELECT pk, genericData AS data FROM MyEntity"
+    return performBlocking(__db, true, false) { _connection ->
+      val _stmt: SQLiteStatement = _connection.prepare(_sql)
+      try {
+        val _columnIndexOfPk: Int = getColumnIndexOrThrow(_stmt, "pk")
+        val _columnIndexOfData: Int = getColumnIndexOrThrow(_stmt, "data")
+        val _result: MutableMap<LongValueClass, GenericValueClass<String>> = LinkedHashMap<LongValueClass, GenericValueClass<String>>()
+        while (_stmt.step()) {
+          val _key: LongValueClass
+          val _data: Long
+          _data = _stmt.getLong(_columnIndexOfPk)
+          _key = LongValueClass(_data)
+          if (_stmt.isNull(_columnIndexOfData)) {
+            error("The column(s) of the map value object of type '[@MapColumn(\"data\")] GenericValueClass<String>' are NULL but the map's value type argument expect it to be NON-NULL")
+          }
+          val _value: GenericValueClass<String>
+          val _password: String
+          _password = _stmt.getText(_columnIndexOfData)
+          _value = GenericValueClass<String>(_password)
+          if (!_result.containsKey(_key)) {
+            _result.put(_key, _value)
+          }
+        }
+        _result
+      } finally {
+        _stmt.close()
+      }
+    }
+  }
+
   private fun __entityStatementConverter_MyEntity(statement: SQLiteStatement): MyEntity {
     val _entity: MyEntity
     val _columnIndexOfPk: Int = getColumnIndex(statement, "pk")
@@ -223,6 +257,8 @@ internal class MyDao_Impl(
   }
 
   public companion object {
-    public fun getRequiredConverters(): List<KClass<*>> = emptyList()
+    public fun getRequiredColumnConverters(): List<KClass<*>> = emptyList()
+
+    public fun getRequiredDaoReturnTypeConverters(): List<KClass<*>> = emptyList()
   }
 }

@@ -19,6 +19,7 @@ import static androidx.compose.remote.core.documentation.DocumentedOperation.FLO
 import static androidx.compose.remote.core.documentation.DocumentedOperation.INT;
 
 import androidx.annotation.RestrictTo;
+import androidx.compose.remote.core.CoreDocument;
 import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.Operations;
 import androidx.compose.remote.core.PaintContext;
@@ -32,6 +33,7 @@ import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.layout.measure.ComponentMeasure;
 import androidx.compose.remote.core.operations.layout.measure.MeasurePass;
 import androidx.compose.remote.core.operations.layout.measure.Size;
+import androidx.compose.remote.core.operations.layout.modifiers.AlignByModifierOperation;
 import androidx.compose.remote.core.operations.paint.PaintBundle;
 import androidx.compose.remote.core.operations.utilities.StringSerializer;
 import androidx.compose.remote.core.semantics.AccessibleComponent;
@@ -88,11 +90,8 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
 
     private final Size mCachedSize = new Size(0f, 0f);
 
-
-    @Nullable
-    private String mCachedString;
-    @Nullable
-    private String mNewString;
+    @Nullable private String mCachedString;
+    @Nullable private String mNewString;
 
     RcPlatformServices.ComputedTextLayout mComputedTextLayout;
 
@@ -100,6 +99,14 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
     @Override
     public Integer getTextId() {
         return mTextId;
+    }
+
+    public float getFontSize() {
+        return mFontSize;
+    }
+
+    public float getFontSizeValue() {
+        return mFontSizeValue;
     }
 
     @Override
@@ -110,13 +117,17 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
         if (isAtLeastVersion7(context)) {
             if (Float.isNaN(mFontSize)) {
                 context.listensTo(Utils.idFromNan(mFontSize), this);
+            } else if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP) {
+                context.listensTo(RemoteContext.ID_DENSITY, this);
             }
             if (mIsDynamicColorEnabled) {
                 context.listensTo(mColor, this);
             }
+        } else if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP
+                && !Float.isNaN(mFontSize)) {
+            context.listensTo(RemoteContext.ID_DENSITY, this);
         }
     }
-
 
     private static boolean isAtLeastVersion7(@NonNull RemoteContext context) {
         return context.supportsVersion(1, 1, 0);
@@ -133,22 +144,39 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
 
     @Override
     public void updateVariables(@NonNull RemoteContext context) {
+        float prevFontSize = mFontSizeValue;
+        mTextAlignValue = (short) (mTextAlign & 0xFFFF);
         if (isAtLeastVersion7(context)) {
             mFontSizeValue =
                     Float.isNaN(mFontSize)
                             ? context.getFloat(Utils.idFromNan(mFontSize))
                             : mFontSize;
+            if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP
+                    && !Float.isNaN(mFontSize)) {
+                mFontSizeValue *= context.getDensity();
+            }
 
-            mTextAlignValue = (short) (mTextAlign & 0xFFFF);
             if (mIsDynamicColorEnabled) {
+                int prevColorValue = mColorValue;
                 mColorValue = context.getColor(mColor);
+
+                if (prevColorValue != mColorValue && mComputedTextLayout != null) {
+                    // mComputedTextLayout caches the paint color
+                    invalidateMeasure();
+                }
             } else {
                 mColorValue = mColor;
             }
         } else {
             mFontSizeValue = mFontSize;
+            if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP
+                    && !Float.isNaN(mFontSize)) {
+                mFontSizeValue *= context.getDensity();
+            }
             mColorValue = mColor;
-            mTextAlignValue = mTextAlign;
+        }
+        if (prevFontSize != mFontSizeValue && mComputedTextLayout != null) {
+            invalidateMeasure();
         }
         String cachedString = context.getText(mTextId);
         if (cachedString != null && cachedString.equalsIgnoreCase(mCachedString)) {
@@ -216,6 +244,7 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
         mFontWeight = fontWeight;
         mFontFamilyId = fontFamilyId;
         mTextAlign = textAlign;
+        mTextAlignValue = (short) (mTextAlign & 0xFFFF);
         mOverflow = overflow;
         mMaxLines = maxLines;
     }
@@ -252,17 +281,16 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
                 maxLines);
     }
 
-    @NonNull
-    public PaintBundle mPaint = new PaintBundle();
+    @NonNull public PaintBundle mPaint = new PaintBundle();
 
     @Override
     public float getAlignValue(@NonNull PaintContext context, float line) {
         if (Float.isNaN(line)) {
             int id = Utils.idFromNan(line);
-            if (id == RemoteContext.ID_FIRST_BASELINE) {
+            if (id == AlignByModifierOperation.ID_FIRST_BASELINE) {
                 return mBaseline;
             }
-            if (id == RemoteContext.ID_LAST_BASELINE) {
+            if (id == AlignByModifierOperation.ID_LAST_BASELINE) {
                 // TODO add support for last baseline
                 return mBaseline;
             }
@@ -294,9 +322,9 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
         float ty = mPaddingTop;
         context.translate(tx, ty);
 
-        //////////////////////////////////////////////////////////
+        // -------------------------------------- //
         // Text content
-        //////////////////////////////////////////////////////////
+        // -------------------------------------- //
         context.savePaint();
         mPaint.reset();
         mPaint.setStyle(PaintBundle.STYLE_FILL);
@@ -308,29 +336,42 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
             return;
         }
         int length = mCachedString.length();
-        if (mComputedTextLayout != null) {
-            context.drawComplexText(mComputedTextLayout);
-        } else {
-            float px = mTextX;
-            switch (mTextAlignValue) {
-                case TEXT_ALIGN_CENTER:
-                    px = (mWidth - mPaddingLeft - mPaddingRight - mTextW) / 2f;
-                    break;
-                case TEXT_ALIGN_RIGHT:
-                case TEXT_ALIGN_END:
-                    px = (mWidth - mPaddingLeft - mPaddingRight - mTextW);
-                    break;
-                case TEXT_ALIGN_LEFT:
-                case TEXT_ALIGN_START:
-                default:
-            }
+        float contentW = mWidth - mPaddingLeft - mPaddingRight;
+        float px = 0f;
+        switch (mTextAlignValue) {
+            case TEXT_ALIGN_CENTER:
+                px = (contentW - mTextW) / 2f;
+                break;
+            case TEXT_ALIGN_RIGHT:
+            case TEXT_ALIGN_END:
+                px = contentW - mTextW;
+                break;
+            case TEXT_ALIGN_LEFT:
+            case TEXT_ALIGN_START:
+            default:
+                px = 0f;
+        }
 
-            if (mTextW > (mWidth - mPaddingLeft - mPaddingRight)) {
+        if (mComputedTextLayout != null) {
+            context.save();
+            if (mOverflow != OVERFLOW_VISIBLE) {
+                context.clipRect(
+                        0f,
+                        0f,
+                        contentW,
+                        mHeight - mPaddingTop - mPaddingBottom);
+            }
+            context.translate(getScrollX() + px, getScrollY());
+            context.drawComplexText(mComputedTextLayout);
+            context.restore();
+        } else {
+            px += mTextX;
+            if (mTextW > contentW) {
                 context.save();
                 context.clipRect(
                         0f,
                         0f,
-                        mWidth - mPaddingLeft - mPaddingRight,
+                        contentW,
                         mHeight - mPaddingTop - mPaddingBottom);
                 context.translate(getScrollX(), getScrollY());
                 context.drawTextRun(mTextId, 0, length, 0, 0, px, mTextY, false);
@@ -353,7 +394,7 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
             context.drawLine(0f, mHeight, mWidth, 0f);
         }
         context.restorePaint();
-        //////////////////////////////////////////////////////////
+        // -------------------------------------- //
 
         if (mGraphicsLayerModifier != null) {
             context.endGraphicsLayer();
@@ -425,8 +466,16 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
             float maxHeight,
             @NonNull MeasurePass measure) {
         super.computeSize(context, minWidth, maxWidth, minHeight, maxHeight, measure);
-        computeWrapSize(context, minWidth, maxWidth,
-                minHeight, maxHeight, true, true, measure, mCachedSize);
+        computeWrapSize(
+                context,
+                minWidth,
+                maxWidth,
+                minHeight,
+                maxHeight,
+                true,
+                true,
+                measure,
+                mCachedSize);
         ComponentMeasure m = measure.get(this);
         m.setW(mCachedSize.getWidth());
         m.setH(mCachedSize.getHeight());
@@ -435,8 +484,10 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
     @Override
     public void computeWrapSize(
             @NonNull PaintContext context,
-            float minWidth, float maxWidth,
-            float minHeight, float maxHeight,
+            float minWidth,
+            float maxWidth,
+            float minHeight,
+            float maxHeight,
             boolean horizontalWrap,
             boolean verticalWrap,
             @NonNull MeasurePass measure,
@@ -459,8 +510,8 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
         int flags = PaintContext.TEXT_MEASURE_FONT_HEIGHT | PaintContext.TEXT_MEASURE_SPACES;
         if (mMaxLines == 1
                 && (mOverflow == OVERFLOW_START_ELLIPSIS
-                || mOverflow == OVERFLOW_MIDDLE_ELLIPSIS
-                || mOverflow == OVERFLOW_ELLIPSIS)) {
+                        || mOverflow == OVERFLOW_MIDDLE_ELLIPSIS
+                        || mOverflow == OVERFLOW_ELLIPSIS)) {
             flags |= PaintContext.TEXT_COMPLEX;
             // TODO: enable forceComplex = true;
         }
@@ -479,12 +530,14 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
             mBaseline = -bounds[1];
         }
         if (forceComplex || (bounds[2] - bounds[1] > maxWidth && mMaxLines > 1 && maxWidth > 0f)) {
+            // Pass mTextAlignValue (masked with 0xFFFF) to exclude upper-bit flags packed into
+            // mTextAlign.
             mComputedTextLayout =
                     context.layoutComplexText(
                             mTextId,
                             0,
                             mCachedString.length(),
-                            mTextAlign,
+                            mTextAlignValue,
                             mOverflow,
                             mMaxLines,
                             maxWidth,
@@ -519,12 +572,12 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
     }
 
     @Override
-    public float minIntrinsicHeight(@Nullable RemoteContext context) {
+    public float minIntrinsicHeight(@NonNull RemoteContext context) {
         return mTextH;
     }
 
     @Override
-    public float minIntrinsicWidth(@Nullable RemoteContext context) {
+    public float minIntrinsicWidth(@NonNull RemoteContext context) {
         return mTextW;
     }
 
@@ -550,16 +603,16 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
     /**
      * Write the operation in the buffer
      *
-     * @param buffer       the WireBuffer we write on
-     * @param componentId  the component id
-     * @param animationId  the animation id (-1 if not set)
-     * @param textId       the text id
-     * @param color        the text color
-     * @param fontSize     the font size
-     * @param fontStyle    the font style
-     * @param fontWeight   the font weight
+     * @param buffer the WireBuffer we write on
+     * @param componentId the component id
+     * @param animationId the animation id (-1 if not set)
+     * @param textId the text id
+     * @param color the text color
+     * @param fontSize the font size
+     * @param fontStyle the font style
+     * @param fontWeight the font weight
      * @param fontFamilyId the font family id
-     * @param textAlign    the alignment rules
+     * @param textAlign the alignment rules
      */
     public static void apply(
             @NonNull WireBuffer buffer,
@@ -591,18 +644,18 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
     /**
      * Read this operation and add it to the list of operations
      *
-     * @param buffer     the buffer to read
+     * @param buffer the buffer to read
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int componentId = buffer.readInt();
-        int animationId = buffer.readInt();
-        int textId = buffer.readInt();
+        int componentId = buffer.declareId();
+        int animationId = buffer.declareId();
+        int textId = buffer.readId();
         int color = buffer.readInt();
-        float fontSize = buffer.readFloat();
+        float fontSize = buffer.readNanId();
         int fontStyle = buffer.readInt();
-        float fontWeight = buffer.readFloat();
-        int fontFamilyId = buffer.readInt();
+        float fontWeight = buffer.readNanId();
+        int fontFamilyId = buffer.readId();
         int textAlign = buffer.readInt();
         int overflow = buffer.readInt();
         int maxLines = buffer.readInt();
@@ -628,19 +681,19 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Layout Operations", id(), name())
-                .description("Text layout implementation.\n\n")
-                .field(INT, "COMPONENT_ID", "unique id for this component")
-                .field(
-                        INT,
-                        "ANIMATION_ID",
-                        "id used to match components," + " for animation purposes")
-                .field(INT, "COLOR", "text color")
-                .field(FLOAT, "FONT_SIZE", "font size")
-                .field(INT, "FONT_STYLE", "font style (0 = normal, 1 = italic)")
-                .field(FLOAT, "FONT_WEIGHT", "font weight (1-1000, normal = 400)")
-                .field(INT, "FONT_FAMILY_ID", "font family id")
-                .field(INT, "FLAGS", "Change the behaviour, currently only used for dynamic color");
+        doc.operation("Text Operations", id(), name())
+                .description("Text layout implementation")
+                .field(INT, "componentId", "Unique ID for this component")
+                .field(INT, "animationId", "ID used to match components for animation purposes")
+                .field(INT, "textId", "The ID of the text to display")
+                .field(INT, "color", "The text color (ARGB)")
+                .field(FLOAT, "fontSize", "The font size in pixels")
+                .field(INT, "fontStyle", "The font style (0=normal, 1=italic)")
+                .field(FLOAT, "fontWeight", "The font weight [1..1000]")
+                .field(INT, "fontFamilyId", "The ID of the font family name string")
+                .field(INT, "textAlign", "The text alignment and flags")
+                .field(INT, "overflow", "The overflow strategy")
+                .field(INT, "maxLines", "The maximum number of lines");
     }
 
     @Override
@@ -678,5 +731,45 @@ public class TextLayout extends LayoutManager implements VariableSupport, Access
         serializer.add("textAlign", mTextAlign);
         serializer.add("overflow", mOverflow);
         serializer.add("maxLines", mMaxLines);
+    }
+
+    /** Returns {@code mColorValue}. */
+    public int getColorValue() {
+        return mColorValue;
+    }
+
+    /** Returns {@code mType}. */
+    public int getType() {
+        return mType;
+    }
+
+    /** Returns {@code mFontWeight}. */
+    public float getFontWeight() {
+        return mFontWeight;
+    }
+
+    /** Returns {@code mTextAlignValue}. */
+    public int getTextAlignValue() {
+        return mTextAlignValue;
+    }
+
+    /** Returns {@code mOverflow}. */
+    public int getOverflow() {
+        return mOverflow;
+    }
+
+    /** Returns {@code mMaxLines}. */
+    public int getMaxLines() {
+        return mMaxLines;
+    }
+
+    /** Returns {@code mIsDynamicColorEnabled}. */
+    public boolean isDynamicColorEnabled() {
+        return mIsDynamicColorEnabled;
+    }
+
+    /** Returns {@code mColor}. */
+    public int getColor() {
+        return mColor;
     }
 }

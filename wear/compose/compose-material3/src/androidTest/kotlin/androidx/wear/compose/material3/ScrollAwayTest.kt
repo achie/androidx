@@ -34,16 +34,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.testutils.WithTouchSlop
 import androidx.compose.testutils.assertContainsColor
 import androidx.compose.testutils.assertDoesNotContainColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
@@ -60,6 +64,7 @@ import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,9 +72,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class ScrollAwayTest {
-    @Suppress("ComposeTestRuleDispatcher") // b/457595340
-    @get:Rule
-    val rule = createComposeRule()
+    @get:Rule val rule = createComposeRule()
 
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
     @Test
@@ -100,6 +103,54 @@ class ScrollAwayTest {
         rule.mainClock.autoAdvance = false
         rule.mainClock.advanceTimeBy(500)
         rule.onNodeWithTag(TEST_TAG).captureToImage().assertDoesNotContainColor(timeTextColor)
+    }
+
+    @Test
+    fun doesNotShowTimeTextWhenEnteringCompositionWhileScrolled() {
+        var firstFrameY: Float? = null
+        var showTimeText by mutableStateOf(false)
+        lateinit var scrollState: TransformingLazyColumnState
+
+        rule.setContentWithTheme {
+            scrollState = rememberTransformingLazyColumnState()
+            WithTouchSlop(0f) {
+                Box(modifier = Modifier.size(200.dp)) {
+                    TransformingLazyColumn(
+                        state = scrollState,
+                        modifier = Modifier.fillMaxSize().testTag(SCROLL_TAG),
+                    ) {
+                        item { ListHeader { Text("Buttons") } }
+                        items(10) { i -> TestButton(i, Modifier.height(100.dp)) }
+                    }
+                    if (showTimeText) {
+                        Box(
+                            modifier =
+                                Modifier.size(20.dp)
+                                    .scrollAway(
+                                        scrollInfoProvider = ScrollInfoProvider(scrollState),
+                                        screenStage = { ScreenStage.Scrolling },
+                                    )
+                                    .onGloballyPositioned { coordinates ->
+                                        if (firstFrameY == null) {
+                                            firstFrameY = coordinates.positionInRoot().y
+                                        }
+                                    }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Scroll down so the header is completely scrolled away
+        rule.onNodeWithTag(SCROLL_TAG).performTouchInput { swipeUp() }
+
+        // Bring into composition while already scrolled down
+        rule.runOnIdle { showTimeText = true }
+        rule.waitForIdle()
+
+        // When scrolled away, initial Y must be -maxOffset (-24.dp), NOT 0.dp.
+        val expectedY = with(rule.density) { -maxOffset.toPx() }
+        assertEquals(expectedY, firstFrameY!!, 0.5f)
     }
 
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)

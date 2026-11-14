@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION") // b/552879150
+
 package androidx.compose.foundation.text
 
 import androidx.compose.foundation.OverscrollEffect
@@ -27,6 +29,7 @@ internal actual fun Modifier.textFieldScroll(
     scrollerPosition: TextFieldScrollerPosition,
     textFieldValue: TextFieldValue,
     visualTransformation: VisualTransformation,
+    overscrollEffect: OverscrollEffect?,
     textLayoutResultProvider: () -> TextLayoutResultProxy?,
 ): Modifier = implementedInJetBrainsFork()
 

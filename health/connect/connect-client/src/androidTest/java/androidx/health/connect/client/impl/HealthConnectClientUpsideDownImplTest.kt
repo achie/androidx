@@ -20,6 +20,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.ext.SdkExtensions
+import androidx.health.connect.client.ExperimentalDeviceDataSourceApi
+import androidx.health.connect.client.ExperimentalMatchmakingApi
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.aggregate.AggregationResult
@@ -35,6 +37,7 @@ import androidx.health.connect.client.impl.platform.records.SDK_TO_PLATFORM_RECO
 import androidx.health.connect.client.impl.platform.records.SDK_TO_PLATFORM_RECORD_CLASS_EXT_13
 import androidx.health.connect.client.impl.platform.records.SDK_TO_PLATFORM_RECORD_CLASS_EXT_15
 import androidx.health.connect.client.impl.platform.records.SDK_TO_PLATFORM_RECORD_CLASS_EXT_16
+import androidx.health.connect.client.matchmaking.MatchmakingRequest
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.readRecord
 import androidx.health.connect.client.records.FhirResource.Companion.FHIR_RESOURCE_TYPE_IMMUNIZATION
@@ -47,6 +50,7 @@ import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.WheelchairPushesRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
+import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.records.metadata.Metadata.Companion.RECORDING_METHOD_MANUAL_ENTRY
 import androidx.health.connect.client.request.AggregateGroupByDurationRequest
@@ -85,7 +89,11 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalPersonalHealthRecordApi::class)
+@OptIn(
+    ExperimentalPersonalHealthRecordApi::class,
+    ExperimentalMatchmakingApi::class,
+    ExperimentalDeviceDataSourceApi::class,
+)
 @RunWith(AndroidJUnit4::class)
 @MediumTest
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE, codeName = "UpsideDownCake")
@@ -175,7 +183,7 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_featuresAddedInExt13_areAvailableInExt13() {
+    fun getFeatureStatus_sdkExt13Features_available() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 13)
 
         for (feature in
@@ -190,7 +198,7 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_belowUExt13_noneIsAvailable() {
+    fun getFeatureStatus_sdkExt13Features_unavailable() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 13)
 
         val features =
@@ -201,6 +209,8 @@ class HealthConnectClientUpsideDownImplTest {
                 HealthConnectFeatures.FEATURE_PLANNED_EXERCISE,
                 HealthConnectFeatures.FEATURE_MINDFULNESS_SESSION,
                 HealthConnectFeatures.FEATURE_ACTIVITY_INTENSITY,
+                HealthConnectFeatures.FEATURE_ON_DEVICE_STEP_TRACKING,
+                HealthConnectFeatures.FEATURE_MATCHMAKING,
             )
 
         for (feature in features) {
@@ -210,7 +220,7 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_featuresAddedInExt15_areAvailableInExt15() {
+    fun getFeatureStatus_sdkExt15Features_available() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 15)
 
         for (feature in
@@ -224,10 +234,14 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_belowUExt15_noneIsAvailable() {
+    fun getFeatureStatus_sdkExt15Features_unavailable() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 15)
 
-        val features = listOf(HealthConnectFeatures.FEATURE_MINDFULNESS_SESSION)
+        val features =
+            listOf(
+                HealthConnectFeatures.FEATURE_MINDFULNESS_SESSION,
+                HealthConnectFeatures.FEATURE_MATCHMAKING,
+            )
 
         for (feature in features) {
             assertThat(healthConnectClient.features.getFeatureStatus(feature))
@@ -236,7 +250,7 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_featuresAddedInExt16_areAvailableInExt16() {
+    fun getFeatureStatus_sdkExt16Features_available() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 16)
 
         assertThat(
@@ -248,15 +262,86 @@ class HealthConnectClientUpsideDownImplTest {
     }
 
     @Test
-    fun getFeatureStatus_belowUExt16_noneIsAvailable() {
+    fun getFeatureStatus_sdkExt16Features_unavailable() {
         assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 16)
 
         val features = listOf(HealthConnectFeatures.FEATURE_ACTIVITY_INTENSITY)
+        for (feature in features) {
+            assertThat(healthConnectClient.features.getFeatureStatus(feature))
+                .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_UNAVAILABLE)
+        }
+    }
+
+    @Test
+    fun getFeatureStatus_sdkExt20Features_available() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 20)
+
+        assertThat(
+                healthConnectClient.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_ON_DEVICE_STEP_TRACKING
+                )
+            )
+            .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_AVAILABLE)
+    }
+
+    @Test
+    fun getFeatureStatus_sdkExt20Features_unavailable() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 20)
+
+        val features = listOf(HealthConnectFeatures.FEATURE_ON_DEVICE_STEP_TRACKING)
 
         for (feature in features) {
             assertThat(healthConnectClient.features.getFeatureStatus(feature))
                 .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_UNAVAILABLE)
         }
+    }
+
+    @Test
+    fun getFeatureStatus_matchmaking_available() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        assertThat(
+                healthConnectClient.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_MATCHMAKING
+                )
+            )
+            .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_AVAILABLE)
+    }
+
+    @Test
+    fun getFeatureStatus_matchmaking_unavailable() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 22)
+
+        assertThat(
+                healthConnectClient.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_MATCHMAKING
+                )
+            )
+            .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_UNAVAILABLE)
+    }
+
+    @Test
+    fun getFeatureStatus_deviceDataProviders_available() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        assertThat(
+                healthConnectClient.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_DEVICE_DATA_PROVIDERS
+                )
+            )
+            .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_AVAILABLE)
+    }
+
+    @Test
+    fun getFeatureStatus_deviceDataProviders_unavailable() {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) < 22)
+
+        assertThat(
+                healthConnectClient.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_DEVICE_DATA_PROVIDERS
+                )
+            )
+            .isEqualTo(HealthConnectFeatures.FEATURE_STATUS_UNAVAILABLE)
     }
 
     @Test
@@ -275,6 +360,53 @@ class HealthConnectClientUpsideDownImplTest {
                 )
             )
         assertThat(response.recordIdsList).hasSize(1)
+    }
+
+    @Test
+    fun insertRecords_deviceWithDisplayName_readRecordReturnsDisplayName() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+        val record =
+            StepsRecord(
+                count = 10,
+                startTime = START_TIME,
+                startZoneOffset = null,
+                endTime = START_TIME + 1.minutes,
+                endZoneOffset = null,
+                metadata =
+                    Metadata.autoRecorded(
+                        Device(type = Device.TYPE_WATCH, displayName = "Pixel Watch 3")
+                    ),
+            )
+
+        val recordId = healthConnectClient.insertRecords(listOf(record)).recordIdsList[0]
+        val readRecord = healthConnectClient.readRecord(StepsRecord::class, recordId).record
+
+        assertThat(readRecord.metadata.device?.displayName).isEqualTo("Pixel Watch 3")
+    }
+
+    @Test
+    fun insertRecords_deviceWithUdi_readRecordReturnsUdi() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 23)
+        val record =
+            StepsRecord(
+                count = 10,
+                startTime = START_TIME,
+                startZoneOffset = null,
+                endTime = START_TIME + 1.minutes,
+                endZoneOffset = null,
+                metadata =
+                    Metadata.autoRecorded(
+                        Device(
+                            type = Device.TYPE_CONSUMER_MEDICAL_DEVICE,
+                            udi = "04015674011832",
+                        )
+                    ),
+            )
+
+        val recordId = healthConnectClient.insertRecords(listOf(record)).recordIdsList[0]
+        val readRecord = healthConnectClient.readRecord(StepsRecord::class, recordId).record
+
+        assertThat(readRecord.metadata.device?.udi).isEqualTo("04015674011832")
     }
 
     @Test
@@ -1330,6 +1462,88 @@ class HealthConnectClientUpsideDownImplTest {
         val medicalResources =
             healthConnectClient.readMedicalResources(insertResponse.map { it.id })
         assertThat(medicalResources).isEmpty()
+    }
+
+    @Test
+    fun checkIfMatchmakingIsPossible_returnsResult() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val response =
+            healthConnectClient.checkIfMatchmakingIsPossible(
+                MatchmakingRequest(
+                    recordTypes = setOf(StepsRecord::class),
+                    includedDataSources = setOf(DataOrigin("com.example.app")),
+                )
+            )
+        assertThat(response).isNotNull()
+    }
+
+    @Test
+    fun createMatchmakingIntent_returnsValidIntent() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val intent =
+            healthConnectClient.createMatchmakingIntent(
+                MatchmakingRequest(recordTypes = setOf(StepsRecord::class))
+            )
+        assertThat(intent).isNotNull()
+        assertThat(intent.action).isEqualTo(HealthConnectClient.ACTION_HEALTH_CONNECT_MATCHMAKING)
+    }
+
+    @Test
+    fun createMatchmakingIntent_withIncludedDataSources_returnsValidIntent() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val intent =
+            healthConnectClient.createMatchmakingIntent(
+                MatchmakingRequest(
+                    recordTypes = setOf(StepsRecord::class),
+                    includedDataSources = setOf(DataOrigin("com.example.included")),
+                )
+            )
+        assertThat(intent).isNotNull()
+        assertThat(intent.action).isEqualTo(HealthConnectClient.ACTION_HEALTH_CONNECT_MATCHMAKING)
+    }
+
+    @Test
+    fun createMatchmakingIntent_withExcludedDataSources_returnsValidIntent() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val intent =
+            healthConnectClient.createMatchmakingIntent(
+                MatchmakingRequest(
+                    recordTypes = setOf(StepsRecord::class),
+                    excludedDataSources = setOf(DataOrigin("com.example.excluded")),
+                )
+            )
+        assertThat(intent).isNotNull()
+        assertThat(intent.action).isEqualTo(HealthConnectClient.ACTION_HEALTH_CONNECT_MATCHMAKING)
+    }
+
+    @Test
+    fun getDeviceDataSources_returnsResult() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val response = healthConnectClient.getDeviceDataSources()
+        assertThat(response).isNotNull()
+        assertThat(response.deviceDataSources).isNotNull()
+    }
+
+    @Test
+    fun getCurrentDeviceDataSource_returnsResult() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val deviceDataSource = healthConnectClient.getCurrentDeviceDataSource()
+        assertThat(deviceDataSource).isNotNull()
+    }
+
+    @Test
+    fun getDeviceDataSourceCapabilities_returnsResult() = runTest {
+        assumeTrue(SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 22)
+
+        val capabilities = healthConnectClient.getDeviceDataSourceCapabilities()
+        assertThat(capabilities).isNotNull()
+        assertThat(capabilities.recordTypes).isNotNull()
     }
 
     private val Int.seconds: Duration

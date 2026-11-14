@@ -73,6 +73,58 @@ class OrderedScatterSetTest {
     }
 
     @Test
+    fun mutableOrderedScatterSetFromSet() {
+        val from = setOf("Hello", "World")
+        val set = from.toMutableOrderedScatterSet()
+        assertEquals(2, set.size)
+        assertTrue("Hello" in set)
+        assertTrue("World" in set)
+    }
+
+    @Test
+    fun mutableOrderedScatterSetFromOrderedScatterSet() {
+        val from = orderedScatterSetOf("Hello", "World")
+        val set = from.toMutableOrderedScatterSet()
+        assertEquals(2, set.size)
+        assertTrue("Hello" in set)
+        assertTrue("World" in set)
+    }
+
+    @Test
+    fun orderedScatterSetFromSet() {
+        val from = setOf("Hello", "World")
+        val set = from.toOrderedScatterSet()
+        assertEquals(2, set.size)
+        assertTrue("Hello" in set)
+        assertTrue("World" in set)
+    }
+
+    @Test
+    fun orderedScatterSetFromOrderedScatterSet() {
+        val from = orderedScatterSetOf("Hello", "World")
+        val set = from.toOrderedScatterSet()
+        assertEquals(2, set.size)
+        assertTrue("Hello" in set)
+        assertTrue("World" in set)
+    }
+
+    @Test
+    fun orderedScatterSetFromEmptySet() {
+        val from = setOf<String>()
+        val set = from.toOrderedScatterSet()
+        assertEquals(0, set.size)
+        assertSame(emptyOrderedScatterSet(), set)
+    }
+
+    @Test
+    fun orderedScatterSetFromEmptyOrderedScatterSet() {
+        val from = mutableOrderedScatterSetOf<String>()
+        val set = from.toOrderedScatterSet()
+        assertEquals(0, set.size)
+        assertSame(emptyOrderedScatterSet(), set)
+    }
+
+    @Test
     fun addToScatterSet() {
         val set = MutableOrderedScatterSet<String>()
         set += "Hello"
@@ -934,6 +986,10 @@ class OrderedScatterSetTest {
         set2 += "Hello"
         assertEquals(set.asSet(), set2.asSet())
         assertEquals(set.asMutableSet(), set2.asMutableSet())
+
+        val set3 = setOf("Hello", null, "Bonjour")
+        assertEquals(set3, set.asSet())
+        assertEquals(set3, set.asMutableSet())
     }
 
     @Test
@@ -1331,7 +1387,7 @@ class OrderedScatterSetTest {
             val i = x % 128
             val key = BadHashKey(i.toString())
             set.add(key)
-            for (j in i downTo max(0, i - 24)) {
+            (i downTo max(0, i - 24)).forEach { _ ->
                 assertTrue(set.contains(BadHashKey(i.toString())))
             }
         }
@@ -1341,11 +1397,11 @@ class OrderedScatterSetTest {
     fun randomizedHashCollisions() {
         val set = MutableOrderedScatterSet<BadHashKey>()
 
-        for (x in 0..1024) {
+        (0..1024).forEach { _ ->
             val i = abs(Random(6789).nextInt()) % 128
             val key = BadHashKey(i.toString())
             set.add(key)
-            for (j in i downTo max(0, i - 24)) {
+            (i downTo max(0, i - 24)).forEach { _ ->
                 assertTrue(set.contains(BadHashKey(i.toString())))
             }
         }

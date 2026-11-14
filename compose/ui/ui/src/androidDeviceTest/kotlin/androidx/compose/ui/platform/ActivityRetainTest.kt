@@ -41,7 +41,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasTextExactly
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.core.view.get
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -61,7 +61,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.runner.RunWith
 
@@ -69,7 +68,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ActivityRetainTest {
     @get:Rule val activityScenarioRule = activityScenarioRule<ComponentActivity>()
-    @get:Rule val composeTestRule = createEmptyComposeRule(StandardTestDispatcher())
+    @get:Rule val composeTestRule = createEmptyComposeRule()
 
     private val activityScenario
         get() = activityScenarioRule.scenario

@@ -1,0 +1,442 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.xr.arcore.openxr
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.xr.arcore.runtime.Plane
+import androidx.xr.arcore.runtime.SpatialAnnotationId
+import androidx.xr.arcore.runtime.SpatialAnnotationImageFormat
+import androidx.xr.arcore.runtime.SpatialAnnotationQuadAlignment
+import androidx.xr.runtime.ExperimentalSpatialAnnotationsApi
+import androidx.xr.runtime.math.IntSize2d
+import androidx.xr.runtime.math.Pose
+import androidx.xr.runtime.math.Quad
+import androidx.xr.runtime.math.Quaternion
+import androidx.xr.runtime.math.Ray
+import androidx.xr.runtime.math.Vector2
+import androidx.xr.runtime.math.Vector3
+import com.google.common.truth.Truth.assertThat
+import java.nio.ByteBuffer
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+
+@OptIn(ExperimentalSpatialAnnotationsApi::class, ExperimentalCoroutinesApi::class)
+@RunWith(AndroidJUnit4::class)
+@Config(shadows = [OpenXrPerceptionManagerTest.ShadowOpenXrPerceptionManager::class])
+// TODO(b/560290369): Failures yield clear assertion messages rather than IllegalStateException.
+class OpenXrPerceptionManagerTest {
+
+    @Implements(OpenXrPerceptionManager::class)
+    class ShadowOpenXrPerceptionManager {
+        companion object {
+            var mockedStartHandles: LongArray? = null
+            internal var mockedHitData: Array<HitData> = emptyArray()
+            val stoppedHandleBatches = mutableListOf<LongArray>()
+
+            @Implementation
+            @JvmStatic
+            @JvmName("nativeHitTest")
+            internal fun nativeHitTest(
+                maxResults: Int,
+                originX: Float,
+                originY: Float,
+                originZ: Float,
+                directionX: Float,
+                directionY: Float,
+                directionZ: Float,
+                timestampNs: Long,
+            ): Array<HitData> = mockedHitData
+
+            @Implementation
+            @JvmStatic
+            @JvmName("nativeStartSpatialAnnotationTracking")
+            internal fun nativeStartSpatialAnnotationTracking(
+                imageBuffer: ByteBuffer,
+                width: Int,
+                height: Int,
+                rowStride: Int,
+                format: Int,
+                alignment: Int,
+                quadsExtents: FloatArray,
+                timestampNanos: Long,
+                callback: (LongArray?) -> Unit,
+            ) {
+                callback(mockedStartHandles)
+            }
+
+            @Implementation
+            @JvmStatic
+            @JvmName("nativeStopSpatialAnnotationTracking")
+            internal fun nativeStopSpatialAnnotationTracking(handles: LongArray) {
+                stoppedHandleBatches.add(handles)
+            }
+        }
+    }
+
+    private lateinit var underTest: OpenXrPerceptionManager
+    private lateinit var timeSource: OpenXrTimeSource
+
+    @Before
+    fun setUp() {
+        ShadowOpenXrPerceptionManager.mockedStartHandles = null
+        ShadowOpenXrPerceptionManager.mockedHitData = emptyArray()
+        ShadowOpenXrPerceptionManager.stoppedHandleBatches.clear()
+        timeSource = OpenXrTimeSource()
+        underTest = OpenXrPerceptionManager(timeSource)
+    }
+
+    @Test
+    fun updateSpatialAnnotations_noConfigs_doesNothing() {
+        underTest.updateSpatialAnnotations(1000L)
+
+        assertThat(underTest.trackables).isEmpty()
+        assertThat(underTest.xrResources.trackablesMap).isEmpty()
+        assertThat(underTest.xrResources.updatables).isEmpty()
+    }
+
+    @Test
+    fun updateSpatialAnnotations_addsSpatialAnnotationToTrackablesAndUpdatables() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        val handle = 42L
+        underTest.xrResources.addAnnotationHandle(id, handle, SpatialAnnotationQuadAlignment.SCREEN)
+
+        underTest.updateSpatialAnnotations(1000L)
+        val trackable = underTest.xrResources.trackablesMap[handle] as? OpenXrSpatialAnnotation
+
+        assertThat(trackable).isNotNull()
+        assertThat(trackable?.id).isEqualTo(id)
+        assertThat(trackable?.alignment).isEqualTo(SpatialAnnotationQuadAlignment.SCREEN)
+        assertThat(underTest.xrResources.updatables).contains(trackable as Updatable)
+    }
+
+    @Test
+    fun updateSpatialAnnotations_alreadyTracked_doesNotDuplicateTrackable() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        val handle = 42L
+        underTest.xrResources.addAnnotationHandle(id, handle, SpatialAnnotationQuadAlignment.SCREEN)
+
+        underTest.updateSpatialAnnotations(1000L)
+        val firstTrackable = underTest.xrResources.trackablesMap[handle]
+
+        underTest.updateSpatialAnnotations(2000L)
+        val secondTrackable = underTest.xrResources.trackablesMap[handle]
+
+        assertThat(secondTrackable).isSameInstanceAs(firstTrackable)
+        assertThat(underTest.xrResources.updatables.filter { it === firstTrackable }).hasSize(1)
+    }
+
+    @Test
+    fun updateSpatialAnnotations_multipleAnnotations_addsAllTrackables() {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val id2 = SpatialAnnotationId.fromString("annotation_2")
+        underTest.xrResources.addAnnotationHandle(id1, 101L, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.xrResources.addAnnotationHandle(id2, 102L, SpatialAnnotationQuadAlignment.OBJECT)
+
+        underTest.updateSpatialAnnotations(1000L)
+
+        assertThat(underTest.xrResources.trackablesMap).containsKey(101L)
+        assertThat(underTest.xrResources.trackablesMap).containsKey(102L)
+
+        val trackable1 = underTest.xrResources.trackablesMap[101L] as? OpenXrSpatialAnnotation
+        val trackable2 = underTest.xrResources.trackablesMap[102L] as? OpenXrSpatialAnnotation
+
+        assertThat(trackable1?.alignment).isEqualTo(SpatialAnnotationQuadAlignment.SCREEN)
+        assertThat(trackable2?.alignment).isEqualTo(SpatialAnnotationQuadAlignment.OBJECT)
+        assertThat(underTest.xrResources.updatables).contains(trackable1 as Updatable)
+        assertThat(underTest.xrResources.updatables).contains(trackable2 as Updatable)
+    }
+
+    @Test
+    fun updateSpatialAnnotations_nullAlignment_addsTrackableWithNullAlignment() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        val handle = 42L
+        underTest.xrResources.addAnnotationHandle(id, handle, alignment = null)
+
+        underTest.updateSpatialAnnotations(1000L)
+
+        val trackable = underTest.xrResources.trackablesMap[handle] as? OpenXrSpatialAnnotation
+        assertThat(trackable).isNotNull()
+        assertThat(trackable?.alignment).isNull()
+    }
+
+    @Test
+    fun addAnnotationHandle_newId_returnsNull() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+
+        val replaced =
+            underTest.xrResources.addAnnotationHandle(
+                id,
+                42L,
+                SpatialAnnotationQuadAlignment.SCREEN,
+            )
+
+        assertThat(replaced).isNull()
+    }
+
+    @Test
+    fun addAnnotationHandle_existingId_returnsReplacedHandle() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        underTest.xrResources.addAnnotationHandle(id, 42L, SpatialAnnotationQuadAlignment.SCREEN)
+
+        val replaced =
+            underTest.xrResources.addAnnotationHandle(
+                id,
+                43L,
+                SpatialAnnotationQuadAlignment.SCREEN,
+            )
+
+        assertThat(replaced).isEqualTo(42L)
+        assertThat(underTest.xrResources.annotationConfigs[id]?.handle).isEqualTo(43L)
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_emptyListAndNoConfigs_doesNothing() {
+        underTest.stopSpatialAnnotationTracking(emptyList())
+
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+        assertThat(underTest.xrResources.trackablesMap).isEmpty()
+        assertThat(underTest.xrResources.updatables).isEmpty()
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_unknownId_doesNothing() {
+        underTest.stopSpatialAnnotationTracking(listOf(SpatialAnnotationId.fromString("unknown")))
+
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_removesTrackableAndUpdatable() {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        val handle = 42L
+        underTest.xrResources.addAnnotationHandle(id, handle, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.updateSpatialAnnotations(1000L)
+        val trackable = underTest.xrResources.trackablesMap[handle]
+        checkNotNull(trackable)
+        check(underTest.xrResources.updatables.contains(trackable as Updatable))
+
+        try {
+            underTest.stopSpatialAnnotationTracking(listOf(id))
+        } catch (_: UnsatisfiedLinkError) {
+            // Native method is not linked in JVM host unit tests.
+        }
+
+        assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id)
+
+        underTest.updateSpatialAnnotations(2000L)
+
+        assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(handle)
+        assertThat(underTest.xrResources.updatables).doesNotContain(trackable as Updatable)
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_emptyList_stopsAllAnnotations() {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val id2 = SpatialAnnotationId.fromString("annotation_2")
+        underTest.xrResources.addAnnotationHandle(id1, 101L, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.xrResources.addAnnotationHandle(id2, 102L, SpatialAnnotationQuadAlignment.OBJECT)
+        underTest.updateSpatialAnnotations(1000L)
+        check(underTest.xrResources.trackablesMap.size == 2)
+        check(underTest.xrResources.updatables.size == 2)
+
+        try {
+            underTest.stopSpatialAnnotationTracking(emptyList())
+        } catch (_: UnsatisfiedLinkError) {
+            // Native method is not linked in JVM host unit tests.
+        }
+
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+
+        underTest.updateSpatialAnnotations(2000L)
+
+        assertThat(underTest.xrResources.trackablesMap).isEmpty()
+        assertThat(underTest.xrResources.updatables).isEmpty()
+    }
+
+    @Test
+    fun clear_clearsSpatialAnnotationsAndResources() {
+        assertThat(underTest.isPerceptionManagerCleared).isFalse()
+
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        underTest.xrResources.addAnnotationHandle(id, 42L, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.updateSpatialAnnotations(1000L)
+
+        try {
+            underTest.clear()
+        } catch (_: UnsatisfiedLinkError) {
+            // Native method is not linked in JVM host unit tests.
+        }
+
+        assertThat(underTest.isPerceptionManagerCleared).isTrue()
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+        assertThat(underTest.xrResources.trackablesMap).isEmpty()
+        assertThat(underTest.xrResources.updatables).isEmpty()
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_specificId_removesOnlyTargetAnnotation() {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val id2 = SpatialAnnotationId.fromString("annotation_2")
+        underTest.xrResources.addAnnotationHandle(id1, 101L, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.xrResources.addAnnotationHandle(id2, 102L, SpatialAnnotationQuadAlignment.OBJECT)
+        underTest.updateSpatialAnnotations(1000L)
+        val trackable2 = underTest.xrResources.trackablesMap[102L] as Updatable
+
+        try {
+            underTest.stopSpatialAnnotationTracking(listOf(id1))
+        } catch (_: UnsatisfiedLinkError) {
+            // Native method is not linked in JVM host unit tests.
+        }
+
+        assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id1)
+        assertThat(underTest.xrResources.annotationConfigs).containsKey(id2)
+
+        underTest.updateSpatialAnnotations(2000L)
+
+        assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(101L)
+        assertThat(underTest.xrResources.trackablesMap).containsKey(102L)
+        assertThat(underTest.xrResources.updatables).contains(trackable2)
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_partiallyKnownIds_removesOnlyKnownId() {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val unknownId = SpatialAnnotationId.fromString("unknown")
+        underTest.xrResources.addAnnotationHandle(id1, 101L, SpatialAnnotationQuadAlignment.SCREEN)
+        underTest.updateSpatialAnnotations(1000L)
+
+        try {
+            underTest.stopSpatialAnnotationTracking(listOf(id1, unknownId))
+        } catch (_: UnsatisfiedLinkError) {
+            // Native method is not linked in JVM host unit tests.
+        }
+
+        assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id1)
+
+        underTest.updateSpatialAnnotations(2000L)
+
+        assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(101L)
+    }
+
+    @Test
+    fun startSpatialAnnotationTracking_partialFailure_stopsSucceededHandlesAndFails() = runTest {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val id2 = SpatialAnnotationId.fromString("annotation_2")
+        val quad = Quad.fromMinMax(Vector2(-1f, -1f), Vector2(1f, 1f))
+        ShadowOpenXrPerceptionManager.mockedStartHandles = longArrayOf(101L)
+
+        val exception =
+            assertFailsWith<IllegalStateException> {
+                underTest.startSpatialAnnotationTracking(
+                    imageBuffer = ByteBuffer.allocateDirect(100),
+                    imageSize = IntSize2d(10, 10),
+                    rowStride = 10,
+                    format = SpatialAnnotationImageFormat.GRAYSCALE,
+                    alignment = SpatialAnnotationQuadAlignment.SCREEN,
+                    quads = mapOf(id1 to quad, id2 to quad),
+                    timestampNanos = 1000L,
+                )
+            }
+
+        assertThat(exception)
+            .hasMessageThat()
+            .isEqualTo("Failed to start spatial annotation tracking.")
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+        assertThat(ShadowOpenXrPerceptionManager.stoppedHandleBatches).hasSize(1)
+        assertThat(ShadowOpenXrPerceptionManager.stoppedHandleBatches.single().toList())
+            .containsExactly(101L)
+    }
+
+    @Test
+    fun startSpatialAnnotationTracking_nullHandles_failsWithoutStoppingHandles() = runTest {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val quad = Quad.fromMinMax(Vector2(-1f, -1f), Vector2(1f, 1f))
+        ShadowOpenXrPerceptionManager.mockedStartHandles = null
+
+        val exception =
+            assertFailsWith<IllegalStateException> {
+                underTest.startSpatialAnnotationTracking(
+                    imageBuffer = ByteBuffer.allocateDirect(100),
+                    imageSize = IntSize2d(10, 10),
+                    rowStride = 10,
+                    format = SpatialAnnotationImageFormat.GRAYSCALE,
+                    alignment = SpatialAnnotationQuadAlignment.SCREEN,
+                    quads = mapOf(id1 to quad),
+                    timestampNanos = 1000L,
+                )
+            }
+
+        assertThat(exception)
+            .hasMessageThat()
+            .isEqualTo("Failed to start spatial annotation tracking.")
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+        assertThat(ShadowOpenXrPerceptionManager.stoppedHandleBatches).isEmpty()
+    }
+
+    @Test
+    fun startSpatialAnnotationTracking_emptyHandles_failsWithoutStoppingHandles() = runTest {
+        val id1 = SpatialAnnotationId.fromString("annotation_1")
+        val quad = Quad.fromMinMax(Vector2(-1f, -1f), Vector2(1f, 1f))
+        ShadowOpenXrPerceptionManager.mockedStartHandles = longArrayOf()
+
+        val exception =
+            assertFailsWith<IllegalStateException> {
+                underTest.startSpatialAnnotationTracking(
+                    imageBuffer = ByteBuffer.allocateDirect(100),
+                    imageSize = IntSize2d(10, 10),
+                    rowStride = 10,
+                    format = SpatialAnnotationImageFormat.GRAYSCALE,
+                    alignment = SpatialAnnotationQuadAlignment.SCREEN,
+                    quads = mapOf(id1 to quad),
+                    timestampNanos = 1000L,
+                )
+            }
+
+        assertThat(exception)
+            .hasMessageThat()
+            .isEqualTo("Failed to start spatial annotation tracking.")
+        assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+        assertThat(ShadowOpenXrPerceptionManager.stoppedHandleBatches).isEmpty()
+    }
+
+    @Test
+    fun hitTest_unsyncedNativeTrackables_skipsUnsyncedAndReturnsSyncedHitResult() {
+        val syncedPlaneId = 101L
+        val unsyncedTrackableId = 999L
+        val syncedPlane =
+            OpenXrPlane(syncedPlaneId, Plane.Type.VERTICAL, timeSource, underTest.xrResources)
+        underTest.xrResources.addTrackable(syncedPlaneId, syncedPlane)
+        val unsyncedPose = Pose(Vector3(0f, 0f, -1f), Quaternion.Identity)
+        val syncedPose = Pose(Vector3(0f, 0f, -2f), Quaternion.Identity)
+        ShadowOpenXrPerceptionManager.mockedHitData =
+            arrayOf(HitData(unsyncedPose, unsyncedTrackableId), HitData(syncedPose, syncedPlaneId))
+
+        val results = underTest.hitTest(Ray(Vector3.Zero, Vector3.Forward))
+
+        val hitResult = results.single()
+        assertThat(hitResult.distance).isEqualTo(2f)
+        assertThat(hitResult.hitPose).isEqualTo(syncedPose)
+        assertThat(hitResult.trackable).isEqualTo(syncedPlane)
+    }
+}

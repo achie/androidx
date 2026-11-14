@@ -24,16 +24,20 @@ import android.text.format.DateFormat
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.State
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -50,14 +54,9 @@ import androidx.wear.compose.foundation.clearAndSetSemantics
 import androidx.wear.compose.foundation.curvedRow
 import androidx.wear.compose.foundation.padding
 import androidx.wear.compose.foundation.sizeIn
-import androidx.wear.compose.material3.TimeTextDefaults.timeFormat
-import androidx.wear.compose.material3.TimeTextDefaults.timeTextStyle
 import androidx.wear.compose.materialcore.currentTimeMillis
 import androidx.wear.compose.materialcore.is24HourFormat
 import java.util.Calendar
-import java.util.Locale
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Layout to show the current time and a label, they will be drawn in a curve, following the top
@@ -75,23 +74,34 @@ import kotlinx.coroutines.flow.callbackFlow
  *
  * @sample androidx.wear.compose.material3.samples.TimeTextClockOnly
  *
+ * ![TimeTextClockOnly Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimeTextClockOnly_CompositeImage.png)
+ *
  * A [TimeText] with a short app status message shown:
  *
  * @sample androidx.wear.compose.material3.samples.TimeTextWithStatus
  *
+ * ![TimeTextWithStatus Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimeTextWithStatus_CompositeImage.png)
+ *
  * A [TimeText] with a long status message, that needs ellipsizing:
  *
  * @sample androidx.wear.compose.material3.samples.TimeTextWithStatusEllipsized
+ *
+ * ![TimeTextWithStatusEllipsized Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimeTextWithStatusEllipsized_CompositeImage.png)
+ *
  * @param modifier The modifier to be applied to the component.
  * @param curvedModifier The [CurvedModifier] used to restrict the arc in which [TimeText] is drawn.
  * @param maxSweepAngle The default maximum sweep angle in degrees.
  * @param backgroundColor The background color of the arc drawn behind the [TimeText].
- * @param timeSource [TimeSource] which retrieves the current time and formats it.
+ * @param timeSource [TimeSource] which retrieves the current time and formats it. Defaults to the
+ *   current [LocalTimeSource].
  * @param contentPadding The spacing values between the container and the content.
  * @param content The content of the [TimeText] - displays the current time by default. This lambda
  *   receives the current time as a String and should display it using curvedText. Note that if long
- *   curved text is included here, it should specify [CurvedModifier.weight] on it so that the space
- *   available is suitably allocated.
+ *   curved text is included here, it should specify [androidx.wear.compose.foundation.weight] on it
+ *   so that the space available is suitably allocated.
  */
 @Composable
 public fun TimeText(
@@ -99,13 +109,13 @@ public fun TimeText(
     curvedModifier: CurvedModifier = CurvedModifier,
     maxSweepAngle: Float = TimeTextDefaults.MaxSweepAngle,
     backgroundColor: Color = TimeTextDefaults.backgroundColor(),
-    timeSource: TimeSource = TimeTextDefaults.rememberTimeSource(timeFormat()),
+    timeSource: TimeSource = LocalTimeSource.current,
     contentPadding: PaddingValues = TimeTextDefaults.ContentPadding,
     content: CurvedScope.(String) -> Unit = { time -> timeTextCurvedText(time) },
 ) {
     val currentTime = timeSource.currentTime()
 
-    CurvedLayout(modifier = modifier) {
+    CurvedLayout(modifier = modifier.testTag("time_text")) {
         curvedRow(
             modifier =
                 curvedModifier
@@ -148,7 +158,7 @@ public object TimeTextDefaults {
     @Composable
     public fun timeFormat(): String {
         val format = if (is24HourFormat()) TimeFormat24Hours else TimeFormat12Hours
-        return DateFormat.getBestDateTimePattern(Locale.getDefault(), format)
+        return DateFormat.getBestDateTimePattern(LocalLocale.current.platformLocale, format)
             .replace("a", "")
             .trim()
     }
@@ -203,7 +213,7 @@ public object TimeTextDefaults {
 public fun CurvedScope.timeTextCurvedText(time: String, style: CurvedTextStyle? = null) {
     // TimeText is intended to be hidden from TalkBack, so we clear semantics.
     basicCurvedText(time, modifier = CurvedModifier.clearAndSetSemantics {}) {
-        style?.let { timeTextStyle() + it } ?: timeTextStyle()
+        style?.let { TimeTextDefaults.timeTextStyle() + it } ?: TimeTextDefaults.timeTextStyle()
     }
 }
 
@@ -225,6 +235,23 @@ public fun CurvedScope.timeTextSeparator(
     )
 }
 
+/**
+ * CompositionLocal providing the [TimeSource] for [TimeText].
+ *
+ * This provides the mechanism to override the time source for composables that may display
+ * [TimeText] without providing a slot for an explicit `timeSource` parameter, such as the fallback
+ * [TimeText] provided by [AppScaffold] or [ScreenScaffold] for platform builds that do not support
+ * the system status bar.
+ *
+ * Example of providing a fixed time for testing:
+ *
+ * @sample androidx.wear.compose.material3.samples.TimeTextOverrideTimeSourceForTesting
+ */
+@Suppress("TopLevelCompositionLocal")
+public val LocalTimeSource: ProvidableCompositionLocal<TimeSource> = staticCompositionLocalOf {
+    DefaultTimeSource()
+}
+
 public interface TimeSource {
 
     /**
@@ -235,33 +262,32 @@ public interface TimeSource {
     @Composable public fun currentTime(): String
 }
 
-internal class DefaultTimeSource(val timeFormat: String) : TimeSource {
+internal class DefaultTimeSource(private val timeFormat: String? = null) : TimeSource {
     @Composable
-    override fun currentTime(): String = currentTime({ currentTimeMillis() }, timeFormat).value
+    override fun currentTime(): String {
+        val format = timeFormat ?: TimeTextDefaults.timeFormat()
+        return currentTime({ currentTimeMillis() }, format).value
+    }
 }
 
 @Composable
 @VisibleForTesting
 internal fun currentTime(time: () -> Long, timeFormat: String): State<String> {
-    val timeText = remember {
-        mutableStateOf(formatTime(Calendar.getInstance(), time(), timeFormat))
-    }
+    val timeText =
+        remember(timeFormat) {
+            mutableStateOf(formatTime(Calendar.getInstance(), time(), timeFormat))
+        }
 
     val context = LocalContext.current
-    remember(context) {
-            callbackFlow<Unit> {
-                val receiver =
-                    TimeBroadcastReceiver(
-                        // Either time or timezone changed, or we got the tick sent every minute.
-                        onChange = {
-                            timeText.value = formatTime(Calendar.getInstance(), time(), timeFormat)
-                        }
-                    )
-                receiver.register(context)
-                awaitClose { receiver.unregister(context) }
-            }
+    val updatedTimeLambda by rememberUpdatedState(time)
+    DisposableEffect(context, timeFormat) {
+        val receiver = TimeBroadcastReceiver {
+            // Either time or timezone changed, or we got the tick sent every minute.
+            timeText.value = formatTime(Calendar.getInstance(), updatedTimeLambda(), timeFormat)
         }
-        .collectAsState(Unit)
+        receiver.register(context)
+        onDispose { receiver.unregister(context) }
+    }
     return timeText
 }
 

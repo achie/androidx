@@ -21,9 +21,13 @@ import static androidx.heifwriter.HeifWriter.INPUT_MODE_BUFFER;
 import static androidx.heifwriter.HeifWriter.INPUT_MODE_SURFACE;
 import static androidx.test.core.app.ApplicationProvider.getApplicationContext;
 
+import static org.junit.Assert.assertTrue;
+
 import android.Manifest;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -32,7 +36,6 @@ import android.util.Log;
 
 import androidx.heifwriter.test.R;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
-import androidx.test.filters.FlakyTest;
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.SmallTest;
 import androidx.test.rule.GrantPermissionRule;
@@ -54,7 +57,6 @@ import java.io.InputStream;
  * Test {@link HeifWriter}.
  */
 @RunWith(AndroidJUnit4.class)
-@FlakyTest
 public class HeifWriterTest extends TestBase {
     private static final String TAG = HeifWriterTest.class.getSimpleName();
 
@@ -68,6 +70,8 @@ public class HeifWriterTest extends TestBase {
 
     private static final boolean DEBUG = true;
     private static final boolean DUMP_YUV_INPUT = false;
+    private static final int GRID_WIDTH = 512;
+    private static final int GRID_HEIGHT = 512;
 
     private static final String HEIFWRITER_INPUT = "heifwriter_input.heic";
     private static final int[] IMAGE_RESOURCES = new int[] {
@@ -272,6 +276,98 @@ public class HeifWriterTest extends TestBase {
             .build();
 
         heifWriter.close();
+    }
+
+    /**
+     * This test is to ensure that if the device advertises support for {@link
+     * MediaFormat#MIMETYPE_IMAGE_ANDROID_HEIC} (which encodes full-frame image
+     * with tiling), it must also support {@link MediaFormat#MIMETYPE_VIDEO_HEVC}
+     * at a specific tile size (512x512) with bitrate control mode {@link
+     * MediaCodecInfo.EncoderCapabilities#BITRATE_MODE_CQ}, so that a fallback
+     * could be implemented for image resolutions that's not supported by the
+     * {@link MediaFormat#MIMETYPE_IMAGE_ANDROID_HEIC} encoder.
+     */
+    @Test
+    @SmallTest
+    public void testHeicFallbackAvailable() throws Throwable {
+        if (!hasEncoderForMime(MediaFormat.MIMETYPE_IMAGE_ANDROID_HEIC)) {
+            return;
+        }
+
+        final MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+
+        boolean fallbackFound = false;
+        for (MediaCodecInfo info : mcl.getCodecInfos()) {
+            if (!info.isEncoder() || !info.isHardwareAccelerated()) {
+                continue;
+            }
+            MediaCodecInfo.CodecCapabilities caps = null;
+            try {
+                caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC);
+            } catch (IllegalArgumentException e) { // mime is not supported
+                continue;
+            }
+            if (caps.getVideoCapabilities().isSizeSupported(GRID_WIDTH, GRID_HEIGHT)
+                    && caps.getEncoderCapabilities().isBitrateModeSupported(
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ)) {
+                fallbackFound = true;
+                Log.d(TAG, "found fallback on " + info.getName());
+                // not breaking here so that we can log what's available by running this test
+            }
+        }
+        assertTrue("HEIC full-frame image encoder without HEVC fallback", fallbackFound);
+    }
+
+    @Test
+    @SmallTest
+    public void testAddExifData_InvalidIndex() throws Throwable {
+        if (shouldSkip()) return;
+
+        final String outputPath = new File(getApplicationContext().getExternalFilesDir(null),
+                OUTPUT_FILENAME).getAbsolutePath();
+        HeifWriter heifWriter = new HeifWriter.Builder(
+                outputPath, 1920, 1080, INPUT_MODE_SURFACE)
+                .setMaxImages(1)
+                .build();
+        heifWriter.start();
+
+        try {
+            byte[] exifData = new byte[100];
+            // index 1 is invalid for maxImages = 1
+            heifWriter.addExifData(1, exifData, 0, exifData.length);
+            throw new RuntimeException("Should have thrown IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        } finally {
+            heifWriter.close();
+        }
+    }
+
+    @Test
+    @SmallTest
+    public void testAddExifData_TooManyBlocks() throws Throwable {
+        if (shouldSkip()) return;
+
+        final String outputPath = new File(getApplicationContext().getExternalFilesDir(null),
+                OUTPUT_FILENAME).getAbsolutePath();
+        HeifWriter heifWriter = new HeifWriter.Builder(
+                outputPath, 1920, 1080, INPUT_MODE_SURFACE)
+                .setMaxImages(1)
+                .build();
+        heifWriter.start();
+
+        try {
+            byte[] exifData = new byte[100];
+            // Add first block
+            heifWriter.addExifData(0, exifData, 0, exifData.length);
+            // Add second block, should fail as maxImages is 1
+            heifWriter.addExifData(0, exifData, 0, exifData.length);
+            throw new RuntimeException("Should have thrown IllegalStateException");
+        } catch (IllegalStateException e) {
+            // expected
+        } finally {
+            heifWriter.close();
+        }
     }
 
     private void doTestForVariousNumberImages(TestConfig.Builder builder) throws Exception {

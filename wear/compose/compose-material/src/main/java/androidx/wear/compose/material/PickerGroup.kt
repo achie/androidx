@@ -30,7 +30,6 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
@@ -217,7 +216,7 @@ public class PickerGroupState constructor(initiallySelectedIndex: Int = 0) {
  * @param onSelected Action triggered when the Picker is selected by clicking
  * @param readOnlyLabel A slot for providing a label, displayed above the selected option when the
  *   [Picker] is read-only. The label is overlaid with the currently selected option within a Box,
- *   so it is recommended that the label is given [Alignment.TopCenter].
+ *   so it is recommended that the label is given [androidx.compose.ui.Alignment.TopCenter].
  * @param option A block which describes the content. The integer parameter to the composable
  *   denotes the index of the option and boolean denotes whether the picker is selected or not.
  */
@@ -271,14 +270,14 @@ private fun AutoCenteringRow(
  * A scrollable modifier which can be applied on a composable to propagate the scrollable events to
  * the specified [Picker] defined by the [PickerState].
  */
-private fun Modifier.scrollablePicker(pickerState: PickerState) = composed {
+@Composable
+private fun Modifier.scrollablePicker(pickerState: PickerState): Modifier =
     this.scrollable(
         state = pickerState,
         orientation = Orientation.Vertical,
         flingBehavior = PickerDefaults.flingBehavior(state = pickerState),
         reverseDirection = true,
     )
-}
 
 /**
  * Calculates the center for the list of [Placeable]. Returns the offset which can be applied on

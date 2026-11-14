@@ -97,7 +97,7 @@ object Camera2ExtensionsTestUtil {
         verifyOutput: Boolean = false,
     ) {
         val extensionsCharacteristics = cameraManager.getCameraExtensionCharacteristics(cameraId)
-        assumeCameraExtensionSupported(extensionMode, extensionsCharacteristics)
+        assumeCameraExtensionSupported(cameraManager, cameraId, extensionMode)
 
         // Preview surface
         val previewSize =
@@ -106,90 +106,99 @@ object Camera2ExtensionsTestUtil {
                 .maxBy { it.width * it.height }
         val deferredPreviewFrame = CompletableDeferred<SurfaceTexture>()
 
-        // Some OEM requires frames drain (updateTexImage being invoked) in SurfaceTexture,
-        // otherwise it might cause still capture to fail.
-        val surfaceTextureHolder =
-            SurfaceTextureProvider.createAutoDrainingSurfaceTextureAsync(
-                    previewSize.width,
-                    previewSize.height,
-                    {
-                        if (!deferredPreviewFrame.isCompleted) {
-                            deferredPreviewFrame.complete(it)
-                        }
-                    },
+        var surfaceTextureHolder: SurfaceTextureProvider.SurfaceTextureHolder? = null
+        var previewSurface: Surface? = null
+        var imageReader: ImageReader? = null
+        var captureSurface: Surface? = null
+        var cameraDevice: CameraDevice? = null
+        var extensionSession: CameraExtensionSession? = null
+
+        try {
+            // Some OEM requires frames drain (updateTexImage being invoked) in SurfaceTexture,
+            // otherwise it might cause still capture to fail.
+            surfaceTextureHolder =
+                SurfaceTextureProvider.createAutoDrainingSurfaceTextureAsync(
+                        previewSize.width,
+                        previewSize.height,
+                        {
+                            if (!deferredPreviewFrame.isCompleted) {
+                                deferredPreviewFrame.complete(it)
+                            }
+                        },
+                    )
+                    .await()
+            previewSurface = Surface(surfaceTextureHolder.surfaceTexture)
+
+            // Still capture surface
+            imageReader = createCaptureImageReader(extensionsCharacteristics, extensionMode)
+            captureSurface = imageReader.surface
+
+            cameraDevice = openCameraDevice(cameraManager, cameraId)
+            val outputConfigurationPreview = OutputConfiguration(previewSurface!!)
+            val outputConfigurationCapture = OutputConfiguration(captureSurface!!)
+            extensionSession =
+                openExtensionSession(
+                    cameraDevice,
+                    extensionMode,
+                    listOf(outputConfigurationPreview, outputConfigurationCapture),
                 )
-                .await()
-        val previewSurface = Surface(surfaceTextureHolder.surfaceTexture)
+            assertThat(extensionSession).isNotNull()
 
-        // Still capture surface
-        val imageReader = createCaptureImageReader(extensionsCharacteristics, extensionMode)
-        val captureSurface = imageReader.surface
+            val builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            builder.addTarget(previewSurface)
 
-        val cameraDevice = openCameraDevice(cameraManager, cameraId)
-        val outputConfigurationPreview = OutputConfiguration(previewSurface)
-        val outputConfigurationCapture = OutputConfiguration(captureSurface)
-        val extensionSession =
-            openExtensionSession(
-                cameraDevice,
-                extensionMode,
-                listOf(outputConfigurationPreview, outputConfigurationCapture),
+            extensionSession.setRepeatingRequest(
+                builder.build(),
+                CameraXExecutors.ioExecutor(),
+                object : CameraExtensionSession.ExtensionCaptureCallback() {
+                    override fun onCaptureSequenceCompleted(
+                        session: CameraExtensionSession,
+                        sequenceId: Int,
+                    ) {}
+
+                    override fun onCaptureStarted(
+                        session: CameraExtensionSession,
+                        request: CaptureRequest,
+                        timestamp: Long,
+                    ) {}
+
+                    override fun onCaptureProcessStarted(
+                        session: CameraExtensionSession,
+                        request: CaptureRequest,
+                    ) {}
+
+                    override fun onCaptureFailed(
+                        session: CameraExtensionSession,
+                        request: CaptureRequest,
+                    ) {}
+
+                    override fun onCaptureSequenceAborted(
+                        session: CameraExtensionSession,
+                        sequenceId: Int,
+                    ) {}
+
+                    override fun onCaptureResultAvailable(
+                        session: CameraExtensionSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult,
+                    ) {}
+                },
             )
-        assertThat(extensionSession).isNotNull()
 
-        val builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        builder.addTarget(previewSurface)
-
-        extensionSession.setRepeatingRequest(
-            builder.build(),
-            CameraXExecutors.ioExecutor(),
-            object : CameraExtensionSession.ExtensionCaptureCallback() {
-                override fun onCaptureSequenceCompleted(
-                    session: CameraExtensionSession,
-                    sequenceId: Int,
-                ) {}
-
-                override fun onCaptureStarted(
-                    session: CameraExtensionSession,
-                    request: CaptureRequest,
-                    timestamp: Long,
-                ) {}
-
-                override fun onCaptureProcessStarted(
-                    session: CameraExtensionSession,
-                    request: CaptureRequest,
-                ) {}
-
-                override fun onCaptureFailed(
-                    session: CameraExtensionSession,
-                    request: CaptureRequest,
-                ) {}
-
-                override fun onCaptureSequenceAborted(
-                    session: CameraExtensionSession,
-                    sequenceId: Int,
-                ) {}
-
-                override fun onCaptureResultAvailable(
-                    session: CameraExtensionSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult,
-                ) {}
-            },
-        )
-
-        if (verifyOutput) {
-            deferredPreviewFrame.await()
-            val image = takePicture(cameraDevice, extensionSession, imageReader)
-            assertThat(image).isNotNull()
-            image!!.close()
+            if (verifyOutput) {
+                deferredPreviewFrame.await()
+                takePicture(cameraDevice, extensionSession, imageReader).use { image ->
+                    assertThat(image).isNotNull()
+                }
+            }
+        } finally {
+            extensionSession?.close()
+            cameraDevice?.close()
+            imageReader?.close()
+            previewSurface?.release()
+            captureSurface?.release()
+            surfaceTextureHolder?.close()
         }
-
-        extensionSession.close()
-        cameraDevice.close()
-        imageReader.close()
-        previewSurface.release()
-        captureSurface.release()
-        surfaceTextureHolder.close()
     }
 
     /**
@@ -197,10 +206,15 @@ object Camera2ExtensionsTestUtil {
      * required for testing. Halt the test if any criteria is not satisfied.
      */
     fun assumeCameraExtensionSupported(
+        cameraManager: CameraManager,
+        cameraId: String,
         extensionMode: Int,
-        extensionsCharacteristics: CameraExtensionCharacteristics,
     ) {
-        assumeTrue(extensionsCharacteristics.supportedExtensions.contains(extensionMode))
+        val extensionsCharacteristics = cameraManager.getCameraExtensionCharacteristics(cameraId)
+        assumeTrue(
+            Camera2ExtensionsUtil.getSupportedExtensions(cameraManager, cameraId)
+                .contains(extensionMode)
+        )
         assumeTrue(
             extensionsCharacteristics
                 .getExtensionSupportedSizes(extensionMode, SurfaceTexture::class.java)
@@ -363,8 +377,11 @@ object Camera2ExtensionsTestUtil {
                     if (!backwardCompatible) {
                         return@filter false
                     }
-                    val extCharacteristics = cameraManager.getCameraExtensionCharacteristics((it))
-                    return@filter extCharacteristics.supportedExtensions.contains(extensionsMode)
+                    return@filter Camera2ExtensionsUtil.isCamera2ExtensionModeSupported(
+                        context,
+                        it,
+                        extensionsMode,
+                    )
                 }
 
             if (supportedCameraIdList.size <= 1) {
@@ -379,9 +396,9 @@ object Camera2ExtensionsTestUtil {
     fun findNextEffectMode(context: Context, cameraId: String, extensionsMode: Int): Int {
         val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         try {
-            val characteristics = cameraManager.getCameraExtensionCharacteristics((cameraId))
             val supportedExtensions =
-                ArrayList(characteristics.supportedExtensions).apply { sort() }
+                ArrayList(Camera2ExtensionsUtil.getSupportedExtensions(cameraManager, cameraId))
+                    .apply { sort() }
             val currentIndex = supportedExtensions.indexOf(extensionsMode)
             if (currentIndex >= 0 && supportedExtensions.size > 1) {
                 return supportedExtensions[(currentIndex + 1) % supportedExtensions.size]

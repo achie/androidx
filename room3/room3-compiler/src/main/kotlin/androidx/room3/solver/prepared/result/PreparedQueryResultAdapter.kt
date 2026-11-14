@@ -16,9 +16,7 @@
 
 package androidx.room3.solver.prepared.result
 
-import androidx.room3.compiler.codegen.XCodeBlock.Builder.Companion.applyTo
 import androidx.room3.compiler.codegen.XMemberName.Companion.packageMember
-import androidx.room3.compiler.codegen.XPropertySpec
 import androidx.room3.compiler.processing.XType
 import androidx.room3.compiler.processing.isInt
 import androidx.room3.compiler.processing.isKotlinUnit
@@ -57,55 +55,8 @@ class PreparedQueryResultAdapter(private val returnType: XType, private val quer
         }
     }
 
-    fun executeAndReturn(
-        stmtQueryVal: String,
-        preparedStmtProperty: XPropertySpec?,
-        dbProperty: XPropertySpec,
-        scope: CodeGenScope,
-    ) {
-        scope.builder.apply {
-            val stmtMethod =
-                if (queryType == QueryType.INSERT) {
-                    "executeInsert"
-                } else {
-                    "executeUpdateDelete"
-                }
-            if (preparedStmtProperty != null) {
-                beginControlFlow("try")
-            }
-            addStatement("%N.beginTransaction()", dbProperty)
-            beginControlFlow("try").apply {
-                if (returnType.isVoid() || returnType.isVoidObject() || returnType.isKotlinUnit()) {
-                    addStatement("%L.%L()", stmtQueryVal, stmtMethod)
-                    addStatement("%N.setTransactionSuccessful()", dbProperty)
-                    if (returnType.isVoidObject()) {
-                        addStatement("return null")
-                    }
-                } else {
-                    val resultVar = scope.getTmpVar("_result")
-                    addLocalVal(
-                        resultVar,
-                        returnType.asTypeName(),
-                        "%L.%L()",
-                        stmtQueryVal,
-                        stmtMethod,
-                    )
-                    addStatement("%N.setTransactionSuccessful()", dbProperty)
-                    addStatement("return %L", resultVar)
-                }
-            }
-            nextControlFlow("finally").apply { addStatement("%N.endTransaction()", dbProperty) }
-            endControlFlow()
-            if (preparedStmtProperty != null) {
-                nextControlFlow("finally")
-                addStatement("%N.release(%L)", preparedStmtProperty, stmtQueryVal)
-                endControlFlow()
-            }
-        }
-    }
-
     fun executeAndReturn(connectionVar: String, statementVar: String, scope: CodeGenScope) {
-        scope.builder.applyTo { language ->
+        scope.builder.apply {
             addStatement("%L.step()", statementVar)
             if (returnType.isVoid() || returnType.isVoidObject() || returnType.isKotlinUnit()) {
                 if (returnType.isVoidObject()) {

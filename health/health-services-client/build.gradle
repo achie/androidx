@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.SoftwareType
@@ -35,6 +34,7 @@ dependencies {
     api("androidx.annotation:annotation:1.8.1")
     implementation(libs.guavaListenableFuture)
     implementation(libs.guavaAndroid)
+    implementation(libs.findbugs)
     implementation("androidx.core:core-ktx:1.7.0")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
     implementation(project(":health:health-services-client-proto"))
@@ -50,8 +50,7 @@ dependencies {
 
 android {
     defaultConfig {
-        minSdk = 30
-        consumerProguardFiles("proguard-rules.pro")
+        minSdk { version = release(30) }
     }
     buildFeatures {
         aidl = true
@@ -70,6 +69,5 @@ androidx {
     mavenVersion = LibraryVersions.HEALTH_SERVICES_CLIENT
     inceptionYear = "2021"
     description = "This library helps developers create performant health applications in a platform agnostic way"
-    legacyDisableKotlinStrictApiMode = true
     enableRobolectric()
 }

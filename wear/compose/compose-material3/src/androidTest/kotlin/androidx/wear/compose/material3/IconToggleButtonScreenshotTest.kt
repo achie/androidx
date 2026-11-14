@@ -17,9 +17,12 @@
 package androidx.wear.compose.material3
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.Icons
@@ -31,14 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -49,7 +51,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class IconToggleButtonScreenshotTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -149,6 +151,134 @@ class IconToggleButtonScreenshotTest {
                 )
             },
         )
+
+    @Test
+    fun icon_toggle_button_inset_focus_ring() {
+        val checkedInteractionSource = MutableInteractionSource()
+        val uncheckedInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Row(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        IconToggleButton(
+                            checked = true,
+                            onCheckedChange = {},
+                            interactionSource = checkedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                        IconToggleButton(
+                            checked = false,
+                            onCheckedChange = {},
+                            interactionSource = uncheckedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            checkedInteractionSource.tryEmit(FocusInteraction.Focus())
+            uncheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
+
+    @Test
+    fun icon_toggle_button_animated_shapes_inset_focus_ring() {
+        val animatedCheckedInteractionSource = MutableInteractionSource()
+        val animatedUncheckedInteractionSource = MutableInteractionSource()
+        val variantCheckedInteractionSource = MutableInteractionSource()
+        val variantUncheckedInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Row(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        IconToggleButton(
+                            checked = true,
+                            onCheckedChange = {},
+                            shapes = IconToggleButtonDefaults.animatedShapes(),
+                            interactionSource = animatedCheckedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                        IconToggleButton(
+                            checked = false,
+                            onCheckedChange = {},
+                            shapes = IconToggleButtonDefaults.animatedShapes(),
+                            interactionSource = animatedUncheckedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                        IconToggleButton(
+                            checked = true,
+                            onCheckedChange = {},
+                            shapes = IconToggleButtonDefaults.variantAnimatedShapes(),
+                            interactionSource = variantCheckedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                        IconToggleButton(
+                            checked = false,
+                            onCheckedChange = {},
+                            shapes = IconToggleButtonDefaults.variantAnimatedShapes(),
+                            interactionSource = variantUncheckedInteractionSource,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = "Favourite",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            animatedCheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+            animatedCheckedInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            animatedUncheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+            animatedUncheckedInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            variantCheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+            variantCheckedInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            variantUncheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+            variantUncheckedInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
 
     @Composable
     private fun sampleIconToggleButton(

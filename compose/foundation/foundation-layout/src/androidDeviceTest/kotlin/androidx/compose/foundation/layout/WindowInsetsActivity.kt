@@ -25,8 +25,8 @@ open class WindowInsetsActivity : ComponentActivity() {
     val attachedToWindowLatch = CountDownLatch(1)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
         super.onCreate(savedInstanceState)
+        WindowCompat.enableEdgeToEdge(window)
         createdLatch.countDown()
         topActivity = this
     }

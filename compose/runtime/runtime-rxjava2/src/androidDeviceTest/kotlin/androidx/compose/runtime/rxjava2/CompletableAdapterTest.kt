@@ -16,13 +16,12 @@
 
 package androidx.compose.runtime.rxjava2
 
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth
 import io.reactivex.Completable
 import io.reactivex.CompletableEmitter
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,7 +30,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class CompletableAdapterTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun whenNotCompletedSetWeGotFalse() {
@@ -69,14 +68,13 @@ private class CompletableStream {
 
     private val emitters = mutableListOf<CompletableEmitter>()
 
-    val completable =
-        Completable.create {
-            if (completed) {
-                it.onComplete()
-            } else {
-                emitters.add(it)
-            }
+    val completable = Completable.create {
+        if (completed) {
+            it.onComplete()
+        } else {
+            emitters.add(it)
         }
+    }
 
     private var completed = false
 

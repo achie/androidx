@@ -16,32 +16,161 @@
 
 package androidx.xr.scenecore
 
-import androidx.xr.runtime.Session
+import androidx.annotation.FloatRange
+import androidx.xr.runtime.RequiresSpatialApi
+import androidx.xr.runtime.SpatialApiVersions
 import androidx.xr.scenecore.runtime.PointSourceParams as RtPointSourceParams
 
 /**
  * Configures a sound source to be spatialized at a 3D location.
  *
- * Positional sound sources are defined by PointSourceParams with an associated [Entity]. The
- * position and orientation of the Entity dictates where the PointSourceParams is rendered in 3D
- * space. For more information, see
+ * For more information, see
  * [Add positional audio to your app][https://developer.android.com/develop/xr/jetpack-xr-sdk/add-spatial-audio#add-positional].
  */
-// TODO: b/430650745 - reevaluate the usefulness of this class prior to the beta release
-public class PointSourceParams(internal val entity: Entity) {
-
+public class PointSourceParams
+internal constructor(
+    @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+    public val distanceAttenuation: DistanceAttenuation,
+    // Directivity properties
+    @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+    @get:FloatRange(from = 0.0, to = 1.0)
+    public val directivityBalance: Float,
+    @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+    @get:FloatRange(from = 1.0)
+    public val directivitySharpness: Float,
+    @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+    @get:FloatRange(from = 0.0, to = 360.0)
+    public val spread: Float,
+) {
     init {
-        (entity as BaseEntity<*>).checkNotDisposed()
+        require(
+            directivityBalance.isFinite() &&
+                directivityBalance >= 0.0f &&
+                directivityBalance <= 1.0f
+        ) {
+            "directivityBalance must be between 0.0 and 1.0"
+        }
+        require(directivitySharpness.isFinite() && directivitySharpness >= 1.0f) {
+            "directivitySharpness must be >= 1.0"
+        }
+        require(spread.isFinite() && spread in 0.0f..360.0f) {
+            "spread must be between 0.0 and 360.0"
+        }
     }
 
-    internal val rtPointSourceParams: RtPointSourceParams
-        get() {
-            (entity as BaseEntity<*>).checkNotDisposed()
-            return RtPointSourceParams(entity.rtEntity!!)
-        }
-}
+    internal constructor(
+        rtPointSourceParams: RtPointSourceParams
+    ) : this(
+        rtPointSourceParams.distanceAttenuation.toDistanceAttenuation(),
+        rtPointSourceParams.directivityBalance,
+        rtPointSourceParams.directivitySharpness,
+        rtPointSourceParams.spread,
+    )
 
-internal fun RtPointSourceParams.toPointSourceParams(session: Session): PointSourceParams? {
-    val jxrEntity = session.scene.getEntityForRtEntity(entity)
-    return jxrEntity?.let { PointSourceParams(it) }
+    public constructor() : this(RtPointSourceParams())
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PointSourceParams) return false
+        return distanceAttenuation == other.distanceAttenuation &&
+            directivityBalance == other.directivityBalance &&
+            directivitySharpness == other.directivitySharpness &&
+            spread == other.spread
+    }
+
+    override fun hashCode(): Int {
+        var result = distanceAttenuation.hashCode()
+        result = 31 * result + directivityBalance.hashCode()
+        result = 31 * result + directivitySharpness.hashCode()
+        result = 31 * result + spread.hashCode()
+        return result
+    }
+
+    override fun toString(): String {
+        return "PointSourceParams(" +
+            "distanceAttenuation=$distanceAttenuation, " +
+            "directivityBalance=$directivityBalance, " +
+            "directivitySharpness=$directivitySharpness, " +
+            "spread=$spread)"
+    }
+
+    internal val rtPointSourceParams =
+        RtPointSourceParams(
+            distanceAttenuationToRtDistanceAttenuation(distanceAttenuation),
+            directivityBalance,
+            directivitySharpness,
+            spread,
+        )
+
+    /** Builder for creating customized [PointSourceParams] instances. */
+    @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+    public class Builder() {
+        private var distanceAttenuation: DistanceAttenuation = DistanceAttenuation.Auto
+        private var directivityBalance: Float = 0.0f
+        private var directivitySharpness: Float = 1.0f
+        private var spread: Float = 0.0f
+
+        /**
+         * Creates a new [Builder] initialized with the values from an existing [PointSourceParams]
+         * object.
+         */
+        public constructor(params: PointSourceParams) : this() {
+            this.distanceAttenuation = params.distanceAttenuation
+            this.directivityBalance = params.directivityBalance
+            this.directivitySharpness = params.directivitySharpness
+            this.spread = params.spread
+        }
+
+        /**
+         * Sets all parameters related to distance-based attenuation.
+         *
+         * @param distanceAttenuation [DistanceAttenuation] distance attenuation configuration
+         */
+        public fun setDistanceAttenuation(distanceAttenuation: DistanceAttenuation): Builder =
+            apply {
+                this.distanceAttenuation = distanceAttenuation
+            }
+
+        /**
+         * Sets all parameters related to the emission directivity of the sound source.
+         *
+         * @param balance The balance between an omnidirectional (0.0f) and a fully directional
+         *   (1.0f) sound.
+         * @param sharpness Controls the sharpness of the directional sound cone. Higher values
+         *   result in a more focused sound beam. Must be >= 1.0.
+         * @throws IllegalArgumentException if balance is not between 0.0 and 1.0 or sharpness is
+         *   less than 1.0
+         */
+        @Suppress("MissingGetterMatchingBuilder")
+        public fun setDirectivity(
+            @FloatRange(from = 0.0, to = 1.0) balance: Float,
+            @FloatRange(from = 1.0) sharpness: Float,
+        ): Builder = apply {
+            require(balance in 0.0f..1.0f) { "balance must be between 0.0 and 1.0" }
+            require(sharpness >= 1.0f) { "sharpness must be greater or equal to 1.0" }
+            this.directivityBalance = balance
+            this.directivitySharpness = sharpness
+        }
+
+        /**
+         * Sets the spread of the point source, in degrees.
+         *
+         * @param spread The spread angle value in degrees between 0.0 and 360.0
+         * @throws IllegalArgumentException if spread angle is less than 0 or greater than 360
+         */
+        public fun setSpread(@FloatRange(from = 0.0, to = 360.0) spread: Float): Builder = apply {
+            require(spread in 0.0f..360.0f) { "spread must be between 0.0 and 360.0" }
+            this.spread = spread
+        }
+
+        /** Builds a new [PointSourceParams] object. */
+        public fun build(): PointSourceParams {
+            return PointSourceParams(
+                distanceAttenuation = this.distanceAttenuation,
+                directivityBalance = this.directivityBalance,
+                directivitySharpness = this.directivitySharpness,
+                spread = this.spread,
+            )
+        }
+    }
 }

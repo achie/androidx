@@ -52,10 +52,15 @@ class LocaleListTest {
         assertThat(LocaleList("en-US,ja-JP")).isNotEqualTo(LocaleList("en-US,es-ES"))
     }
 
+    @Suppress("DEPRECATION")
     @Test
     fun getCurrent_afterJavaLocaleSetDefault() {
         val javaLocales =
-            listOf(java.util.Locale("ar"), java.util.Locale("ja"), java.util.Locale("en"))
+            listOf(
+                java.util.Locale.forLanguageTag("ar"),
+                java.util.Locale.forLanguageTag("ja"),
+                java.util.Locale.forLanguageTag("en"),
+            )
         for (javaLocale in javaLocales) {
             java.util.Locale.setDefault(javaLocale)
 

@@ -16,20 +16,25 @@
 
 package androidx.compose.animation
 
+import androidx.collection.MutableObjectList
+import androidx.collection.ObjectList
+import androidx.collection.mutableObjectListOf
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.util.fastAny
 import androidx.compose.ui.util.fastFirstOrNull
-import androidx.compose.ui.util.fastForEach
 import kotlinx.coroutines.launch
 
 internal class SharedElement(val key: Any, val scope: SharedTransitionScopeImpl) {
@@ -39,28 +44,48 @@ internal class SharedElement(val key: Any, val scope: SharedTransitionScopeImpl)
     internal val state
         get() = stateMachine.state
 
+    /**
+     * Each entry comes from a call site of sharedElement/sharedBounds of the same key. In most
+     * cases there will be 1 (i.e. no match) or 2 (i.e. match found) entries. In the interrupted
+     * cases, there may be multiple scenes showing simultaneously, resulting in more than 2 shared
+     * element entries for the same key to be present. In those cases, we expect there to be only 1
+     * state that is becoming visible, which we will use to derive target bounds. If none is
+     * becoming visible, then we consider this an error case for the lack of target, and
+     * consequently animate none of them.
+     */
+    private val _allEntries: MutableObjectList<SharedElementEntry> = mutableObjectListOf()
+    // Note: This list needs to be observable, in order to properly invalidate overlay drawing.
+    private var _enabledEntries: List<SharedElementEntry> by mutableStateOf(emptyList())
+
     // Read-only entries
     val enabledEntries: List<SharedElementEntry>
         get() = _enabledEntries
 
     // Read-only entries
-    val allEntries: List<SharedElementEntry>
+    val allEntries: ObjectList<SharedElementEntry>
         get() = _allEntries
 
     fun isAnimating(): Boolean = enabledEntries.fastAny { it.boundsAnimation.isRunning }
+
+    fun isMutating(): Boolean = enabledEntries.fastAny {
+        it.activeMutableTransformState?.isMutating == true
+    }
 
     private val momentumAnimation = Animatable(Offset.Zero, Offset.VectorConverter)
 
     internal fun updateMatch() {
         @Suppress("VisibleForTests") scope.testBlockToRun?.invoke()
-        _enabledEntries.removeAll { !allEntries.contains(it) || !it.isEnabled }
-        allEntries.fastForEach {
-            if (it.isEnabled && !enabledEntries.contains(it)) {
-                _enabledEntries.add(it)
+        val newEnabledEntries = mutableListOf<SharedElementEntry>()
+        var hasVisibleContent = false
+        _allEntries.forEach {
+            if (it.isEnabled) {
+                newEnabledEntries.add(it)
+                if (it.boundsAnimation.target) hasVisibleContent = true
             }
         }
-        val hasVisibleContent = _enabledEntries.hasVisibleContent()
+        _enabledEntries = newEnabledEntries
         stateMachine.checkForAndDeferStateUpdates(hasVisibleContent)
+        _allEntries.forEach { it.updateTransitionActiveness() }
     }
 
     private var animationSpecFinalized = false
@@ -113,10 +138,26 @@ internal class SharedElement(val key: Any, val scope: SharedTransitionScopeImpl)
     fun tryInitializingCurrentBounds() = stateMachine.tryInitializingCurrentBounds()
 
     fun onSharedTransitionFinished() {
+        pendingTargetBounds = null
         if (enabledEntries.size <= 1 || !enabledEntries.hasVisibleContent()) {
             stateMachine.resetState()
         }
     }
+
+    internal var pendingTargetBounds: Rect? by mutableStateOf(null)
+        private set
+
+    /**
+     * Returns the incoming entry during the deferred phase of a
+     * [DeferredTransition][androidx.compose.animation.core.DeferredTransition], or `null` if none
+     * exists.
+     *
+     * When an incoming match exists during deferral, rendering hands off to it. If there is no
+     * incoming match (e.g., deferring to an unmatched state while a transition is in flight), the
+     * current [SharedElementEntry.target] entry keeps rendering.
+     */
+    internal val pendingTargetEntry: SharedElementEntry?
+        get() = enabledEntries.fastFirstOrNull { it.pendingTarget == true }
 
     /**
      * This is queried by developers for active match. We need to therefore return the possibility
@@ -140,7 +181,6 @@ internal class SharedElement(val key: Any, val scope: SharedTransitionScopeImpl)
         if (state.boundsAnimation.target && matchState.activeMatchFound) {
             with(placementScope) {
                 coordinates?.let {
-                    val lookaheadSize = it.size.toSize()
                     val topLeft =
                         with(state.sharedElement.scope) {
                             state.sharedElement.scope.lookaheadRoot.localLookaheadPositionOf(it)
@@ -152,37 +192,49 @@ internal class SharedElement(val key: Any, val scope: SharedTransitionScopeImpl)
                                 includeMotionFrameOfReference = false,
                             )
                         }
-
-                    stateMachine.configureActiveMatch(lookaheadSize, topLeft, structuralOffset)
+                    if (state.isDeferredExiting()) {
+                        // Initialize the match once from the outgoing entry's pre-transition bounds
+                        // on screen (the same source non-deferred transitions use for the outgoing
+                        // entry's starting bounds) rather than re-reading the outgoing entry's
+                        // lookahead size and structural offset during the transition. MFR offset
+                        // changes (e.g. scrolling of the outgoing content) are still tracked, but
+                        // only take effect while a transition is active.
+                        val mfrOffset = topLeft - structuralOffset
+                        if (!matchState.matchIsOrHasBeenConfigured) {
+                            matchState.initializeCurrentBounds(this@SharedElement)?.let { bounds ->
+                                stateMachine.configureActiveMatch(
+                                    bounds.size,
+                                    bounds.topLeft,
+                                    bounds.topLeft - mfrOffset,
+                                )
+                            }
+                        } else {
+                            matchState.targetData?.currentMfrOffset = mfrOffset
+                        }
+                    } else {
+                        val lookaheadSize = it.size.toSize()
+                        stateMachine.configureActiveMatch(lookaheadSize, topLeft, structuralOffset)
+                    }
+                }
+            }
+        } else if (state.isDeferredEntering() && matchState.activeMatchFound) {
+            with(placementScope) {
+                coordinates?.let {
+                    val lookaheadSize = it.size.toSize()
+                    val topLeft = with(scope) { lookaheadRoot.localLookaheadPositionOf(it) }
+                    pendingTargetBounds = Rect(topLeft, lookaheadSize)
                 }
             }
         }
     }
 
-    /**
-     * Each entry comes from a call site of sharedElement/sharedBounds of the same key. In most
-     * cases there will be 1 (i.e. no match) or 2 (i.e. match found) entries. In the interrupted
-     * cases, there may be multiple scenes showing simultaneously, resulting in more than 2 shared
-     * element entries for the same key to be present. In those cases, we expect there to be only 1
-     * state that is becoming visible, which we will use to derive target bounds. If none is
-     * becoming visible, then we consider this an error case for the lack of target, and
-     * consequently animate none of them.
-     */
-    private val _allEntries = mutableStateListOf<SharedElementEntry>()
-    private val _enabledEntries = mutableStateListOf<SharedElementEntry>()
-
-    internal val observingVisibilityChange: () -> Unit = {
-        allEntries.fastAny { it.target && it.isEnabled }
-    }
-
-    fun addEntry(sharedElementState: SharedElementEntry) {
-        _allEntries.add(sharedElementState)
+    fun addEntry(sharedElementEntry: SharedElementEntry) {
+        _allEntries.add(sharedElementEntry)
         updateMatch()
     }
 
-    fun removeEntry(sharedElementState: SharedElementEntry) {
-        _allEntries.remove(sharedElementState)
-        _enabledEntries.remove(sharedElementState)
+    fun removeEntry(sharedElementEntry: SharedElementEntry) {
+        _allEntries.remove(sharedElementEntry)
         updateMatch()
     }
 }

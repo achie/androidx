@@ -22,16 +22,17 @@ plugins {
 }
 
 android {
-    compileSdk = 35
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
     defaultConfig {
         applicationId = "androidx.wear.compose.integration.navigation"
-        minSdk = 25
+        minSdk { version = release(25) }
     }
 
     buildTypes {
         release {
-            minifyEnabled = false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            optimization {
+                enable = false
+            }
         }
     }
     buildFeatures {

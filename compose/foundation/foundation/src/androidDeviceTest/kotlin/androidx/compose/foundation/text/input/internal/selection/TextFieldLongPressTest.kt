@@ -51,7 +51,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
@@ -71,7 +71,6 @@ import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -81,7 +80,7 @@ import org.junit.runner.RunWith
 @RunWith(ContextMenuFlagFlipperRunner::class)
 class TextFieldLongPressTest : FocusedWindowTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
     @get:Rule val platformSelectionBehaviorsRule = PlatformSelectionBehaviorsRule()
 
     private val TAG = "BasicTextField"
@@ -457,13 +456,13 @@ class TextFieldLongPressTest : FocusedWindowTest {
                 press()
                 moveTo(positionForOffset(4))
             }
-            assertThat(state.selection).isEqualTo(TextRange(4, 5))
+            assertThat(state.selection).isEqualTo(TextRange(5, 4))
 
             performKeyInput { pressKey(Key.Backspace) }
             assertThat(state.selection).isEqualTo(TextRange(4, 4))
 
             performMouseInput { moveTo(positionForOffset(3)) }
-            assertThat(state.selection).isEqualTo(TextRange(3, 4))
+            assertThat(state.selection).isEqualTo(TextRange(4, 3))
             performMouseInput { release() }
         }
     }

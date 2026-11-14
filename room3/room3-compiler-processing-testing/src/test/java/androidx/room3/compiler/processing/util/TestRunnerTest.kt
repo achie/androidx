@@ -50,34 +50,32 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            class KotlinClass1
-            class KotlinClass2
-            """
+                class KotlinClass1
+                class KotlinClass2
+                """
                     .trimIndent(),
             )
         val javaSource =
             Source.java(
                 "foo.bar.JavaClass1",
                 """
-            package foo.bar;
-            public class JavaClass1 {}
-            """
+                package foo.bar;
+                public class JavaClass1 {}
+                """
                     .trimIndent(),
             )
 
-        val kspProcessorProvider =
-            SyntheticKspProcessor.Provider { invocation ->
-                if (invocation.processingEnv.findTypeElement("gen.GeneratedKotlin") == null) {
-                    invocation.processingEnv.filer.write(
-                        FileSpec.builder("gen", "KotlinGen")
-                            .addType(
-                                com.squareup.kotlinpoet.TypeSpec.classBuilder("GeneratedKotlin")
-                                    .build()
-                            )
-                            .build()
-                    )
-                }
+        val kspProcessorProvider = SyntheticKspProcessor.Provider { invocation ->
+            if (invocation.processingEnv.findTypeElement("gen.GeneratedKotlin") == null) {
+                invocation.processingEnv.filer.write(
+                    FileSpec.builder("gen", "KotlinGen")
+                        .addType(
+                            com.squareup.kotlinpoet.TypeSpec.classBuilder("GeneratedKotlin").build()
+                        )
+                        .build()
+                )
             }
+        }
 
         val javaProcessor = SyntheticJavacProcessor { invocation ->
             if (invocation.processingEnv.findTypeElement("gen.GeneratedJava") == null) {
@@ -168,7 +166,7 @@ class TestRunnerTest {
                 """
                 val x: ToBeGeneratedKotlin? = null
                 val y: ToBeGeneratedJava? = null
-            """
+                """
                     .trimIndent(),
             )
         val javaSource =
@@ -179,7 +177,7 @@ class TestRunnerTest {
                     public static ToBeGeneratedKotlin x;
                     public static ToBeGeneratedJava y;
                 }
-            """
+                """
                     .trimIndent(),
             )
         runProcessorTest(sources = listOf(kotlinSource, javaSource)) { invocation ->
@@ -218,10 +216,10 @@ class TestRunnerTest {
             Source.java(
                 "test.Foo",
                 """
-            package test;
-            // static here is invalid, causes a Java syntax error
-            public static class Foo {}
-            """
+                package test;
+                // static here is invalid, causes a Java syntax error
+                public static class Foo {}
+                """
                     .trimIndent(),
             )
         val errorMessage = "modifier static not allowed here"
@@ -243,9 +241,9 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            package foo;
-            bad code
-            """
+                package foo;
+                bad code
+                """
                     .trimIndent(),
             )
         val errorMessage = "Expecting a top level declaration"
@@ -262,9 +260,9 @@ class TestRunnerTest {
             Source.java(
                 "Foo",
                 """
-            public class Foo {
-            }
-            """
+                public class Foo {
+                }
+                """
                     .trimIndent(),
             )
         runProcessorTest(sources = listOf(src), javacArguments = listOf("-Werror")) { invocation ->
@@ -287,8 +285,8 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            class Foo
-            """
+                class Foo
+                """
                     .trimIndent(),
             )
         runProcessorTest(
@@ -311,20 +309,20 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            class Foo {
-                internal fun f() {}
-            }
-            """
+                class Foo {
+                    internal fun f() {}
+                }
+                """
                     .trimIndent(),
             )
         val lib =
             Source.kotlin(
                 "Bar.kt",
                 """
-            class Bar {
-                internal fun f() {}
-            }
-            """
+                |            class Bar {
+                |                internal fun f() {}
+                |            }
+                """
                     .trimMargin(),
             )
         val classpath =
@@ -361,10 +359,10 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            class Foo {
-                val errorField : DoesNotExist = TODO()
-            }
-            """
+                class Foo {
+                    val errorField : DoesNotExist = TODO()
+                }
+                """
                     .trimIndent(),
             )
 
@@ -484,7 +482,11 @@ class TestRunnerTest {
         // odd number of args
         KotlinCliRunner.getPluginOptions(
                 "org.jetbrains.kotlin.kapt3",
-                listOf("-P", "plugin:org.jetbrains.kotlin.kapt3:correctErrorTypes=true", "-verbose"),
+                listOf(
+                    "-P",
+                    "plugin:org.jetbrains.kotlin.kapt3:correctErrorTypes=true",
+                    "-verbose",
+                ),
             )
             .let { options -> assertThat(options).containsExactly("correctErrorTypes", "true") }
 
@@ -544,11 +546,11 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            annotation class Annotated
+                annotation class Annotated
 
-            @Annotated
-            class Foo
-            """
+                @Annotated
+                class Foo
+                """
                     .trimIndent(),
             )
         class TestStep : XProcessingStep {
@@ -609,11 +611,11 @@ class TestRunnerTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            annotation class Annotated
+                annotation class Annotated
 
-            @Annotated
-            class Foo
-            """
+                @Annotated
+                class Foo
+                """
                     .trimIndent(),
             )
         var processingRounds = 0

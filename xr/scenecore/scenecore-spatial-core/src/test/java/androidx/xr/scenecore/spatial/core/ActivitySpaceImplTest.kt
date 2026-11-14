@@ -20,22 +20,20 @@ import android.app.Activity
 import android.util.Size
 import androidx.xr.runtime.math.BoundingBox
 import androidx.xr.runtime.math.Matrix4
+import androidx.xr.runtime.math.Matrix4.Companion.fromPose
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.runtime.testing.math.assertPose
 import androidx.xr.runtime.testing.math.assertVector3
-import androidx.xr.scenecore.impl.perception.PerceptionLibrary
-import androidx.xr.scenecore.impl.perception.Session
 import androidx.xr.scenecore.runtime.ActivitySpace
 import androidx.xr.scenecore.runtime.Dimensions
 import androidx.xr.scenecore.runtime.HitTestResult
 import androidx.xr.scenecore.runtime.ScenePose
 import androidx.xr.scenecore.runtime.SceneRuntime
 import androidx.xr.scenecore.runtime.Space
-import androidx.xr.scenecore.runtime.extensions.XrExtensionsProvider
+import androidx.xr.scenecore.runtime.SpatialModeChangeListener
 import androidx.xr.scenecore.testing.FakeScheduledExecutorService
-import androidx.xr.scenecore.testing.FakeSpatialModeChangeListener
 import com.android.extensions.xr.ShadowXrExtensions
 import com.android.extensions.xr.XrExtensions
 import com.android.extensions.xr.environment.EnvironmentVisibilityState
@@ -43,6 +41,7 @@ import com.android.extensions.xr.environment.PassthroughVisibilityState
 import com.android.extensions.xr.environment.ShadowEnvironmentVisibilityState
 import com.android.extensions.xr.environment.ShadowPassthroughVisibilityState
 import com.android.extensions.xr.node.Box3
+import com.android.extensions.xr.node.Node
 import com.android.extensions.xr.node.NodeRepository
 import com.android.extensions.xr.node.Vec3
 import com.android.extensions.xr.space.Bounds
@@ -51,7 +50,6 @@ import com.android.extensions.xr.space.ShadowSpatialState
 import com.android.extensions.xr.space.SpatialCapabilities
 import com.android.extensions.xr.space.SpatialState
 import com.google.common.truth.Truth.assertThat
-import com.google.common.util.concurrent.Futures.immediateFuture
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.DefaultAsserter.fail
 import kotlinx.coroutines.CoroutineStart
@@ -63,9 +61,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.Mockito
-import org.mockito.Mockito.`when`
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -78,32 +76,39 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
     // TODO(b/329902726): Move this boilerplate for creating a TestSceneRuntime into a test util
     private val activityController: ActivityController<Activity> =
         Robolectric.buildActivity(Activity::class.java)
-    private val activity: Activity = activityController.create().start().get()
-    private val fakeExecutor = FakeScheduledExecutorService()
-    private val perceptionLibrary = Mockito.mock(PerceptionLibrary::class.java)
+    override val activity: Activity = activityController.create().start().get()
+    override val fakeExecutor = FakeScheduledExecutorService()
     private val nodeRepository = NodeRepository.getInstance()
-    private lateinit var xrExtensions: XrExtensions
+    override lateinit var xrExtensions: XrExtensions
     private lateinit var testRuntime: SceneRuntime
     private lateinit var activitySpace: ActivitySpaceImpl
 
-    private fun createTestSceneRuntime(unscaledGravityAlignedActivitySpace: Boolean): SceneRuntime {
-        return SpatialSceneRuntime.create(
+    private fun createTestSceneRuntime(): SceneRuntime {
+        return SpatialSceneRuntime.create(activity, fakeExecutor, xrExtensions, SceneNodeRegistry())
+    }
+
+    /**
+     * Creates a new [AndroidXrEntity] for testing.
+     *
+     * @param node The [Node] to use for the entity.
+     * @return The created [AndroidXrEntity].
+     */
+    override fun createEntity(node: Node): AndroidXrEntity {
+        return ActivitySpaceImpl(
+            node,
             activity,
-            fakeExecutor,
             xrExtensions,
-            EntityManager(),
-            perceptionLibrary,
-            unscaledGravityAlignedActivitySpace,
+            SceneNodeRegistry(),
+            { xrExtensions.getSpatialState(activity) },
+            fakeExecutor,
         )
     }
 
     @Before
     fun setUp() {
-        xrExtensions = XrExtensionsProvider.getXrExtensions()!!
-        `when`(perceptionLibrary.initSession(eq(activity), any(), eq(fakeExecutor)))
-            .thenReturn(immediateFuture(Mockito.mock(Session::class.java)))
+        xrExtensions = SpatialCoreXrExtensionsHolderProvider.extensionsLegacy
 
-        testRuntime = createTestSceneRuntime(/* unscaledGravityAlignedActivitySpace= */ false)
+        testRuntime = createTestSceneRuntime()
 
         activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
 
@@ -120,15 +125,18 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
         testRuntime.destroy()
     }
 
-    override fun getSystemSpaceEntityImpl(): SystemSpaceEntityImpl = activitySpace
+    override val systemSpaceEntityImpl: SystemSpaceEntityImpl
+        get() = activitySpace
 
-    override fun getDefaultFakeExecutor(): FakeScheduledExecutorService = fakeExecutor
+    override val defaultFakeExecutor: FakeScheduledExecutorService
+        get() = fakeExecutor
 
     override fun createChildAndroidXrEntity(): AndroidXrEntity {
-        return testRuntime.createGroupEntity(Pose(), "child", activitySpace) as AndroidXrEntity
+        return testRuntime.createEntity(Pose(), "child", activitySpace) as AndroidXrEntity
     }
 
-    override fun getActivitySpaceEntity(): ActivitySpaceImpl = activitySpace
+    override val activitySpaceEntity: ActivitySpaceImpl
+        get() = activitySpace
 
     private fun createSpatialState(bounds: Bounds): SpatialState {
         val isUnbounded =
@@ -196,16 +204,16 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
     }
 
     @Test
-    fun getPoseInActivitySpace_returnsIdentity() {
+    fun getActivitySpacePose_returnsIdentity() {
         val activitySpaceImpl = activitySpace
 
-        assertPose(activitySpaceImpl.poseInActivitySpace, Pose())
+        assertPose(activitySpaceImpl.activitySpacePose, Pose())
     }
 
     @Test
     fun getActivitySpaceScale_returnsUnitScale() {
         val activitySpaceImpl = activitySpace
-        activitySpaceImpl.setOpenXrReferenceSpaceTransform(Matrix4.fromScale(5f))
+        activitySpaceImpl.setPlatformReferenceSpaceTransform(Matrix4.fromScale(5f))
         assertVector3(activitySpaceImpl.activitySpaceScale, Vector3(1f, 1f, 1f))
     }
 
@@ -247,7 +255,7 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
 
         assertThat(hitTestResult.distance).isEqualTo(distance)
         assertVector3(hitTestResult.hitPosition!!, Vector3(1f, 2f, 3f))
-        assertVector3(hitTestResult.surfaceNormal!!, Vector3(4f, 5f, 6f))
+        assertVector3(hitTestResult.surfaceNormal!!, Vector3(4f, 5f, 6f).toNormalized())
         assertThat(hitTestResult.surfaceType)
             .isEqualTo(HitTestResult.HitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_PLANE)
     }
@@ -282,8 +290,69 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
     }
 
     @Test
+    fun hitTestRelativeToActivityPose_transformsHitPositionAndNormal() = runBlocking {
+        val distance = 2.0f
+        val hitPositionInActivity = Vec3(0.0f, 0.0f, 0.0f)
+        val surfaceNormalInActivity = Vec3(0.0f, 0.0f, 1.0f)
+        val surfaceType = com.android.extensions.xr.space.HitTestResult.SURFACE_PANEL
+        @ScenePose.HitTestFilterValue val hitTestFilter = ScenePose.HitTestFilter.SELF_SCENE
+
+        val hitTestResultBuilder =
+            com.android.extensions.xr.space.HitTestResult.Builder(
+                distance,
+                hitPositionInActivity,
+                true,
+                surfaceType,
+            )
+        val extensionsHitTestResult =
+            hitTestResultBuilder.setSurfaceNormal(surfaceNormalInActivity).build()
+        ShadowXrExtensions.extract(xrExtensions).setHitTestResult(activity, extensionsHitTestResult)
+
+        // Create a child entity at (0, 0, 2) rotated 90 degrees around Y with 2x scale
+        val childPose = Pose(Vector3(0f, 0f, 2f), Quaternion.fromEulerAngles(0f, 90f, 0f))
+        val childEntity =
+            testRuntime.createEntity(childPose, "child", activitySpace) as AndroidXrEntity
+        childEntity.setScale(Vector3(2f, 2f, 2f), Space.PARENT)
+
+        val deferredHitTestResult =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                activitySpace.hitTestRelativeToActivityPose(
+                    origin = Vector3(0f, 0f, 0f),
+                    direction = Vector3(0f, 0f, -1f),
+                    hitTestFilter = hitTestFilter,
+                    scenePose = childEntity,
+                )
+            }
+        fakeExecutor.runAll()
+        val hitTestResult = deferredHitTestResult.await()
+
+        assertThat(hitTestResult.distance).isEqualTo(distance)
+        // Hit position (0, 0, 0) in ActivitySpace relative to childEntity at (0, 0, 2) with 90 deg
+        // yaw and 2x scale should be (1, 0, 0)
+        assertVector3(hitTestResult.hitPosition!!, Vector3(1f, 0f, 0f))
+        // Surface normal (0, 0, 1) in ActivitySpace relative to childEntity rotated +90 deg around
+        // Y should be (-1, 0, 0) and remain unit length despite the 2x entity scale
+        assertVector3(hitTestResult.surfaceNormal!!, Vector3(-1f, 0f, 0f))
+        assertThat(hitTestResult.surfaceNormal!!.length).isWithin(1e-5f).of(1.0f)
+        assertThat(hitTestResult.surfaceType)
+            .isEqualTo(HitTestResult.HitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_PLANE)
+    }
+
+    private class TestSpatialModeChangeListener : SpatialModeChangeListener {
+        var lastRecommendedPose: Pose? = null
+        var lastRecommendedScale: Vector3? = null
+        var updateCount = 0
+
+        override fun onSpatialModeChanged(recommendedPose: Pose, recommendedScale: Vector3) {
+            lastRecommendedPose = recommendedPose
+            lastRecommendedScale = recommendedScale
+            updateCount++
+        }
+    }
+
+    @Test
     fun handleOriginUpdate_unscaledGravityAlignedFalse_handlerCalled() {
-        val handler = FakeSpatialModeChangeListener()
+        val handler = TestSpatialModeChangeListener()
         activitySpace.setSpatialModeChangeListener(handler)
 
         val initialRotation = Quaternion.fromEulerAngles(30f, 0f, 0f)
@@ -292,15 +361,15 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
 
         activitySpace.handleOriginUpdate(newTransform)
 
-        assertThat(handler.lastRecommendedPose).isEqualTo(Pose())
-        assertThat(handler.lastRecommendedScale).isEqualTo(Vector3.One)
+        assertPose(handler.lastRecommendedPose!!, Pose(Vector3.Zero, initialRotation))
+        assertVector3(handler.lastRecommendedScale!!, initialScale)
         assertThat(handler.updateCount).isEqualTo(1)
     }
 
     @Test
     fun handleOriginUpdate_unscaledGravityAlignedTrue_scaleAndRotationApplied_handlerCalled() {
-        val handler = FakeSpatialModeChangeListener()
-        testRuntime = createTestSceneRuntime(/* unscaledGravityAlignedActivitySpace= */ true)
+        val handler = TestSpatialModeChangeListener()
+        testRuntime = createTestSceneRuntime()
         activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
         activitySpace.setSpatialModeChangeListener(handler)
 
@@ -331,9 +400,52 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
     }
 
     @Test
+    fun handleOriginUpdate_unscaledGravityAlignedTrue_preservesYaw() {
+        val handler = TestSpatialModeChangeListener()
+        testRuntime = createTestSceneRuntime()
+        activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
+        activitySpace.setSpatialModeChangeListener(handler)
+
+        // Rotation with Pitch=45, Yaw=90, Roll=30
+        val initialRotation = Quaternion.fromEulerAngles(45f, 90f, 30f)
+        val initialScale = Vector3(1.0f, 1.0f, 1.0f)
+        val newTransform = Matrix4.fromTrs(Vector3.One, initialRotation, initialScale)
+
+        activitySpace.handleOriginUpdate(newTransform)
+
+        val activitySpaceRotation =
+            RuntimeUtils.getQuaternion(nodeRepository.getOrientation(activitySpace.getNode()))
+
+        // Expected: inverse of full rotation * yaw rotation
+        // This ensures the net global rotation has the original yaw but 0 pitch/roll (gravity
+        // aligned).
+        val yawRotation = Quaternion.fromEulerAngles(0f, 90f, 0f)
+        val expectedRotation = initialRotation.inverse * yawRotation
+
+        assertThat(activitySpaceRotation.x).isWithin(0.001f).of(expectedRotation.x)
+        assertThat(activitySpaceRotation.y).isWithin(0.001f).of(expectedRotation.y)
+        assertThat(activitySpaceRotation.z).isWithin(0.001f).of(expectedRotation.z)
+        assertThat(activitySpaceRotation.w).isWithin(0.001f).of(expectedRotation.w)
+
+        // Ensure the handler receives the rotation with identity yaw (Pitch and Roll only)
+        // Original rotation: Pitch=45, Yaw=90, Roll=30
+        // Expected rotation: Pitch=45, Yaw=0, Roll=30
+        val expectedCallbackRotation = Quaternion.fromEulerAngles(45f, 0f, 30f)
+        val expectedPose = Pose(Vector3.Zero, expectedCallbackRotation)
+
+        val actualPose = handler.lastRecommendedPose!!
+        assertThat(actualPose.rotation.x).isWithin(0.001f).of(expectedPose.rotation.x)
+        assertThat(actualPose.rotation.y).isWithin(0.001f).of(expectedPose.rotation.y)
+        assertThat(actualPose.rotation.z).isWithin(0.001f).of(expectedPose.rotation.z)
+        assertThat(actualPose.rotation.w).isWithin(0.001f).of(expectedPose.rotation.w)
+
+        assertThat(handler.updateCount).isEqualTo(1)
+    }
+
+    @Test
     fun handleOriginUpdate_noHandler_doesNotCallHandler() {
-        val handler = FakeSpatialModeChangeListener()
-        testRuntime = createTestSceneRuntime(/* unscaledGravityAlignedActivitySpace= */ true)
+        val handler = TestSpatialModeChangeListener()
+        testRuntime = createTestSceneRuntime()
         activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
         activitySpace.setSpatialModeChangeListener(null)
 
@@ -351,7 +463,12 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
         )
         val activitySpaceRotation =
             RuntimeUtils.getQuaternion(nodeRepository.getOrientation(activitySpace.getNode()))
-        val expectedRotation = newTransform.unscaled().rotation.inverse
+
+        // Even without handler, the physics correction applies.
+        // Rotation was 90 roll. Yaw=0.
+        // Expected: Inverse(90 roll) * Yaw(0) = Inverse(90 roll)
+        val expectedRotation = initialRotation.inverse
+
         assertThat(activitySpaceRotation.x).isWithin(0.001f).of(expectedRotation.x)
         assertThat(activitySpaceRotation.y).isWithin(0.001f).of(expectedRotation.y)
         assertThat(activitySpaceRotation.z).isWithin(0.001f).of(expectedRotation.z)
@@ -398,7 +515,7 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
     fun getPoseRelativeToActivitySpace_returnsIdentity() {
         val activitySpaceImpl = activitySpace
 
-        assertPose(activitySpaceImpl.getPose(Space.ACTIVITY), activitySpaceImpl.poseInActivitySpace)
+        assertPose(activitySpaceImpl.getPose(Space.ACTIVITY), activitySpaceImpl.activitySpacePose)
     }
 
     @Test
@@ -433,8 +550,315 @@ class ActivitySpaceImplTest : SystemSpaceEntityImplTest() {
 
     @Test
     fun getScaleRelativeToRealWorldSpace_returnsVector3One() {
-        val activitySpaceImpl = activitySpace
+        testRuntime = createTestSceneRuntime()
+        activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
+        val newTransform =
+            Matrix4.fromTrs(
+                Vector3.One,
+                Quaternion.fromEulerAngles(45f, 0f, 0f),
+                Vector3(2f, 2f, 2f),
+            )
+        activitySpace.handleOriginUpdate(newTransform)
+        assertVector3(activitySpace.worldSpaceScale, Vector3(1f, 1f, 1f))
+    }
 
-        assertVector3(activitySpaceImpl.getScale(Space.REAL_WORLD), Vector3(1f, 1f, 1f))
+    @Test
+    fun getPoseInPlatformReferenceSpace_returnsUnscaledPose() {
+        testRuntime = createTestSceneRuntime()
+        activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
+        val initialRotation = Quaternion.fromEulerAngles(45f, 0f, 0f)
+        val newTransform = Matrix4.fromTrs(Vector3.One, initialRotation, Vector3(2f, 2f, 2f))
+        activitySpace.setPlatformReferenceSpaceTransform(newTransform)
+        val pose = activitySpace.poseInPlatformReferenceSpace
+        assertThat(pose).isNotNull()
+        assertPose(pose!!, Pose(Vector3.One, initialRotation))
+    }
+
+    @Test
+    override fun zeroTransform_doesNotUpdatePoseOrScaleOrCallOnOriginChanged() {
+        val systemSpaceEntity = this.systemSpaceEntityImpl
+        val listener = Mockito.mock(Runnable::class.java)
+        val executor = FakeScheduledExecutorService()
+        val expectedPose = Pose(Vector3.One, Quaternion.Identity)
+        val expectedScale = Vector3(4f, 5f, 6f)
+
+        systemSpaceEntity.platformReferenceSpaceTransform.set(fromPose(expectedPose))
+        systemSpaceEntity._worldSpaceScale = expectedScale
+        systemSpaceEntity.setOnOriginChangedListener(listener, executor)
+        systemSpaceEntity.setPlatformReferenceSpaceTransform(Matrix4.Zero)
+        executor.runAll()
+
+        assertThat(systemSpaceEntity.poseInPlatformReferenceSpace).isEqualTo(expectedPose)
+        // ActivitySpace always returns Vector3.One
+        assertThat(systemSpaceEntity.worldSpaceScale).isEqualTo(Vector3.One)
+        verify(listener, never()).run()
+    }
+
+    @Test
+    override fun setPlatformReferenceSpaceTransform_updatesScale() {
+        val systemSpaceEntity = this.systemSpaceEntityImpl
+        val matrix = Matrix4.fromScale(3.3f)
+        systemSpaceEntity.setPlatformReferenceSpaceTransform(matrix)
+        assertVector3(systemSpaceEntity.activitySpaceScale, Vector3.One)
+        // ActivitySpace always returns Vector3.One
+        assertVector3(systemSpaceEntity.worldSpaceScale, Vector3.One)
+        assertVector3(systemSpaceEntity.getScale(Space.ACTIVITY), Vector3.One)
+    }
+
+    @Test
+    fun handleOriginUpdate_sameTransform_doesNotNotifyAgain() {
+        val handler = TestSpatialModeChangeListener()
+        testRuntime = createTestSceneRuntime()
+        activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
+        activitySpace.setSpatialModeChangeListener(handler)
+
+        val newTransform = Matrix4.fromTrs(Vector3.One, Quaternion.Identity, Vector3.One)
+
+        activitySpace.handleOriginUpdate(newTransform)
+        assertThat(handler.updateCount).isEqualTo(1)
+
+        activitySpace.handleOriginUpdate(newTransform)
+        assertThat(handler.updateCount).isEqualTo(1)
+    }
+
+    @Test
+    fun handleOriginUpdate_handlesIndependentlyOfPlatformReferenceSpaceTransform() {
+        val handler = TestSpatialModeChangeListener()
+        testRuntime = createTestSceneRuntime()
+        activitySpace = testRuntime.activitySpace as ActivitySpaceImpl
+        activitySpace.setSpatialModeChangeListener(handler)
+
+        val newTransform = Matrix4.fromTrs(Vector3.One, Quaternion.Identity, Vector3.One)
+        val anotherTransform =
+            Matrix4.fromTrs(Vector3.One, Quaternion.Identity, Vector3(2f, 2f, 2f))
+
+        activitySpace.handleOriginUpdate(newTransform)
+        assertThat(handler.updateCount).isEqualTo(1)
+
+        // Asynchronously the underlying platform reference space transform might be updated
+        // by the node transform listener. This should NOT affect handleOriginUpdate's debouncing.
+        activitySpace.setPlatformReferenceSpaceTransform(anotherTransform)
+
+        // Applying the same transform via handleOriginUpdate should be debounced.
+        activitySpace.handleOriginUpdate(newTransform)
+        assertThat(handler.updateCount).isEqualTo(1)
+    }
+
+    @Test
+    fun isValidSceneParentTransform_acceptsPositiveUniformScale() {
+        val valid = Matrix4.fromTrs(Vector3.Zero, Quaternion.Identity, Vector3(2f, 2f, 2f))
+        assertThat(isValidSceneParentTransform(valid)).isTrue()
+    }
+
+    @Test
+    fun isValidSceneParentTransform_rejectsInvalidTransforms() {
+        assertThat(isValidSceneParentTransform(Matrix4.Zero)).isFalse()
+
+        val negativeScale =
+            Matrix4.fromTrs(Vector3.Zero, Quaternion.Identity, Vector3(-2f, -2f, -2f))
+        assertThat(isValidSceneParentTransform(negativeScale)).isFalse()
+
+        val subEpsilonScale =
+            Matrix4.fromTrs(Vector3.Zero, Quaternion.Identity, Vector3(1e-5f, 1e-5f, 1e-5f))
+        assertThat(isValidSceneParentTransform(subEpsilonScale)).isFalse()
+
+        val nonUniformScale =
+            Matrix4.fromTrs(Vector3.Zero, Quaternion.Identity, Vector3(1f, 1.05f, 1f))
+        assertThat(isValidSceneParentTransform(nonUniformScale)).isFalse()
+
+        val nanData = FloatArray(16) { Float.NaN }
+        val nanMatrix = Matrix4(nanData)
+        assertThat(isValidSceneParentTransform(nanMatrix)).isFalse()
+
+        val partialNanData = Matrix4.Identity.data.clone()
+        partialNanData[12] = Float.NaN
+        val partialNanMatrix = Matrix4(partialNanData)
+        assertThat(isValidSceneParentTransform(partialNanMatrix)).isFalse()
+    }
+
+    @Test
+    fun originCompensation_convertsVectorsDirectionsAndNormals() {
+        val compensation = OriginCompensation(2f, Quaternion.fromEulerAngles(0f, 90f, 0f))
+
+        val position = Vector3(2f, 0f, 0f)
+        val convertedPos = compensation.toActivitySpace(position)
+        assertVector3(convertedPos, Vector3(0f, 0f, 4f))
+
+        val sceneParentPos = compensation.toSceneParentSpace(convertedPos)
+        assertVector3(sceneParentPos, position)
+
+        val direction = Vector3(2f, 0f, 0f)
+        val convertedDirection = compensation.toActivitySpaceDirection(direction)
+        assertVector3(convertedDirection, Vector3(0f, 0f, 1f))
+
+        val sceneParentDirection = compensation.toSceneParentSpaceDirection(convertedDirection)
+        assertVector3(sceneParentDirection, Vector3(1f, 0f, 0f))
+
+        val normal = Vector3(1f, 0f, 0f)
+        val convertedNormal = compensation.toActivitySpaceNormal(normal)
+        assertVector3(convertedNormal, Vector3(0f, 0f, 1f))
+    }
+
+    @Test
+    fun hitTest_withOriginCompensation_compensatesRayAndResult() = runBlocking {
+        val sceneParentScale = Vector3(2f, 2f, 2f)
+        val sceneParentRotation = Quaternion.fromEulerAngles(0f, 90f, 0f)
+        activitySpace.handleOriginUpdate(
+            Matrix4.fromTrs(Vector3.Zero, sceneParentRotation, sceneParentScale)
+        )
+
+        val rawDistance = 2.5f
+        val rawHitPosition = Vec3(2f, 0f, 0f)
+        val rawNormal = Vec3(1f, 0f, 0f)
+        val extensionsHitTestResult =
+            com.android.extensions.xr.space.HitTestResult.Builder(
+                    rawDistance,
+                    rawHitPosition,
+                    true,
+                    com.android.extensions.xr.space.HitTestResult.SURFACE_PANEL,
+                )
+                .setSurfaceNormal(rawNormal)
+                .build()
+        ShadowXrExtensions.extract(xrExtensions).setHitTestResult(activity, extensionsHitTestResult)
+
+        val deferredHitTestResult =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                activitySpace.hitTest(
+                    Vector3(2f, 4f, 6f),
+                    Vector3(0f, 0f, -1f),
+                    ScenePose.HitTestFilter.SELF_SCENE,
+                )
+            }
+        fakeExecutor.runAll()
+        val hitTestResult = deferredHitTestResult.await()
+
+        assertThat(hitTestResult.distance).isWithin(1e-5f).of(5.0f)
+        assertThat(hitTestResult.hitPosition).isNotNull()
+        assertVector3(hitTestResult.hitPosition!!, Vector3(4f, 0f, 0f))
+        assertThat(hitTestResult.surfaceNormal).isNotNull()
+        assertVector3(hitTestResult.surfaceNormal!!, Vector3(1f, 0f, 0f))
+    }
+
+    @Test
+    fun hitTest_withPitchAndScale_compensatesRayAndResult() = runBlocking {
+        // 45 degree pitch + 2x uniform scale: gravityAlignedRotation is -45 degree pitch.
+        val sceneParentScale = Vector3(2f, 2f, 2f)
+        val sceneParentRotation = Quaternion.fromEulerAngles(45f, 0f, 0f)
+        activitySpace.handleOriginUpdate(
+            Matrix4.fromTrs(Vector3.Zero, sceneParentRotation, sceneParentScale)
+        )
+
+        val rawDistance = 2.0f
+        val rawHitPosition = Vec3(0f, 2f, 0f)
+        val rawNormal = Vec3(0f, 1f, 0f)
+        val extensionsHitTestResult =
+            com.android.extensions.xr.space.HitTestResult.Builder(
+                    rawDistance,
+                    rawHitPosition,
+                    true,
+                    com.android.extensions.xr.space.HitTestResult.SURFACE_PANEL,
+                )
+                .setSurfaceNormal(rawNormal)
+                .build()
+        ShadowXrExtensions.extract(xrExtensions).setHitTestResult(activity, extensionsHitTestResult)
+
+        val deferredResult =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                activitySpace.hitTest(
+                    Vector3(1f, 0f, 0f),
+                    Vector3(0f, 0f, 1f),
+                    ScenePose.HitTestFilter.SELF_SCENE,
+                )
+            }
+        fakeExecutor.runAll()
+        val hitTestResult = deferredResult.await()
+
+        assertThat(hitTestResult.distance).isWithin(1e-5f).of(4.0f)
+        assertThat(hitTestResult.hitPosition).isNotNull()
+        val expectedY = 2f * kotlin.math.sqrt(2.0).toFloat()
+        val expectedZ = 2f * kotlin.math.sqrt(2.0).toFloat()
+        assertVector3(hitTestResult.hitPosition!!, Vector3(0f, expectedY, expectedZ))
+        assertThat(hitTestResult.surfaceNormal).isNotNull()
+        val expectedNormalY = kotlin.math.sqrt(0.5).toFloat()
+        val expectedNormalZ = kotlin.math.sqrt(0.5).toFloat()
+        assertVector3(hitTestResult.surfaceNormal!!, Vector3(0f, expectedNormalY, expectedNormalZ))
+    }
+
+    @Test
+    fun gravityAlignedYawRotation_cardinalYawAngles_returnsExactYaw() {
+        val testAngles = listOf(0f, 45f, 90f, -90f, 180f)
+        for (expectedYaw in testAngles) {
+            val input = Quaternion.fromEulerAngles(0f, expectedYaw, 0f)
+            val result = gravityAlignedYawRotation(input)
+
+            // Verifying forward facing direction matches the expected yaw rotation precisely
+            val expectedForward = input * Vector3(0f, 0f, -1f)
+            val actualForward = result * Vector3(0f, 0f, -1f)
+            assertVector3(actualForward, expectedForward)
+        }
+    }
+
+    @Test
+    fun gravityAlignedYawRotation_withPitchAndRoll_preservesFacingYaw() {
+        val expectedYaw = 45.0f
+        // Apply +30 deg pitch and -20 deg roll alongside +45 deg yaw
+        val input = Quaternion.fromEulerAngles(30f, expectedYaw, -20f)
+        val result = gravityAlignedYawRotation(input)
+
+        // The extracted gravity-aligned yaw must remain purely around Y without tilt distortion
+        val resultEuler = result.eulerAngles
+        assertThat(resultEuler.x).isWithin(1e-3f).of(0f)
+        assertThat(resultEuler.z).isWithin(1e-3f).of(0f)
+        assertThat(resultEuler.y).isWithin(0.1f).of(expectedYaw)
+    }
+
+    @Test
+    fun gravityAlignedYawRotation_atExactVerticalPoles_returnsValidRotation() {
+        val yawDeg = 60.0f
+        val northPole = Quaternion.fromEulerAngles(90f, yawDeg, 0f)
+        val southPole = Quaternion.fromEulerAngles(-90f, yawDeg, 0f)
+
+        val resultNorth = gravityAlignedYawRotation(northPole)
+        val resultSouth = gravityAlignedYawRotation(southPole)
+
+        // Verify neither extreme vertical orientation produces NaN values in the quaternion
+        assertThat(
+                resultNorth.x.isFinite() &&
+                    resultNorth.y.isFinite() &&
+                    resultNorth.z.isFinite() &&
+                    resultNorth.w.isFinite()
+            )
+            .isTrue()
+        assertThat(
+                resultSouth.x.isFinite() &&
+                    resultSouth.y.isFinite() &&
+                    resultSouth.z.isFinite() &&
+                    resultSouth.w.isFinite()
+            )
+            .isTrue()
+        // Proves Up-vector fallback accurately extracts exact facing yaw at vertical poles
+        assertThat(resultNorth.eulerAngles.y).isWithin(0.1f).of(yawDeg)
+        assertThat(resultSouth.eulerAngles.y).isWithin(0.1f).of(yawDeg)
+        // Verify that zero tilt (0 pitch and 0 roll) is cleanly preserved in the output
+        assertThat(resultNorth.eulerAngles.x).isWithin(1e-3f).of(0f)
+        assertThat(resultSouth.eulerAngles.x).isWithin(1e-3f).of(0f)
+    }
+
+    @Test
+    fun gravityAlignedYawRotation_nearPoleTransition_blendsSmoothlyWithoutDiscontinuity() {
+        val yawDeg = 45.0f
+        val rollDeg = 20.0f
+        var previousForward =
+            gravityAlignedYawRotation(Quaternion.fromEulerAngles(80f, yawDeg, rollDeg)) *
+                Vector3.Forward
+
+        for (step in 1..20) {
+            val pitch = 80f + step * 0.5f // 80.5 to 90.0 degrees
+            val currentRotation =
+                gravityAlignedYawRotation(Quaternion.fromEulerAngles(pitch, yawDeg, rollDeg))
+            val currentForward = currentRotation * Vector3.Forward
+            assertThat(currentForward.dot(previousForward)).isGreaterThan(0.99f)
+            previousForward = currentForward
+        }
     }
 }

@@ -19,7 +19,10 @@ package androidx.webkit.internal;
 import android.webkit.WebView;
 
 import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewOutcomeReceiver;
 import androidx.webkit.WebViewStartUpConfig;
+import androidx.webkit.WebViewStartUpResult;
+import androidx.webkit.WebViewStartupException;
 
 import org.chromium.support_lib_boundary.DropDataContentProviderBoundaryInterface;
 import org.chromium.support_lib_boundary.ProfileStoreBoundaryInterface;
@@ -32,6 +35,8 @@ import org.chromium.support_lib_boundary.WebViewProviderBoundaryInterface;
 import org.chromium.support_lib_boundary.WebkitToCompatConverterBoundaryInterface;
 import org.jspecify.annotations.NonNull;
 
+import java.util.concurrent.Executor;
+
 /**
  * This is a stub class used when the WebView Support Library is invoked on a device incompatible
  * with the library (either a pre-L device or a device without a compatible WebView APK). The only
@@ -41,9 +46,9 @@ public class IncompatibleApkWebViewProviderFactory implements WebViewProviderFac
     private static final String[] EMPTY_STRING_ARRAY = new String[0];
     private static final String UNSUPPORTED_EXCEPTION_EXPLANATION =
             "This should never happen, if this method was called it means we're trying to reach"
-                + " into WebView APK code on an incompatible device. This most likely means the"
-                + " current method is being called too early, or is being called on start-up rather"
-                + " than lazily";
+                    + " into WebView APK code on an incompatible device. This most likely means the"
+                    + " current method is being called too early, or is being called on start-up "
+                    + "rather than lazily";
 
     @Override
     public @NonNull WebViewBuilderBoundaryInterface getWebViewBuilder() {
@@ -95,11 +100,23 @@ public class IncompatibleApkWebViewProviderFactory implements WebViewProviderFac
         throw new UnsupportedOperationException(UNSUPPORTED_EXCEPTION_EXPLANATION);
     }
 
+    @SuppressWarnings("removal")
+    @Deprecated
     @WebViewCompat.ExperimentalAsyncStartUp
     @Override
     public void startUpWebView(
             @NonNull WebViewStartUpConfig config,
+            @NonNull Executor callbackExecutor,
             WebViewCompat.@NonNull WebViewStartUpCallback callback) {
+        throw new UnsupportedOperationException(UNSUPPORTED_EXCEPTION_EXPLANATION);
+    }
+
+    @Override
+    public void startUpWebView(
+            @NonNull WebViewStartUpConfig config,
+            @NonNull Executor callbackExecutor,
+            @NonNull WebViewOutcomeReceiver<WebViewStartUpResult,
+                    WebViewStartupException> callback) {
         throw new UnsupportedOperationException(UNSUPPORTED_EXCEPTION_EXPLANATION);
     }
 }

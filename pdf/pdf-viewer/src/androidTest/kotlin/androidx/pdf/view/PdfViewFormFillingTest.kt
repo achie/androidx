@@ -44,7 +44,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
-import kotlin.math.roundToInt
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assume.assumeFalse
@@ -101,6 +100,7 @@ class PdfViewFormFillingTest {
             "Test fails on cuttlefish b/466080956",
             Build.MODEL.contains("Cuttlefish", ignoreCase = true),
         )
+        val formWidgetRect = Rect(10, 10, 100, 100)
         val fakePdfDocument =
             FakePdfDocument(
                 pages = List(10) { Point(DEFAULT_WIDTH, DEFAULT_HEIGHT) },
@@ -109,12 +109,12 @@ class PdfViewFormFillingTest {
                     mapOf(
                         0 to
                             listOf(
-                                FormWidgetInfo(
-                                    widgetType = FormWidgetInfo.WIDGET_TYPE_RADIOBUTTON,
+                                FormWidgetInfo.createRadioButton(
                                     widgetIndex = 0,
-                                    widgetRect = Rect(10, 10, 100, 100),
+                                    widgetRect = formWidgetRect,
                                     textValue = "TextField",
                                     accessibilityLabel = "TextField",
+                                    isReadOnly = false,
                                 )
                             )
                     ),
@@ -139,13 +139,84 @@ class PdfViewFormFillingTest {
         }
 
         pdfClickPoint = requireNotNull(pdfClickPoint)
-        val formWidgetClickPoint = Point(pdfClickPoint.x.roundToInt(), pdfClickPoint.y.roundToInt())
         // Confirm that fakePdfDocument.applyEdit is called.
         assertThat(formEditInfos).hasSize(1)
         assertThat(formEditInfos[0])
             .isEqualTo(
-                FormEditInfo(pageNumber = 0, widgetIndex = 0, clickPoint = formWidgetClickPoint)
+                FormEditInfo.createClick(
+                    widgetIndex = 0,
+                    clickPoint =
+                        PdfPoint(
+                            pdfClickPoint.pageNum,
+                            formWidgetRect.centerX().toFloat(),
+                            formWidgetRect.centerY().toFloat(),
+                        ),
+                )
             )
+    }
+
+    @Test
+    fun testInteractionWithComboBox_hasCustomTextInputByDefault() = runTest {
+        val fakePdfDocument = getFakePdfDocumentInstance(getSampleComboBoxWidget(true))
+        setupPdfView(fakePdfDocument = fakePdfDocument, enableFormFilling = true)
+
+        val currentTextValue = fakePdfDocument.getFormWidgetInfos(0)[0].textValue
+        val textToAppend = " World"
+        val finalText = currentTextValue + textToAppend
+
+        with(ActivityScenario.launch(PdfViewTestActivity::class.java)) {
+            fakePdfDocument.waitForRender(untilPage = 0)
+            fakePdfDocument.waitForLayout(untilPage = 0)
+            var pdfView: PdfView? = null
+
+            Espresso.onView(withId(PDF_VIEW_ID)).check { view, noViewFoundException ->
+                view ?: throw noViewFoundException
+                pdfView = view as PdfView
+            }
+            // Tap on the form-widget
+            Espresso.onView(withId(PDF_VIEW_ID)).perform(performSingleTapOnCoords(25f, 25f))
+
+            val expectedChoices =
+                listOf("Custom") +
+                    fakePdfDocument.getFormWidgetInfos(0)[0].listItems.map { it.label }
+            // Confirm that the expected choices are displayed.
+            checkDialogBoxOptionsAndConfirmButton(expectedChoices)
+            // Select the "Custom" option to enter custom text.
+            Espresso.onView(withText(expectedChoices[0])).inRoot(isDialog()).perform(click())
+            // Confirm the selection.
+            Espresso.onView(withText(R.string.confirm_selection))
+                .inRoot(isDialog())
+                .perform(click())
+            // EditText will be added as a child view to PdfView, create a matcher for the child
+            // view.
+            val editTextMatcher: (View) -> Boolean = { view ->
+                view is EditText && view.text.toString() == currentTextValue && view.isShown
+            }
+
+            val childAddedIdlingResource = ChildViewAddedIdlingResource(pdfView!!, editTextMatcher)
+            try {
+                IdlingRegistry.getInstance().register(childAddedIdlingResource)
+                Espresso.onView(withText(currentTextValue))
+                    .check(ViewAssertions.matches(isDisplayed()))
+                Espresso.onView(withText(currentTextValue)).perform(typeText(textToAppend))
+                Espresso.onView(withText(finalText)).check(ViewAssertions.matches(isDisplayed()))
+                Espresso.onView(withText(finalText)).perform(pressImeActionButton())
+            } finally {
+                IdlingRegistry.getInstance().unregister(childAddedIdlingResource)
+            }
+            close()
+        }
+        assertThat(formEditInfos).hasSize(textToAppend.length)
+        for (i in 0..<formEditInfos.size) {
+            assertThat(formEditInfos[i])
+                .isEqualTo(
+                    FormEditInfo.createSetText(
+                        0,
+                        0,
+                        currentTextValue + textToAppend.substring(0, i + 1),
+                    )
+                )
+        }
     }
 
     @Test
@@ -181,7 +252,11 @@ class PdfViewFormFillingTest {
         assertThat(formEditInfos).hasSize(1)
         assertThat(formEditInfos[0])
             .isEqualTo(
-                FormEditInfo(pageNumber = 0, widgetIndex = 0, selectedIndices = IntArray(1) { 0 })
+                FormEditInfo.createSetIndices(
+                    pageNumber = 0,
+                    widgetIndex = 0,
+                    selectedIndices = IntArray(1) { 0 },
+                )
             )
     }
 
@@ -222,7 +297,11 @@ class PdfViewFormFillingTest {
         assertThat(formEditInfos).hasSize(1)
         assertThat(formEditInfos[0])
             .isEqualTo(
-                FormEditInfo(pageNumber = 0, widgetIndex = 0, selectedIndices = intArrayOf(0, 2))
+                FormEditInfo.createSetIndices(
+                    pageNumber = 0,
+                    widgetIndex = 0,
+                    selectedIndices = intArrayOf(0, 2),
+                )
             )
     }
 
@@ -237,14 +316,16 @@ class PdfViewFormFillingTest {
                     mapOf(
                         0 to
                             listOf(
-                                FormWidgetInfo(
-                                    widgetType = FormWidgetInfo.WIDGET_TYPE_TEXTFIELD,
+                                FormWidgetInfo.createTextField(
                                     widgetIndex = 0,
                                     widgetRect = Rect(10, 10, 200, 200),
                                     textValue = "Hello",
                                     accessibilityLabel = "Hello",
-                                    multiLineText = false,
+                                    isReadOnly = false,
+                                    isMultiLineText = false,
                                     fontSize = 10.0f,
+                                    isEditableText = true,
+                                    maxLength = 100,
                                 )
                             )
                     ),
@@ -277,8 +358,14 @@ class PdfViewFormFillingTest {
             }
             close()
         }
-        assertThat(formEditInfos).hasSize(1)
-        assertThat(formEditInfos[0]).isEqualTo(FormEditInfo(0, 0, finalText))
+        // We get callbacks when the edit text gets updated.
+        assertThat(formEditInfos).hasSize(textToAppend.length)
+        for (i in 0..<formEditInfos.size) {
+            assertThat(formEditInfos[i])
+                .isEqualTo(
+                    FormEditInfo.createSetText(0, 0, textValue + textToAppend.substring(0, i + 1))
+                )
+        }
     }
 
     @Test
@@ -291,22 +378,22 @@ class PdfViewFormFillingTest {
                     mapOf(
                         0 to
                             listOf(
-                                FormWidgetInfo(
-                                    widgetType = FormWidgetInfo.WIDGET_TYPE_RADIOBUTTON,
+                                FormWidgetInfo.createRadioButton(
                                     widgetIndex = 0,
                                     widgetRect = Rect(10, 10, 100, 100),
                                     textValue = "TextField",
                                     accessibilityLabel = "TextField",
+                                    isReadOnly = false,
                                 )
                             ),
                         1 to
                             listOf(
-                                FormWidgetInfo(
-                                    widgetType = FormWidgetInfo.WIDGET_TYPE_RADIOBUTTON,
+                                FormWidgetInfo.createRadioButton(
                                     widgetIndex = 0,
                                     widgetRect = Rect(10, 10, 100, 100),
                                     textValue = "true",
                                     accessibilityLabel = "Radio",
+                                    isReadOnly = false,
                                 )
                             ),
                     ),
@@ -322,7 +409,7 @@ class PdfViewFormFillingTest {
                 pdfView = view as PdfView
             }
             fakePdfDocument.clearFormWidgetRequests()
-            pdfView?.isFormFillingEnabled = true
+            onActivity { pdfView?.isFormFillingEnabled = true }
             fakePdfDocument.waitForFormDataFetch(1)
             close()
         }
@@ -337,18 +424,54 @@ class PdfViewFormFillingTest {
         )
     }
 
+    private fun getSampleComboBoxWidget(customInput: Boolean): List<FormWidgetInfo> {
+        val choicesAllUnselected =
+            listOf(ListItem("Apple", false), ListItem("Banana", false), ListItem("Cherry", false))
+        val widgetWithCustomInput =
+            FormWidgetInfo.createComboBox(
+                widgetIndex = 0,
+                widgetRect = Rect(10, 10, 100, 100),
+                textValue = "Android",
+                accessibilityLabel = "Fruit",
+                isReadOnly = false,
+                isEditableText = true,
+                fontSize = 10.0f,
+                listItems = choicesAllUnselected,
+            )
+
+        val singleChoiceSelected =
+            listOf(ListItem("Apple", false), ListItem("Banana", true), ListItem("Cherry", false))
+
+        val widgetWithSelection =
+            FormWidgetInfo.createComboBox(
+                widgetIndex = 0,
+                widgetRect = Rect(10, 10, 100, 100),
+                textValue = "Banana",
+                accessibilityLabel = "Fruit",
+                isReadOnly = false,
+                isEditableText = true,
+                fontSize = 10.0f,
+                listItems = singleChoiceSelected,
+            )
+        return if (customInput) {
+            listOf(widgetWithCustomInput)
+        } else {
+            listOf(widgetWithSelection)
+        }
+    }
+
     private fun getChoiceTypeFormWidgets(multiselect: Boolean): List<FormWidgetInfo> {
         val choices =
             listOf(ListItem("Apple", false), ListItem("Banana", true), ListItem("Cherry", false))
         return listOf(
-            FormWidgetInfo(
-                widgetType = FormWidgetInfo.WIDGET_TYPE_LISTBOX,
+            FormWidgetInfo.createListBox(
                 widgetIndex = 0,
                 widgetRect = Rect(10, 10, 100, 100),
                 textValue = "Banana",
                 accessibilityLabel = "ListBox",
+                isReadOnly = false,
                 listItems = choices,
-                multiSelect = multiselect,
+                isMultiSelect = multiselect,
             )
         )
     }

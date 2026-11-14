@@ -15,14 +15,12 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 
-import androidx.build.AndroidXConfig
 import androidx.build.ApkCopyHelperKt
 import androidx.build.SoftwareType
 
@@ -34,16 +32,30 @@ plugins {
 
 android {
     defaultConfig {
-        minSdk = 31
+        minSdk { version = release(31) }
+        compileSdk { version = release(36) }
+        // Jetpack XR only ships 64-bit native libraries, and nativedata_jni assumes 64-bit
+        // OpenXR handles.
+        ndk {
+            abiFilters.clear()
+            abiFilters.addAll(["arm64-v8a", "x86_64"])
+        }
     }
     buildFeatures { viewBinding = true }
     namespace = "androidx.xr.arcore.testapp"
 
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version = libs.versions.cmake.get()
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            optimization {
+                enable = true
+            }
         }
     }
 }
@@ -53,6 +65,10 @@ androidx {
     type = SoftwareType.TEST_APPLICATION
     inceptionYear = "2025"
     description = "Integration tests app that exercises the ARCore APIs."
+    deviceTests {
+        maxShardCount = 1
+    }
+    additionalDeviceTestTags.add("xr_optin")
 }
 
 dependencies {
@@ -60,11 +76,16 @@ dependencies {
     implementation(project(":xr:arcore:arcore-openxr"))
     implementation(project(":xr:assets"))
     implementation(project(":xr:compose:compose"))
+    implementation(project(":xr:projected:projected"))
     implementation(project(":xr:scenecore:scenecore"))
     implementation(project(":xr:scenecore:scenecore-spatial-core"))
     implementation(project(":xr:scenecore:scenecore-spatial-rendering"))
 
     implementation(libs.kotlinCoroutinesGuava)
+    implementation("androidx.camera:camera-camera2:1.4.0")
+    implementation("androidx.camera:camera-lifecycle:1.4.0")
+    implementation("androidx.camera:camera-core:1.4.0")
+    implementation("androidx.camera:camera-view:1.4.0")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.compose.foundation:foundation-layout:1.7.5")
@@ -72,9 +93,16 @@ dependencies {
     implementation("androidx.compose.runtime:runtime:1.7.5")
     implementation("androidx.compose.ui:ui:1.7.5")
     implementation("androidx.compose.material:material-icons-extended-android:1.7.8")
-    implementation("androidx.lifecycle:lifecycle-runtime:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime:2.10.0")
 
-    compileOnly("com.android.extensions.xr:extensions-xr:1.1.0")
+    compileOnly(libs.androidExtensionsXr)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.testExtJunit)
+    androidTestImplementation(libs.testRules)
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.truth)
+    androidTestImplementation(project(":xr:testutils"))
 }
 
 // Making this APK available via Android Build

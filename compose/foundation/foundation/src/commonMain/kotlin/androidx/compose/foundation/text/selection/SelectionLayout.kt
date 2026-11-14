@@ -19,7 +19,8 @@ package androidx.compose.foundation.text.selection
 import androidx.collection.LongIntMap
 import androidx.collection.LongObjectMap
 import androidx.collection.MutableLongIntMap
-import androidx.collection.MutableLongObjectMap
+import androidx.collection.buildLongObjectMap
+import androidx.collection.emptyLongObjectMap
 import androidx.collection.longObjectMapOf
 import androidx.collection.mutableLongIntMapOf
 import androidx.collection.mutableLongObjectMapOf
@@ -31,6 +32,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
 
 /**
@@ -50,34 +52,24 @@ import androidx.compose.ui.util.fastForEachIndexed
  * ```
  *
  * ## Mappings:
- * The `X` represents an impossible slot assignment The `|`, `/`, and `\` represent a slot mapping.
+ * The `|`, `/`, and `\` represent a slot mapping.
  *
  * ### Mapping minimum slot:
  * ```
  * slot value  0  1  2  3  4  5  6  7  8  9  10
- *              \ |   \ |   \ |   \ |   \ | X
+ *              \ |   \ |   \ |   \ |   \ | /
  * info index     0     1     2     3     4
  *
  * min-slot index = slot / 2
  * ```
  *
- * Minimum slot cannot be after the final `Text` (index `4`).
- *
  * ### Mapping maximum slot:
  * ```
  * slot value  0  1  2  3  4  5  6  7  8  9  10
- *              X | /   | /   | /   | /   | /
+ *              \ | /   | /   | /   | /   | /
  * info index     0     1     2     3     4
  * max-slot index = (slot - 1) / 2
  * ```
- *
- * Maximum slot cannot be before the first `Text` (index `0`).
- *
- * ## Assertions
- * * The non-dragging slot should always be directly on a text (odd) because the non-dragging handle
- *   must be anchored somewhere.
- *     * Because of this, we can determine that if `startSlot == endSlot` then it also follows that
- *       `startSlot` and `endSlot` are even.
  */
 internal interface SelectionLayout {
     /** The number of [SelectableInfo]s in this [SelectionLayout]. */
@@ -119,6 +111,9 @@ internal interface SelectionLayout {
     /** The previous [Selection] that we are modifying. */
     val previousSelection: Selection?
 
+    /** Returns the [SelectableInfo] of the selectable with the given id. */
+    fun infoForSelectable(selectableId: Long): SelectableInfo?
+
     /**
      * Whether this layout, compared to another layout, has any relevant changes that would require
      * recomputing selection.
@@ -149,6 +144,17 @@ private class MultiSelectionLayout(
         }
     }
 
+    private var _infoBySelectableId: LongObjectMap<SelectableInfo>? = null
+    private val infoBySelectableId: LongObjectMap<SelectableInfo>
+        get() {
+            var result = _infoBySelectableId
+            if (result == null) {
+                result = buildLongObjectMap { infoList.fastForEach { put(it.selectableId, it) } }
+                _infoBySelectableId = result
+            }
+            return result
+        }
+
     // Most of these properties are unused unless shouldRecomputeSelection returns true,
     // hence why getters are used everywhere.
 
@@ -160,12 +166,9 @@ private class MultiSelectionLayout(
             when {
                 startSlot < endSlot -> CrossStatus.NOT_CROSSED
                 startSlot > endSlot -> CrossStatus.CROSSED
-                // because one of the slots is not-dragging, it must be on a text directly
-                // because one of the slots is on a text directly and the start/end slots are equal,
-                // they both must be odd. Given this, dividing the slot by 2 should give us the
-                // correct
-                // info index.
-                else -> infoList[startSlot / 2].rawCrossStatus
+                // startSlot == endSlot from here on
+                (startSlot % 2) == 0 -> CrossStatus.COLLAPSED // Both are between texts
+                else -> infoList[startSlot / 2].rawCrossStatus // Both are on a text
             }
 
     override val startInfo: SelectableInfo
@@ -195,6 +198,10 @@ private class MultiSelectionLayout(
         }
     }
 
+    override fun infoForSelectable(selectableId: Long): SelectableInfo? {
+        return infoBySelectableId[selectableId]
+    }
+
     override fun shouldRecomputeSelection(other: SelectionLayout?): Boolean =
         previousSelection == null ||
             other == null ||
@@ -217,56 +224,34 @@ private class MultiSelectionLayout(
     }
 
     override fun createSubSelections(selection: Selection): LongObjectMap<Selection> =
-        // Selection is within one selectable, we can return a singleton map of this selection.
-        if (selection.start.selectableId == selection.end.selectableId) {
-            // this check, if not passed, leads to exceptions when selection
-            // highlighting is rendered, so check here instead.
-            checkPrecondition(
-                (selection.handlesCrossed && selection.start.offset >= selection.end.offset) ||
-                    (!selection.handlesCrossed && selection.start.offset <= selection.end.offset)
-            ) {
-                "unexpectedly miss-crossed selection: $selection"
-            }
-            longObjectMapOf(selection.start.selectableId, selection)
-        } else
-            mutableLongObjectMapOf<Selection>().apply {
-                val minAnchor = with(selection) { if (handlesCrossed) end else start }
-                createAndPutSubSelection(
-                    selection,
-                    firstInfo,
-                    minAnchor.offset,
-                    firstInfo.textLength,
-                )
-
-                forEachMiddleInfo { info ->
-                    createAndPutSubSelection(selection, info, minOffset = 0, info.textLength)
+        createSubSelections(
+            selection = selection,
+            sortedItems = infoList,
+            getId = { it.selectableId },
+            getSelectAll = { info, _ ->
+                if (selection.handlesCrossed) {
+                    info.makeSingleLayoutSelection(info.textLength, 0)
+                } else {
+                    info.makeSingleLayoutSelection(0, info.textLength)
                 }
-
-                val maxAnchor = with(selection) { if (handlesCrossed) start else end }
-                createAndPutSubSelection(selection, lastInfo, minOffset = 0, maxAnchor.offset)
-            }
-
-    private fun MutableLongObjectMap<Selection>.createAndPutSubSelection(
-        selection: Selection,
-        info: SelectableInfo,
-        minOffset: Int,
-        maxOffset: Int,
-    ) {
-        val subSelection =
-            if (selection.handlesCrossed) {
-                info.makeSingleLayoutSelection(start = maxOffset, end = minOffset)
-            } else {
-                info.makeSingleLayoutSelection(start = minOffset, end = maxOffset)
-            }
-
-        // this check, if not passed, leads to exceptions when selection
-        // highlighting is rendered, so check here instead.
-        checkPrecondition(minOffset <= maxOffset) {
-            "minOffset should be less than or equal to maxOffset: $subSelection"
-        }
-
-        put(info.selectableId, subSelection)
-    }
+            },
+            createBoundarySelection = { info, isStart, offset, _ ->
+                val isCrossed = selection.handlesCrossed
+                if (isStart) {
+                    if (isCrossed) {
+                        info.makeSingleLayoutSelection(start = offset, end = 0)
+                    } else {
+                        info.makeSingleLayoutSelection(start = offset, end = info.textLength)
+                    }
+                } else {
+                    if (isCrossed) {
+                        info.makeSingleLayoutSelection(start = info.textLength, end = offset)
+                    } else {
+                        info.makeSingleLayoutSelection(start = 0, end = offset)
+                    }
+                }
+            },
+        )
 
     override fun toString(): String =
         "MultiSelectionLayout(isStartHandle=$isStartHandle, " +
@@ -290,22 +275,22 @@ private class MultiSelectionLayout(
             }
         })"
 
-    private fun startOrEndSlotToIndex(slot: Int, isStartSlot: Boolean): Int =
-        slotToIndex(
-            slot = slot,
-            isMinimumSlot =
-                when (crossStatus) {
-                    // collapsed: doesn't matter whether true or false, it will result in the same
-                    // index
-                    CrossStatus.COLLAPSED -> true
-                    CrossStatus.NOT_CROSSED -> isStartSlot
-                    CrossStatus.CROSSED -> !isStartSlot
-                },
-        )
-
-    private fun slotToIndex(slot: Int, isMinimumSlot: Boolean): Int {
-        val slotAdjustment = if (isMinimumSlot) 0 else 1
-        return (slot - slotAdjustment) / 2
+    private fun startOrEndSlotToIndex(slot: Int, isStartSlot: Boolean): Int {
+        // Map slots to selectable indices to return the most compact range of selectables.
+        // For slots on a selectable, the rounding/adjustment doesn't change the result because
+        // they're odd.
+        // For slots between selectables return the index of the selectable after the slot for
+        // the start one and the selectable before the slot for the end one.
+        // When both slots are equal and are between selectables, return the index of the selectable
+        // before them.
+        val roundDown =
+            when (crossStatus) {
+                CrossStatus.COLLAPSED -> true // Collapsed implies startSlot==endSlot, so round down
+                CrossStatus.NOT_CROSSED -> !isStartSlot // Round down for end slot (it's larger)
+                CrossStatus.CROSSED -> isStartSlot // Round down for start slot (it's larger)
+            }
+        val adjustment = if (roundDown) 1 else 0
+        return (slot - adjustment) / 2
     }
 
     private fun getInfoListIndexBySelectableId(id: Long): Int =
@@ -339,12 +324,23 @@ private class SingleSelectionLayout(
         get() = 1
 
     override val crossStatus: CrossStatus
-        get() =
-            when {
+        get() {
+            val rawCrossStatus = info.rawCrossStatus
+            return when {
+                // When the rawCrossStatus is not collapsed, return it instead of relying on
+                // startSlot/endSlot. Dragging from inside a selectable up and then to the
+                // right and outside, we get endSlot=startSlot+1 (because the endHandle is now
+                // AFTER the selectable) but the handles *are* crossed.
+                // On the other hand, we can't just return rawCrossStatus because when it is
+                // collapsed, the slots can determine the cross status. For example, dragging from
+                // a one-letter selectable to above it will have both raw handle offsets 0, but
+                // startSlot will be 0 and endSlot will be 1
+                rawCrossStatus != CrossStatus.COLLAPSED -> rawCrossStatus
                 startSlot < endSlot -> CrossStatus.NOT_CROSSED
                 startSlot > endSlot -> CrossStatus.CROSSED
-                else -> info.rawCrossStatus
+                else -> rawCrossStatus
             }
+        }
 
     override val startInfo: SelectableInfo
         get() = info
@@ -365,6 +361,10 @@ private class SingleSelectionLayout(
         // there are no middle infos, so do nothing
     }
 
+    override fun infoForSelectable(selectableId: Long): SelectableInfo? {
+        return if (selectableId == info.selectableId) info else null
+    }
+
     override fun shouldRecomputeSelection(other: SelectionLayout?): Boolean =
         previousSelection == null ||
             other == null ||
@@ -375,18 +375,17 @@ private class SingleSelectionLayout(
             info.shouldRecomputeSelection(other.info)
 
     override fun createSubSelections(selection: Selection): LongObjectMap<Selection> {
-        val finalSelection =
-            selection.run {
-                // uncross handles if necessary
-                if (
-                    (!handlesCrossed && start.offset > end.offset) ||
-                        (handlesCrossed && start.offset <= end.offset)
-                ) {
-                    copy(handlesCrossed = !handlesCrossed)
-                } else {
-                    this
-                }
+        val finalSelection = selection.run {
+            // uncross handles if necessary
+            if (
+                (!handlesCrossed && start.offset > end.offset) ||
+                    (handlesCrossed && start.offset <= end.offset)
+            ) {
+                copy(handlesCrossed = !handlesCrossed)
+            } else {
+                this
             }
+        }
         return longObjectMapOf(info.selectableId, finalSelection)
     }
 
@@ -474,7 +473,17 @@ internal const val UNASSIGNED_SLOT = -1
  * @param containerCoordinates the coordinates of the [SelectionContainer] for converting
  *   [SelectionContainer] coordinates to their respective [Selectable] coordinates
  * @param isStartHandle whether the currently pressed/clicked handle is the start
+ * @param previousLayout The [SelectionLayout] created when [currentPosition] was
+ *   [previousHandlePosition]. When non-null, it is used to obtain
+ *   [SelectableInfo.rawPreviousHandleOffset] instead of re-computing it from
+ *   [previousHandlePosition]. Note that this is not just an optimization. When selectables are
+ *   moved (due to drag-to-scroll, for example) inside the selection container, it becomes
+ *   impossible to correctly deduce [SelectableInfo.rawPreviousHandleOffset] from
+ *   [previousHandlePosition] (because to do that, the "previous" layout coordinates are needed, but
+ *   are not available).
  * @param selectableIdOrderingComparator determines the ordering of selectables by their IDs
+ * @param allowSelectionBetweenSelectables whether selection in the "empty" area where there are no
+ *   selectables is allowed.
  */
 internal class SelectionLayoutBuilder(
     val currentPosition: Offset,
@@ -482,7 +491,9 @@ internal class SelectionLayoutBuilder(
     val containerCoordinates: LayoutCoordinates,
     val isStartHandle: Boolean,
     val previousSelection: Selection?,
+    val previousLayout: SelectionLayout?,
     val selectableIdOrderingComparator: Comparator<Long>,
+    val allowSelectionBetweenSelectables: Boolean = false,
 ) {
     private val selectableIdToInfoListIndex: MutableLongIntMap = mutableLongIntMapOf()
     private val infoList: MutableList<SelectableInfo> = mutableListOf()
@@ -490,16 +501,20 @@ internal class SelectionLayoutBuilder(
     private var endSlot: Int = UNASSIGNED_SLOT
     private var currentSlot: Int = UNASSIGNED_SLOT
 
+    /** Whether no selection infos have been added yet */
+    val isEmpty: Boolean
+        get() = infoList.isEmpty()
+
     /**
      * Finishes building the [SelectionLayout] and returns it.
      *
      * @return the [SelectionLayout] or null if no [SelectableInfo]s were added.
      */
     fun build(): SelectionLayout? {
-        val lastSlot = currentSlot + 1
+        val lastSlot = currentSlot + 1 // The "empty" slot after the last text
         return when (infoList.size) {
             0 -> {
-                return null
+                null
             }
             1 -> {
                 SingleSelectionLayout(
@@ -735,4 +750,49 @@ internal fun Selection?.isCollapsed(layout: SelectionLayout?): Boolean {
     }
 
     return allTextsEmpty
+}
+
+internal fun <T> createSubSelections(
+    selection: Selection,
+    sortedItems: List<T>,
+    getId: (T) -> Long,
+    getSelectAll: (T, handlesCrossed: Boolean) -> Selection?,
+    createBoundarySelection:
+        (item: T, isStart: Boolean, offset: Int, handlesCrossed: Boolean) -> Selection?,
+): LongObjectMap<Selection> {
+    val startId = selection.start.selectableId
+    val endId = selection.end.selectableId
+
+    if (startId == endId) {
+        return longObjectMapOf(startId, selection)
+    }
+
+    val startIndex = sortedItems.indexOfFirst { getId(it) == startId }
+    val endIndex = sortedItems.indexOfFirst { getId(it) == endId }
+
+    if (startIndex == -1 || endIndex == -1) {
+        return emptyLongObjectMap()
+    }
+
+    val firstIndex = minOf(startIndex, endIndex)
+    val lastIndex = maxOf(startIndex, endIndex)
+    val handlesCrossed = startIndex > endIndex
+
+    val result = mutableLongObjectMapOf<Selection>()
+
+    for (i in firstIndex..lastIndex) {
+        val item = sortedItems[i]
+        val id = getId(item)
+
+        val subSelection =
+            when (id) {
+                startId ->
+                    createBoundarySelection(item, true, selection.start.offset, handlesCrossed)
+                endId -> createBoundarySelection(item, false, selection.end.offset, handlesCrossed)
+                else -> getSelectAll(item, handlesCrossed)
+            }
+        subSelection?.let { result[id] = it }
+    }
+
+    return result
 }

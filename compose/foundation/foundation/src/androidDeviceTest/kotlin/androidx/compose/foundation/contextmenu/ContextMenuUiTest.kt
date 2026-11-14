@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
@@ -48,7 +47,7 @@ import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
@@ -68,7 +67,6 @@ import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import kotlin.test.fail
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -89,9 +87,7 @@ private val TestColors =
 @RunWith(AndroidJUnit4::class)
 @MediumTest
 class ContextMenuUiTest {
-    @OptIn(ExperimentalTestApi::class)
-    @get:Rule
-    val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val tag = "testTag"
     private val longText = "M ".repeat(200).trimEnd()
@@ -254,8 +250,10 @@ class ContextMenuUiTest {
             val action = accessibilityAction.action
             assertThat(action).isNotNull()
             assertThat(onClickCount).isEqualTo(0)
-            action!!.invoke()
-            assertThat(onClickCount).isEqualTo(1)
+            rule.runOnUiThread {
+                action!!.invoke()
+                assertThat(onClickCount).isEqualTo(1)
+            }
         }
     }
 
@@ -275,8 +273,10 @@ class ContextMenuUiTest {
             val action = accessibilityAction.action
             assertThat(action).isNotNull()
             assertThat(onClickCount).isEqualTo(0)
-            action!!.invoke()
-            assertThat(onClickCount).isEqualTo(0)
+            rule.runOnUiThread {
+                action!!.invoke()
+                assertThat(onClickCount).isEqualTo(0)
+            }
         }
     }
 
@@ -584,7 +584,9 @@ class ContextMenuUiTest {
             TestColumn(colors) {
                 testItem(
                     enabled = false,
-                    leadingIcon = { iconColor -> Box(Modifier.background(iconColor).fillMaxSize()) },
+                    leadingIcon = { iconColor ->
+                        Box(Modifier.background(iconColor).fillMaxSize())
+                    },
                 )
             }
         }
@@ -610,7 +612,9 @@ class ContextMenuUiTest {
                 testItem(
                     label = "M".repeat(5),
                     enabled = enabled,
-                    leadingIcon = { iconColor -> Box(Modifier.background(iconColor).fillMaxSize()) },
+                    leadingIcon = { iconColor ->
+                        Box(Modifier.background(iconColor).fillMaxSize())
+                    },
                 )
             }
         }
@@ -684,7 +688,9 @@ class ContextMenuUiTest {
                 testItem(
                     label = "M".repeat(10),
                     enabled = enabled,
-                    leadingIcon = { iconColor -> Box(Modifier.background(iconColor).fillMaxSize()) },
+                    leadingIcon = { iconColor ->
+                        Box(Modifier.background(iconColor).fillMaxSize())
+                    },
                 )
             }
         }

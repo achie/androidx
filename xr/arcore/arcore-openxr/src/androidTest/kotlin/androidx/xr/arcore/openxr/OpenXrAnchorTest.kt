@@ -22,7 +22,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import androidx.xr.arcore.runtime.Anchor
-import androidx.xr.runtime.TrackingState
+import androidx.xr.arcore.runtime.TrackingState
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Vector3
@@ -33,7 +33,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-// TODO - b/382119583: Remove the @SdkSuppress annotation once "androidx.xr.runtime.openxr.test"
+// TODO - b/382119583: Remove the @SdkSuppress annotation once "androidx.xr.arcore.openxr.test"
 // supports a
 // lower SDK version.
 @SdkSuppress(minSdkVersion = 29)
@@ -43,13 +43,13 @@ class OpenXrAnchorTest {
 
     companion object {
         init {
-            System.loadLibrary("androidx.xr.runtime.openxr.test")
+            System.loadLibrary("androidx.xr.arcore.openxr.test")
         }
     }
 
     @get:Rule val activityRule = ActivityScenarioRule(ComponentActivity::class.java)
 
-    private lateinit var openXrManager: OpenXrManager
+    private lateinit var openXrRuntime: OpenXrRuntime
     private lateinit var xrResources: XrResources
     private lateinit var underTest: OpenXrAnchor
     private lateinit var timeSource: OpenXrTimeSource
@@ -63,7 +63,7 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun update_updatesPose() = initOpenXrManagerAndRunTest {
+    fun update_updatesPose() = initOpenXrRuntimeAndRunTest {
         val xrTime = 50L * 1_000_000 // 50 milliseconds in nanoseconds.
         check(underTest.pose == Pose())
 
@@ -77,7 +77,7 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun update_updatesTrackingState() = initOpenXrManagerAndRunTest {
+    fun update_updatesTrackingState() = initOpenXrRuntimeAndRunTest {
         val xrTime = 50L * 1_000_000 // 50 milliseconds in nanoseconds.
         check(underTest.trackingState == TrackingState.PAUSED)
 
@@ -91,7 +91,7 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun persist_updatesUuidAndPersistenceState() = initOpenXrManagerAndRunTest {
+    fun persist_updatesUuidAndPersistenceState() = initOpenXrRuntimeAndRunTest {
         check(underTest.persistenceState == Anchor.PersistenceState.NOT_PERSISTED)
         check(underTest.uuid == null)
 
@@ -106,7 +106,7 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun persist_calledTwice_doesNotChangeUuidAndState() = initOpenXrManagerAndRunTest {
+    fun persist_calledTwice_doesNotChangeUuidAndState() = initOpenXrRuntimeAndRunTest {
         val xrTime = 50L * 1_000_000 // 50 milliseconds in nanoseconds.
         underTest.persist()
         underTest.update(xrTime)
@@ -119,7 +119,7 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun update_updatesPersistenceState() = initOpenXrManagerAndRunTest {
+    fun update_updatesPersistenceState() = initOpenXrRuntimeAndRunTest {
         val xrTime = 50L * 1_000_000 // 50 milliseconds in nanoseconds.
         underTest.persist()
         check(underTest.persistenceState == Anchor.PersistenceState.PENDING)
@@ -130,12 +130,26 @@ class OpenXrAnchorTest {
     }
 
     @Test
-    fun detach_removesAnchorFromXrResources() = initOpenXrManagerAndRunTest {
+    fun detach_removesAnchorFromXrResources() = initOpenXrRuntimeAndRunTest {
         check(xrResources.updatables.contains(underTest))
 
         underTest.detach()
 
         assertThat(xrResources.updatables).doesNotContain(underTest)
+    }
+
+    @Test
+    fun nativeSpaceHandle_returnsNativePointer() {
+        assertThat(underTest.nativeSpaceHandle).isEqualTo(1L)
+    }
+
+    @Test
+    fun nativeSpaceHandle_afterDetach_returnsNull() = initOpenXrRuntimeAndRunTest {
+        check(underTest.nativeSpaceHandle == 1L)
+
+        underTest.detach()
+
+        assertThat(underTest.nativeSpaceHandle).isNull()
     }
 
     @Test
@@ -151,19 +165,19 @@ class OpenXrAnchorTest {
             .isEqualTo(Anchor.PersistenceState.PERSISTED)
     }
 
-    private fun initOpenXrManagerAndRunTest(testBody: () -> Unit) {
+    private fun initOpenXrRuntimeAndRunTest(testBody: () -> Unit) {
         activityRule.scenario.onActivity {
             val perceptionManager = OpenXrPerceptionManager(timeSource)
-            openXrManager = OpenXrManager(it, perceptionManager, timeSource)
-            openXrManager.create()
-            openXrManager.resume()
+            openXrRuntime = OpenXrRuntime(it, perceptionManager, timeSource)
+            openXrRuntime.initialize()
+            openXrRuntime.resume()
 
             testBody()
 
-            // Pause and stop the OpenXR manager here in lieu of an @After method to ensure that the
-            // calls to the OpenXR manager are coming from the same thread.
-            openXrManager.pause()
-            openXrManager.stop()
+            // Pause and stop the OpenXR runtime here in lieu of an @After method to ensure that the
+            // calls to the OpenXR runtime are coming from the same thread.
+            openXrRuntime.pause()
+            openXrRuntime.destroy()
         }
     }
 }

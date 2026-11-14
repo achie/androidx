@@ -1,5 +1,10 @@
 #!/bin/bash
 
+OS=$(uname -a | awk '{print $1}')
+if [ "$OS" != "Linux" ]; then
+  echo "This script must be run on cloudtop"
+fi
+
 function echoAndDo() {
   echo "$@"
   eval "$@"
@@ -13,10 +18,20 @@ function sedInPlace() {
   rm $TEMP_FILE
 }
 
+echo "checking whether gcert was run"
+source gbash.sh || exit 1
+
+# if the user doesn't have permission to upload to GCS, we don't want to proceed with downloading
+# artifacts. This is for the updating ASwB part
+source development/check_gcloud_permissions.sh
+checkGcloudPermissions || exit 1
+
 # Versions that the user should update when running this script
 echo Getting Studio version and link
-AGP_VERSION=${1:-9.0.0-beta02}
-STUDIO_VERSION_STRING=${2:-"Android Studio Otter 3 Feature Drop | 2025.2.3 Canary 2"}
+AGP_VERSION=${1:-9.6.0-alpha01}
+STUDIO_VERSION_STRING=${2:-"Android Studio Rabbit 3 | 2026.2.3 Canary 1"}
+# Instructions for how to update the build id can be found here: go/androidx/playbook#update-aswb
+NEW_ASWB_BUILD_ID=${5:-"16689957"}
 
 # Get studio version number from version name
 STUDIO_IFRAME_LINK=`curl "https://developer.android.com/studio/archive.html" | grep "<iframe " | sed "s/.* src=\"\([^\"]*\)\".*/\1/g"`
@@ -30,6 +45,7 @@ if [ "$STUDIO_LINK" == "" ]; then
   exit 1
 fi
 STUDIO_VERSION=`echo $STUDIO_LINK | sed "s/.*ide-zips\/\(.*\)\/android-studio-.*/\1/g"`
+STUDIO_NAME=`echo $STUDIO_LINK | sed "s/.*ide-zips\/.*\/android-studio-\(.*\)-.*/\1/g"`
 
 # Update AGP
 ARTIFACTS_TO_DOWNLOAD="com.android.tools.build:gradle:$AGP_VERSION,"
@@ -54,7 +70,8 @@ ARTIFACTS_TO_DOWNLOAD+="com.android.tools:ninepatch:$LINT_VERSION,"
 echo Updating dependency versions
 sedInPlace "s/androidGradlePlugin = \".*/androidGradlePlugin = \"$AGP_VERSION\"/g" gradle/libs.versions.toml
 sedInPlace "s/androidLint = \".*/androidLint = \"$LINT_VERSION\"/g" gradle/libs.versions.toml
-sedInPlace "s/androidStudio = \".*/androidStudio = \"$STUDIO_VERSION\"/g" gradle/libs.versions.toml
+sedInPlace "s/androidStudioIj = \".*/androidStudioIj = \"$STUDIO_VERSION\"/g" gradle/libs.versions.toml
+sedInPlace "s/androidStudioName = \".*/androidStudioName = \"$STUDIO_NAME\"/g" gradle/libs.versions.toml
 
 # update settings.gradle -- don't match the line with :$agpOverride
 sedInPlace "s/com.android.settings:com.android.settings.gradle.plugin:[^$][0-9a-z\.\-]*/com.android.settings:com.android.settings.gradle.plugin:$AGP_VERSION/g" settings.gradle
@@ -69,7 +86,7 @@ while read line
              | tail -n +3 \
              | sed '$ d') # Remove the last line
 
-ATP_VERSION=${4:-0.0.9-alpha03}
+ATP_VERSION=${4:-0.0.9-alpha04}
 ARTIFACTS_TO_DOWNLOAD+="com.google.testing.platform:android-test-plugin:$ATP_VERSION,"
 ARTIFACTS_TO_DOWNLOAD+="com.google.testing.platform:launcher:$ATP_VERSION,"
 ARTIFACTS_TO_DOWNLOAD+="com.google.testing.platform:android-driver-instrumentation:$ATP_VERSION,"
@@ -77,3 +94,6 @@ ARTIFACTS_TO_DOWNLOAD+="com.google.testing.platform:core:$ATP_VERSION"
 
 # Download all the artifacts
 echoAndDo ./development/importMaven/importMaven.sh "$ARTIFACTS_TO_DOWNLOAD"
+
+# update aswb
+./development/update_aswb.sh $NEW_ASWB_BUILD_ID

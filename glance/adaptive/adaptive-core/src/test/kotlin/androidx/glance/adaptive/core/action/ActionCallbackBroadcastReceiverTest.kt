@@ -1,0 +1,419 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.glance.adaptive.core.action
+
+import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Bundle
+import android.os.Looper
+import android.util.Log
+import androidx.test.core.app.ApplicationProvider
+import com.google.common.truth.Truth.assertThat
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowBroadcastPendingResult
+import org.robolectric.shadows.ShadowLog
+
+private const val THROWING_CALLBACK_MESSAGE = "Simulated callback failure"
+
+@Config(sdk = [Config.TARGET_SDK])
+@RunWith(RobolectricTestRunner::class)
+class ActionCallbackBroadcastReceiverTest {
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Before
+    fun setUp() {
+        RecordingCallback.reset()
+        NonCallbackClass.instantiated = false
+        HangingCallback.started = false
+        HangingCallback.cancelled = false
+        AlmostTimeoutCallback.completed = false
+    }
+
+    @Test
+    fun receiver_isDeclaredWithoutBeingExported() {
+        val receiverInfo =
+            context.packageManager.getReceiverInfo(
+                ComponentName(context, ActionCallbackBroadcastReceiver::class.java),
+                /* flags= */ 0,
+            )
+
+        // Otherwise other apps could trigger this app's callbacks through it.
+        assertThat(receiverInfo.exported).isFalse()
+    }
+
+    @Test
+    fun onReceive_dispatchesCallbackWithWidgetNameWidgetIdAndParameters() = runTest {
+        val params =
+            Bundle().apply {
+                putString("task_id", "task_42")
+                putInt("priority", 1)
+            }
+
+        receive(
+            callbackIntent(
+                GlanceAdaptiveAction.CallbackAction(RecordingCallback::class.java, params),
+                widgetName = "obsidian_tasks",
+                widgetId = "vault_work",
+            )
+        )
+
+        val invocation = RecordingCallback.invocation.await()
+        assertThat(invocation.widgetName).isEqualTo("obsidian_tasks")
+        assertThat(invocation.widgetId).isEqualTo("vault_work")
+        assertThat(invocation.parameters.getString("task_id")).isEqualTo("task_42")
+        assertThat(invocation.parameters.getInt("priority")).isEqualTo(1)
+    }
+
+    @Test
+    fun onReceive_withBlankWidgetId_passesNullWidgetId() = runTest {
+        receive(
+            callbackIntent(
+                GlanceAdaptiveAction.CallbackAction(RecordingCallback::class.java),
+                widgetName = "medication_widget",
+                widgetId = "   ",
+            )
+        )
+
+        val invocation = RecordingCallback.invocation.await()
+        assertThat(invocation.widgetName).isEqualTo("medication_widget")
+        assertThat(invocation.widgetId).isNull()
+        assertThat(invocation.parameters.isEmpty).isTrue()
+    }
+
+    @Test
+    fun onReceive_ignoresUnexpectedActionOrMissingExtras() = runTest {
+        val valid =
+            callbackIntent(
+                GlanceAdaptiveAction.CallbackAction(RecordingCallback::class.java),
+                widgetName = "widget",
+                widgetId = null,
+            )
+
+        receive(Intent(valid).setAction("com.example.WRONG_ACTION"))
+        receive(
+            Intent(valid).apply {
+                removeExtra(ActionCallbackBroadcastReceiver.EXTRA_CALLBACK_CLASS)
+            }
+        )
+        receive(
+            Intent(valid).apply { removeExtra(ActionCallbackBroadcastReceiver.EXTRA_WIDGET_NAME) }
+        )
+
+        assertThat(RecordingCallback.invocation.isCompleted).isFalse()
+    }
+
+    @Test
+    fun onReceive_doesNotInstantiateClassNotImplementingCallback() = runTest {
+        receive(
+            Intent(ActionCallbackBroadcastReceiver.ACTION_TRIGGER_CALLBACK)
+                .putExtra(
+                    ActionCallbackBroadcastReceiver.EXTRA_CALLBACK_CLASS,
+                    NonCallbackClass::class.java.name,
+                )
+                .putExtra(ActionCallbackBroadcastReceiver.EXTRA_WIDGET_NAME, "widget")
+        )
+
+        assertThat(NonCallbackClass.instantiated).isFalse()
+    }
+
+    @Test
+    fun onReceive_whenCallbackThrows_finishesBroadcastThenLeavesExceptionUncaught() {
+        val scheduler = TestCoroutineScheduler()
+        val receiver = RecordingUncaughtReceiver(scheduler)
+
+        sendBroadcast(
+            receiver.receiver,
+            GlanceAdaptiveAction.CallbackAction(ThrowingCallback::class.java),
+        )
+        scheduler.advanceUntilIdle()
+
+        val uncaught = receiver.uncaughtExceptions.single()
+        // The exception crosses the scope of the timeout, so the coroutines debug mode of tests may
+        // rethrow a copy with a recovered stack trace, whose cause is the original.
+        assertThat(uncaught.cause ?: uncaught).hasMessageThat().isEqualTo(THROWING_CALLBACK_MESSAGE)
+        assertThat(receiver.broadcastFinishedWhenUncaught).isTrue()
+        assertThat(receiverErrorLogs()).isEmpty()
+    }
+
+    @Test
+    fun onReceive_whenCallbackCannotBeInstantiated_leavesExceptionUncaught() {
+        val scheduler = TestCoroutineScheduler()
+        val receiver = RecordingUncaughtReceiver(scheduler)
+
+        sendBroadcast(
+            receiver.receiver,
+            GlanceAdaptiveAction.CallbackAction(NoZeroArgumentConstructorCallback::class.java),
+        )
+        scheduler.advanceUntilIdle()
+
+        val uncaught = receiver.uncaughtExceptions.single()
+        assertThat(uncaught.cause ?: uncaught).isInstanceOf(NoSuchMethodException::class.java)
+        assertThat(receiver.broadcastFinishedWhenUncaught).isTrue()
+    }
+
+    @Test
+    fun onReceive_whenCallbackClassDoesNotExist_logsErrorWithoutCrashing() = runTest {
+        receive(
+            callbackIntent(
+                    GlanceAdaptiveAction.CallbackAction(RecordingCallback::class.java),
+                    widgetName = "widget",
+                    widgetId = null,
+                )
+                .putExtra(
+                    ActionCallbackBroadcastReceiver.EXTRA_CALLBACK_CLASS,
+                    "com.example.RemovedCallback",
+                )
+        )
+
+        val errors = receiverErrorLogs()
+        assertThat(errors).hasSize(1)
+        assertThat(errors[0].msg).contains("com.example.RemovedCallback")
+    }
+
+    @Test
+    fun onReceive_whenCallbackExceedsTimeout_cancelsItLogsErrorAndFinishesBroadcast() {
+        val scheduler = TestCoroutineScheduler()
+        val receiver = ActionCallbackBroadcastReceiver(StandardTestDispatcher(scheduler))
+
+        sendBroadcast(receiver, GlanceAdaptiveAction.CallbackAction(HangingCallback::class.java))
+        scheduler.advanceTimeBy(OnActionTimeout - 1.milliseconds)
+
+        assertThat(HangingCallback.started).isTrue()
+        assertThat(HangingCallback.cancelled).isFalse()
+        assertThat(receiver.isBroadcastFinished()).isFalse()
+
+        scheduler.advanceTimeBy(1.milliseconds)
+        scheduler.runCurrent()
+
+        assertThat(HangingCallback.cancelled).isTrue()
+        assertThat(receiver.isBroadcastFinished()).isTrue()
+        val errors = receiverErrorLogs()
+        assertThat(errors).hasSize(1)
+        assertThat(errors[0].msg).contains("did not complete within $OnActionTimeout")
+    }
+
+    @Test
+    fun onReceive_whenCallbackOwnTimeoutExpires_doesNotReportLibraryTimeout() {
+        val scheduler = TestCoroutineScheduler()
+        val receiver = ActionCallbackBroadcastReceiver(StandardTestDispatcher(scheduler))
+
+        sendBroadcast(receiver, GlanceAdaptiveAction.CallbackAction(OwnTimeoutCallback::class.java))
+        scheduler.advanceUntilIdle()
+
+        assertThat(receiver.isBroadcastFinished()).isTrue()
+        assertThat(receiverErrorLogs()).isEmpty()
+    }
+
+    @Test
+    fun onReceive_whenCallbackFinishesJustUnderTimeout_completesItWithoutLogging() {
+        val scheduler = TestCoroutineScheduler()
+        val receiver = ActionCallbackBroadcastReceiver(StandardTestDispatcher(scheduler))
+
+        sendBroadcast(
+            receiver,
+            GlanceAdaptiveAction.CallbackAction(AlmostTimeoutCallback::class.java),
+        )
+        scheduler.advanceUntilIdle()
+
+        assertThat(AlmostTimeoutCallback.completed).isTrue()
+        assertThat(receiver.isBroadcastFinished()).isTrue()
+        assertThat(receiverErrorLogs()).isEmpty()
+    }
+
+    private fun callbackIntent(
+        action: GlanceAdaptiveAction.CallbackAction,
+        widgetName: String,
+        widgetId: String?,
+    ): Intent = ActionCallbackBroadcastReceiver.createIntent(context, action, widgetName, widgetId)
+
+    private fun TestScope.receive(intent: Intent) {
+        ActionCallbackBroadcastReceiver(StandardTestDispatcher(testScheduler))
+            .onReceive(context, intent)
+        testScheduler.advanceUntilIdle()
+    }
+
+    /** Delivers a broadcast for [action] to [receiver] like the platform, with a pending result. */
+    // Registered only to receive a broadcast sent by this test, so no export flag is needed.
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun sendBroadcast(
+        receiver: ActionCallbackBroadcastReceiver,
+        action: GlanceAdaptiveAction.CallbackAction,
+    ) {
+        context.registerReceiver(
+            receiver,
+            IntentFilter(ActionCallbackBroadcastReceiver.ACTION_TRIGGER_CALLBACK),
+        )
+        // Without a component or data URI, so that it matches the filter registered above.
+        val intent =
+            callbackIntent(action, widgetName = "widget", widgetId = null)
+                .setComponent(null)
+                .setData(null)
+        context.sendBroadcast(intent)
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    private fun ActionCallbackBroadcastReceiver.isBroadcastFinished(): Boolean =
+        Shadow.extract<ShadowBroadcastPendingResult>(shadowOf(this).originalPendingResult)
+            .future
+            .isDone
+
+    private fun receiverErrorLogs(): List<ShadowLog.LogItem> =
+        ShadowLog.getLogsForTag("GlanceActionReceiver").filter { it.type == Log.ERROR }
+
+    /**
+     * An [ActionCallbackBroadcastReceiver] on [scheduler] that records what reaches the exception
+     * handler of its coroutine context, and whether the broadcast was finished by then.
+     */
+    private inner class RecordingUncaughtReceiver(scheduler: TestCoroutineScheduler) {
+        val uncaughtExceptions = mutableListOf<Throwable>()
+        var broadcastFinishedWhenUncaught = false
+
+        val receiver: ActionCallbackBroadcastReceiver =
+            ActionCallbackBroadcastReceiver(
+                StandardTestDispatcher(scheduler) +
+                    CoroutineExceptionHandler { _, exception ->
+                        broadcastFinishedWhenUncaught = receiver.isBroadcastFinished()
+                        uncaughtExceptions += exception
+                    }
+            )
+    }
+
+    data class Invocation(val widgetName: String, val widgetId: String?, val parameters: Bundle)
+
+    class RecordingCallback : GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {
+            invocation.complete(Invocation(widgetName, widgetId, parameters))
+        }
+
+        companion object {
+            var invocation = CompletableDeferred<Invocation>()
+
+            fun reset() {
+                invocation = CompletableDeferred()
+            }
+        }
+    }
+
+    class ThrowingCallback : GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {
+            throw IllegalStateException(THROWING_CALLBACK_MESSAGE)
+        }
+    }
+
+    /** Breaks the contract of a public zero-argument constructor. */
+    class NoZeroArgumentConstructorCallback(@Suppress("unused") val value: Int) :
+        GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {}
+    }
+
+    /** Suspends until cancelled. */
+    class HangingCallback : GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {
+            started = true
+            try {
+                awaitCancellation()
+            } finally {
+                cancelled = true
+            }
+        }
+
+        companion object {
+            var started = false
+            var cancelled = false
+        }
+    }
+
+    /** Lets its own, shorter, withTimeout expire. */
+    class OwnTimeoutCallback : GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {
+            withTimeout(1.seconds) { awaitCancellation() }
+        }
+    }
+
+    /** Returns just before [OnActionTimeout]. */
+    class AlmostTimeoutCallback : GlanceAdaptiveActionCallback {
+        override suspend fun onAction(
+            context: Context,
+            widgetName: String,
+            widgetId: String?,
+            parameters: Bundle,
+        ) {
+            delay(OnActionTimeout - 1.milliseconds)
+            completed = true
+        }
+
+        companion object {
+            var completed = false
+        }
+    }
+
+    class NonCallbackClass {
+        init {
+            instantiated = true
+        }
+
+        companion object {
+            var instantiated = false
+        }
+    }
+}

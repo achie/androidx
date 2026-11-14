@@ -277,20 +277,20 @@ public class DrawBitmapScaled extends PaintOperation
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int imageId = buffer.readInt();
+        int imageId = buffer.readId();
 
-        float sLeft = buffer.readFloat();
-        float srcTop = buffer.readFloat();
-        float srcRight = buffer.readFloat();
-        float srcBottom = buffer.readFloat();
+        float sLeft = buffer.readNanId();
+        float srcTop = buffer.readNanId();
+        float srcRight = buffer.readNanId();
+        float srcBottom = buffer.readNanId();
 
-        float dstLeft = buffer.readFloat();
-        float dstTop = buffer.readFloat();
-        float dstRight = buffer.readFloat();
-        float dstBottom = buffer.readFloat();
+        float dstLeft = buffer.readNanId();
+        float dstTop = buffer.readNanId();
+        float dstRight = buffer.readNanId();
+        float dstBottom = buffer.readNanId();
         int scaleType = buffer.readInt();
-        float scaleFactor = buffer.readFloat();
-        int cdId = buffer.readInt();
+        float scaleFactor = buffer.readNanId();
+        int cdId = buffer.readId();
         DrawBitmapScaled op =
                 new DrawBitmapScaled(
                         imageId,
@@ -315,19 +315,29 @@ public class DrawBitmapScaled extends PaintOperation
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Draw Operations", OP_CODE, CLASS_NAME)
-                .description("Draw a bitmap using integer coordinates")
-                .field(DocumentedOperation.INT, "id", "id of bitmap")
-                .field(DocumentedOperation.FLOAT, "srcLeft", "The left side of the image")
-                .field(DocumentedOperation.FLOAT, "srcTop", "The top of the image")
-                .field(DocumentedOperation.FLOAT, "srcRight", "The right side of the image")
-                .field(DocumentedOperation.FLOAT, "srcBottom", "The bottom of the output")
-                .field(DocumentedOperation.FLOAT, "dstLeft", "The left side of the output")
-                .field(DocumentedOperation.FLOAT, "dstTop", "The top of the output")
-                .field(DocumentedOperation.FLOAT, "dstRight", "The right side of the output")
-                .field(DocumentedOperation.INT, "type", "type of auto scaling")
-                .field(DocumentedOperation.INT, "scaleFactor", "for allowed")
-                .field(DocumentedOperation.INT, "cdId", "id of string");
+        doc.operation("Canvas Operations", OP_CODE, CLASS_NAME)
+                .additionalDocumentation("draw_bitmap_scaled")
+                .description("Draw a bitmap with scaling and alignment options")
+                .field(DocumentedOperation.INT, "imageId", "The ID of the bitmap")
+                .field(DocumentedOperation.FLOAT, "srcLeft", "The left side of the source image")
+                .field(DocumentedOperation.FLOAT, "srcTop", "The top of the source image")
+                .field(DocumentedOperation.FLOAT, "srcRight", "The right side of the source image")
+                .field(DocumentedOperation.FLOAT, "srcBottom", "The bottom of the source image")
+                .field(DocumentedOperation.FLOAT, "dstLeft", "The left side of the destination")
+                .field(DocumentedOperation.FLOAT, "dstTop", "The top of the destination")
+                .field(DocumentedOperation.FLOAT, "dstRight", "The right side of the destination")
+                .field(DocumentedOperation.FLOAT, "dstBottom", "The bottom of the destination")
+                .field(DocumentedOperation.INT, "scaleType", "Type of scaling to apply")
+                .possibleValues("SCALE_NONE", SCALE_NONE)
+                .possibleValues("SCALE_INSIDE", SCALE_INSIDE)
+                .possibleValues("SCALE_FILL_WIDTH", SCALE_FILL_WIDTH)
+                .possibleValues("SCALE_FILL_HEIGHT", SCALE_FILL_HEIGHT)
+                .possibleValues("SCALE_FIT", SCALE_FIT)
+                .possibleValues("SCALE_CROP", SCALE_CROP)
+                .possibleValues("SCALE_FILL_BOUNDS", SCALE_FILL_BOUNDS)
+                .possibleValues("SCALE_FIXED_SCALE", SCALE_FIXED_SCALE)
+                .field(DocumentedOperation.FLOAT, "scaleFactor", "Factor for fixed scale")
+                .field(DocumentedOperation.INT, "cdId", "The ID of the content description string");
     }
 
     //    private String typeToString(int type) {
@@ -413,5 +423,110 @@ public class DrawBitmapScaled extends PaintOperation
             default:
                 return "INVALID_SCALE_TYPE";
         }
+    }
+
+    /** Returns {@code mImageId}. */
+    public int getImageId() {
+        return mImageId;
+    }
+
+    /** Returns {@code mSrcLeft}. */
+    public float getSrcLeft() {
+        return mSrcLeft;
+    }
+
+    /** Returns {@code mOutSrcLeft}. */
+    public float getOutSrcLeft() {
+        return mOutSrcLeft;
+    }
+
+    /** Returns {@code mSrcTop}. */
+    public float getSrcTop() {
+        return mSrcTop;
+    }
+
+    /** Returns {@code mOutSrcTop}. */
+    public float getOutSrcTop() {
+        return mOutSrcTop;
+    }
+
+    /** Returns {@code mSrcRight}. */
+    public float getSrcRight() {
+        return mSrcRight;
+    }
+
+    /** Returns {@code mOutSrcRight}. */
+    public float getOutSrcRight() {
+        return mOutSrcRight;
+    }
+
+    /** Returns {@code mSrcBottom}. */
+    public float getSrcBottom() {
+        return mSrcBottom;
+    }
+
+    /** Returns {@code mOutSrcBottom}. */
+    public float getOutSrcBottom() {
+        return mOutSrcBottom;
+    }
+
+    /** Returns {@code mDstLeft}. */
+    public float getDstLeft() {
+        return mDstLeft;
+    }
+
+    /** Returns {@code mOutDstLeft}. */
+    public float getOutDstLeft() {
+        return mOutDstLeft;
+    }
+
+    /** Returns {@code mDstTop}. */
+    public float getDstTop() {
+        return mDstTop;
+    }
+
+    /** Returns {@code mOutDstTop}. */
+    public float getOutDstTop() {
+        return mOutDstTop;
+    }
+
+    /** Returns {@code mDstRight}. */
+    public float getDstRight() {
+        return mDstRight;
+    }
+
+    /** Returns {@code mOutDstRight}. */
+    public float getOutDstRight() {
+        return mOutDstRight;
+    }
+
+    /** Returns {@code mDstBottom}. */
+    public float getDstBottom() {
+        return mDstBottom;
+    }
+
+    /** Returns {@code mOutDstBottom}. */
+    public float getOutDstBottom() {
+        return mOutDstBottom;
+    }
+
+    /** Returns {@code mContentDescId}. */
+    public int getContentDescId() {
+        return mContentDescId;
+    }
+
+    /** Returns {@code mScaleFactor}. */
+    public float getScaleFactor() {
+        return mScaleFactor;
+    }
+
+    /** Returns {@code mOutScaleFactor}. */
+    public float getOutScaleFactor() {
+        return mOutScaleFactor;
+    }
+
+    /** Returns {@code mScaleType}. */
+    public int getScaleType() {
+        return mScaleType;
     }
 }

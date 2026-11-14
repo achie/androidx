@@ -43,32 +43,44 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.isDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.unit.IntSize
 import androidx.kruth.assertThat
+import androidx.kruth.assertWithMessage
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation3.BlueBox
+import androidx.navigation3.GreenBox
+import androidx.navigation3.RedBox
+import androidx.navigation3.first
+import androidx.navigation3.fourth
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavEntryDecorator
+import androidx.navigation3.runtime.metadata
+import androidx.navigation3.scene.DialogSceneStrategy
+import androidx.navigation3.scene.SceneStrategy
+import androidx.navigation3.second
+import androidx.navigation3.third
 import androidx.navigation3.ui.CardStackSceneStrategy.Companion.CARD_KEY
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.runner.RunWith
 
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class AnimatedTest {
-    @get:Rule val composeTestRule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val composeTestRule = createComposeRule()
 
     @Test
     fun testNavigateAnimations() {
@@ -134,7 +146,7 @@ class AnimatedTest {
             backStack = remember { mutableStateListOf(first, second, third) }
             backPressedDispatcher =
                 LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
-            NavDisplay(backStack = backStack, sceneStrategy = CardStackSceneStrategy()) {
+            NavDisplay(backStack = backStack, sceneStrategies = listOf(CardStackSceneStrategy())) {
                 when (it) {
                     first -> NavEntry(first, metadata = mapOf(CARD_KEY to first)) { RedBox(first) }
                     second ->
@@ -236,7 +248,7 @@ class AnimatedTest {
 
         // advance a third between animations
         composeTestRule.mainClock.advanceTimeBy(
-            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 3
+            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 20
         )
 
         composeTestRule.waitForIdle()
@@ -309,9 +321,9 @@ class AnimatedTest {
         // interrupt pop third by pop second as well
         composeTestRule.runOnIdle { backStack.removeLastOrNull() }
 
-        // advance a third between animations
+        // advance a small amount to catch the fast spring interruption midway
         composeTestRule.mainClock.advanceTimeBy(
-            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 3
+            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 20
         )
 
         composeTestRule.waitForIdle()
@@ -386,7 +398,7 @@ class AnimatedTest {
 
         // advance a third between animations
         composeTestRule.mainClock.advanceTimeBy(
-            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 3
+            DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong() / 20
         )
 
         composeTestRule.waitForIdle()
@@ -488,9 +500,11 @@ class AnimatedTest {
                         NavEntry(
                             second,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(customDuration)) togetherWith
-                                        fadeOut(tween(customDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(customDuration)) togetherWith
+                                            fadeOut(tween(customDuration))
+                                    }
                                 },
                         ) {
                             Text(second)
@@ -538,9 +552,11 @@ class AnimatedTest {
                         NavEntry(
                             second,
                             metadata =
-                                NavDisplay.popTransitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.PopTransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(second)
@@ -630,9 +646,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             metadata =
-                                NavDisplay.popTransitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.PopTransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(third)
@@ -678,9 +696,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(third)
@@ -725,9 +745,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(third)
@@ -769,9 +791,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(third)
@@ -813,9 +837,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             third,
-                            NavDisplay.transitionSpec {
-                                fadeIn(tween(testDuration)) togetherWith
-                                    fadeOut(tween(testDuration))
+                            metadata {
+                                put(NavDisplay.TransitionKey) {
+                                    fadeIn(tween(testDuration)) togetherWith
+                                        fadeOut(tween(testDuration))
+                                }
                             },
                         ) {
                             Text(third)
@@ -863,9 +889,11 @@ class AnimatedTest {
                         NavEntry(
                             fourth,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(fourth)
@@ -910,9 +938,11 @@ class AnimatedTest {
                         NavEntry(
                             third,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(third)
@@ -959,9 +989,11 @@ class AnimatedTest {
                         NavEntry(
                             fourth,
                             fourth,
-                            NavDisplay.transitionSpec {
-                                fadeIn(tween(testDuration)) togetherWith
-                                    fadeOut(tween(testDuration))
+                            metadata {
+                                put(NavDisplay.TransitionKey) {
+                                    fadeIn(tween(testDuration)) togetherWith
+                                        fadeOut(tween(testDuration))
+                                }
                             },
                         ) {
                             Text(fourth)
@@ -1006,9 +1038,11 @@ class AnimatedTest {
                         NavEntry(
                             second,
                             second,
-                            NavDisplay.transitionSpec {
-                                fadeIn(tween(testDuration)) togetherWith
-                                    fadeOut(tween(testDuration))
+                            metadata {
+                                put(NavDisplay.TransitionKey) {
+                                    fadeIn(tween(testDuration)) togetherWith
+                                        fadeOut(tween(testDuration))
+                                }
                             },
                         ) {
                             Text(second)
@@ -1121,9 +1155,11 @@ class AnimatedTest {
                         NavEntry(
                             second,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    fadeIn(tween(testDuration)) togetherWith
-                                        fadeOut(tween(testDuration))
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        fadeIn(tween(testDuration)) togetherWith
+                                            fadeOut(tween(testDuration))
+                                    }
                                 },
                         ) {
                             Text(second)
@@ -1289,9 +1325,13 @@ class AnimatedTest {
                         NavEntry(
                             key = second,
                             metadata =
-                                NavDisplay.transitionSpec {
-                                    slideInHorizontally(tween(testDuration)) { it / 2 } togetherWith
-                                        slideOutHorizontally(tween(testDuration)) { -it / 2 }
+                                metadata {
+                                    put(NavDisplay.TransitionKey) {
+                                        slideInHorizontally(tween(testDuration)) {
+                                            it / 2
+                                        } togetherWith
+                                            slideOutHorizontally(tween(testDuration)) { -it / 2 }
+                                    }
                                 },
                         ) {
                             BlueBox(second)
@@ -1312,9 +1352,135 @@ class AnimatedTest {
         composeTestRule.onNodeWithText(first).assertIsDisplayed()
         composeTestRule.onNodeWithText(second).assertIsDisplayed()
     }
-}
 
-private const val first = "first"
-private const val second = "second"
-private const val third = "third"
-private const val fourth = "fourth"
+    @Test
+    fun testLocalAnimatedContentScopeDoesNotThrowInOverlays() {
+        lateinit var backStack: MutableList<Any>
+        composeTestRule.setContent {
+            backStack = remember { mutableStateListOf(first, second) }
+            NavDisplay(backStack = backStack, sceneStrategies = listOf(DialogSceneStrategy())) {
+                when (it) {
+                    first -> NavEntry(first) { Text("first") }
+                    second ->
+                        NavEntry(second, metadata = DialogSceneStrategy.dialog()) {
+                            LocalNavAnimatedContentScope.current
+                            Text("second")
+                        }
+                    else -> error("Invalid key passed")
+                }
+            }
+        }
+
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("first").assertIsDisplayed()
+        composeTestRule.onNodeWithText("second").assertIsDisplayed()
+    }
+
+    @Test
+    fun testInterruptedConsecutivePop() {
+        var forwardTransitionCount = 0
+        var popTransitionCount = 0
+        lateinit var backStack: MutableList<Any>
+        val testDuration = DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong()
+
+        composeTestRule.setContent {
+            backStack = remember { mutableStateListOf(first, second, third) }
+            NavDisplay(
+                backStack = backStack,
+                transitionSpec = {
+                    forwardTransitionCount++
+                    defaultTransitionSpec<Any>()(this)
+                },
+                popTransitionSpec = {
+                    popTransitionCount++
+                    defaultPopTransitionSpec<Any>()(this)
+                },
+            ) { entry ->
+                NavEntry(entry.toString()) { Text(entry.toString()) }
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        forwardTransitionCount = 0
+        popTransitionCount = 0
+
+        composeTestRule.mainClock.autoAdvance = false
+
+        // Perform first pop
+        composeTestRule.runOnIdle { backStack.removeLastOrNull() }
+
+        // Advance halfway through transition
+        composeTestRule.mainClock.advanceTimeBy(testDuration / 2)
+
+        // Perform second pop during interruption
+        composeTestRule.runOnIdle { backStack.removeLastOrNull() }
+
+        composeTestRule.mainClock.autoAdvance = true
+        composeTestRule.waitForIdle()
+
+        assertWithMessage(
+                "Interrupted consecutive pop should NOT be classified as forward transition"
+            )
+            .that(forwardTransitionCount)
+            .isEqualTo(0)
+        assertWithMessage("Interrupted consecutive pop SHOULD be classified as pop transition")
+            .that(popTransitionCount)
+            .isAtLeast(2)
+    }
+
+    @Test
+    fun testSharedEntryInSceneInterruptedPopByPush() {
+        lateinit var backStack: MutableList<Any>
+        val testDuration = DEFAULT_TRANSITION_DURATION_MILLISECOND.toLong()
+        var firstSize = IntSize.Zero
+
+        val twoPaneStrategy = SceneStrategy { entries ->
+            if (entries.size < 2) null
+            else
+                TestTwoPaneScene(
+                    key = Pair(entries[0].contentKey, entries[1].contentKey),
+                    entries = entries.takeLast(2),
+                    previousEntries = entries.dropLast(1),
+                )
+        }
+
+        composeTestRule.setContent {
+            backStack = remember { mutableStateListOf(first, second) }
+            SharedTransitionLayout {
+                NavDisplay(
+                    backStack = backStack,
+                    sharedTransitionScope = this,
+                    sceneStrategies = listOf(twoPaneStrategy),
+                ) { key ->
+                    when (key) {
+                        first ->
+                            NavEntry(first) {
+                                Box(Modifier.fillMaxSize().onSizeChanged { firstSize = it }) {
+                                    Text(first)
+                                }
+                            }
+                        else -> NavEntry(key) { Box(Modifier.fillMaxSize()) { Text("$key") } }
+                    }
+                }
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        val initialTwoPaneSize = firstSize
+        composeTestRule.mainClock.autoAdvance = false
+
+        // Pop to single-pane [first], then interrupt halfway by pushing a detail entry [second].
+        composeTestRule.runOnIdle { backStack.removeLastOrNull() }
+        composeTestRule.mainClock.advanceTimeBy(testDuration / 2)
+        composeTestRule.runOnIdle { backStack.add(second) }
+
+        composeTestRule.mainClock.advanceTimeBy(testDuration / 2)
+        composeTestRule.waitForIdle()
+        assertThat(firstSize.width).isAtLeast(initialTwoPaneSize.width)
+        assertThat(firstSize.height).isEqualTo(initialTwoPaneSize.height)
+
+        composeTestRule.mainClock.advanceTimeBy(testDuration)
+        composeTestRule.waitForIdle()
+    }
+}

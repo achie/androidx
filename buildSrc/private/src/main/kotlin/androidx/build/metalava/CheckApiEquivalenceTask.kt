@@ -44,14 +44,21 @@ abstract class CheckApiEquivalenceTask : DefaultTask() {
     @PathSensitive(PathSensitivity.RELATIVE)
     fun getTaskInputs(): List<File> {
         val checkedInApiLocations = checkedInApis.get()
-        val checkedInApiFiles =
-            checkedInApiLocations.flatMap { checkedInApiLocation ->
-                listOf(checkedInApiLocation.publicApiFile, checkedInApiLocation.restrictedApiFile)
-            }
+        val checkedInApiFiles = checkedInApiLocations.flatMap { checkedInApiLocation ->
+            listOf(
+                checkedInApiLocation.publicApiFile,
+                checkedInApiLocation.restrictedApiFile,
+                checkedInApiLocation.multiplatformApiDirectory,
+            )
+        }
 
         val builtApiLocation = builtApi.get()
         val builtApiFiles =
-            listOf(builtApiLocation.publicApiFile, builtApiLocation.restrictedApiFile)
+            listOf(
+                builtApiLocation.publicApiFile,
+                builtApiLocation.restrictedApiFile,
+                builtApiLocation.multiplatformApiDirectory,
+            )
 
         return checkedInApiFiles + builtApiFiles
     }
@@ -62,6 +69,27 @@ abstract class CheckApiEquivalenceTask : DefaultTask() {
         for (checkedInApi in checkedInApis.get()) {
             checkEqual(checkedInApi.publicApiFile, builtApiLocation.publicApiFile)
             checkEqual(checkedInApi.restrictedApiFile, builtApiLocation.restrictedApiFile)
+
+            // Compare each source set API file from the multiplatform directories.
+            val multiplatformSourceSets =
+                (checkedInApi.multiplatformApiDirectory.fileNamesInDir() +
+                        builtApiLocation.multiplatformApiDirectory.fileNamesInDir())
+                    .toSet()
+            for (sourceSet in multiplatformSourceSets) {
+                checkEqual(
+                    File(checkedInApi.multiplatformApiDirectory, sourceSet),
+                    File(builtApiLocation.multiplatformApiDirectory, sourceSet),
+                )
+            }
+        }
+    }
+
+    /** If the [File] exists and is a directory, returns the names of files in the directory. */
+    private fun File.fileNamesInDir(): Array<String> {
+        return if (exists() && isDirectory) {
+            list()
+        } else {
+            emptyArray()
         }
     }
 }

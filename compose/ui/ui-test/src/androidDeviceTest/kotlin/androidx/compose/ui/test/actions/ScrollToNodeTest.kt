@@ -30,14 +30,12 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.testutils.expectError
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.scrollBy
@@ -53,7 +51,7 @@ import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.util.ClickableTestBox
@@ -64,7 +62,6 @@ import androidx.compose.ui.unit.dp
 import com.google.common.truth.Truth.assertWithMessage
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -165,7 +162,7 @@ class ScrollToNodeTest(private val config: TestConfig) {
             }
     }
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun scrollToTarget() {
@@ -275,29 +272,25 @@ class ScrollToNodeTest(private val config: TestConfig) {
     private fun DpRect.toPx(): Rect = with(rule.density) { toRect() }
 
     private fun rowModifier(): Modifier =
-        Modifier.composed {
-            with(LocalDensity.current) {
-                Modifier.testTag(containerTag)
-                    .then(
-                        if (config.hasNestedScrollConsumer)
-                            Modifier.nestedScroll(horizontalNestedScrollConsumer)
-                        else Modifier
-                    )
-                    .requiredSize(config.viewportSizePx.toDp(), itemSizePx.toDp())
-            }
+        with(rule.density) {
+            Modifier.testTag(containerTag)
+                .then(
+                    if (config.hasNestedScrollConsumer)
+                        Modifier.nestedScroll(horizontalNestedScrollConsumer)
+                    else Modifier
+                )
+                .requiredSize(config.viewportSizePx.toDp(), itemSizePx.toDp())
         }
 
     private fun columnModifier(): Modifier =
-        Modifier.composed {
-            with(LocalDensity.current) {
-                Modifier.testTag(containerTag)
-                    .then(
-                        if (config.hasNestedScrollConsumer)
-                            Modifier.nestedScroll(verticalNestedScrollConsumer)
-                        else Modifier
-                    )
-                    .requiredSize(itemSizePx.toDp(), config.viewportSizePx.toDp())
-            }
+        with(rule.density) {
+            Modifier.testTag(containerTag)
+                .then(
+                    if (config.hasNestedScrollConsumer)
+                        Modifier.nestedScroll(verticalNestedScrollConsumer)
+                    else Modifier
+                )
+                .requiredSize(itemSizePx.toDp(), config.viewportSizePx.toDp())
         }
 
     private fun LazyListScope.Boxes() {

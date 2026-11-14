@@ -16,7 +16,7 @@
 
 package androidx.compose.ui.node
 
-import androidx.compose.runtime.collection.MutableVector
+import androidx.collection.MutableObjectList
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.internal.checkPrecondition
@@ -142,10 +142,11 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
 
     override val alignmentLines: AlignmentLines = LayoutNodeAlignmentLines(this)
 
-    private val _childDelegates = MutableVector<MeasurePassDelegate>()
+    private val _childDelegates = MutableObjectList<MeasurePassDelegate>()
 
     internal var childDelegatesDirty: Boolean = true
     internal val childDelegates: List<MeasurePassDelegate>
+        @Suppress("AsCollectionCall") // Passed to MeasurePolicy as List<Measurable>.
         get() {
             // Update the children list first so we know whether the cached list is
             // reusable.
@@ -177,13 +178,28 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
         clearPlaceOrder()
         forEachChildAlignmentLinesOwner { it.alignmentLines.usedDuringParentLayout = false }
 
+        var childrenPlacingForAlignment: MutableObjectList<LayoutNode>? = null
         if (innerCoordinator.isPlacingForAlignment) {
-            layoutNode.children.fastForEach { it.outerCoordinator.isPlacingForAlignment = true }
+            layoutNode.children.fastForEach {
+                val isPlacingForAlignment = it.outerCoordinator.isPlacingForAlignment
+                if (isPlacingForAlignment) {
+                    // This is an edge case that might only happen during recursive alignment
+                    // calculations, so we allocate the list here to preserve correctness instead of
+                    // reserving a field for this.
+                    childrenPlacingForAlignment = childrenPlacingForAlignment ?: MutableObjectList()
+                    childrenPlacingForAlignment.add(it)
+                }
+                it.outerCoordinator.isPlacingForAlignment = innerCoordinator.isPlacingForAlignment
+            }
         }
+
         innerCoordinator.measureResult.placeChildren()
 
         if (innerCoordinator.isPlacingForAlignment) {
-            layoutNode.children.fastForEach { it.outerCoordinator.isPlacingForAlignment = false }
+            layoutNode.children.fastForEach {
+                val wasPlacingForAlignment = childrenPlacingForAlignment?.contains(it) == true
+                it.outerCoordinator.isPlacingForAlignment = wasPlacingForAlignment
+            }
         }
 
         checkChildrenPlaceOrderForUpdates()
@@ -217,6 +233,13 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
                 owner.snapshotObserver.observeLayoutSnapshotReads(this, block = layoutChildrenBlock)
             }
             layoutState = oldLayoutState
+            if (
+                innerCoordinator.isPlacingForAlignment &&
+                    (layoutNodeLayoutDelegate.coordinatesAccessedDuringPlacement ||
+                        layoutNodeLayoutDelegate.coordinatesAccessedDuringModifierPlacement)
+            ) {
+                requestLayout()
+            }
             layoutPendingForAlignment = false
         }
 
@@ -451,11 +474,6 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
 
     /** The function to be executed when the parent layout measures its children. */
     override fun measure(constraints: Constraints): Placeable {
-        if (layoutNode.intrinsicsUsageByParent == LayoutNode.UsageByParent.NotUsed) {
-            // This LayoutNode may have asked children for intrinsics. If so, we should
-            // clear the intrinsics usage for everything that was requested previously.
-            layoutNode.clearSubtreeIntrinsicsUsage()
-        }
         // If we are at the lookahead root of the tree, do both the lookahead measure and
         // regular measure. Otherwise, we'll be consistent with parent's lookahead measure
         // and regular measure stages. This avoids producing exponential amount of
@@ -463,7 +481,7 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
         if (layoutNode.isOutMostLookaheadRoot) {
             lookaheadPassDelegate!!.run {
                 measuredByParent = LayoutNode.UsageByParent.NotUsed
-                measure(constraints)
+                traceMeasureLayout("Compose:lookaheadMeasure") { measure(constraints) }
             }
         }
         trackMeasurementByParent(layoutNode)
@@ -483,6 +501,11 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
             layoutNode.canMultiMeasure =
                 layoutNode.canMultiMeasure || (parent != null && parent.canMultiMeasure)
             if (layoutNode.measurePending || measurementConstraints != constraints) {
+                if (layoutNode.intrinsicsUsageByParent == LayoutNode.UsageByParent.NotUsed) {
+                    // This LayoutNode may have asked children for intrinsics. If so, we should
+                    // clear the intrinsics usage for everything that was requested previously.
+                    layoutNode.clearSubtreeIntrinsicsUsage()
+                }
                 alignmentLines.usedByModifierMeasurement = false
                 forEachChildAlignmentLinesOwner {
                     it.alignmentLines.usedDuringParentMeasurement = false
@@ -506,9 +529,6 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
                 // trigger extra remeasure request on our node. we do it now in order to report the
                 // final measured size to our parent without doing extra pass later.
                 owner.forceMeasureTheSubtree(layoutNode)
-
-                // Restore the intrinsics usage for the sub-tree
-                layoutNode.resetSubtreeIntrinsicsUsage()
             }
             return false
         }
@@ -774,21 +794,35 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
         // final constraints after the intrinsics run. Sometimes it will cause unnecessary
         // remeasurements, but it makes sure such component states are using the correct final
         // constraints/sizes.
-        layoutNode.requestRemeasure()
+        // We pass invalidateIntrinsics = false because the parent/ancestor is actively querying
+        // this node's intrinsics during measurement; invalidating the parent here would re-mark the
+        // measuring ancestor dirty and cause an infinite remeasure livelock.
+        layoutNode.requestRemeasure(invalidateIntrinsics = false)
 
-        // Mark the intrinsics size has been used by the parent if it hasn't already been
-        // marked.
+        // Mark that the intrinsic size has been used by the parent.
+        // InMeasureBlock takes precedence over InLayoutBlock so that if intrinsics are queried
+        // in both measure and layout passes, child invalidations trigger a remeasure on the parent.
         val parent = layoutNode.parent
         if (
-            parent != null && layoutNode.intrinsicsUsageByParent == LayoutNode.UsageByParent.NotUsed
+            parent != null &&
+                layoutNode.intrinsicsUsageByParent != LayoutNode.UsageByParent.InMeasureBlock
         ) {
-            layoutNode.intrinsicsUsageByParent =
+            // Check parent.layoutState before falling back to parent.intrinsicsUsageByParent so
+            // an active measure/layout pass on the parent takes precedence over stale usage the
+            // parent may still hold from an ancestor (e.g. a parent carrying InLayoutBlock from
+            // an ancestor's layout pass that later remeasures on its own and queries this child's
+            // intrinsics during measure).
+            val usage =
                 when (parent.layoutState) {
                     LayoutState.Measuring -> LayoutNode.UsageByParent.InMeasureBlock
                     LayoutState.LayingOut -> LayoutNode.UsageByParent.InLayoutBlock
-                    // Called from parent's intrinsic measurement
+                    // Called from parent's intrinsic measurement (e.g. DefaultIntrinsicMeasurable
+                    // where parent.layoutState is Idle)
                     else -> parent.intrinsicsUsageByParent
                 }
+            if (usage != LayoutNode.UsageByParent.NotUsed) {
+                layoutNode.intrinsicsUsageByParent = usage
+            }
         }
     }
 
@@ -826,6 +860,12 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
         }
         return alignmentLines.getLastCalculation()
     }
+
+    override var isPlacingForAlignment: Boolean
+        get() = innerCoordinator.isPlacingForAlignment
+        set(value) {
+            innerCoordinator.isPlacingForAlignment = value
+        }
 
     override val parentAlignmentLinesOwner: AlignmentLinesOwner?
         get() = layoutNode.parent?.layoutDelegate?.alignmentLinesOwner
@@ -930,8 +970,10 @@ internal class MeasurePassDelegate(private val layoutNodeLayoutDelegate: LayoutN
     }
 
     fun markLayoutPending() {
+        if (layoutPending && layoutPendingForAlignment) return
         layoutPending = true
         layoutPendingForAlignment = true
+        layoutNode.forEachCoordinator { it.layoutPendingForAlignment = true }
     }
 
     /** Marks the layoutNode dirty for another measure pass. */

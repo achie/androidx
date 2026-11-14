@@ -105,10 +105,9 @@ class FragmentTransactionCallbackTest : BaseTest() {
             )
 
             // when 2: current item changed to next page
-            val latch2 =
-                adapter.registerMaxLifecycleUpdatedLatch { fragment, maxLifecycleState ->
-                    fragment.name == "f0" && maxLifecycleState == Lifecycle.State.STARTED
-                }
+            val latch2 = adapter.registerMaxLifecycleUpdatedLatch { fragment, maxLifecycleState ->
+                fragment.name == "f0" && maxLifecycleState == Lifecycle.State.STARTED
+            }
             viewPager.setCurrentItemSync(1, true, 5, SECONDS)
             latch2.awaitStrict(5)
 
@@ -443,7 +442,6 @@ class FragmentTransactionCallbackTest : BaseTest() {
                     " {@link #onFragmentAttached(FragmentManager, Fragment, Context)}, removing it\n" +
                     " when it receives the {@link Lifecycle.State#CREATED} callback."
             )
-            @Suppress("OVERRIDE_DEPRECATION") // b/446706247
             override fun onFragmentActivityCreated(
                 fm: FragmentManager,
                 f: Fragment,

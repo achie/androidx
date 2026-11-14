@@ -115,9 +115,9 @@ public abstract class DrawBase3 extends PaintOperation implements VariableSuppor
      */
     public static void read(
             @NonNull WireBuffer buffer, @NonNull List<Operation> operations, @NonNull Maker maker) {
-        float v1 = buffer.readFloat();
-        float v2 = buffer.readFloat();
-        float v3 = buffer.readFloat();
+        float v1 = buffer.readNanId();
+        float v2 = buffer.readNanId();
+        float v3 = buffer.readNanId();
         Operation op = maker.create(v1, v2, v3);
         operations.add(op);
     }
@@ -144,5 +144,35 @@ public abstract class DrawBase3 extends PaintOperation implements VariableSuppor
                 .add(v1Name, mValue1, mV1)
                 .add(v2Name, mValue2, mV2)
                 .add(v3Name, mValue3, mV3);
+    }
+
+    /** Returns {@code mV1}. */
+    public float getV1() {
+        return mV1;
+    }
+
+    /** Returns {@code mV2}. */
+    public float getV2() {
+        return mV2;
+    }
+
+    /** Returns {@code mV3}. */
+    public float getV3() {
+        return mV3;
+    }
+
+    /** Returns {@code mValue1}. */
+    public float getValue1() {
+        return mValue1;
+    }
+
+    /** Returns {@code mValue2}. */
+    public float getValue2() {
+        return mValue2;
+    }
+
+    /** Returns {@code mValue3}. */
+    public float getValue3() {
+        return mValue3;
     }
 }

@@ -16,6 +16,7 @@
 
 package androidx.appfunctions
 
+// LINT.IfChange(supported_proxies)
 /**
  * Annotates a class to indicate that it can be serialized and transferred between processes using
  * AppFunction.
@@ -49,9 +50,15 @@ package androidx.appfunctions
  *     * `List<String>`
  *     * Another class annotated with `@AppFunctionSerializable` (enabling nested structures) or a
  *       list of a class annotated with `@AppFunctionSerializable`
+ *     * Supported proxy types: [android.net.Uri], [java.time.LocalDate], [java.time.LocalTime],
+ *       [java.time.LocalDateTime], [java.time.Instant], [java.time.ZoneId], or a [List] of these
+ *       types
+ *     * Any implementation of [android.os.Parcelable] type. For `Parcelable` types not defined by
+ *       the Android platform (e.g., custom classes shared between agents and apps), forward and
+ *       backward compatibility is **not guaranteed** by AppFunctions library. Implementers are
+ *       responsible for managing any compatibility and versioning concerns.
  * * **Public Primary Constructor:** The primary constructor of the annotated class must have public
  *   visibility to allow instantiation.
- * * **
  *
  * **IMPORTANT:** When the default value is set in the constructor parameter, the field would be
  * exposed to the caller as optional in the
@@ -66,10 +73,12 @@ package androidx.appfunctions
  * **Example:**
  *
  * ```
- * @AppFunctionSerializable
+ * /** The location. */
+ * @AppFunctionSerializable(isDescribedByKDoc = true)
  * class Location(val latitude: Double, val longitude: Double)
  *
- * @AppFunctionSerializable
+ * /** The place. */
+ * @AppFunctionSerializable(isDescribedByKDoc = true)
  * class Place(
  *     val name: String,
  *     val location: Location, // Nested AppFunctionSerializable
@@ -78,12 +87,14 @@ package androidx.appfunctions
  *     val notes: String? = "default"
  * )
  *
- * @AppFunctionSerializable
+ * /** The search place result. */
+ * @AppFunctionSerializable(isDescribedByKDoc = true)
  * class SearchPlaceResult(
  *     val places: List<Place> // If missing, will be an empty list
  * )
  *
- * @AppFunctionSerializable
+ * /** The attachment. */
+ * @AppFunctionSerializable(isDescribedByKDoc = true)
  * class Attachment(
  *   uri: String // Putting constructor parameter without getter will result in compiler error
  * )
@@ -91,18 +102,18 @@ package androidx.appfunctions
  *
  * @see androidx.appfunctions.metadata.AppFunctionObjectTypeMetadata
  */
+// LINT.ThenChange(/appfunctions/appfunctions/src/main/java/androidx/appfunctions/internal/serializableproxies/BuiltInSerializableProxies.kt:supported_proxies, /appfunctions/appfunctions-compiler/src/main/java/androidx/appfunctions/compiler/core/AppFunctionTypeReference.kt:supported_proxies)
 // Use BINARY here so that the annotation is kept around at the aggregation stage.
 @Retention(AnnotationRetention.BINARY)
 @Target(AnnotationTarget.CLASS)
 public annotation class AppFunctionSerializable(
     /**
-     * Whether to use the serializable's KDoc as the type's description to the agent. The default
-     * value is `false`.
+     * Whether to use the serializable's KDoc as the type's description to the agent.
      *
      * If set to `true`, the serializable's KDoc will be set as the type's
      * [androidx.appfunctions.metadata.AppFunctionDataTypeMetadata.description]. The class's
      * properties' KDoc will also be set as their corresponding descriptions. The caller will use
      * the descriptions to interpret when and how to use the class and its properties.
      */
-    public val isDescribedByKdoc: Boolean = false
+    public val isDescribedByKDoc: Boolean
 )

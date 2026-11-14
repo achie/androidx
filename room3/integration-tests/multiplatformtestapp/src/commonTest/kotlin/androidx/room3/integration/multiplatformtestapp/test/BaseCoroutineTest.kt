@@ -19,16 +19,16 @@ package androidx.room3.integration.multiplatformtestapp.test
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
 import androidx.room3.immediateTransaction
+import androidx.room3.integration.multiplatformtestapp.backgroundDispatcher
 import androidx.room3.useReaderConnection
 import androidx.room3.useWriterConnection
 import androidx.sqlite.SQLiteException
+import androidx.sqlite.async.step
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -63,23 +63,21 @@ abstract class BaseCoroutineTest {
         // it doesn't affect others.
         val failureQueryScope = CoroutineScope(Job())
         val successQueryScope = CoroutineScope(Job())
-        val failureDeferred =
-            failureQueryScope.async {
-                db.useReaderConnection { connection ->
-                    connection.usePrepared("SELECT * FROM WrongTableName") {
-                        assertThat(it.step()).isFalse()
-                    }
+        val failureDeferred = failureQueryScope.async {
+            db.useReaderConnection { connection ->
+                connection.usePrepared("SELECT * FROM WrongTableName") {
+                    assertThat(it.step()).isFalse()
                 }
             }
-        val successDeferred =
-            successQueryScope.async {
-                db.useReaderConnection { connection ->
-                    connection.usePrepared("SELECT * FROM SampleEntity") {
-                        assertThat(it.step()).isTrue()
-                        it.getLong(0)
-                    }
+        }
+        val successDeferred = successQueryScope.async {
+            db.useReaderConnection { connection ->
+                connection.usePrepared("SELECT * FROM SampleEntity") {
+                    assertThat(it.step()).isTrue()
+                    it.getLong(0)
                 }
             }
+        }
         assertThrows<SQLiteException> { failureDeferred.await() }
             .hasMessageThat()
             .contains("no such table: WrongTableName")
@@ -93,16 +91,14 @@ abstract class BaseCoroutineTest {
         val toBeCancelledScope = CoroutineScope(Job())
         val notCancelledScope = CoroutineScope(Job())
         val latch = Mutex(locked = true)
-        val cancelledDeferred =
-            toBeCancelledScope.async {
-                db.useReaderConnection { latch.withLock {} }
-                1
-            }
-        val notCancelledDeferred =
-            notCancelledScope.async {
-                db.useReaderConnection { latch.withLock {} }
-                1
-            }
+        val cancelledDeferred = toBeCancelledScope.async {
+            db.useReaderConnection { latch.withLock {} }
+            1
+        }
+        val notCancelledDeferred = notCancelledScope.async {
+            db.useReaderConnection { latch.withLock {} }
+            1
+        }
 
         yield()
         toBeCancelledScope.cancel()
@@ -120,7 +116,7 @@ abstract class BaseCoroutineTest {
                     // Validates that multiple concurrent DAO operation re-using the same connection
                     // (due to the transaction) operate mutex-ed such that SQLite's multi-thread
                     // restrictions are respected. b/447171815
-                    repeat(10) { launch(Dispatchers.IO) { db.dao().insertItem(it.toLong()) } }
+                    repeat(10) { launch(backgroundDispatcher) { db.dao().insertItem(it.toLong()) } }
                 }
             }
         }

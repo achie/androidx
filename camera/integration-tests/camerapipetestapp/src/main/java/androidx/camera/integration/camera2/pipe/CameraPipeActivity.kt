@@ -25,8 +25,8 @@ import android.util.Size
 import android.view.View
 import androidx.annotation.GuardedBy
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraPipe
+import androidx.camera.common.CameraId
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -78,15 +78,14 @@ class CameraPipeActivity : CameraPermissionActivity() {
                     concurrentCameraIds
         }
 
-        cameraIdsJob =
-            lifecycleScope.launch {
-                cameraDevices.cameraIdsFlow().collect {
-                    Log.i("CXCP-App", "Collected updated camera ID list: $it")
-                    synchronized(lock) {
-                        cameraIdGroups = it.map { listOf(it) } + concurrentCameraIds
-                    }
+        cameraIdsJob = lifecycleScope.launch {
+            cameraDevices.cameraIdsFlow().collect {
+                Log.i("CXCP-App", "Collected updated camera ID list: $it")
+                synchronized(lock) {
+                    cameraIdGroups = it.map { listOf(it) } + concurrentCameraIds
                 }
             }
+        }
 
         // TODO: Update this to work with newer versions of the visualizations and to accept
         //   the CameraPipeUi object as a parameter.

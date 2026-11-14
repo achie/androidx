@@ -42,12 +42,18 @@
         individual list represents one collection of signature hashes. Refer to your font provider's
         documentation for these values. -->
         <attr name="fontProviderCerts" format="reference" />
+        <!-- The sets of hashes for the certificates the provider should be signed with, only trusted
+        if the provider is installed as a system application (FLAG_SYSTEM or FLAG_UPDATED_SYSTEM_APP).
+        This value may point to one list or a list of lists, where each individual list represents
+        one collection of signature hashes. Refer to your font provider's documentation for these
+        values. -->
+        <attr name="fontProviderSystemCerts" format="reference" />
         <!-- The strategy to be used when fetching font data from a font provider in XML layouts.
         This attribute is ignored when the resource is loaded from code, as it is equivalent to the
         choice of API between {@link
-    androidx.core.content.res.ResourcesCompat#getFont(Context, int)} (blocking) and
+    androidx.core.content.res.ResourcesCompat#getFont(android.content.Context, int)} (blocking) and
         {@link
-    androidx.core.content.res.ResourcesCompat#getFont(Context, int, FontCallback, Handler)}
+    androidx.core.content.res.ResourcesCompat#getFont(android.content.Context, int, androidx.core.content.res.ResourcesCompat.FontCallback, android.os.Handler)}
         (async). -->
         <attr name="fontProviderFetchStrategy">
             <!-- The blocking font fetch works as follows.
@@ -209,5 +215,10 @@
         <!-- Indicates whether a parameter in a capability template can only contain a matched
              shortcut id and not an arbitrary string. -->
         <attr name="shortcutMatchRequired" format="boolean" />
+    </declare-styleable>
+
+    <declare-styleable name="NestedScrollView">
+        <!-- Defines whether the NestedScrollView should consume scroll-to-top events or not. -->
+        <attr name="isScrollToTopEnabled" format="boolean" />
     </declare-styleable>
 </resources>

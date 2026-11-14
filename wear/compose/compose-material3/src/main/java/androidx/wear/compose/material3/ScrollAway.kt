@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.wear.compose.foundation.ScrollInfoProvider
 import androidx.wear.compose.foundation.lazy.ScalingLazyListState
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.material3.tokens.MotionTokens
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -46,9 +47,15 @@ import kotlinx.coroutines.launch
  * [ScreenScaffold] to provide the correct scroll away behavior by default):
  *
  * @sample androidx.wear.compose.material3.samples.ScrollAwaySample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_ScrollAwaySample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param scrollInfoProvider Used as the basis for the scroll-away implementation, based on the
  *   state of the scrollable container. See [ScrollInfoProvider] methods for creating a
- *   ScrollInfoProvider from common lists such as [ScalingLazyListState].
+ *   ScrollInfoProvider from common lists such as [TransformingLazyColumnState] or
+ *   [ScalingLazyListState].
  * @param screenStage Function that returns the screen stage of the active screen. Scrolled away
  *   items are shown when the screen is new, then scrolled away or hidden when scrolling, and
  *   finally shown again when idle.
@@ -138,6 +145,7 @@ private class ScrollAwayModifierNode(
 ) : LayoutModifierNode, Modifier.Node() {
     private val progressAnimatable: Animatable<Float, AnimationVector1D> = Animatable(0f)
     private val alphaAnimatable = Animatable(1f)
+    private var isFirstFrame = true
 
     override fun MeasureScope.measure(
         measurable: Measurable,
@@ -176,36 +184,47 @@ private class ScrollAwayModifierNode(
                     targetAlpha = 1f
                 }
 
+                // Update alpha animation state. Hide is always instant.
                 if (targetAlpha != alphaAnimatable.targetValue) {
-                    if (targetAlpha == 0f) {
-                        // Hide is instant.
-                        coroutineScope.launch { alphaAnimatable.snapTo(0f) }
+                    if (isFirstFrame || targetAlpha == 0f) {
+                        coroutineScope.launch { alphaAnimatable.snapTo(targetAlpha) }
                     } else {
                         animateAlpha(targetAlpha, coroutineScope, alphaAnimatable)
                     }
                 }
 
+                // Update progress animation state.
                 if (targetProgress != progressAnimatable.targetValue) {
                     val scrollingAtTheTop =
                         targetProgress != 0f &&
                             progressAnimatable.targetValue != 0f &&
-                            screenStage() != ScreenStage.New
-                    if (scrollingAtTheTop || (showAfterTimeout && screenStage != ScreenStage.New)) {
-                        // If we are scrolling at the top, keep in sync.
-                        // Also, when we show after a timeout, there is no progress animation.
+                            screenStage != ScreenStage.New
+                    val shouldSnapProgress =
+                        isFirstFrame ||
+                            scrollingAtTheTop ||
+                            (showAfterTimeout && screenStage != ScreenStage.New)
+
+                    if (shouldSnapProgress) {
                         coroutineScope.launch { progressAnimatable.snapTo(targetProgress) }
                     } else {
                         animateProgress(targetProgress, coroutineScope, progressAnimatable)
                     }
                 }
 
-                val motionFraction = lerp(minMotionOut, maxMotionOut, progressAnimatable.value)
-                val offsetY = -(maxOffset.toPx() * progressAnimatable.value)
-                alpha = motionFraction * alphaAnimatable.value
+                // Use the target values immediately on the first frame or when hiding to avoid
+                // 1-frame visual glitches (b/570028738).
+                val currentAlpha = if (targetAlpha == 0f) 0f else alphaAnimatable.value
+                val currentProgress = if (isFirstFrame) targetProgress else progressAnimatable.value
+
+                val motionFraction = lerp(minMotionOut, maxMotionOut, currentProgress)
+                val offsetY = -(maxOffset.toPx() * currentProgress)
+                alpha = motionFraction * currentAlpha
                 scaleX = motionFraction
                 scaleY = motionFraction
                 translationY = offsetY
                 transformOrigin = TransformOrigin(pivotFractionX = 0.5f, pivotFractionY = 0.0f)
+
+                isFirstFrame = false
             }
         }
     }
@@ -243,7 +262,7 @@ private class ScrollAwayModifierNode(
                                 // Animation spec for showing the TimeText
                                 MotionTokens.EasingStandard
                             } else {
-                                // Animation spec for hidding the TimeText
+                                // Animation spec for hiding the TimeText
                                 MotionTokens.EasingStandardDecelerate
                             },
                     ),

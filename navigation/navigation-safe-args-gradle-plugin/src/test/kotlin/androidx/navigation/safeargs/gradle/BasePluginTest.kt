@@ -78,10 +78,9 @@ abstract class BasePluginTest {
                 .withArguments(
                     // b/175897186 set explicit metaspace size in hopes of fewer crashes
                     "-Dorg.gradle.jvmargs=-XX:MaxMetaspaceSize=512m",
-                    // Enable configuration cache for these tests
-                    "-Dorg.gradle.configuration-cache=true",
                     *args,
                 )
+        projectSetup.setUpGradleVersion(runner, "8.14")
         return runner
     }
 
@@ -98,7 +97,7 @@ abstract class BasePluginTest {
                     id('com.android.application')
                     id('androidx.navigation.safeargs')
                 }
-            """
+                """
                     .trimIndent(),
             suffix =
                 """
@@ -149,7 +148,7 @@ abstract class BasePluginTest {
                     id('kotlin-android')
                     id('androidx.navigation.safeargs.kotlin')
                 }
-            """
+                """
                     .trimIndent(),
             suffix =
                 """

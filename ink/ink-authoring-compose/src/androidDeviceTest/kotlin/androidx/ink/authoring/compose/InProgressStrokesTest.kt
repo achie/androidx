@@ -14,25 +14,23 @@
  * limitations under the License.
  */
 
-@file:OptIn(ExperimentalInkCustomBrushApi::class)
-
 package androidx.ink.authoring.compose
 
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import androidx.annotation.ColorInt
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Path
-import androidx.ink.authoring.testing.InputStreamBuilder
-import androidx.ink.authoring.testing.MultiTouchInputBuilder
+import androidx.ink.authoring.testing.InputStreamCreator
+import androidx.ink.authoring.testing.MultiTouchInputCreator
 import androidx.ink.brush.Brush
-import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.StockBrushes
 import androidx.ink.brush.StockBrushes.MarkerVersion
-import androidx.ink.brush.StockTextureBitmapStore
+import androidx.ink.nativeloader.InkInternalOnlyApi
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.onIdle
 import androidx.test.ext.junit.rules.ActivityScenarioRule
@@ -52,6 +50,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 @RunWith(AndroidJUnit4::class)
 @LargeTest
+@OptIn(InkInternalOnlyApi::class)
 class InProgressStrokesTest {
 
     @get:Rule
@@ -70,7 +69,7 @@ class InProgressStrokesTest {
     @Test
     fun downEvent_showsStrokeWithNoCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -99,7 +98,7 @@ class InProgressStrokesTest {
     @Test
     fun downAndMoveEvents_showsStrokeWithNoCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -129,7 +128,7 @@ class InProgressStrokesTest {
     @Test
     fun downAndUpEvents_sendsCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -159,7 +158,7 @@ class InProgressStrokesTest {
     @Test
     fun downAndMoveAndUpEvents_sendsCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -190,7 +189,7 @@ class InProgressStrokesTest {
     @Test
     fun downAndMoveEvents_withNonIdentityTransforms_showsStrokeWithNoCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -222,7 +221,7 @@ class InProgressStrokesTest {
     @Test
     fun downAndConsumedMoveEvents_cancelsStrokeWithNoCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 consumeMoveTouchEventOfPointerNumber = 0,
@@ -253,7 +252,7 @@ class InProgressStrokesTest {
     @Test
     fun twoSimultaneousStrokesDownAndMoveAndFinish_oneCallbackWithBothStrokes() {
         val inputStream =
-            MultiTouchInputBuilder.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
+            MultiTouchInputCreator.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
         var usedFirstBrush = false
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
@@ -284,7 +283,7 @@ class InProgressStrokesTest {
     @Test
     fun twoSimultaneousStrokesDownAndMove_moveOfFirstConsumed_showsSecondStrokeWithNoCallback() {
         val inputStream =
-            MultiTouchInputBuilder.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
+            MultiTouchInputCreator.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
         var usedFirstBrush = false
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
@@ -324,7 +323,7 @@ class InProgressStrokesTest {
     @Test
     fun twoSimultaneousStrokesDownAndMove_moveOfSecondConsumed_showsFirstStrokeWithNoCallback() {
         val inputStream =
-            MultiTouchInputBuilder.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
+            MultiTouchInputCreator.rotate90DegreesClockwise(centerX = 200F, centerY = 300F)
         var usedFirstBrush = false
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
@@ -364,7 +363,7 @@ class InProgressStrokesTest {
     @Test
     fun downEvent_withMaskPath_showsMaskedStrokeWithNoCallback() {
         val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
@@ -404,34 +403,334 @@ class InProgressStrokesTest {
         }
     }
 
+    /**
+     * Verifies that when a stroke is started on one input device and interrupted by a second input
+     * device with a different source and tool type (causing Compose to issue a synthetic cancel
+     * while the first device remains pressed), continuing move and up events from the first device
+     * do not crash and a subsequent stroke completes normally.
+     */
     @Test
-    fun downEvent_withTextureBitmapStore_showsPencilStrokeWithNoCallback() {
-        val stylusInputStream =
-            InputStreamBuilder.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+    fun concurrentInputFromDifferentDevicesAndToolTypes_doesNotCrashAndAllowsSubsequentStroke() {
         activityScenarioRule.scenario.onActivity { activity ->
             activity.init(
                 nextBrush = {
                     Brush.createWithColorIntArgb(
-                        StockBrushes.pencilUnstable,
+                        StockBrushes.marker(MarkerVersion.V1),
                         AVOCADO_GREEN,
                         25F,
                         0.1F,
                     )
-                },
-                textureBitmapStore = StockTextureBitmapStore(activity.resources),
+                }
+            )
+        }
+        yieldingSleep()
+
+        val baseTime = SystemClock.uptimeMillis()
+        activityScenarioRule.scenario.onActivity { activity ->
+            // Device 1 (mouse) starts a stroke.
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime,
+                action = MotionEvent.ACTION_DOWN,
+                x = 25F,
+                y = 25F,
+                toolType = MotionEvent.TOOL_TYPE_MOUSE,
+                source = InputDevice.SOURCE_MOUSE,
+                deviceId = 1,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 10,
+                action = MotionEvent.ACTION_MOVE,
+                x = 50F,
+                y = 50F,
+                toolType = MotionEvent.TOOL_TYPE_MOUSE,
+                source = InputDevice.SOURCE_MOUSE,
+                deviceId = 1,
+            )
+
+            // Device 2 (touchpad/finger) interrupts while device 1 is active.
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime + 20,
+                eventTime = baseTime + 20,
+                action = MotionEvent.ACTION_DOWN,
+                x = 100F,
+                y = 100F,
+                toolType = MotionEvent.TOOL_TYPE_FINGER,
+                source = InputDevice.SOURCE_TOUCHSCREEN,
+                deviceId = 2,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime + 20,
+                eventTime = baseTime + 30,
+                action = MotionEvent.ACTION_MOVE,
+                x = 120F,
+                y = 120F,
+                toolType = MotionEvent.TOOL_TYPE_FINGER,
+                source = InputDevice.SOURCE_TOUCHSCREEN,
+                deviceId = 2,
+            )
+
+            // Device 1 continues moving while device 2 is down, then both lift up.
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 40,
+                action = MotionEvent.ACTION_MOVE,
+                x = 75F,
+                y = 75F,
+                toolType = MotionEvent.TOOL_TYPE_MOUSE,
+                source = InputDevice.SOURCE_MOUSE,
+                deviceId = 1,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime + 20,
+                eventTime = baseTime + 50,
+                action = MotionEvent.ACTION_UP,
+                x = 120F,
+                y = 120F,
+                toolType = MotionEvent.TOOL_TYPE_FINGER,
+                source = InputDevice.SOURCE_TOUCHSCREEN,
+                deviceId = 2,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 60,
+                action = MotionEvent.ACTION_MOVE,
+                x = 90F,
+                y = 90F,
+                toolType = MotionEvent.TOOL_TYPE_MOUSE,
+                source = InputDevice.SOURCE_MOUSE,
+                deviceId = 1,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 70,
+                action = MotionEvent.ACTION_UP,
+                x = 90F,
+                y = 90F,
+                toolType = MotionEvent.TOOL_TYPE_MOUSE,
+                source = InputDevice.SOURCE_MOUSE,
+                deviceId = 1,
+            )
+        }
+        yieldingSleep()
+
+        // Subsequent clean stroke completes and delivers callback.
+        val stylusInputStream =
+            InputStreamCreator.stylusLine(startX = 25F, startY = 25F, endX = 105F, endY = 205F)
+        activityScenarioRule.scenario.onActivity { activity ->
+            stylusInputStream.runInputStreamWith { event ->
+                activity.rootView.dispatchTouchEvent(event)
+            }
+        }
+        yieldingSleep()
+
+        activityScenarioRule.scenario.onActivity { activity ->
+            assertThat(activity.finishedStrokeCohorts).hasSize(1)
+            assertThat(activity.finishedStrokeCohorts[0]).hasSize(1)
+        }
+    }
+
+    /**
+     * Verifies that when two input devices share the same source and tool type but have different
+     * device IDs, events from the second device cancel the in-progress stroke from the first device
+     * rather than merging coordinates into it or crashing on subsequent move events.
+     */
+    @Test
+    fun concurrentInputFromSameSourceAndToolTypeDifferentDeviceIds_cancelsStrokeWithNoCallback() {
+        activityScenarioRule.scenario.onActivity { activity ->
+            activity.init(
+                nextBrush = {
+                    Brush.createWithColorIntArgb(
+                        StockBrushes.marker(MarkerVersion.V1),
+                        AVOCADO_GREEN,
+                        25F,
+                        0.1F,
+                    )
+                }
+            )
+        }
+        yieldingSleep()
+
+        val baseTime = SystemClock.uptimeMillis()
+        activityScenarioRule.scenario.onActivity { activity ->
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime,
+                action = MotionEvent.ACTION_DOWN,
+                x = 25F,
+                y = 25F,
+                deviceId = 1,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 10,
+                action = MotionEvent.ACTION_MOVE,
+                x = 50F,
+                y = 50F,
+                deviceId = 1,
+            )
+
+            // Second device with same source and toolType but different deviceId sends move and up.
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 20,
+                action = MotionEvent.ACTION_MOVE,
+                x = 200F,
+                y = 200F,
+                deviceId = 2,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 30,
+                action = MotionEvent.ACTION_UP,
+                x = 200F,
+                y = 200F,
+                deviceId = 2,
+            )
+
+            // First device continues moving and lifts up.
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 40,
+                action = MotionEvent.ACTION_MOVE,
+                x = 75F,
+                y = 75F,
+                deviceId = 1,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 50,
+                action = MotionEvent.ACTION_UP,
+                x = 75F,
+                y = 75F,
+                deviceId = 1,
             )
         }
         yieldingSleep()
 
         activityScenarioRule.scenario.onActivity { activity ->
-            activity.rootView.dispatchTouchEvent(stylusInputStream.getDownEvent())
+            assertThat(activity.finishedStrokeCohorts).isEmpty()
         }
+    }
 
-        // Single dot.
-        assertThatTakingScreenshotMatchesGolden("down_with_pencil_texture")
+    /**
+     * Verifies that if an in-progress stroke is canceled and the pointer continues sending move and
+     * up events without a new down event, those unmapped move and up events are ignored without
+     * crashing or producing a finished stroke.
+     */
+    @Test
+    fun moveWithoutPriorDownAfterCancel_ignoresMoveWithNoCallback() {
+        activityScenarioRule.scenario.onActivity { activity ->
+            activity.init(
+                nextBrush = {
+                    Brush.createWithColorIntArgb(
+                        StockBrushes.marker(MarkerVersion.V1),
+                        AVOCADO_GREEN,
+                        25F,
+                        0.1F,
+                    )
+                }
+            )
+        }
+        yieldingSleep()
+
+        val baseTime = SystemClock.uptimeMillis()
+        activityScenarioRule.scenario.onActivity { activity ->
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime,
+                action = MotionEvent.ACTION_DOWN,
+                x = 25F,
+                y = 25F,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 10,
+                action = MotionEvent.ACTION_CANCEL,
+                x = 25F,
+                y = 25F,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 20,
+                action = MotionEvent.ACTION_MOVE,
+                x = 50F,
+                y = 50F,
+            )
+            dispatchMotionEvent(
+                activity = activity,
+                downTime = baseTime,
+                eventTime = baseTime + 30,
+                action = MotionEvent.ACTION_UP,
+                x = 50F,
+                y = 50F,
+            )
+        }
+        yieldingSleep()
+
         activityScenarioRule.scenario.onActivity { activity ->
             assertThat(activity.finishedStrokeCohorts).isEmpty()
         }
+    }
+
+    private fun dispatchMotionEvent(
+        activity: InProgressStrokesTestActivity,
+        downTime: Long,
+        eventTime: Long,
+        action: Int,
+        x: Float,
+        y: Float,
+        toolType: Int = MotionEvent.TOOL_TYPE_STYLUS,
+        source: Int = InputDevice.SOURCE_STYLUS,
+        deviceId: Int = 1,
+    ) {
+        val event =
+            MotionEvent.obtain(
+                /* downTime = */ downTime,
+                /* eventTime = */ eventTime,
+                /* action = */ action,
+                /* pointerCount = */ 1,
+                /* pointerProperties = */ arrayOf(
+                    MotionEvent.PointerProperties().apply {
+                        id = 0
+                        this.toolType = toolType
+                    }
+                ),
+                /* pointerCoords = */ arrayOf(
+                    MotionEvent.PointerCoords().apply {
+                        this.x = x
+                        this.y = y
+                    }
+                ),
+                /* metaState = */ 0,
+                /* buttonState = */ 0,
+                /* xPrecision = */ 0.001f,
+                /* yPrecision = */ 0.001f,
+                /* deviceId = */ deviceId,
+                /* edgeFlags = */ 0,
+                /* source = */ source,
+                /* flags = */ 0,
+            )
+        activity.rootView.dispatchTouchEvent(event)
+        event.recycle()
     }
 
     /**

@@ -17,11 +17,12 @@
 package androidx.compose.ui.test.junit4.accessibility.samples
 
 import androidx.activity.ComponentActivity
+import androidx.annotation.RequiresApi
 import androidx.annotation.Sampled
 import androidx.compose.ui.test.junit4.accessibility.disableAccessibilityChecks
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -37,6 +38,7 @@ private val androidComposeTestRule = createAndroidComposeRule<ComponentActivity>
 
 /** Sample that shows how to enable accessibility checks when using a ComposeTestRule. */
 @Sampled
+@RequiresApi(34)
 fun accessibilityChecks_withComposeTestRule_sample() {
     // Enable accessibility checks with default configuration:
     composeTestRule.enableAccessibilityChecks()
@@ -59,6 +61,7 @@ fun accessibilityChecks_withComposeTestRule_sample() {
  * AndroidComposeTestRule<A : ComponentActivity>.
  */
 @Sampled
+@RequiresApi(34)
 fun accessibilityChecks_withAndroidComposeTestRule_sample() {
     // Configure your own AccessibilityValidator
     val accessibilityValidator =
@@ -75,6 +78,7 @@ fun accessibilityChecks_withAndroidComposeTestRule_sample() {
  * ComposeTestRule.
  */
 @Sampled
+@RequiresApi(34)
 fun accessibilityChecks_interopWithEspresso_withTestRule() {
     // Enable accessibility checks in both Espresso and Compose, and share the configuration
     val accessibilityValidator = AccessibilityChecks.enable()

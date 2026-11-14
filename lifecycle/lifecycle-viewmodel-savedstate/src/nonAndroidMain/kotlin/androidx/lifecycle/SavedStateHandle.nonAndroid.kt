@@ -22,6 +22,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.internal.SavedStateHandleImpl
 import androidx.lifecycle.internal.isAcceptableType
 import androidx.savedstate.SavedState
+import androidx.savedstate.SavedStateContainer
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.read
 import kotlin.jvm.JvmStatic
@@ -33,6 +34,10 @@ public actual class SavedStateHandle {
 
     private var impl: SavedStateHandleImpl
 
+    internal actual constructor(container: SavedStateContainer) {
+        impl = SavedStateHandleImpl(container)
+    }
+
     @VisibleForTesting
     public actual constructor(initialState: Map<String, Any?>) {
         impl = SavedStateHandleImpl(initialState)
@@ -42,10 +47,6 @@ public actual class SavedStateHandle {
     public actual constructor() {
         impl = SavedStateHandleImpl()
     }
-
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    public actual fun savedStateProvider(): SavedStateRegistry.SavedStateProvider =
-        impl.savedStateProvider()
 
     @MainThread public actual operator fun contains(key: String): Boolean = key in impl
 
@@ -64,7 +65,7 @@ public actual class SavedStateHandle {
 
     @MainThread public actual fun keys(): Set<String> = impl.keys()
 
-    @MainThread public actual operator fun <T> get(key: String): T? = impl.get(key)
+    @MainThread public actual operator fun <T> get(key: String): T? = impl[key]
 
     @MainThread
     public actual operator fun <T> set(key: String, value: T?): Unit = impl.set(key, value)
@@ -81,6 +82,16 @@ public actual class SavedStateHandle {
     public actual fun clearSavedStateProvider(key: String) {
         impl.clearSavedStateProvider(key)
     }
+
+    @MainThread public actual fun asContainer(): SavedStateContainer = impl.asContainer()
+
+    @MainThread
+    public actual fun getOrCreateContainer(key: String): SavedStateContainer =
+        impl.getOrCreateContainer(key)
+
+    @MainThread
+    public actual fun getOrCreateSavedStateHandle(key: String): SavedStateHandle =
+        SavedStateHandle(impl.getOrCreateContainer(key))
 
     public actual companion object {
 

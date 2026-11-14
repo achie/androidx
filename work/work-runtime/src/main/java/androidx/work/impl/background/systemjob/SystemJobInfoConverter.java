@@ -52,25 +52,46 @@ class SystemJobInfoConverter {
     private final ComponentName mWorkServiceComponent;
     private final Clock mClock;
     private final boolean mMarkImportantWhileForeground;
+    private final boolean mIsJobSchedulerPersistenceEnabled;
 
     SystemJobInfoConverter(@NonNull Context context,
-            Clock clock, boolean markImportantWhileForeground) {
+            Clock clock, boolean markImportantWhileForeground,
+            boolean isJobSchedulerPersistenceEnabled) {
         mClock = clock;
         Context appContext = context.getApplicationContext();
         mWorkServiceComponent = new ComponentName(appContext, SystemJobService.class);
         mMarkImportantWhileForeground = markImportantWhileForeground;
+        mIsJobSchedulerPersistenceEnabled = isJobSchedulerPersistenceEnabled;
     }
 
     /**
      * Converts a {@link WorkSpec} into a {@link JobInfo}.
      *
-     * Note: All {@link JobInfo} are set to persist on reboot.
+     * Note: {@link JobInfo} without content URI triggers are only set to persist on reboot when
+     * {@link androidx.work.Configuration#isJobSchedulerPersistenceEnabled()} is set and
+     * {@code android.permission.RECEIVE_BOOT_COMPLETED} is granted (see
+     * {@link androidx.work.Configuration#isJobSchedulerPersistenceEffective(Context)}).
      *
      * @param workSpec The {@link WorkSpec} to convert
      * @param jobId    The {@code jobId} to use. This is useful when de-duping jobs on reschedule.
      * @return The {@link JobInfo} representing the same information as the {@link WorkSpec}
      */
     JobInfo convert(WorkSpec workSpec, int jobId) {
+        long nextRunTime = workSpec.calculateNextRunTime();
+        long now = mClock.currentTimeMillis();
+        long offset = Math.max(nextRunTime - now, 0);
+        return convert(workSpec, jobId, offset);
+    }
+
+    /**
+     * Converts a {@link WorkSpec} into a {@link JobInfo} with a custom initial delay offset.
+     *
+     * @param workSpec The {@link WorkSpec} to convert
+     * @param jobId    The {@code jobId} to use
+     * @param offset   The initial delay offset in milliseconds
+     * @return The {@link JobInfo} representing the same information as the {@link WorkSpec}
+     */
+    JobInfo convert(WorkSpec workSpec, int jobId, long offset) {
         Constraints constraints = workSpec.constraints;
         PersistableBundle extras = new PersistableBundle();
         extras.putString(EXTRA_WORK_SPEC_ID, workSpec.id);
@@ -94,10 +115,6 @@ class SystemJobInfoConverter {
             builder.setBackoffCriteria(workSpec.backoffDelayDuration, backoffPolicy);
         }
 
-        long nextRunTime = workSpec.calculateNextRunTime();
-        long now = mClock.currentTimeMillis();
-        long offset = Math.max(nextRunTime - now, 0);
-
         if (Build.VERSION.SDK_INT <= 28) {
             // Before API 29, Jobs needed at least one constraint. Therefore before API 29 we
             // always setMinimumLatency to make sure we have at least one constraint.
@@ -113,7 +130,7 @@ class SystemJobInfoConverter {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= 24 && constraints.hasContentUriTriggers()) {
+        if (constraints.hasContentUriTriggers()) {
             //noinspection ConstantConditions
             for (Constraints.ContentUriTrigger trigger : constraints.getContentUriTriggers()) {
                 builder.addTriggerContentUri(convertContentUriTrigger(trigger));
@@ -122,9 +139,9 @@ class SystemJobInfoConverter {
             builder.setTriggerContentMaxDelay(constraints.getContentTriggerMaxDelayMillis());
         }
 
-        // We don't want to persist these jobs because we reschedule these jobs on BOOT_COMPLETED.
-        // That way ForceStopRunnable correctly reschedules Jobs when necessary.
-        builder.setPersisted(false);
+        boolean isPersisted =
+                mIsJobSchedulerPersistenceEnabled && !constraints.hasContentUriTriggers();
+        builder.setPersisted(isPersisted);
         if (Build.VERSION.SDK_INT >= 26) {
             builder.setRequiresBatteryNotLow(constraints.requiresBatteryNotLow());
             builder.setRequiresStorageNotLow(constraints.requiresStorageNotLow());

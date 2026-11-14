@@ -16,11 +16,12 @@
 
 package androidx.compose.ui.node
 
-import androidx.annotation.RestrictTo
 import androidx.collection.IntObjectMap
 import androidx.compose.runtime.Applier
 import androidx.compose.runtime.retain.RetainedValuesStore
+import androidx.compose.ui.ExperimentalMediaQueryApi
 import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.UiMediaScope
 import androidx.compose.ui.autofill.AutofillManager
 import androidx.compose.ui.draganddrop.DragAndDropManager
 import androidx.compose.ui.focus.FocusOwner
@@ -37,22 +38,26 @@ import androidx.compose.ui.layout.PlacementScope
 import androidx.compose.ui.modifier.ModifierLocalManager
 import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.Clipboard
-import androidx.compose.ui.platform.PlatformTextInputModifierNode
+import androidx.compose.ui.platform.GraphicsResourceCache
+import androidx.compose.ui.platform.NoSoundEffect
 import androidx.compose.ui.platform.PlatformTextInputSessionScope
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.SoundEffect
+import androidx.compose.ui.platform.TaskDispatchers
 import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.spatial.RectManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.viewinterop.InteropView
 import kotlin.coroutines.CoroutineContext
-import kotlinx.coroutines.Job
 
 /**
  * Owner implements the connection to the underlying view system. On Android, this connects to
@@ -102,6 +107,14 @@ internal interface Owner : PositionCalculator {
      */
     val graphicsContext: GraphicsContext
 
+    /**
+     * Cache used to share expensive graphics resources (such as vector draw caches) between all
+     * compositions hosted in the same context. Owners that don't support graphics resource sharing
+     * return null, in which case consumers should allocate locally-owned resources instead.
+     */
+    val graphicsResourceCache: GraphicsResourceCache?
+        get() = null
+
     /** Provide toolbar for text-related actions, such as copy, paste, cut etc. */
     val textToolbar: TextToolbar
 
@@ -131,6 +144,9 @@ internal interface Owner : PositionCalculator {
 
     val pointerIconService: PointerIconService
 
+    val soundEffect: SoundEffect
+        get() = NoSoundEffect
+
     /**
      * Semantics owner that provides access to
      * [SemanticsInfo][androidx.compose.ui.semantics.SemanticsInfo] and
@@ -143,6 +159,14 @@ internal interface Owner : PositionCalculator {
 
     /** Provide information about the window that hosts this [Owner]. */
     val windowInfo: WindowInfo
+
+    /** Provide [TaskDispatchers] for coroutines running within this [Owner]. */
+    val taskDispatchers: TaskDispatchers
+
+    /** Provide information about media query features that host this [Owner]. */
+    @ExperimentalMediaQueryApi
+    val uiMediaScope: UiMediaScope?
+        get() = null
 
     /**
      * Sets the [RetainedValuesStore] for the composition. On Android, this is a lifecycle-aware
@@ -172,9 +196,14 @@ internal interface Owner : PositionCalculator {
 
     val layoutDirection: LayoutDirection
 
+    val localeList: LocaleList
+
     /** `true` when layout should draw debug bounds. */
     var showLayoutBounds: Boolean
-        @RestrictTo(RestrictTo.Scope.LIBRARY) @InternalCoreApi set
+
+    /** [UriHandler] provided by [androidx.compose.ui.platform.LocalUriHandler] */
+    val uriHandler: UriHandler
+        get() = EmptyUriHandler
 
     /**
      * Called by [LayoutNode] to request the Owner a new measurement+layout. [forceRequest] defines
@@ -348,11 +377,12 @@ internal interface Owner : PositionCalculator {
 
     /**
      * Starts a new text input session and suspends until it's closed. For more information see
-     * [PlatformTextInputModifierNode.establishTextInputSession].
+     * [androidx.compose.ui.platform.establishTextInputSession].
      *
      * Implementations must ensure that new requests cancel any active request. They must also
      * ensure that the previous request is finished running all cancellation tasks before starting
-     * the new session, to ensure that no session code overlaps (e.g. using [Job.cancelAndJoin]).
+     * the new session, to ensure that no session code overlaps (e.g. using
+     * [kotlinx.coroutines.cancelAndJoin]).
      */
     suspend fun textInputSession(
         session: suspend PlatformTextInputSessionScope.() -> Nothing
@@ -388,9 +418,16 @@ internal interface Owner : PositionCalculator {
     /**
      * Dispatches a callback when something in this hierarchy scrolls.
      *
-     * @param offset Delta scrolled.
+     * @param node The [LayoutNode] that consumed the scroll.
+     * @param delta Delta scrolled.
      */
-    fun dispatchOnScrollChanged(delta: Offset) {}
+    fun dispatchOnScrollChanged(node: LayoutNode, delta: Offset) {}
+
+    /**
+     * Invalidates the layer that the root elements are drawn in. This does not invalidate any child
+     * layers.
+     */
+    fun invalidateRootLayer() {}
 
     companion object {
         /**
@@ -402,5 +439,11 @@ internal interface Owner : PositionCalculator {
 
     interface OnLayoutCompletedListener {
         fun onLayoutComplete()
+    }
+}
+
+private object EmptyUriHandler : UriHandler {
+    override fun openUri(uri: String) {
+        throw NotImplementedError("Owner must implement uriHandler")
     }
 }

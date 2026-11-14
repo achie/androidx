@@ -17,12 +17,14 @@
 package androidx.compose.ui.test
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.semantics.AccessibilityAction
 import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.util.fastForEachIndexed
+import androidx.compose.ui.util.fastJoinToString
 
 internal expect fun printToLog(tag: String, message: String)
 
@@ -38,7 +40,7 @@ internal expect fun printToLog(tag: String, message: String)
  * @param maxDepth Max depth of the nodes in hierarchy to print. Zero will print just this node.
  *   Must not be negative.
  */
-fun SemanticsNodeInteraction.printToString(
+public fun SemanticsNodeInteraction.printToString(
     /*@IntRange(from = 0)*/
     maxDepth: Int = Int.MAX_VALUE
 ): String {
@@ -59,7 +61,7 @@ fun SemanticsNodeInteraction.printToString(
  * @param maxDepth Max depth of the nodes in hierarchy to print. Zero will print just this node.
  *   Must not be negative.
  */
-fun SemanticsNodeInteraction.printToLog(
+public fun SemanticsNodeInteraction.printToLog(
     tag: String,
     /*@IntRange(from = 0)*/
     maxDepth: Int = Int.MAX_VALUE,
@@ -80,7 +82,7 @@ fun SemanticsNodeInteraction.printToLog(
  * @param maxDepth Max depth of the nodes in hierarchy to print. Zero will print nodes in this
  *   collection only. Must not be negative.
  */
-fun SemanticsNodeInteractionCollection.printToString(
+public fun SemanticsNodeInteractionCollection.printToString(
     /*@IntRange(from = 0)*/
     maxDepth: Int = 0
 ): String {
@@ -106,7 +108,7 @@ fun SemanticsNodeInteractionCollection.printToString(
  * @param maxDepth Max depth of the nodes in hierarchy to print. Zero will print nodes in this
  *   collection only.
  */
-fun SemanticsNodeInteractionCollection.printToLog(
+public fun SemanticsNodeInteractionCollection.printToLog(
     tag: String,
     /*@IntRange(from = 0)*/
     maxDepth: Int = 0,
@@ -132,21 +134,17 @@ internal fun Collection<SemanticsNode>.printToString(maxDepth: Int = 0): String 
     return sb.toString()
 }
 
-internal fun SemanticsNode.printToString(maxDepth: Int = 0): String {
+internal fun SemanticsNode.printToString(maxDepth: Int = 0): String =
+    SemanticsNodeSnapshot(this, maxDepth).printToString()
+
+internal fun SemanticsNodeSnapshot.printToString(): String {
     val sb = StringBuilder()
-    printToStringInner(
-        sb = sb,
-        maxDepth = maxDepth,
-        nestingLevel = 0,
-        nestingIndent = "",
-        isFollowedBySibling = false,
-    )
+    printToStringInner(sb = sb, nestingLevel = 0, nestingIndent = "", isFollowedBySibling = false)
     return sb.toString()
 }
 
-private fun SemanticsNode.printToStringInner(
+private fun SemanticsNodeSnapshot.printToStringInner(
     sb: StringBuilder,
-    maxDepth: Int,
     nestingLevel: Int,
     nestingIndent: String,
     isFollowedBySibling: Boolean,
@@ -172,13 +170,10 @@ private fun SemanticsNode.printToStringInner(
         sb.append("'")
     }
 
-    val maxLevelReached = nestingLevel == maxDepth
-
     sb.appendConfigInfo(config, newIndent)
 
-    if (maxLevelReached) {
-        val childrenCount = children.size
-        val siblingsCount = (parent?.children?.size ?: 1) - 1
+    // The children are not part of the snapshot once the max depth is reached
+    if (children == null) {
         if (childrenCount > 0 || (siblingsCount > 0 && nestingLevel == 0)) {
             sb.appendLine()
             sb.append(newIndent)
@@ -203,18 +198,12 @@ private fun SemanticsNode.printToStringInner(
     }
 
     val childrenLevel = nestingLevel + 1
-    val children = this.children.toList()
-    children.forEachIndexed { index, child ->
+    children.fastForEachIndexed { index, child ->
         val hasSibling = index < children.size - 1
         sb.appendLine()
-        child.printToStringInner(sb, maxDepth, childrenLevel, newIndent, hasSibling)
+        child.printToStringInner(sb, childrenLevel, newIndent, hasSibling)
     }
 }
-
-private val SemanticsNode.unclippedGlobalBounds: Rect
-    get() {
-        return Rect(positionInWindow, size.toSize())
-    }
 
 private fun rectToShortString(rect: Rect): String {
     return "(l=${rect.left}, t=${rect.top}, r=${rect.right}, b=${rect.bottom})px"
@@ -259,6 +248,8 @@ private fun StringBuilder.appendConfigInfo(config: SemanticsConfiguration, inden
                 // Save space if we there is text only in the object
                 append(value)
             }
+        } else if (value is ColorProducer) {
+            append(value.invoke())
         } else {
             append(value)
         }
@@ -270,7 +261,7 @@ private fun StringBuilder.appendConfigInfo(config: SemanticsConfiguration, inden
         appendLine()
         append(indent)
         append("[")
-        append(units.joinToString(separator = ", "))
+        append(units.fastJoinToString(separator = ", "))
         append("]")
     }
 
@@ -278,7 +269,7 @@ private fun StringBuilder.appendConfigInfo(config: SemanticsConfiguration, inden
         appendLine()
         append(indent)
         append("Actions = [")
-        append(actions.joinToString(separator = ", "))
+        append(actions.fastJoinToString(separator = ", "))
         append("]")
     }
 

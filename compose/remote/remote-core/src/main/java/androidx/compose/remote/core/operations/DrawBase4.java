@@ -39,10 +39,10 @@ public abstract class DrawBase4 extends PaintOperation implements VariableSuppor
     protected float mY1;
     protected float mX2;
     protected float mY2;
-    float mX1Value;
-    float mY1Value;
-    float mX2Value;
-    float mY2Value;
+    protected float mX1Value;
+    protected float mY1Value;
+    protected float mX2Value;
+    protected float mY2Value;
 
     public DrawBase4(float x1, float y1, float x2, float y2) {
         mX1Value = x1;
@@ -54,6 +54,22 @@ public abstract class DrawBase4 extends PaintOperation implements VariableSuppor
         mY1 = y1;
         mX2 = x2;
         mY2 = y2;
+    }
+
+    public float getX1() {
+        return mX1Value;
+    }
+
+    public float getY1() {
+        return mY1Value;
+    }
+
+    public float getX2() {
+        return mX2Value;
+    }
+
+    public float getY2() {
+        return mY2Value;
     }
 
     @Override
@@ -115,10 +131,10 @@ public abstract class DrawBase4 extends PaintOperation implements VariableSuppor
      */
     public static void read(
             @NonNull WireBuffer buffer, @NonNull List<Operation> operations, @NonNull Maker maker) {
-        float v1 = buffer.readFloat();
-        float v2 = buffer.readFloat();
-        float v3 = buffer.readFloat();
-        float v4 = buffer.readFloat();
+        float v1 = buffer.readNanId();
+        float v2 = buffer.readNanId();
+        float v3 = buffer.readNanId();
+        float v4 = buffer.readNanId();
 
         Operation op = maker.create(v1, v2, v3, v4);
         operations.add(op);
@@ -168,5 +184,45 @@ public abstract class DrawBase4 extends PaintOperation implements VariableSuppor
                 .add(y1Name, mY1Value, mY1)
                 .add(x2Name, mX2Value, mX2)
                 .add(y2Name, mY2Value, mY2);
+    }
+
+    /** Returns {@code mX1Value}. */
+    public float getX1Value() {
+        return mX1Value;
+    }
+
+    /** Returns {@code mY1Value}. */
+    public float getY1Value() {
+        return mY1Value;
+    }
+
+    /** Returns {@code mX2Value}. */
+    public float getX2Value() {
+        return mX2Value;
+    }
+
+    /** Returns {@code mY2Value}. */
+    public float getY2Value() {
+        return mY2Value;
+    }
+
+    /** Returns the raw (possibly NaN-encoded variable id) {@code mX1}. */
+    public float getRawX1() {
+        return mX1;
+    }
+
+    /** Returns the raw (possibly NaN-encoded variable id) {@code mY1}. */
+    public float getRawY1() {
+        return mY1;
+    }
+
+    /** Returns the raw (possibly NaN-encoded variable id) {@code mX2}. */
+    public float getRawX2() {
+        return mX2;
+    }
+
+    /** Returns the raw (possibly NaN-encoded variable id) {@code mY2}. */
+    public float getRawY2() {
+        return mY2;
     }
 }

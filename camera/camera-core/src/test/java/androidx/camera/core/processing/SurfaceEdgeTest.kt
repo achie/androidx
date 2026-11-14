@@ -47,6 +47,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.After
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -347,6 +348,21 @@ class SurfaceEdgeTest {
     }
 
     @Test
+    fun connectToClosedProviderStillInUse_getsException() {
+        // Arrange: the provider is closed while it's still in use, e.g. by a previous connection.
+        provider.incrementUseCount()
+        provider.close()
+        try {
+            // Act and assert.
+            assertThrows(SurfaceClosedException::class.java) { surfaceEdge.setProvider(provider) }
+            assertThat(surfaceEdge.hasProvider()).isFalse()
+            assertThat(provider.useCount).isEqualTo(1)
+        } finally {
+            provider.decrementUseCount()
+        }
+    }
+
+    @Test
     fun createSurfaceRequestAndCancel_cancellationIsPropagated() {
         // Arrange: create a SurfaceRequest.
         val surfaceRequest = surfaceEdge.createSurfaceRequest(FakeCamera())
@@ -479,11 +495,10 @@ class SurfaceEdgeTest {
     fun setSourceSurfaceFutureAndProvide_surfaceIsPropagated() {
         // Arrange: set a ListenableFuture<Surface> as the source.
         var completer: CallbackToFutureAdapter.Completer<Surface>? = null
-        val surfaceFuture =
-            CallbackToFutureAdapter.getFuture {
-                completer = it
-                return@getFuture null
-            }
+        val surfaceFuture = CallbackToFutureAdapter.getFuture {
+            completer = it
+            return@getFuture null
+        }
         surfaceEdge.setProvider(
             object : DeferrableSurface(INPUT_SIZE, ImageFormat.PRIVATE) {
                 override fun provideSurface(): ListenableFuture<Surface> {

@@ -16,6 +16,7 @@
 
 package androidx.xr.compose.subspace.node
 
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.xr.compose.subspace.layout.LayoutSubspaceMeasureScope
 import androidx.xr.compose.subspace.layout.ParentLayoutParamsAdjustable
 import androidx.xr.compose.subspace.layout.SubspaceLayoutCoordinates
@@ -23,9 +24,11 @@ import androidx.xr.compose.subspace.layout.SubspaceMeasurable
 import androidx.xr.compose.subspace.layout.SubspaceMeasureResult
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.SubspacePlaceable
+import androidx.xr.compose.subspace.layout.metersToPx
 import androidx.xr.compose.unit.IntVolumeSize
 import androidx.xr.compose.unit.VolumeConstraints
 import androidx.xr.runtime.math.Pose
+import androidx.xr.scenecore.Space
 
 /**
  * A [SubspaceMeasurable] and [SubspacePlaceable] object that is used to measure and lay out the
@@ -65,14 +68,30 @@ internal class SubspaceLayoutModifierNodeCoordinator(
     /**
      * The pose of this layout modifier node relative to its parent entity in the Compose hierarchy.
      */
-    override val poseInParentEntity: Pose
-        get() = coordinatesInParentEntity?.poseInParentEntity?.compose(pose) ?: pose
+    override val poseInParent: Pose
+        get() = coordinatesInParentEntity?.poseInParent?.compose(pose) ?: pose
 
     /**
      * The pose of this layout modifier node relative to the root entity of the Compose hierarchy.
      */
     override val poseInRoot: Pose
         get() = parentCoordinates?.poseInRoot?.compose(pose) ?: pose
+
+    /**
+     * The pose of this layout modifier node relative to ActivitySpace, with translation in pixels.
+     */
+    override val poseInActivitySpace: Pose
+        get() {
+            // Nodes under the subspace root have a parentCoordinates value.
+            parentCoordinates?.let {
+                return it.poseInActivitySpace.compose(pose)
+            }
+
+            // For the subspace root, return its pose in ActivitySpace.
+            val pixelDensity = layoutNode?.coreEntity?.pixelDensity ?: return Pose.Identity
+            return layoutNode?.coreEntity?.getPose(Space.ACTIVITY)?.metersToPx(pixelDensity)
+                ?: Pose.Identity
+        }
 
     /**
      * The coordinates of the immediate parent in the layout hierarchy.
@@ -121,6 +140,9 @@ internal class SubspaceLayoutModifierNodeCoordinator(
         logger?.nodePlaced(layoutModifierNode, pose)
         subspaceMeasureResult?.placeChildren(
             object : SubspacePlacementScope() {
+                override val parentLayoutDirection =
+                    this@SubspaceLayoutModifierNodeCoordinator.layoutNode?.layoutDirection
+                        ?: LayoutDirection.Ltr
                 public override val coordinates = this@SubspaceLayoutModifierNodeCoordinator
             }
         )
@@ -139,6 +161,8 @@ internal class SubspaceLayoutModifierNodeCoordinator(
      *   by its parent layout.
      */
     override fun measure(constraints: VolumeConstraints): SubspacePlaceable {
+        measurementConstraints = constraints
+
         with(layoutModifierNode) {
             val measurable: SubspaceMeasurable = child ?: layoutNode!!.measurableLayout
             val subspaceMeasureResult: SubspaceMeasureResult =

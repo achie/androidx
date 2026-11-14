@@ -16,22 +16,26 @@
 
 package androidx.xr.scenecore
 
-import android.annotation.SuppressLint
 import android.view.Surface
 import androidx.annotation.FloatRange
 import androidx.annotation.MainThread
 import androidx.annotation.RestrictTo
-import androidx.xr.runtime.Config
-import androidx.xr.runtime.Log
+import androidx.annotation.VisibleForTesting
+import androidx.xr.arcore.RenderViewpoint
+import androidx.xr.runtime.RequiresSpatialApi
 import androidx.xr.runtime.Session
-import androidx.xr.runtime.internal.LifecycleManager
+import androidx.xr.runtime.SpatialApiVersions
+import androidx.xr.runtime.math.FieldOfView
 import androidx.xr.runtime.math.FloatSize2d
 import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Pose
 import androidx.xr.scenecore.runtime.RenderingRuntime
-import androidx.xr.scenecore.runtime.SceneRuntime
 import androidx.xr.scenecore.runtime.SurfaceEntity as RtSurfaceEntity
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import java.nio.IntBuffer
 
 /**
  * SurfaceEntity is an [Entity] that hosts a [Surface], which will be texture mapped onto the
@@ -42,21 +46,25 @@ import androidx.xr.scenecore.runtime.SurfaceEntity as RtSurfaceEntity
  * application rendering or video decoding. Applications are advised to carefully hide this entity
  * around state transitions (for example in response to video events) to manage glitchiness.
  *
- * @property shape The [Shape] which describes the mesh to which the Surface is mapped.
- * @property stereoMode The [StereoMode] which describes how parts of the surface are displayed to
- *   the user's eyes.
- * @property dimensions The dimensions of the canvas in the local spatial coordinate system of the
- *   entity.
- * @property edgeFeatheringParams The [EdgeFeatheringParams] which describes the edge fading effects
- *   for the surface.
+ * @property shape the [Shape] which describes the mesh to which the Surface is mapped
+ * @property stereoMode the [StereoMode] which describes how parts of the surface are displayed to
+ *   the user's eyes
+ * @property blendingMode the [BlendingMode] which specifies the blending behavior of the surface
+ * @property dimensions the dimensions of the canvas in the local spatial coordinate system of the
+ *   entity
+ * @property edgeFeatheringParams the [EdgeFeatheringParams] which describes the edge fading effects
+ *   for the surface
  */
 public class SurfaceEntity
 private constructor(
-    private val lifecycleManager: LifecycleManager,
-    rtEntity: RtSurfaceEntity,
-    entityManager: EntityManager,
+    private val perceptionSpace: PerceptionSpace,
+    rtSurfaceEntity: RtSurfaceEntity,
+    entityRegistry: EntityRegistry,
     shape: Shape,
-) : BaseEntity<RtSurfaceEntity>(rtEntity, entityManager) {
+) : Entity(rtSurfaceEntity, entityRegistry) {
+
+    private val rtSurfaceEntity: RtSurfaceEntity
+        get() = rtEntity as RtSurfaceEntity
 
     /** Represents the shape of the Canvas that backs a SurfaceEntity. */
     public interface Shape {
@@ -66,24 +74,55 @@ private constructor(
          * local spatial coordinate system of the entity. (0,0) is the center of the Quad mesh; the
          * lower-left corner of the Quad is at (-width/2, -height/2).
          *
-         * @property extents The size of the Quad in the local spatial coordinate system of the
-         *   entity.
+         * The maximum allowed value for [cornerRadius] is half of the smaller dimension of
+         * [extents]. If [cornerRadius] is set to 0.0f, the corners will be sharp. Rounded corners
+         * require [androidx.xr.runtime.SpatialApiVersions.SPATIAL_API_V4] or higher. On earlier
+         * versions this value is ignored and the corners stay sharp. Check the device's version
+         * with [androidx.xr.runtime.SpatialApiVersionHelper.spatialApiVersion].
+         *
+         * @property extents the size of the Quad in the local spatial coordinate system of the
+         *   entity
+         * @property cornerRadius the radius of the rounded corners of the Quad in the local spatial
+         *   coordinate system of the entity
+         * @throws IllegalArgumentException if [extents] has a negative width or height, or if
+         *   [cornerRadius] is negative or greater than half of the smaller dimension of [extents]
          */
-        public class Quad(public val extents: FloatSize2d) : Shape {}
+        public class Quad
+        @JvmOverloads
+        constructor(
+            public val extents: FloatSize2d,
+            @FloatRange(from = 0.0) public val cornerRadius: Float = 0.0f,
+        ) : Shape {
+            init {
+                require(extents.width >= 0.0f && extents.height >= 0.0f) {
+                    "extents must be non-negative"
+                }
+                require(cornerRadius >= 0.0f) { "cornerRadius must be non-negative" }
+                val maxRadius = minOf(extents.width, extents.height) / 2.0f
+                require(cornerRadius <= maxRadius) {
+                    "cornerRadius ($cornerRadius) must not be greater than half of the smaller dimension (width or height): $maxRadius"
+                }
+            }
+        }
 
         /**
-         * cal An inwards-facing sphere-shaped mesh, centered at (0,0,0) in the local coordinate
-         * space. This is intended to be used by setting the entity's pose to the user's head pose.
-         * Radius is represented in the local spatial coordinate system of the entity. The center of
-         * the Surface will be mapped to (0, 0, -radius) in the local coordinate space, and texture
+         * An inwards-facing sphere-shaped mesh, centered at (0,0,0) in the local coordinate space.
+         * This is intended to be used by setting the entity's pose to the user's head pose. Radius
+         * is represented in the local spatial coordinate system of the entity. The center of the
+         * Surface will be mapped to (0, 0, -radius) in the local coordinate space, and texture
          * coordinate UVs are applied from positive X to negative X in an equirectangular
          * projection. This means that if this Entity is set to the user's head pose, then they will
          * be looking at the center of the video if it were viewed in a 2D player.
          *
-         * @property radius The radius of the sphere in the local spatial coordinate system of the
-         *   entity.
+         * @property radius the radius of the sphere in the local spatial coordinate system of the
+         *   entity
+         * @throws IllegalArgumentException if [radius] is negative
          */
-        public class Sphere(public val radius: Float) : Shape {}
+        public class Sphere(public val radius: Float) : Shape {
+            init {
+                require(radius >= 0.0f) { "radius must be non-negative" }
+            }
+        }
 
         /**
          * An inwards-facing hemisphere-shaped canvas, where (0,0,0) is the center of the base of
@@ -93,25 +132,126 @@ private constructor(
          * space, and texture coordinate UV's are applied from positive X to negative X in an
          * equirectangular projection.
          *
-         * @property radius The radius of the hemisphere in the local spatial coordinate system of
-         *   the entity.
+         * @property radius the radius of the hemisphere in the local spatial coordinate system of
+         *   the entity
+         * @throws IllegalArgumentException if [radius] is negative
          */
-        public class Hemisphere(public val radius: Float) : Shape {}
+        public class Hemisphere(public val radius: Float) : Shape {
+            init {
+                require(radius >= 0.0f) { "radius must be non-negative" }
+            }
+        }
+
+        /**
+         * Geometric Data for a triangle mesh which can be used by the CustomMesh Shape. [positions]
+         * must have 3 entries for every 2 in [texCoords]. If [indices] is null, then the geometry
+         * will be assembled (according to the [DrawMode]) from the vertex data sequentially.
+         *
+         * @property positions a FloatBuffer containing {x,y,z} position data for each vertex
+         * @property texCoords a FloatBuffer containing {u,v} texture coordinate data for each
+         *   vertex
+         * @property indices an optional IntBuffer containing an index traversal in Triangle list
+         *   format for the vertex data in [positions] and [texCoords]
+         */
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+        public class TriangleMesh(
+            positions: FloatBuffer,
+            texCoords: FloatBuffer,
+            indices: IntBuffer? = null,
+        ) {
+            public val positions: FloatBuffer =
+                if (positions.isDirect) positions
+                else {
+                    copyToDirect(positions)
+                }
+            public val texCoords: FloatBuffer =
+                if (texCoords.isDirect) texCoords
+                else {
+                    copyToDirect(texCoords)
+                }
+            public val indices: IntBuffer? =
+                if (indices == null || indices.isDirect) indices
+                else {
+                    copyToDirect(indices)
+                }
+
+            private companion object {
+                private fun copyToDirect(buffer: FloatBuffer): FloatBuffer {
+                    val direct =
+                        ByteBuffer.allocateDirect(buffer.capacity() * 4)
+                            .order(ByteOrder.nativeOrder())
+                            .asFloatBuffer()
+                    val duplicate = buffer.duplicate()
+                    duplicate.clear()
+                    direct.put(duplicate)
+                    direct.position(buffer.position())
+                    direct.limit(buffer.limit())
+                    return direct
+                }
+
+                private fun copyToDirect(buffer: IntBuffer): IntBuffer {
+                    val direct =
+                        ByteBuffer.allocateDirect(buffer.capacity() * 4)
+                            .order(ByteOrder.nativeOrder())
+                            .asIntBuffer()
+                    val duplicate = buffer.duplicate()
+                    duplicate.clear()
+                    direct.put(duplicate)
+                    direct.position(buffer.position())
+                    direct.limit(buffer.limit())
+                    return direct
+                }
+            }
+        }
+
+        /**
+         * Specifies vertex geometry for the projection surface. Vertex positions should be
+         * expressed in the coordinate space of the SurfaceEntity.
+         *
+         * Note that UV's will be interpreted differently depending on the StereoMode applied to the
+         * SurfaceEntity. It is expected that the UV's of each mesh are mapped to the range of the
+         * rectangular sub-region of the image that is meant to be mapped to that eye. For example,
+         * if the TOP_BOTTOM stereoMode was specified when creating the [SurfaceEntity] to which
+         * this [Shape] is bound, then a [1,1] UV coordinate in the rightEye [TriangleMesh] will map
+         * to [1, 0.5] on the sampled [Surface]. Likewise, if the SIDE_BY_SIDE stereoMode was
+         * specified, a UV of [0,0] in the rightEye mesh would map to [0.5, 0] on the sampled
+         * [Surface]. The MONO stereoMode will not modify UVs, and the MULTIVIEW stereoModes will
+         * not modify UVs, but the underlying texture sampling will come from the Left and Right
+         * buffers of the [Surface].
+         *
+         * Triangle mesh data will be stored within the system when this CanvasShape is set on a
+         * SurfaceEntity instance. Modifying the data within the [TriangleMesh]es supplied at
+         * creation time will not alter the geometry of the SurfaceEntity at the time of
+         * modification; to update the geometry the shape must be re-set.
+         *
+         * If [rightEye] is null, the data from [leftEye] will be displayed in the right eye.
+         *
+         * @property leftEye the [TriangleMesh] data for the geometry shown in the left eye
+         * @property rightEye an optional [TriangleMesh] data for geometry shown in the right eye
+         * @property drawMode the [DrawMode] to use when drawing the mesh, defaulting to
+         *   [DrawMode.TRIANGLES]
+         */
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+        public class CustomMesh(
+            public val leftEye: TriangleMesh,
+            public val rightEye: TriangleMesh? = null,
+            public val drawMode: DrawMode = DrawMode.TRIANGLES,
+        ) : Shape {}
     }
 
     /** Represents edge fading effects for a SurfaceEntity. */
     public abstract class EdgeFeatheringParams private constructor() {
         /**
-         * @property leftRight a [Float] which controls the shape-relative radius of the edge
-         *   fadeout on the left and right edges of the SurfaceEntity canvas.
-         * @property topBottom a [Float] which controls the shape-relative radius of the edge
-         *   fadeout on the top and bottom edges of the SurfaceEntity canvas.
-         *
          * A radius of 0.05 represents 5% of the width of the visible canvas surface. Please note
          * that this is scaled by the aspect ratio of Quad-shaped canvases.
          *
          * Applications are encouraged to use [NoFeathering] on Spherical canvases. The behavior is
          * only defined for values between [0.0f - 0.5f]. Default values are 0.0f.
+         *
+         * @property leftRight a [Float] which controls the shape-relative radius of the edge
+         *   fadeout on the left and right edges of the SurfaceEntity canvas
+         * @property topBottom a [Float] which controls the shape-relative radius of the edge
+         *   fadeout on the top and bottom edges of the SurfaceEntity canvas
          */
         public class RectangleFeather(
             @FloatRange(from = 0.0, to = 0.5) public val leftRight: Float = 0.0f,
@@ -127,46 +267,78 @@ private constructor(
      * [android.hardware.HardwareBuffer]s with the USAGE_PROTECTED_CONTENT flag set. These buffers
      * support hardware paths for decoding protected content.
      *
-     * @see https://developer.android.com/reference/android/media/MediaDrm for more details.
+     * See [MediaDrm](https://developer.android.com/reference/android/media/MediaDrm) for more
+     * details.
      */
-    public class SurfaceProtection private constructor(private val name: String) {
+    public class SurfaceProtection private constructor(private val value: Int) {
         public companion object {
             /**
              * The Surface content is not protected. Non-protected content can be decoded into this
              * surface. Protected content can not be decoded into this Surface. Screen captures of
              * the SurfaceEntity will show the Surface content.
              */
-            @JvmField public val NONE: SurfaceProtection = SurfaceProtection("NONE")
+            @JvmField public val NONE: SurfaceProtection = SurfaceProtection(0)
 
             /**
              * The Surface content is protected. Non-protected content can be decoded into this
              * surface. Protected content can be decoded into this Surface. Screen captures of the
              * SurfaceEntity will redact the Surface content.
              */
-            @JvmField public val PROTECTED: SurfaceProtection = SurfaceProtection("PROTECTED")
+            @JvmField public val PROTECTED: SurfaceProtection = SurfaceProtection(1)
         }
 
-        override fun toString(): String = name
+        override fun toString(): String =
+            when (this) {
+                NONE -> "NONE"
+                PROTECTED -> "PROTECTED"
+                else -> "UNKNOWN ($value)"
+            }
     }
 
     /**
      * Specifies whether super sampling should be enabled for this surface. Super sampling can
      * improve text clarity at a performance cost.
      */
-    public class SuperSampling private constructor(private val name: String) {
+    public class SuperSampling private constructor(private val value: Int) {
         public companion object {
 
             /** Super sampling is disabled. */
-            @JvmField public val NONE: SuperSampling = SuperSampling("NONE")
+            @JvmField public val NONE: SuperSampling = SuperSampling(0)
 
             /**
              * Super sampling is enabled with a default sampling pattern. This is the value that is
              * set if SuperSampling is not specified when the Entity is created.
              */
-            @JvmField public val PENTAGON: SuperSampling = SuperSampling("PENTAGON")
+            @JvmField public val PENTAGON: SuperSampling = SuperSampling(1)
         }
 
-        override fun toString(): String = name
+        override fun toString(): String =
+            when (this) {
+                NONE -> "NONE"
+                PENTAGON -> "PENTAGON"
+                else -> "UNKNOWN ($value)"
+            }
+    }
+
+    /** Specifies the drawing mode for a [Shape.TriangleMesh]. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public class DrawMode private constructor(private val value: Int) {
+        public companion object {
+            /** Draw the mesh as a list of triangles. */
+            @JvmField public val TRIANGLES: DrawMode = DrawMode(1)
+            /** Draw the mesh as a triangle strip. */
+            @JvmField public val TRIANGLE_STRIP: DrawMode = DrawMode(2)
+            /** Draw the mesh as a triangle fan. */
+            @JvmField public val TRIANGLE_FAN: DrawMode = DrawMode(3)
+        }
+
+        override fun toString(): String =
+            when (this) {
+                TRIANGLES -> "TRIANGLES"
+                TRIANGLE_STRIP -> "TRIANGLE_STRIP"
+                TRIANGLE_FAN -> "TRIANGLE_FAN"
+                else -> "UNKNOWN ($value)"
+            }
     }
 
     /**
@@ -174,44 +346,92 @@ private constructor(
      * into the surface in accordance with what they provided here in order for the compositor to
      * correctly produce a stereoscopic view to the user.
      *
-     * Values here match values from [androidx.media3.common.C.StereoMode].
-     *
-     * @see https://developer.android.com/reference/androidx/media3/common/C.StereoMode
+     * Values here match values from
+     * [androidx.media3.common.C.StereoMode](https://developer.android.com/reference/androidx/media3/common/C.StereoMode).
      */
-    public class StereoMode private constructor(private val name: String) {
+    public class StereoMode private constructor(private val value: Int) {
         public companion object {
 
             /** Each eye will see the entire surface (no separation) */
-            @JvmField public val MONO: StereoMode = StereoMode("MONO")
+            @JvmField public val MONO: StereoMode = StereoMode(1)
 
             /** The [top, bottom] halves of the surface will map to [left, right] eyes */
-            @JvmField public val TOP_BOTTOM: StereoMode = StereoMode("TOP_BOTTOM")
+            @JvmField public val TOP_BOTTOM: StereoMode = StereoMode(2)
 
             /** The [left, right] halves of the surface will map to [left, right] eyes */
-            @JvmField public val SIDE_BY_SIDE: StereoMode = StereoMode("SIDE_BY_SIDE")
+            @JvmField public val SIDE_BY_SIDE: StereoMode = StereoMode(3)
 
             /** Multiview video, [primary, auxiliary] views will map to [left, right] eyes */
-            @JvmField
-            public val MULTIVIEW_LEFT_PRIMARY: StereoMode = StereoMode("MULTIVIEW_LEFT_PRIMARY")
+            @JvmField public val MULTIVIEW_LEFT_PRIMARY: StereoMode = StereoMode(4)
 
             /** Multiview video, [primary, auxiliary] views will map to [right, left] eyes */
-            @JvmField
-            public val MULTIVIEW_RIGHT_PRIMARY: StereoMode = StereoMode("MULTIVIEW_RIGHT_PRIMARY")
+            @JvmField public val MULTIVIEW_RIGHT_PRIMARY: StereoMode = StereoMode(5)
         }
 
-        override fun toString(): String = name
+        override fun toString(): String =
+            when (this) {
+                MONO -> "MONO"
+                TOP_BOTTOM -> "TOP_BOTTOM"
+                SIDE_BY_SIDE -> "SIDE_BY_SIDE"
+                MULTIVIEW_LEFT_PRIMARY -> "MULTIVIEW_LEFT_PRIMARY"
+                MULTIVIEW_RIGHT_PRIMARY -> "MULTIVIEW_RIGHT_PRIMARY"
+                else -> "UNKNOWN ($value)"
+            }
+    }
+
+    /**
+     * Specifies the blending behavior of a [SurfaceEntity], which determines how it interacts with
+     * other objects in the scene.
+     *
+     * Use [TRANSPARENT] for alpha effects such as
+     * [edge feathering][SurfaceEntity.edgeFeatheringParams]. Use [OPAQUE] when other objects, such
+     * as sprites or UI, must appear correctly in front of or behind the surface.
+     *
+     * Set the mode at creation time with [Builder.setBlendingMode], or change it later with
+     * [SurfaceEntity.blendingMode]. The default is [TRANSPARENT].
+     *
+     * [OPAQUE] requires [androidx.xr.runtime.SpatialApiVersions.SPATIAL_API_V4] or higher. On
+     * earlier versions, it has no effect and the surface renders as [TRANSPARENT]. Check the
+     * device's version with [androidx.xr.runtime.SpatialApiVersionHelper.spatialApiVersion].
+     */
+    public class BlendingMode private constructor(private val value: Int) {
+        public companion object {
+            /**
+             * Blends the surface with the content behind it according to the surface's alpha
+             * channel, which enables effects such as edge feathering. Treats the surface's RGB
+             * values as not premultiplied by alpha. Other objects may appear in front of or behind
+             * the surface regardless of their actual distance.
+             *
+             * New [SurfaceEntity] instances use this mode by default.
+             */
+            @JvmField public val TRANSPARENT: BlendingMode = BlendingMode(1)
+
+            /**
+             * Renders the surface fully opaque and ignores its alpha channel, so alpha effects such
+             * as edge feathering don't apply. Other objects, including transparent ones, appear in
+             * front of or behind the surface based on their actual distance.
+             */
+            @JvmField public val OPAQUE: BlendingMode = BlendingMode(2)
+        }
+
+        override fun toString(): String =
+            when (this) {
+                TRANSPARENT -> "TRANSPARENT"
+                OPAQUE -> "OPAQUE"
+                else -> "UNKNOWN ($value)"
+            }
     }
 
     /**
      * Color information for the content drawn on a surface. This is used to hint to the system how
      * the content should be rendered depending on display settings.
      *
-     * @property colorSpace The color space of the content.
-     * @property colorTransfer The transfer function to apply to the content.
-     * @property colorRange The color range of the content.
-     * @property maxContentLightLevel The maximum brightness of the content (in nits).
+     * @property colorSpace the color space of the content
+     * @property colorTransfer the transfer function to apply to the content
+     * @property colorRange the color range of the content
+     * @property maxContentLightLevel the maximum brightness of the content (in nits)
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public class ContentColorMetadata(
         public val colorSpace: ColorSpace = ColorSpace.BT709,
         public val colorTransfer: ColorTransfer = ColorTransfer.SRGB,
@@ -224,31 +444,41 @@ private constructor(
          *
          * These values are a superset of androidx.media3.common.C.ColorSpace.
          */
-        public class ColorSpace private constructor(private val name: String) {
+        public class ColorSpace private constructor(private val value: Int) {
             public companion object {
                 /** Please see androidx.media3.common.C.COLOR_SPACE_BT709 (1) */
-                @JvmField public val BT709: ColorSpace = ColorSpace("BT709")
+                @JvmField public val BT709: ColorSpace = ColorSpace(1)
 
                 /** Please see androidx.media3.common.C.COLOR_SPACE_BT601 (2) */
-                @JvmField public val BT601_PAL: ColorSpace = ColorSpace("BT601_PAL")
+                @JvmField public val BT601_PAL: ColorSpace = ColorSpace(2)
 
                 /** Please see androidx.media3.common.C.COLOR_SPACE_BT2020 (6) */
-                @JvmField public val BT2020: ColorSpace = ColorSpace("BT2020")
+                @JvmField public val BT2020: ColorSpace = ColorSpace(6)
 
                 /** Please see ADataSpace::ADATASPACE_BT601_525 (0xf0) */
-                @JvmField public val BT601_525: ColorSpace = ColorSpace("BT601_525")
+                @JvmField public val BT601_525: ColorSpace = ColorSpace(0xf0)
 
                 /** Please see ADataSpace::ADATASPACE_DISPLAY_P3 (0xf1) */
-                @JvmField public val DISPLAY_P3: ColorSpace = ColorSpace("DISPLAY_P3")
+                @JvmField public val DISPLAY_P3: ColorSpace = ColorSpace(0xf1)
 
                 /** Please see ADataSpace::ADATASPACE_DCI_P3 (0xf2) */
-                @JvmField public val DCI_P3: ColorSpace = ColorSpace("DCI_P3")
+                @JvmField public val DCI_P3: ColorSpace = ColorSpace(0xf2)
 
                 /** Please see ADataSpace::ADATASPACE_ADOBE_RGB (0xf3) */
-                @JvmField public val ADOBE_RGB: ColorSpace = ColorSpace("ADOBE_RGB")
+                @JvmField public val ADOBE_RGB: ColorSpace = ColorSpace(0xf3)
             }
 
-            override fun toString(): String = name
+            override fun toString(): String =
+                when (this) {
+                    BT709 -> "BT709"
+                    BT601_PAL -> "BT601_PAL"
+                    BT2020 -> "BT2020"
+                    BT601_525 -> "BT601_525"
+                    DISPLAY_P3 -> "DISPLAY_P3"
+                    DCI_P3 -> "DCI_P3"
+                    ADOBE_RGB -> "ADOBE_RGB"
+                    else -> "UNKNOWN ($value)"
+                }
         }
 
         /**
@@ -257,39 +487,48 @@ private constructor(
          * Enum members cover the transfer functions available in android::ADataSpace Enum values
          * match values from androidx.media3.common.C.ColorTransfer.
          */
-        public class ColorTransfer private constructor(private val name: String) {
+        public class ColorTransfer private constructor(private val value: Int) {
             public companion object {
 
                 /** Linear transfer characteristic curve. */
-                @JvmField public val LINEAR: ColorTransfer = ColorTransfer("LINEAR")
+                @JvmField public val LINEAR: ColorTransfer = ColorTransfer(1)
 
                 /**
                  * The standard RGB transfer function, used for some SDR use-cases like image input.
                  */
-                @JvmField public val SRGB: ColorTransfer = ColorTransfer("SRGB")
+                @JvmField public val SRGB: ColorTransfer = ColorTransfer(2)
 
                 /**
                  * SMPTE 170M transfer characteristic curve used by BT.601/BT.709/BT.2020. This is
                  * the curve used by most non-HDR video content.
                  */
-                @JvmField public val SDR: ColorTransfer = ColorTransfer("SDR")
+                @JvmField public val SDR: ColorTransfer = ColorTransfer(3)
 
                 /**
                  * The Gamma 2.2 transfer function, used for some SDR use-cases like tone-mapping.
                  */
-                @JvmField public val GAMMA_2_2: ColorTransfer = ColorTransfer("GAMMA_2_2")
+                @JvmField public val GAMMA_2_2: ColorTransfer = ColorTransfer(4)
 
                 /** SMPTE ST 2084 transfer function. This is used by some HDR video content. */
-                @JvmField public val ST2084: ColorTransfer = ColorTransfer("ST2084")
+                @JvmField public val ST2084: ColorTransfer = ColorTransfer(5)
 
                 /**
                  * ARIB STD-B67 hybrid-log-gamma transfer function. This is used by some HDR video
                  * content.
                  */
-                @JvmField public val HLG: ColorTransfer = ColorTransfer("HLG")
+                @JvmField public val HLG: ColorTransfer = ColorTransfer(6)
             }
 
-            override fun toString(): String = name
+            override fun toString(): String =
+                when (this) {
+                    LINEAR -> "LINEAR"
+                    SRGB -> "SRGB"
+                    SDR -> "SDR"
+                    GAMMA_2_2 -> "GAMMA_2_2"
+                    ST2084 -> "ST2084"
+                    HLG -> "HLG"
+                    else -> "UNKNOWN ($value)"
+                }
         }
 
         /**
@@ -297,16 +536,21 @@ private constructor(
          *
          * Enum values match values from androidx.media3.common.C.ColorRange.
          */
-        public class ColorRange private constructor(private val name: String) {
+        public class ColorRange private constructor(private val value: Int) {
             public companion object {
                 /** Please see android.media.MediaFormat.COLOR_RANGE_FULL */
-                @JvmField public val FULL: ColorRange = ColorRange("FULL")
+                @JvmField public val FULL: ColorRange = ColorRange(1)
 
                 /** Please see android.media.MedaiFormat.COLOR_RANGE_LIMITED */
-                @JvmField public val LIMITED: ColorRange = ColorRange("LIMITED")
+                @JvmField public val LIMITED: ColorRange = ColorRange(2)
             }
 
-            override fun toString(): String = name
+            override fun toString(): String =
+                when (this) {
+                    FULL -> "FULL"
+                    LIMITED -> "LIMITED"
+                    else -> "UNKNOWN ($value)"
+                }
         }
 
         public companion object {
@@ -400,6 +644,139 @@ private constructor(
         }
     }
 
+    /**
+     * Builder for [SurfaceEntity] instances.
+     *
+     * Values that aren't set use the same defaults as [SurfaceEntity.create]. Use [setBlendingMode]
+     * to set the [BlendingMode] at creation time, which requires
+     * [androidx.xr.runtime.SpatialApiVersions.SPATIAL_API_V4] or higher:
+     * ```
+     * val builder =
+     *     SurfaceEntity.Builder(session)
+     *         .setShape(SurfaceEntity.Shape.Quad(FloatSize2d(1.6f, 0.9f)))
+     *         .setParent(session.scene.activitySpace)
+     * if (SpatialApiVersionHelper.spatialApiVersion >= SpatialApiVersions.SPATIAL_API_V4) {
+     *     builder.setBlendingMode(SurfaceEntity.BlendingMode.OPAQUE)
+     * }
+     * val surfaceEntity = builder.build() // Must be called on the main thread.
+     * ```
+     *
+     * @param session the [Session] to create the [SurfaceEntity] in
+     */
+    public class Builder(private val session: Session) {
+        private var pose: Pose = Pose.Identity
+        private var shape: Shape = Shape.Quad(FloatSize2d(1.0f, 1.0f))
+        private var stereoMode: StereoMode = StereoMode.MONO
+        private var superSampling: SuperSampling = SuperSampling.PENTAGON
+        private var surfaceProtection: SurfaceProtection = SurfaceProtection.NONE
+        private var blendingMode: BlendingMode = BlendingMode.TRANSPARENT
+        private var parent: Entity? = null
+
+        /**
+         * Sets the pose of the [SurfaceEntity] relative to its parent.
+         *
+         * The default value is [Pose.Identity].
+         *
+         * @param pose the pose relative to the parent
+         */
+        public fun setPose(pose: Pose): Builder = apply { this.pose = pose }
+
+        /**
+         * Sets the [Shape] of the canvas that the [Surface] is mapped to.
+         *
+         * The default value is a [Shape.Quad] with a width and height of 1 meter.
+         *
+         * @param shape the spatialized shape of the canvas
+         */
+        public fun setShape(shape: Shape): Builder = apply { this.shape = shape }
+
+        /**
+         * Sets how parts of the surface are displayed to the user's eyes.
+         *
+         * The default value is [StereoMode.MONO].
+         *
+         * @param stereoMode the [StereoMode] of the surface
+         */
+        public fun setStereoMode(stereoMode: StereoMode): Builder = apply {
+            this.stereoMode = stereoMode
+        }
+
+        /**
+         * Sets whether super sampling is enabled for the surface.
+         *
+         * The default value is [SuperSampling.PENTAGON].
+         *
+         * @param superSampling the [SuperSampling] of the surface
+         */
+        @Suppress("MissingGetterMatchingBuilder")
+        public fun setSuperSampling(superSampling: SuperSampling): Builder = apply {
+            this.superSampling = superSampling
+        }
+
+        /**
+         * Sets whether the [Surface] supports protected content, such as Widevine DRM.
+         *
+         * The default value is [SurfaceProtection.NONE].
+         *
+         * @param surfaceProtection the [SurfaceProtection] of the surface
+         */
+        @Suppress("MissingGetterMatchingBuilder")
+        public fun setSurfaceProtection(surfaceProtection: SurfaceProtection): Builder = apply {
+            this.surfaceProtection = surfaceProtection
+        }
+
+        /**
+         * Sets the blending behavior of the surface. See [BlendingMode].
+         *
+         * Requires [androidx.xr.runtime.SpatialApiVersions.SPATIAL_API_V4] or higher. The default
+         * value, and the behavior on earlier API versions, is [BlendingMode.TRANSPARENT]. Check the
+         * device's version with [androidx.xr.runtime.SpatialApiVersionHelper.spatialApiVersion].
+         *
+         * @param blendingMode the [BlendingMode] of the surface
+         */
+        @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+        public fun setBlendingMode(blendingMode: BlendingMode): Builder = apply {
+            this.blendingMode = blendingMode
+        }
+
+        /**
+         * Sets the parent [Entity] of the [SurfaceEntity].
+         *
+         * The default value is `null`, which creates the entity without attaching it to the scene
+         * graph. The entity becomes visible once it has a parent that is part of the scene, such as
+         * [ActivitySpace], which allows the entity to be configured before it's shown.
+         *
+         * @param parent the parent entity, or `null` to create the entity without a parent
+         */
+        public fun setParent(parent: Entity?): Builder = apply { this.parent = parent }
+
+        /**
+         * Creates a [SurfaceEntity] with the values set on this builder. Must be called on the main
+         * thread.
+         *
+         * @return a new [SurfaceEntity]
+         * @throws IllegalArgumentException if the [Shape] set with [setShape] isn't supported
+         */
+        @MainThread public fun build(): SurfaceEntity = build(session.renderingRuntime)
+
+        /** Creates a [SurfaceEntity] using the given [RenderingRuntime]. */
+        @VisibleForTesting
+        @MainThread
+        internal fun build(renderingRuntime: RenderingRuntime): SurfaceEntity =
+            SurfaceEntity.create(
+                session = session,
+                renderingRuntime = renderingRuntime,
+                stereoMode = stereoMode,
+                blendingMode = blendingMode,
+                pose = pose,
+                shape = shape,
+                surfaceProtection = surfaceProtection,
+                contentColorMetadata = null,
+                superSampling = superSampling,
+                parent = parent,
+            )
+    }
+
     public companion object {
         private fun getRtStereoMode(stereoMode: StereoMode): Int {
             return when (stereoMode) {
@@ -425,6 +802,22 @@ private constructor(
             }
         }
 
+        private fun getRtBlendingMode(blendingMode: BlendingMode): Int {
+            return when (blendingMode) {
+                BlendingMode.TRANSPARENT -> RtSurfaceEntity.MediaBlendingMode.TRANSPARENT
+                BlendingMode.OPAQUE -> RtSurfaceEntity.MediaBlendingMode.OPAQUE
+                else -> RtSurfaceEntity.MediaBlendingMode.TRANSPARENT
+            }
+        }
+
+        private fun getBlendingModeFromRt(blendingMode: Int): BlendingMode {
+            return when (blendingMode) {
+                RtSurfaceEntity.MediaBlendingMode.TRANSPARENT -> BlendingMode.TRANSPARENT
+                RtSurfaceEntity.MediaBlendingMode.OPAQUE -> BlendingMode.OPAQUE
+                else -> BlendingMode.TRANSPARENT
+            }
+        }
+
         private fun getRtSurfaceProtection(surfaceProtection: SurfaceProtection): Int {
             return when (surfaceProtection) {
                 SurfaceProtection.NONE -> RtSurfaceEntity.SurfaceProtection.NONE
@@ -441,69 +834,79 @@ private constructor(
             }
         }
 
+        private fun getRtDrawMode(drawMode: DrawMode): Int {
+            return when (drawMode) {
+                DrawMode.TRIANGLES -> RtSurfaceEntity.DrawMode.TRIANGLES
+                DrawMode.TRIANGLE_STRIP -> RtSurfaceEntity.DrawMode.TRIANGLE_STRIP
+                DrawMode.TRIANGLE_FAN -> RtSurfaceEntity.DrawMode.TRIANGLE_FAN
+                else -> RtSurfaceEntity.DrawMode.TRIANGLES
+            }
+        }
+
         /**
          * Factory method for SurfaceEntity.
          *
-         * @param lifecycleManager A SceneCore LifecycleManager
-         * @param sceneRuntime SceneRuntime to use.
-         * @param renderingRuntime RenderingRuntime to use.
-         * @param entityManager A SceneCore EntityManager
-         * @param stereoMode An [Int] which defines how surface subregions map to eyes
-         * @param pose Pose for this StereoSurface entity, relative to its parent.
-         * @param shape The [Shape] which describes the spatialized shape of the canvas.
-         * @param surfaceProtection The Int member of [SurfaceProtection] which describes whether
-         *   DRM is enabled for the surface - which will create protected hardware buffers for
-         *   presentation.
-         * @param contentColorMetadata The [ContentColorMetadata] of the content (nullable).
-         * @param superSampling The [SuperSampling] which describes whether super sampling is
-         *   enabled for the surface.
-         * @param parent Parent entity. If `null`, the entity is created but not attached to the
-         *   scene graph and will not be visible until a parent is set. The default value is
-         *   [Scene]'s [ActivitySpace].
-         * @return a SurfaceEntity instance
+         * If [parent] is `null`, the entity is created but not attached to the scene graph and will
+         * not be visible until a parent is set.
+         *
+         * @param session the [Session] to use
+         * @param renderingRuntime the [RenderingRuntime] to use
+         * @param stereoMode an [Int] which defines how surface subregions map to eyes
+         * @param blendingMode the [BlendingMode] which describes the blending mode of the content
+         * @param pose the [Pose] for this StereoSurface entity, relative to its parent
+         * @param shape the [Shape] which describes the spatialized shape of the canvas
+         * @param surfaceProtection the [SurfaceProtection] which describes whether DRM is enabled
+         *   for the surface - which will create protected hardware buffers for presentation
+         * @param contentColorMetadata the [ContentColorMetadata] of the content (nullable)
+         * @param superSampling the [SuperSampling] which describes whether super sampling is
+         *   enabled for the surface
+         * @param parent the parent entity, defaulting to [Scene]'s [ActivitySpace]
+         * @return a [SurfaceEntity] instance
          */
         internal fun create(
-            lifecycleManager: LifecycleManager,
-            sceneRuntime: SceneRuntime,
+            session: Session,
             renderingRuntime: RenderingRuntime,
-            entityManager: EntityManager,
             stereoMode: StereoMode = StereoMode.MONO,
+            blendingMode: BlendingMode = BlendingMode.TRANSPARENT,
             pose: Pose = Pose.Identity,
             shape: Shape = Shape.Quad(FloatSize2d(1.0f, 1.0f)),
             surfaceProtection: SurfaceProtection = SurfaceProtection.NONE,
             contentColorMetadata: ContentColorMetadata? = null,
             superSampling: SuperSampling = SuperSampling.PENTAGON,
-            parent: Entity? = entityManager.getEntityForRtEntity(sceneRuntime.activitySpace),
+            parent: Entity? =
+                session.scene.entityRegistry.getEntityForRtEntity(
+                    session.sceneRuntime.activitySpace
+                ),
         ): SurfaceEntity {
             val rtShape =
                 when (shape) {
-                    is Shape.Quad -> RtSurfaceEntity.Shape.Quad(shape.extents)
+                    is Shape.Quad -> RtSurfaceEntity.Shape.Quad(shape.extents, shape.cornerRadius)
                     is Shape.Sphere -> RtSurfaceEntity.Shape.Sphere(shape.radius)
                     is Shape.Hemisphere -> RtSurfaceEntity.Shape.Hemisphere(shape.radius)
+                    is Shape.CustomMesh ->
+                        RtSurfaceEntity.Shape.CustomMesh(
+                            shape.leftEye.toRtTriangleMesh(),
+                            shape.rightEye?.toRtTriangleMesh(),
+                            getRtDrawMode(shape.drawMode),
+                        )
                     else -> throw IllegalArgumentException("Unsupported shape: $shape")
                 }
             val surfaceEntity =
                 SurfaceEntity(
-                    lifecycleManager,
+                    session.scene.perceptionSpace,
                     renderingRuntime.createSurfaceEntity(
                         getRtStereoMode(stereoMode),
+                        getRtBlendingMode(blendingMode),
                         pose,
                         rtShape,
                         getRtSurfaceProtection(surfaceProtection),
                         getRtSuperSampling(superSampling),
-                        if (parent != null && parent !is BaseEntity<*>) {
-                            Log.warn(
-                                "The provided parent is not a BaseEntity. The SurfaceEntity will " +
-                                    "be created without a parent."
-                            )
-                            null
-                        } else {
-                            parent?.rtEntity
-                        },
+                        parent?.rtEntity,
                     ),
-                    entityManager,
+                    session.scene.entityRegistry,
                     shape,
                 )
+            surfaceEntity.parent = parent
             surfaceEntity.contentColorMetadata = contentColorMetadata
             return surfaceEntity
         }
@@ -511,15 +914,24 @@ private constructor(
         /**
          * Public factory function for a SurfaceEntity.
          *
-         * @param session Session to create the SurfaceEntity in.
-         * @param stereoMode Stereo mode for the surface.
-         * @param pose Pose of this entity relative to its parent, default value is Identity.
-         * @param shape The [Shape] which describes the spatialized shape of the canvas.
-         * @param surfaceProtection The [SurfaceProtection] which describes whether the hosted
-         *   surface should support Widevine DRM.
-         * @param superSampling The [SuperSampling] which describes whether super sampling is
-         *   enabled for the surface.
-         * @return a SurfaceEntity instance
+         * The entity uses [BlendingMode.TRANSPARENT]. To create it with a different [BlendingMode],
+         * use [Builder].
+         *
+         * If [parent] is `null`, the entity is created but not attached to the scene graph, meaning
+         * it will be invisible. If a parent entity (e.g., [ActivitySpace] or any other [Entity]
+         * already present in the scene) is assigned later, the entity will become visible (provided
+         * it is enabled). This allows for [Entity] pre-configuration before making it visible.
+         *
+         * @param session the [Session] to create the [SurfaceEntity] in
+         * @param pose the [Pose] of this entity relative to its parent, default value is Identity
+         * @param shape the [Shape] which describes the spatialized shape of the canvas
+         * @param stereoMode the [StereoMode] for the surface
+         * @param superSampling the [SuperSampling] which describes whether super sampling is
+         *   enabled for the surface
+         * @param surfaceProtection the [SurfaceProtection] which describes whether the hosted
+         *   surface should support Widevine DRM
+         * @param parent the parent entity, defaulting to `null`
+         * @return a [SurfaceEntity] instance
          */
         @MainThread
         @JvmOverloads
@@ -531,57 +943,13 @@ private constructor(
             stereoMode: StereoMode = StereoMode.MONO,
             superSampling: SuperSampling = SuperSampling.PENTAGON,
             surfaceProtection: SurfaceProtection = SurfaceProtection.NONE,
+            parent: Entity? = null,
         ): SurfaceEntity =
             SurfaceEntity.create(
-                session.perceptionRuntime.lifecycleManager,
-                session.sceneRuntime,
+                session,
                 session.renderingRuntime,
-                session.scene.entityManager,
                 stereoMode,
-                pose,
-                shape,
-                surfaceProtection,
-                null,
-                superSampling,
-            )
-
-        /**
-         * Public factory function for a SurfaceEntity.
-         *
-         * @param session Session to create the SurfaceEntity in.
-         * @param pose Pose of this entity relative to its parent, default value is Identity.
-         * @param shape The [Shape] which describes the spatialized shape of the canvas. The default
-         *   value is [Shape.Quad] with a width and height of 1 meter.
-         * @param stereoMode Stereo mode for the surface. The default value is [StereoMode.MONO].
-         * @param superSampling The [SuperSampling] which describes whether super sampling is
-         *   enabled for the surface. The default value is [SuperSampling.PENTAGON].
-         * @param surfaceProtection The [SurfaceProtection] which describes whether the hosted
-         *   surface should support Widevine DRM. The default value is [SurfaceProtection.NONE].
-         * @param parent Parent entity. If `null`, the entity is created but not attached to the
-         *   scene graph and will not be visible until a parent is set. The default value is
-         *   [Scene]'s [ActivitySpace].
-         * @return a SurfaceEntity instance
-         */
-        @MainThread
-        @JvmStatic
-        // TODO: b/462865943 - Replace @RestrictTo with @JvmOverloads and remove the other overload
-        //  once the API proposal is approved.
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
-        public fun create(
-            session: Session,
-            pose: Pose = Pose.Identity,
-            shape: Shape = Shape.Quad(FloatSize2d(1.0f, 1.0f)),
-            stereoMode: StereoMode = StereoMode.MONO,
-            superSampling: SuperSampling = SuperSampling.PENTAGON,
-            surfaceProtection: SurfaceProtection = SurfaceProtection.NONE,
-            parent: Entity? = session.scene.activitySpace,
-        ): SurfaceEntity =
-            SurfaceEntity.create(
-                session.perceptionRuntime.lifecycleManager,
-                session.sceneRuntime,
-                session.renderingRuntime,
-                session.scene.entityManager,
-                stereoMode,
+                BlendingMode.TRANSPARENT,
                 pose,
                 shape,
                 surfaceProtection,
@@ -596,17 +964,32 @@ private constructor(
      * into the surface in accordance with what is specified here in order for the compositor to
      * correctly produce a stereoscopic view to the user.
      *
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
     public var stereoMode: StereoMode
-        get() {
-            checkNotDisposed()
-            return getStereoModeFromRt(rtEntity!!.stereoMode)
-        }
+        get() = getStereoModeFromRt(rtSurfaceEntity.stereoMode)
         @MainThread
         set(value) {
-            checkNotDisposed()
-            rtEntity!!.stereoMode = getRtStereoMode(value)
+            rtSurfaceEntity.stereoMode = getRtStereoMode(value)
+        }
+
+    /**
+     * Controls the blending behavior of the surface, which determines how it interacts with other
+     * objects in the scene. See [BlendingMode].
+     *
+     * Setting this property requires [androidx.xr.runtime.SpatialApiVersions.SPATIAL_API_V4] or
+     * higher. The default value, and the behavior on earlier API versions, is
+     * [BlendingMode.TRANSPARENT]. Check the device's version with
+     * [androidx.xr.runtime.SpatialApiVersionHelper.spatialApiVersion].
+     *
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
+     */
+    public var blendingMode: BlendingMode
+        get() = getBlendingModeFromRt(rtSurfaceEntity.mediaBlendingMode)
+        @MainThread
+        @RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+        set(value) {
+            rtSurfaceEntity.mediaBlendingMode = getRtBlendingMode(value)
         }
 
     /**
@@ -615,17 +998,14 @@ private constructor(
      * This value is entirely determined by the value of [shape].
      */
     public val dimensions: FloatSize3d
-        get() {
-            checkNotDisposed()
-            return rtEntity!!.dimensions.toFloatSize3d()
-        }
+        get() = rtSurfaceEntity.dimensions.toFloatSize3d()
 
     /**
      * The shape of the canvas that backs the Entity. Updating this value will alter the
      * [dimensions] of the Entity.
      *
-     * @throws IllegalArgumentException if an invalid canvas shape is provided.
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalArgumentException if an invalid canvas shape is provided
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
     public var shape: Shape = shape
         @MainThread
@@ -633,12 +1013,18 @@ private constructor(
             checkNotDisposed()
             val rtShape =
                 when (value) {
-                    is Shape.Quad -> RtSurfaceEntity.Shape.Quad(value.extents)
+                    is Shape.Quad -> RtSurfaceEntity.Shape.Quad(value.extents, value.cornerRadius)
                     is Shape.Sphere -> RtSurfaceEntity.Shape.Sphere(value.radius)
                     is Shape.Hemisphere -> RtSurfaceEntity.Shape.Hemisphere(value.radius)
+                    is Shape.CustomMesh ->
+                        RtSurfaceEntity.Shape.CustomMesh(
+                            value.leftEye.toRtTriangleMesh(),
+                            value.rightEye?.toRtTriangleMesh(),
+                            getRtDrawMode(value.drawMode),
+                        )
                     else -> throw IllegalArgumentException("Unsupported canvas shape: $value")
                 }
-            rtEntity!!.shape = rtShape
+            rtSurfaceEntity.shape = rtShape
             field = value
         }
 
@@ -646,21 +1032,19 @@ private constructor(
      * The texture to be composited into the alpha channel of the surface. If null, the alpha mask
      * will be disabled.
      *
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public var primaryAlphaMaskTexture: Texture? = null
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         get() {
             checkNotDisposed()
             return field
         }
         @MainThread
-        @SuppressLint("HiddenTypeParameter")
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         set(value) {
-            checkNotDisposed()
-            rtEntity!!.setPrimaryAlphaMaskTexture(value?.texture)
+            rtSurfaceEntity.setPrimaryAlphaMaskTexture(value?.texture)
             field = value
         }
 
@@ -668,21 +1052,19 @@ private constructor(
      * The texture to be composited into the alpha channel of the secondary view of the surface.
      * This is only used for interleaved stereo content. If null, the alpha mask will be disabled.
      *
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public var auxiliaryAlphaMaskTexture: Texture? = null
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         get() {
             checkNotDisposed()
             return field
         }
         @MainThread
-        @SuppressLint("HiddenTypeParameter")
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         set(value) {
-            checkNotDisposed()
-            rtEntity!!.setAuxiliaryAlphaMaskTexture(value?.texture)
+            rtSurfaceEntity.setAuxiliaryAlphaMaskTexture(value?.texture)
             field = value
         }
 
@@ -690,7 +1072,7 @@ private constructor(
      * The [EdgeFeatheringParams] feathering pattern to be used along the edges of the Shape. This
      * value must only be set from the main thread.
      *
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
     public var edgeFeatheringParams: EdgeFeatheringParams = EdgeFeatheringParams.NoFeathering()
         get() {
@@ -711,7 +1093,7 @@ private constructor(
                         )
                     else -> throw IllegalArgumentException("Unsupported edge feather: $value")
                 }
-            rtEntity!!.edgeFeather = rtEdgeFeather
+            rtSurfaceEntity.edgeFeather = rtEdgeFeather
             field = value
         }
 
@@ -727,34 +1109,33 @@ private constructor(
      *
      * The setter must be called from the main thread.
      *
-     * @throws IllegalStateException when setting this value if the Entity has been disposed.
+     * @throws IllegalStateException when setting this value if the Entity has been disposed
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public var contentColorMetadata: ContentColorMetadata? = null
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         get() {
-            checkNotDisposed()
-            return if (!rtEntity!!.contentColorMetadataSet) {
+            return if (!rtSurfaceEntity.contentColorMetadataSet) {
                 null
             } else {
                 ContentColorMetadata(
-                    colorSpace = ContentColorMetadata.getColorSpaceFromRt(rtEntity!!.colorSpace),
+                    colorSpace =
+                        ContentColorMetadata.getColorSpaceFromRt(rtSurfaceEntity.colorSpace),
                     colorTransfer =
-                        ContentColorMetadata.getColorTransferFromRt(rtEntity!!.colorTransfer),
-                    colorRange = ContentColorMetadata.getColorRangeFromRt(rtEntity!!.colorRange),
-                    maxContentLightLevel = rtEntity!!.maxContentLightLevel,
+                        ContentColorMetadata.getColorTransferFromRt(rtSurfaceEntity.colorTransfer),
+                    colorRange =
+                        ContentColorMetadata.getColorRangeFromRt(rtSurfaceEntity.colorRange),
+                    maxContentLightLevel = rtSurfaceEntity.maxContentLightLevel,
                 )
             }
         }
         @MainThread
-        @SuppressLint("HiddenTypeParameter")
-        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         set(value) {
-            checkNotDisposed()
             if (value == null) {
-                rtEntity!!.resetContentColorMetadata()
+                rtSurfaceEntity.resetContentColorMetadata()
             } else {
-                rtEntity!!.setContentColorMetadata(
+                rtSurfaceEntity.setContentColorMetadata(
                     ContentColorMetadata.getRtColorSpace(value.colorSpace),
                     ContentColorMetadata.getRtColorTransfer(value.colorTransfer),
                     ContentColorMetadata.getRtColorRange(value.colorRange),
@@ -768,12 +1149,11 @@ private constructor(
      * Returns a surface into which the application can render stereo image content. Note that
      * android.graphics.Canvas Apis are not currently supported on this Canvas.
      *
-     * @throws IllegalStateException if the Entity has been disposed.
+     * @throws IllegalStateException if the Entity has been disposed
      */
     @MainThread
     public fun getSurface(): Surface {
-        checkNotDisposed()
-        return rtEntity!!.surface
+        return rtSurfaceEntity.surface
     }
 
     /**
@@ -791,43 +1171,55 @@ private constructor(
      * updates the resolution of the [Surface]. Unlike [PanelEntity], changing this value will
      * update the pixel density of the displayed Surface. Changing this will not change the scale.
      *
-     * @throws IllegalArgumentException if the dimensions are not greater than 0.
+     * @param dimensions the new width and height of the [Surface] in pixels
+     * @throws IllegalArgumentException if the dimensions are not greater than 0
      * @throws IllegalStateException if the Entity has been disposed, or if
-     *   [SurfaceProtection.PROTECTED] was set at creation.
+     *   [SurfaceProtection.PROTECTED] was set at creation
      */
     @MainThread
     @ExperimentalSurfaceEntityPixelDimensionsApi
     public fun setSurfacePixelDimensions(dimensions: IntSize2d) {
-        checkNotDisposed()
-        rtEntity!!.setSurfacePixelDimensions(dimensions.width, dimensions.height)
+        rtSurfaceEntity.setSurfacePixelDimensions(dimensions.width, dimensions.height)
     }
 
     /**
-     * Gets the perceived resolution of the entity in the camera view.
+     * Gets the perceived resolution of the entity in the provided [RenderViewpoint].
      *
-     * This API is only intended for use in Full Space Mode and will return
-     * [PerceivedResolutionResult.InvalidCameraView] in Home Space Mode.
+     * This API is only intended for use in Full Space and will return
+     * [PerceivedResolutionResult.InvalidRenderViewpoint] in Home Space.
      *
      * The entity's own rotation and the camera's viewing direction are disregarded; this value
      * represents the dimensions of the entity on the camera view if its largest surface was facing
      * the camera without changing the distance of the entity to the camera.
      *
-     * @return A [PerceivedResolutionResult] which encapsulates the outcome:
-     *     - [PerceivedResolutionResult.Success] containing the [PixelDimensions] if the calculation
-     *       is successful.
-     *     - [PerceivedResolutionResult.EntityTooClose] if the entity is too close to the camera.
-     *     - [PerceivedResolutionResult.InvalidCameraView] if the camera information required for
-     *       the calculation is invalid or unavailable.
+     * The returned [PerceivedResolutionResult] encapsulates the outcome:
+     * - [PerceivedResolutionResult.Success] containing the
+     *   [androidx.xr.scenecore.runtime.PixelDimensions] if the calculation is successful.
+     * - [PerceivedResolutionResult.EntityTooClose] if the entity is too close to the camera.
+     * - [PerceivedResolutionResult.InvalidRenderViewpoint] if the camera information required for
+     *   the calculation is invalid or unavailable.
      *
+     * @param renderViewpoint the [RenderViewpoint] that provides the pose and field-of-view of the
+     *   camera
+     * @return a [PerceivedResolutionResult] encapsulating the outcome of the resolution calculation
      * @throws [IllegalStateException] if [Session.config] is not set to
-     *   [Config.DeviceTrackingMode.LAST_KNOWN].
+     *   [androidx.xr.runtime.DeviceTrackingMode.SPATIAL]
      * @see PerceivedResolutionResult
      */
-    public fun getPerceivedResolution(): PerceivedResolutionResult {
-        checkNotDisposed()
-        check(lifecycleManager.config.deviceTracking == Config.DeviceTrackingMode.LAST_KNOWN) {
-            "Config.DeviceTrackingMode is not set to LastKnown."
-        }
-        return rtEntity!!.getPerceivedResolution().toPerceivedResolutionResult()
+    public fun getPerceivedResolution(renderViewpoint: RenderViewpoint): PerceivedResolutionResult {
+        val renderViewpointState = renderViewpoint.state.value
+        return rtSurfaceEntity
+            .getPerceivedResolution(
+                (perceptionSpace.getScenePoseFromPerceptionPose(renderViewpointState.pose)
+                        as PerceptionScenePose)
+                    .rtScenePose,
+                FieldOfView(
+                    renderViewpointState.fieldOfView.angleLeft,
+                    renderViewpointState.fieldOfView.angleRight,
+                    renderViewpointState.fieldOfView.angleUp,
+                    renderViewpointState.fieldOfView.angleDown,
+                ),
+            )
+            .toPerceivedResolutionResult()
     }
 }

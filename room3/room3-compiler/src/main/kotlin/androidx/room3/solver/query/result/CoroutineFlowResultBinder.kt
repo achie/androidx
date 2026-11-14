@@ -35,7 +35,7 @@ class CoroutineFlowResultBinder(
     val typeArg: XType,
     val tableNames: Set<String>,
     adapter: QueryResultAdapter?,
-) : BaseObservableQueryResultBinder(adapter) {
+) : QueryResultBinder(adapter) {
 
     override fun convertAndReturn(
         sqlQueryVar: String,

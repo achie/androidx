@@ -20,10 +20,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.Handle
-import androidx.compose.foundation.text.contextmenu.test.ContextMenuFlagFlipperRunner
 import androidx.compose.foundation.text.selection.HandlePressedScope
-import androidx.compose.foundation.text.selection.Selection
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.SelectionState
 import androidx.compose.foundation.text.selection.fetchTextLayoutResult
 import androidx.compose.foundation.text.selection.gestures.util.SelectionSubject
 import androidx.compose.foundation.text.selection.gestures.util.TextSelectionAsserter
@@ -38,6 +37,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.text.TextStyle
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth
 import kotlin.test.fail
@@ -46,13 +46,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @MediumTest
-@RunWith(ContextMenuFlagFlipperRunner::class)
+@RunWith(AndroidJUnit4::class)
 internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest() {
 
     override val pointerAreaTag = "selectionContainer"
 
     private val textContent = mutableStateOf("line1\nline2 text1 text2\nline3")
-    private val currentSelection = mutableStateOf<Selection?>(null)
+
+    private val state = SelectionState()
 
     private lateinit var asserter: TextSelectionAsserter
 
@@ -66,7 +67,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
                     textToolbar = textToolbar,
                     spyTextActionModeCallback = spyTextActionModeCallback,
                     hapticFeedback = hapticFeedback,
-                    getActual = { currentSelection.value },
+                    getActual = { state.selection },
                 ) {
                 override fun subAssert() {
                     Truth.assertAbout(SelectionSubject.withContent(textContent))
@@ -82,11 +83,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
 
     @Composable
     override fun Content() {
-        SelectionContainer(
-            selection = currentSelection.value,
-            onSelectionChange = { currentSelection.value = it },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        SelectionContainer(state = state, modifier = Modifier.fillMaxWidth()) {
             BasicText(
                 text = textContent.value,
                 style = TextStyle(fontFamily = fontFamily, fontSize = fontSize),
@@ -106,7 +103,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
             selection = 12 to 17
             selectionHandlesShown = true
             textToolbarShown = true
-            hapticsCount++
+            hapticsTextHandleMoveCount++
         }
 
         withHandlePressed(Handle.SelectionEnd) {
@@ -115,7 +112,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
                 selection = 12 to 13
                 magnifierShown = true
                 textToolbarShown = false
-                hapticsCount++
+                hapticsTextHandleMoveCount++
             }
 
             moveHandleToCharacter(12)
@@ -125,7 +122,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
             moveHandleToCharacter(11)
             asserter.applyAndAssert {
                 selection = 12 to 11
-                hapticsCount++
+                hapticsTextHandleMoveCount++
             }
         }
 
@@ -143,7 +140,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
             selection = 12 to 17
             selectionHandlesShown = true
             textToolbarShown = true
-            hapticsCount++
+            hapticsTextHandleMoveCount++
         }
 
         withHandlePressed(Handle.SelectionEnd) {
@@ -187,7 +184,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
             selection = 6 to 11
             selectionHandlesShown = true
             textToolbarShown = true
-            hapticsCount++
+            hapticsTextHandleMoveCount++
         }
 
         withHandlePressed(Handle.SelectionEnd) {
@@ -199,7 +196,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
                 selection = 6 to 7
                 textToolbarShown = false
                 magnifierShown = true
-                hapticsCount++
+                hapticsTextHandleMoveCount++
             }
 
             val y = fetchHandleInfo().position.y
@@ -233,7 +230,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
             selection = 0 to content.length
             selectionHandlesShown = true
             textToolbarShown = true
-            hapticsCount++
+            hapticsTextHandleMoveCount++
         }
 
         withHandlePressed(Handle.SelectionEnd) {
@@ -244,7 +241,7 @@ internal class TextSelectionHandlesGesturesTest : AbstractSelectionGesturesTest(
                 selection = 0 to 5
                 magnifierShown = true
                 textToolbarShown = false
-                hapticsCount++
+                hapticsTextHandleMoveCount++
             }
         }
 

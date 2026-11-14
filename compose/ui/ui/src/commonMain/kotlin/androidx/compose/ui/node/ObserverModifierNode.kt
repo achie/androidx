@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalComposeUiHostApi::class)
+
 package androidx.compose.ui.node
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ExperimentalComposeUiHostApi
 
 /**
  * [Modifier.Node]s that implement ObserverNode can provide their own implementation of
  * [onObservedReadsChanged] that will be called in response to changes to snapshot objects read
  * within an [observeReads] block.
  */
-interface ObserverModifierNode : DelegatableNode {
+public interface ObserverModifierNode : DelegatableNode {
 
     /**
      * This callback is called when any values that are read within the [observeReads] block change.
@@ -31,17 +34,17 @@ interface ObserverModifierNode : DelegatableNode {
      * thread, and only called once in response to snapshot observation. To continue observing
      * further updates, you need to call [observeReads] again.
      */
-    fun onObservedReadsChanged()
+    public fun onObservedReadsChanged()
 }
 
 internal class ObserverNodeOwnerScope(internal val observerNode: ObserverModifierNode) :
-    OwnerScope {
-    override val isValidOwnerScope: Boolean
+    ObservationTarget {
+    override val isObservationValid: Boolean
         get() = observerNode.node.isAttached
 
     companion object {
         internal val OnObserveReadsChanged: (ObserverNodeOwnerScope) -> Unit = {
-            if (it.isValidOwnerScope) it.observerNode.onObservedReadsChanged()
+            if (it.isObservationValid) it.observerNode.onObservedReadsChanged()
         }
     }
 }
@@ -51,7 +54,7 @@ internal class ObserverNodeOwnerScope(internal val observerNode: ObserverModifie
  * [ObserverModifierNode.onObservedReadsChanged] is called when any of the observed values within
  * the snapshot change.
  */
-fun <T> T.observeReads(block: () -> Unit) where T : Modifier.Node, T : ObserverModifierNode {
+public fun <T> T.observeReads(block: () -> Unit) where T : Modifier.Node, T : ObserverModifierNode {
     val target = ownerScope ?: ObserverNodeOwnerScope(this).also { ownerScope = it }
     requireOwner()
         .snapshotObserver

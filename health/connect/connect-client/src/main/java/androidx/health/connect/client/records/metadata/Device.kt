@@ -32,12 +32,42 @@ import androidx.annotation.RestrictTo
  * @property type a client supplied type of the device
  * @property manufacturer an optional client supplied manufacturer of the device
  * @property model an optional client supplied model of the device
+ * @property displayName an optional display name for the device. Requires SDK extension 22 or
+ *   higher; on earlier versions it is ignored when writing and `null` when reading.
+ * @property udi an optional client supplied Unique Device Identifier (UDI) of a medical device,
+ *   such as `"04015674011832"`. To protect user privacy, only populate the Device Identifier
+ *   (UDI-DI) portion, without Production Identifier (UDI-PI) attributes such as serial or batch
+ *   numbers. Writing a record with a non-null [udi] requires declaring the normal manifest
+ *   permission `android.permission.health.WRITE_DEVICE_UDI`, or a [SecurityException] is thrown.
+ *   Requires SDK extension 23 or higher; on earlier versions it is ignored when writing and `null`
+ *   when reading.
  */
 public class Device(
     @property:DeviceType public val type: Int,
     public val manufacturer: String? = null,
     public val model: String? = null,
+    public val displayName: String? = null,
+    public val udi: String? = null,
 ) {
+    /** Creates a [Device] with [type], [manufacturer], [model], and [displayName]. */
+    public constructor(
+        @DeviceType type: Int,
+        manufacturer: String?,
+        model: String?,
+        displayName: String?,
+    ) : this(type, manufacturer, model, displayName, udi = null)
+
+    /** Creates a [Device] with [type], [manufacturer], and [model]. */
+    // Keeps the 1.1 constructors: Device(int, String, String), and the synthetic one that Kotlin
+    // calls when arguments are omitted. Code compiled against 1.1 links to them, so don't remove
+    // this or fold it into the primary constructor. @JvmOverloads gives Java every arity.
+    @JvmOverloads
+    public constructor(
+        @DeviceType type: Int,
+        manufacturer: String? = null,
+        model: String? = null,
+    ) : this(type, manufacturer, model, displayName = null, udi = null)
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -47,6 +77,8 @@ public class Device(
         if (type != other.type) return false
         if (manufacturer != other.manufacturer) return false
         if (model != other.model) return false
+        if (displayName != other.displayName) return false
+        if (udi != other.udi) return false
 
         return true
     }
@@ -55,66 +87,69 @@ public class Device(
         var result = type
         result = 31 * result + (manufacturer?.hashCode() ?: 0)
         result = 31 * result + (model?.hashCode() ?: 0)
+        result = 31 * result + (displayName?.hashCode() ?: 0)
+        result = 31 * result + (udi?.hashCode() ?: 0)
         return result
     }
 
     override fun toString(): String {
-        return "Device(type=$type, manufacturer=$manufacturer, model=$model)"
+        return "Device(type=$type, manufacturer=$manufacturer, model=$model, " +
+            "displayName=$displayName, udi=$udi)"
     }
 
-    companion object {
-        const val TYPE_UNKNOWN = 0
-        const val TYPE_WATCH = 1
-        const val TYPE_PHONE = 2
-        const val TYPE_SCALE = 3
-        const val TYPE_RING = 4
-        const val TYPE_HEAD_MOUNTED = 5
-        const val TYPE_FITNESS_BAND = 6
-        const val TYPE_CHEST_STRAP = 7
-        const val TYPE_SMART_DISPLAY = 8
+    public companion object {
+        public const val TYPE_UNKNOWN: Int = 0
+        public const val TYPE_WATCH: Int = 1
+        public const val TYPE_PHONE: Int = 2
+        public const val TYPE_SCALE: Int = 3
+        public const val TYPE_RING: Int = 4
+        public const val TYPE_HEAD_MOUNTED: Int = 5
+        public const val TYPE_FITNESS_BAND: Int = 6
+        public const val TYPE_CHEST_STRAP: Int = 7
+        public const val TYPE_SMART_DISPLAY: Int = 8
 
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_CONSUMER_MEDICAL_DEVICE = 9
+        public const val TYPE_CONSUMER_MEDICAL_DEVICE: Int = 9
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_GLASSES = 10
+        public const val TYPE_GLASSES: Int = 10
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_HEARABLE = 11
+        public const val TYPE_HEARABLE: Int = 11
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_FITNESS_MACHINE = 12
+        public const val TYPE_FITNESS_MACHINE: Int = 12
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_FITNESS_EQUIPMENT = 13
+        public const val TYPE_FITNESS_EQUIPMENT: Int = 13
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_PORTABLE_COMPUTER = 14
+        public const val TYPE_PORTABLE_COMPUTER: Int = 14
         /**
          * Requires
          * `androidx.health.connect.client.HealthConnectFeatures.FEATURE_EXTENDED_DEVICE_TYPES`. If
          * the feature is not available, this device type will be treated as [TYPE_UNKNOWN].
          */
-        const val TYPE_METER = 15
+        public const val TYPE_METER: Int = 15
     }
 
     /** List of supported device types on Health Platform. */
@@ -141,5 +176,5 @@ public class Device(
             ]
     )
     @RestrictTo(RestrictTo.Scope.LIBRARY)
-    annotation class DeviceType
+    public annotation class DeviceType
 }

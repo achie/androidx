@@ -17,6 +17,8 @@
 package androidx.room3.integration.testapp.test
 
 import androidx.kruth.assertThat
+import androidx.room3.ColumnTypeConverter
+import androidx.room3.ColumnTypeConverters
 import androidx.room3.Dao
 import androidx.room3.Database
 import androidx.room3.Entity
@@ -25,8 +27,6 @@ import androidx.room3.PrimaryKey
 import androidx.room3.Query
 import androidx.room3.Room
 import androidx.room3.RoomDatabase
-import androidx.room3.TypeConverter
-import androidx.room3.TypeConverters
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
@@ -75,8 +75,22 @@ class TypeConverterPriorityTest {
         assertThat(all[0].data).isEqualTo(listOf("d", "e", "f"))
     }
 
+    @Test
+    fun testConverterCoalesce() {
+        db.getDao().insert(TestEntity("1", listOf("a", "b", "c")))
+
+        db.getDao().updateWithCoalesce("1", listOf("d", "e", "f"))
+        assertThat(db.getDao().getAll().single().data).isEqualTo(listOf("d", "e", "f"))
+
+        db.getDao().updateWithCoalesce("1", null)
+        assertThat(db.getDao().getAll().single().data).isEqualTo(listOf("d", "e", "f"))
+
+        db.getDao().updateWithCoalesce("1", emptyList())
+        assertThat(db.getDao().getAll().single().data).isEmpty()
+    }
+
     @Database(entities = [TestEntity::class], version = 1, exportSchema = false)
-    @TypeConverters(Converters::class)
+    @ColumnTypeConverters(Converters::class)
     abstract class TestDatabase : RoomDatabase() {
         abstract fun getDao(): TestDao
     }
@@ -91,21 +105,24 @@ class TypeConverterPriorityTest {
 
         @Query("UPDATE TestEntity SET data = :csv WHERE id = :id")
         fun update(id: String, csv: List<String>)
+
+        @Query("UPDATE TestEntity SET data = COALESCE(:csv, data) WHERE id = :id")
+        fun updateWithCoalesce(id: String, csv: List<String>?)
     }
 
     @Entity data class TestEntity(@PrimaryKey val id: String, val data: List<String>)
 
     object Converters {
         @JvmStatic
-        @TypeConverter
+        @ColumnTypeConverter
         fun fromData(list: List<String>): String {
             return list.joinToString(",")
         }
 
         @JvmStatic
-        @TypeConverter
+        @ColumnTypeConverter
         fun toData(string: String): List<String> {
-            return string.split(",")
+            return if (string.isEmpty()) emptyList() else string.split(",")
         }
     }
 }

@@ -63,7 +63,7 @@ import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
@@ -80,7 +80,6 @@ import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import kotlin.math.abs
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -90,7 +89,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class OverscrollTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule
     val animationScaleRule: AnimationDurationScaleRule = AnimationDurationScaleRule.create()
@@ -232,7 +231,21 @@ class OverscrollTest {
         }
 
         // Should not crash - the node should not be added by Modifier.overscroll
-        rule.waitForIdle()
+        rule.runOnIdle {
+            assertThat(overscrollEffect.node.node.isAttached).isTrue()
+            addOverscrollModifier = false
+        }
+
+        // Should not crash - the node was not added by Modifier.overscroll, so it should not be
+        // removed by it either, and should remain attached through the other modifier
+        rule.runOnIdle {
+            assertThat(overscrollEffect.node.node.isAttached).isTrue()
+        }
+    }
+
+    @Test
+    fun overscrollModifier_returnsOriginalModifier_whenGivenNullEffect() {
+        assertThat(Modifier.overscroll(null)).isSameInstanceAs(Modifier)
     }
 
     @Test
@@ -404,6 +417,7 @@ class OverscrollTest {
         rule.onNodeWithTag(boxTag).performTouchInput {
             down(center)
             moveBy(Offset(1000f, 0f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 
@@ -423,6 +437,7 @@ class OverscrollTest {
         rule.onNodeWithTag(boxTag).performTouchInput {
             down(center)
             moveBy(Offset(1000f, 0f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 
@@ -490,22 +505,23 @@ class OverscrollTest {
         rule.onNodeWithTag(boxTag).performTouchInput {
             down(center)
             moveBy(Offset(500f, 0f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 
-        val lastAccScroll =
-            rule.runOnIdle {
-                assertThat(controller.isInProgressCallCount).isEqualTo(1)
-                // respect touch slop if overscroll animation is not running
-                assertThat(acummulatedScroll).isEqualTo(500f - viewConfiguration.touchSlop)
-                // pretend we're settling the overscroll animation
-                controller.animationRunning = true
-                acummulatedScroll
-            }
+        val lastAccScroll = rule.runOnIdle {
+            assertThat(controller.isInProgressCallCount).isEqualTo(1)
+            // respect touch slop if overscroll animation is not running
+            assertThat(acummulatedScroll).isEqualTo(500f - viewConfiguration.touchSlop)
+            // pretend we're settling the overscroll animation
+            controller.animationRunning = true
+            acummulatedScroll
+        }
 
         rule.onNodeWithTag(boxTag).performTouchInput {
             down(center)
             moveBy(Offset(500f, 0f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 
@@ -1448,7 +1464,10 @@ class OverscrollTest {
             assertThat(controller.lastOverscrollDelta).isEqualTo(Offset.Zero)
         }
 
-        rule.onNodeWithTag(boxTag).performTouchInput { up() }
+        rule.onNodeWithTag(boxTag).performTouchInput {
+            advanceEventTime(3000L) // Prevent fling gesture.
+            up()
+        }
 
         rule.runOnIdle { consumeOnlyHalf = true }
 
@@ -1465,7 +1484,10 @@ class OverscrollTest {
             assertThat(controller.lastNestedScrollSource).isEqualTo(NestedScrollSource.UserInput)
         }
 
-        rule.onNodeWithTag(boxTag).performTouchInput { up() }
+        rule.onNodeWithTag(boxTag).performTouchInput {
+            advanceEventTime(3000L) // Prevent fling gesture.
+            up()
+        }
 
         rule.runOnIdle {
             assertThat(controller.lastVelocity.x).isWithin(0.01f).of(0f)

@@ -60,26 +60,17 @@ enum class PlatformIdentifier(val id: String, val group: PlatformGroup) {
     JS("js", PlatformGroup.JS),
     WASM_JS("wasmJs", PlatformGroup.WASM),
     ANDROID("android", PlatformGroup.JVM),
-    ANDROID_NATIVE_ARM32("androidNativeArm32", PlatformGroup.ANDROID_NATIVE),
-    ANDROID_NATIVE_ARM64("androidNativeArm64", PlatformGroup.ANDROID_NATIVE),
-    ANDROID_NATIVE_X86("androidNativeX86", PlatformGroup.ANDROID_NATIVE),
-    ANDROID_NATIVE_X64("androidNativeX64", PlatformGroup.ANDROID_NATIVE),
     MAC_ARM_64("macosarm64", PlatformGroup.MAC),
-    MAC_OSX_64("macosx64", PlatformGroup.MAC),
     MINGW_X_64("mingwx64", PlatformGroup.WINDOWS),
     LINUX_ARM_64("linuxarm64", PlatformGroup.LINUX),
     LINUX_X_64("linuxx64", PlatformGroup.LINUX),
     LINUX_X_64_STUBS("linuxx64Stubs", PlatformGroup.LINUX),
     IOS_SIMULATOR_ARM_64("iossimulatorarm64", PlatformGroup.MAC),
-    IOS_X_64("iosx64", PlatformGroup.MAC),
     IOS_ARM_64("iosarm64", PlatformGroup.MAC),
     WATCHOS_SIMULATOR_ARM_64("watchossimulatorarm64", PlatformGroup.MAC),
-    WATCHOS_X_64("watchosx64", PlatformGroup.MAC),
-    WATCHOS_ARM_32("watchosarm32", PlatformGroup.MAC),
     WATCHOS_ARM_64("watchosarm64", PlatformGroup.MAC),
     WATCHOS_DEVICE_ARM_64("watchosdevicearm64", PlatformGroup.MAC),
     TVOS_SIMULATOR_ARM_64("tvossimulatorarm64", PlatformGroup.MAC),
-    TVOS_X_64("tvosx64", PlatformGroup.MAC),
     TVOS_ARM_64("tvosarm64", PlatformGroup.MAC),
     DESKTOP("desktop", PlatformGroup.JVM);
 
@@ -132,9 +123,6 @@ private open class KmpPlatformsExtension(project: Project) {
 }
 
 fun Project.enableJs(): Boolean = enabledKmpPlatforms.contains(PlatformGroup.JS)
-
-fun Project.enableAndroidNative(): Boolean =
-    enabledKmpPlatforms.contains(PlatformGroup.ANDROID_NATIVE)
 
 fun Project.enableMac(): Boolean = enabledKmpPlatforms.contains(PlatformGroup.MAC)
 

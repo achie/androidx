@@ -45,7 +45,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertWidthIsEqualTo
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -57,7 +57,6 @@ import com.google.common.truth.Truth
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -74,7 +73,7 @@ class LazyStaggeredGridItemPlacementAnimationTest(private val config: Config) {
     private val reverseLayout: Boolean
         get() = config.reverseLayout
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     // the numbers should be divisible by 8 to avoid the rounding issues as we run 4 or 8 frames
     // of the animation.
@@ -373,7 +372,9 @@ class LazyStaggeredGridItemPlacementAnimationTest(private val config: Config) {
     fun animateSpacingChange() {
         var currentSpacing by mutableStateOf(0.dp)
         rule.setContent {
-            LazyStaggeredGrid(1, spacing = currentSpacing) {
+            // fixed size container so the second item visually moves when the spacing changes
+            // in reverse layout too (otherwise the layout grows with the spacing).
+            LazyStaggeredGrid(1, minSize = containerSizeDp, spacing = currentSpacing) {
                 items(listOf(0, 1), key = { it }) { Item(it) }
             }
         }
@@ -1709,7 +1710,9 @@ class LazyStaggeredGridItemPlacementAnimationTest(private val config: Config) {
         var item0Size by mutableStateOf(itemSizeDp)
         val animSpec = spring(visibilityThreshold = IntOffset.VisibilityThreshold)
         rule.setContent {
-            LazyStaggeredGrid(cells = 1) {
+            // fixed size container so the second item visually moves when the first one is
+            // resized in reverse layout too (otherwise the layout shrinks with the item).
+            LazyStaggeredGrid(cells = 1, minSize = containerSizeDp) {
                 items(2, key = { it }) {
                     Item(it, if (it == 0) item0Size else itemSizeDp, animSpec = animSpec)
                 }
@@ -1829,8 +1832,9 @@ class LazyStaggeredGridItemPlacementAnimationTest(private val config: Config) {
                     keySelector = { it.config[SemanticsProperties.TestTag] },
                     valueTransform = { IntRect(it.positionInRoot.round(), it.size) },
                 )
-        val actualPositions =
-            expected.map { it.first to actualBounds.getValue(it.first.toString()).topLeft }
+        val actualPositions = expected.map {
+            it.first to actualBounds.getValue(it.first.toString()).topLeft
+        }
         val subject =
             if (fraction == null) {
                 assertThat(actualPositions)
@@ -1863,13 +1867,12 @@ class LazyStaggeredGridItemPlacementAnimationTest(private val config: Config) {
             }
         )
         if (crossAxis != null) {
-            val actualCross =
-                expected.map {
-                    it.first to
-                        actualBounds.getValue(it.first.toString()).topLeft.let { offset ->
-                            if (isVertical) offset.x else offset.y
-                        }
-                }
+            val actualCross = expected.map {
+                it.first to
+                    actualBounds.getValue(it.first.toString()).topLeft.let { offset ->
+                        if (isVertical) offset.x else offset.y
+                    }
+            }
             Truth.assertWithMessage(
                     "CrossAxis" + if (fraction != null) "for fraction=$fraction" else ""
                 )

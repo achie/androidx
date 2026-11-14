@@ -67,32 +67,32 @@ class PassthroughConnectionPoolTest {
             Room.inMemoryDatabaseBuilder<TestDatabase>(instrumentation.targetContext)
                 .setDriver(AndroidSQLiteDriver())
                 .build()
-        val connectionOne =
-            db.useReaderConnection { connectionOne ->
-                db.useReaderConnection { reusedConnection ->
-                    assertThat(connectionOne).isSameInstanceAs(reusedConnection)
-                }
-                connectionOne
+        val connectionOne = db.useReaderConnection { connectionOne ->
+            db.useReaderConnection { reusedConnection ->
+                assertThat(connectionOne).isSameInstanceAs(reusedConnection)
             }
+            connectionOne
+        }
         val connectionTwo = db.useReaderConnection { it }
         assertThat(connectionOne).isNotSameInstanceAs(connectionTwo)
+        db.close()
     }
 
     private class TestOpenDelegate : RoomOpenDelegate(1, "", "") {
-        override fun onCreate(connection: SQLiteConnection) {}
+        override suspend fun onCreate(connection: SQLiteConnection) {}
 
-        override fun onPreMigrate(connection: SQLiteConnection) {}
+        override suspend fun onPreMigrate(connection: SQLiteConnection) {}
 
-        override fun onValidateSchema(connection: SQLiteConnection): ValidationResult {
+        override suspend fun onValidateSchema(connection: SQLiteConnection): ValidationResult {
             return ValidationResult(true, null)
         }
 
-        override fun onPostMigrate(connection: SQLiteConnection) {}
+        override suspend fun onPostMigrate(connection: SQLiteConnection) {}
 
-        override fun onOpen(connection: SQLiteConnection) {}
+        override suspend fun onOpen(connection: SQLiteConnection) {}
 
-        override fun createAllTables(connection: SQLiteConnection) {}
+        override suspend fun createAllTables(connection: SQLiteConnection) {}
 
-        override fun dropAllTables(connection: SQLiteConnection) {}
+        override suspend fun dropAllTables(connection: SQLiteConnection) {}
     }
 }

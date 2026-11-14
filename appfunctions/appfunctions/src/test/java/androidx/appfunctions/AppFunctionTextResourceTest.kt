@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:OptIn(ExperimentalAppFunctionsApi::class)
 
 package androidx.appfunctions
 
@@ -31,7 +32,13 @@ class AppFunctionTextResourceTest {
     fun serializeToAppFunctionData_shouldSucceed() {
         val textResource = AppFunctionTextResource(mimeType = "text/plain", content = "Hello World")
 
-        val data = AppFunctionData.serialize(textResource, AppFunctionTextResource::class.java)
+        val data =
+            AppFunctionData.serialize(
+                TEXT_RESOURCE_OBJECT_TYPE_METADATA,
+                TEXT_RESOURCE_COMPONENTS_METADATA,
+                textResource,
+                AppFunctionTextResource::class.java,
+            )
 
         assertThat(data.getString("mimeType")).isEqualTo("text/plain")
         assertThat(data.getString("content")).isEqualTo("Hello World")

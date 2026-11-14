@@ -43,7 +43,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onParent
 import androidx.compose.ui.test.performSemanticsAction
@@ -59,7 +59,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -70,7 +69,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BackdropScaffoldTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val peekHeight = 75.dp
     private val headerHeight = 100.dp
@@ -345,13 +344,12 @@ class BackdropScaffoldTest {
             )
         }
 
-        val revealedOffset =
-            rule.runOnIdle {
-                assertThat(scaffoldState?.currentValue).isEqualTo(Revealed)
-                // state change changes the anchors, causing the recalculation
-                increasedAnchor.value = true
-                scaffoldState?.requireOffset()
-            }
+        val revealedOffset = rule.runOnIdle {
+            assertThat(scaffoldState?.currentValue).isEqualTo(Revealed)
+            // state change changes the anchors, causing the recalculation
+            increasedAnchor.value = true
+            scaffoldState?.requireOffset()
+        }
 
         rule.runOnIdle {
             assertThat(scaffoldState?.requireOffset()).isNotEqualTo(revealedOffset)

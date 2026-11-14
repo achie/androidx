@@ -459,7 +459,7 @@ public class NotificationManagerCompatTest {
         channelGroupTwo.setGroup(groupTwo.getId());
         NotificationChannel secondChannelGroupTwo = new NotificationChannel(
                 secondChannelGroupTwoId, "secondChannelGroupTwoName",
-                IMPORTANCE_MAX);
+                IMPORTANCE_LOW);
         secondChannelGroupTwo.setGroup(groupTwo.getId());
 
         List<NotificationChannelGroup> groups = Arrays.asList(groupOne, groupTwo);
@@ -700,7 +700,7 @@ public class NotificationManagerCompatTest {
                         .setName("channelGroupTwoName")
                         .setGroup(groupTwo.getId()).build();
         NotificationChannelCompat secondChannelGroupTwo =
-                new NotificationChannelCompat.Builder(secondChannelGroupTwoId, IMPORTANCE_MAX)
+                new NotificationChannelCompat.Builder(secondChannelGroupTwoId, IMPORTANCE_LOW)
                         .setName("secondChannelGroupTwoName")
                         .setGroup(groupTwo.getId())
                         .build();

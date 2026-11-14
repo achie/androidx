@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.SoftwareType
@@ -37,7 +36,7 @@ dependencies {
     implementation("androidx.concurrent:concurrent-futures:1.1.0")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
     implementation(libs.autoValueAnnotations)
-    implementation(libs.espressoIdlingResource)
+    implementation("androidx.test.espresso:espresso-idling-resource:3.7.0")
     implementation(libs.kotlinCoroutinesCore)
     implementation(libs.kotlinCoroutinesAndroid)
 
@@ -57,7 +56,7 @@ dependencies {
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
     namespace = "androidx.camera.viewfinder.view"
     lint {
         enable.add("CameraXQuirksClassDetector")
@@ -69,6 +68,5 @@ androidx {
     type = SoftwareType.PUBLISHED_LIBRARY
     inceptionYear = "2022"
     description = "Standalone View-based Viewfinder for Camera"
-    legacyDisableKotlinStrictApiMode = true
     addGoldenImageAssets()
 }

@@ -51,11 +51,12 @@ public fun calculateContentColor(backgroundColor: Color): Color =
     if (backgroundColor.luminance() < LuminanceContrastRatioBreakpoint) Color.White else Color.Black
 
 /**
- * Retrieves the preferred content color for text and iconography. Most surfaces should be
- * [Color.Black], so content color is typically [Color.White]. In a few cases where surfaces are
- * filled with a different color, the content color may be [Color.Black] to improve contrast. For
- * cases where higher emphasis is required, content color may be a different color from the theme,
- * such as [Colors.primary], and provided separately using [contentColorProvider].
+ * Retrieves the preferred content color for text and iconography. Most backgrounds should be
+ * [Color.Black] and surfaces dark, so content color is typically [Color.White]. In a few cases
+ * where surfaces are filled with a different color, the content color may be [Color.Black] to
+ * improve contrast. For cases where higher emphasis is required, content color may be a different
+ * color from the theme, such as [Colors.primary], and provided separately using
+ * [contentColorProvider].
  *
  * Content color is automatically provided by [surface], and calculated from the provided background
  * color by default. It can also be provided with [contentColorProvider]. To manually calculate the
@@ -65,7 +66,7 @@ internal fun DelegatableNode.currentContentColor(): Color {
     var contentColor = Color.White
     traverseAncestors(ContentColorTraverseKey) {
         if (it is ContentColorProviderNode) {
-            contentColor = it.contentColor
+            contentColor = it.currentContentColor
             // Stop at the nearest descendant node
             false
         } else {
@@ -77,11 +78,23 @@ internal fun DelegatableNode.currentContentColor(): Color {
     return contentColor
 }
 
-private class ContentColorProviderElement(private val contentColor: Color) :
-    ModifierNodeElement<ContentColorProviderNode>() {
-    override fun create(): ContentColorProviderNode = ContentColorProviderNode(contentColor)
+/**
+ * Calculates a low emphasis version of [contentColor], for less prominent content such as
+ * unselected page indicator dots. Returns a light gray for light content colors, and a dark gray
+ * for dark content colors.
+ */
+internal fun calculateLowEmphasisContentColor(contentColor: Color): Color =
+    if (contentColor.luminance() >= LuminanceContrastRatioBreakpoint) {
+        LowEmphasisLightContentColor
+    } else {
+        LowEmphasisDarkContentColor
+    }
 
-    override fun update(node: ContentColorProviderNode) = node.update(contentColor)
+private class ContentColorProviderElement(private val contentColor: Color) :
+    ModifierNodeElement<ContentColorProviderNodeImpl>() {
+    override fun create(): ContentColorProviderNodeImpl = ContentColorProviderNodeImpl(contentColor)
+
+    override fun update(node: ContentColorProviderNodeImpl) = node.update(contentColor)
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -100,18 +113,27 @@ private class ContentColorProviderElement(private val contentColor: Color) :
     }
 }
 
-private class ContentColorProviderNode(contentColor: Color) : TraversableNode, Modifier.Node() {
-
+private class ContentColorProviderNodeImpl(contentColor: Color) :
+    Modifier.Node(), ContentColorProviderNode {
     override val shouldAutoInvalidate = false
 
-    var contentColor by mutableStateOf(contentColor)
+    override var currentContentColor by mutableStateOf(contentColor)
         private set
 
     fun update(contentColor: Color) {
-        this.contentColor = contentColor
+        this.currentContentColor = contentColor
     }
+}
 
-    override val traverseKey: String = ContentColorTraverseKey
+/**
+ * Allows custom nodes to provide a content color. Reads of [DelegatableNode.currentContentColor]
+ * will return the color provided by the nearest ancestor node that implements this interface.
+ */
+internal interface ContentColorProviderNode : TraversableNode {
+    val currentContentColor: Color
+
+    override val traverseKey: String
+        get() = ContentColorTraverseKey
 }
 
 private const val ContentColorTraverseKey = "androidx.xr.glimmer.ContentColor"
@@ -125,3 +147,9 @@ private const val ContentColorTraverseKey = "androidx.xr.glimmer.ContentColor"
  * whether (1.05) / (L + 0.05) > (L + 0.05) / (0.05) - this can be simplified down to L < 0.179129.
  */
 private const val LuminanceContrastRatioBreakpoint = 0.179129f
+
+// Color.White with its tone lowered by 19 (HCT tone 81)
+private val LowEmphasisLightContentColor = Color(0xFFC9C9C9)
+
+// Color.Black with its tone raised by 19 (HCT tone 19)
+private val LowEmphasisDarkContentColor = Color(0xFF2E2E2E)

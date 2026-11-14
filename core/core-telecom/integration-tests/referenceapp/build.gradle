@@ -22,18 +22,17 @@ plugins {
 
 android {
     namespace = "androidx.core.telecom.reference"
-    compileSdk = 36
-    compileSdkMinor = 1
+    compileSdk { version = release(37) }
     defaultConfig {
         applicationId = "androidx.core.telecom.reference"
-        minSdk = 26
+        minSdk { version = release(26) }
     }
 
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            optimization {
+                enable = true
+            }
         }
     }
 }

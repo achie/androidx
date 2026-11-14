@@ -65,6 +65,9 @@ class CaptureNodeTest {
     @After
     fun tearDown() {
         captureNode.release()
+
+        // Process any pending looper updates to prevent leaks
+        shadowOf(getMainLooper()).idle()
     }
 
     @Test
@@ -98,8 +101,10 @@ class CaptureNodeTest {
         // Assert
         assertThat(output.outputFormats.size).isEqualTo(2)
         assertThat(input.surface).isNotNull()
+        assertThat(input.surface.prescribedStreamFormat).isEqualTo(RAW_SENSOR)
         assertThat(input.cameraCaptureCallback).isNotNull()
         assertThat(input.secondarySurface).isNotNull()
+        assertThat(input.secondarySurface!!.prescribedStreamFormat).isEqualTo(JPEG)
         assertThat(input.secondaryCameraCaptureCallback).isNotNull()
     }
 
@@ -135,6 +140,39 @@ class CaptureNodeTest {
     }
 
     @Test
+    fun release_simultaneousCapture_imageReadersNotClosedUntilTermination() {
+        val input =
+            CaptureNode.In.of(Size(10, 10), RAW_SENSOR, listOf(RAW_SENSOR, JPEG), false, null)
+        val node = CaptureNode()
+        node.transform(input)
+
+        // Arrange: increment use count on both primary and secondary surfaces
+        input.surface.incrementUseCount()
+        input.secondarySurface!!.incrementUseCount()
+
+        // Act: release node
+        node.release()
+        shadowOf(getMainLooper()).idle()
+
+        // Assert: both ImageReaders remain open
+        assertThat(node.mSafeCloseImageReaderProxy!!.isClosed).isFalse()
+        assertThat(node.mSecondarySafeCloseImageReaderProxy!!.isClosed).isFalse()
+
+        // Act: decrement primary surface use count
+        input.surface.decrementUseCount()
+        shadowOf(getMainLooper()).idle()
+        // Assert: primary closed, secondary still open
+        assertThat(node.mSafeCloseImageReaderProxy!!.isClosed).isTrue()
+        assertThat(node.mSecondarySafeCloseImageReaderProxy!!.isClosed).isFalse()
+
+        // Act: decrement secondary surface use count
+        input.secondarySurface!!.decrementUseCount()
+        shadowOf(getMainLooper()).idle()
+        // Assert: both closed
+        assertThat(node.mSecondarySafeCloseImageReaderProxy!!.isClosed).isTrue()
+    }
+
+    @Test
     fun transform_verifyInputSurface() {
         assertThat(captureNodeIn.surface.surface.get())
             .isEqualTo(captureNode.mSafeCloseImageReaderProxy!!.surface)
@@ -161,11 +199,10 @@ class CaptureNodeTest {
         val captureBundleA = createCaptureBundle(intArrayOf(1))
         val callbackA = FakeTakePictureCallback()
         var captureFutureCompleterA: CallbackToFutureAdapter.Completer<Void>? = null
-        val captureFuture1 =
-            CallbackToFutureAdapter.getFuture {
-                captureFutureCompleterA = it
-                "test"
-            }
+        val captureFuture1 = CallbackToFutureAdapter.getFuture {
+            captureFutureCompleterA = it
+            "test"
+        }
         val requestA = FakeProcessingRequest(captureBundleA, callbackA, captureFuture1)
         val tagBundleKeyA = captureBundleA.hashCode().toString()
         val tagBundleA = TagBundle.create(Pair(tagBundleKeyA, /* stage id */ 1))
@@ -349,5 +386,47 @@ class CaptureNodeTest {
         assertThat(input.postviewSurface!!.prescribedSize).isEqualTo(postviewSettings.resolution)
         assertThat(input.postviewSurface!!.prescribedStreamFormat).isEqualTo(JPEG)
         node.release()
+    }
+
+    @Test
+    fun imagePropagated_trackedBySafeCloseImageReaderProxy() {
+        val captureNode = CaptureNode()
+        val imageReaderProxy = FakeImageReaderProxy(2)
+        captureNodeIn =
+            CaptureNode.In.of(
+                Size(10, 10),
+                JPEG,
+                listOf(JPEG),
+                /* isVirtualCamera */ true,
+                { _, _, _, _, _ -> imageReaderProxy },
+            )
+        captureNodeOut = captureNode.transform(captureNodeIn)
+        captureNodeOut.edge.setListener { imagePropagated.add(it.imageProxy) }
+
+        val captureBundle = createCaptureBundle(intArrayOf(1))
+        val takePictureCallback = FakeTakePictureCallback()
+        val request =
+            FakeProcessingRequest(captureBundle, takePictureCallback, Futures.immediateFuture(null))
+        val tagBundle =
+            TagBundle.create(Pair(captureBundle.hashCode().toString(), /* stage id */ 1))
+
+        assertThat(captureNode.capacity).isEqualTo(2)
+
+        captureNodeIn.requestEdge.accept(request)
+        imageReaderProxy.triggerImageAvailableSync(tagBundle)
+
+        // While the propagated ImageProxy is still open, capacity decreases by 1
+        assertThat(imagePropagated).hasSize(1)
+        assertThat(captureNode.capacity).isEqualTo(1)
+
+        // Releasing CaptureNode defers closing the underlying ImageReader until the image is closed
+        captureNode.release()
+        shadowOf(getMainLooper()).idle()
+        assertThat(imageReaderProxy.isClosed).isFalse()
+
+        // Closing the propagated ImageProxy restores capacity and closes the underlying ImageReader
+        imagePropagated[0].close()
+        assertThat(captureNode.capacity).isEqualTo(2)
+        assertThat(imageReaderProxy.isClosed).isTrue()
     }
 }

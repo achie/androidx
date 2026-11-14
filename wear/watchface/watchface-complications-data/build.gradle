@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 
@@ -37,8 +36,7 @@ dependencies {
     api(libs.kotlinCoroutinesAndroid)
 
     implementation("androidx.core:core:1.1.0")
-    implementation("androidx.preference:preference:1.1.0")
-    implementation("androidx.wear.protolayout:protolayout-expression-pipeline:1.0.0-beta01")
+    implementation("androidx.wear.protolayout:protolayout-expression-pipeline:1.0.0")
     testImplementation(libs.testCore)
     testImplementation(libs.testRunner)
     testImplementation(libs.testRules)
@@ -51,9 +49,17 @@ dependencies {
     testImplementation(libs.testParameterInjector)
     testImplementation(libs.guavaTestlib)
 
+    androidTestImplementation(libs.testExtJunit)
+    androidTestImplementation(libs.testCore)
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.testRules)
+    androidTestImplementation(libs.truth)
+
     annotationProcessor(project(":versionedparcelable:versionedparcelable-compiler"))
 
     compileOnly files("../../wear_sdk/wear-sdk.jar")
+    // The Wear SDK is provided by the watch at runtime, so it must not be bundled in the test APK.
+    androidTestCompileOnly files("../../wear_sdk/wear-sdk.jar")
 }
 
 android {
@@ -61,8 +67,7 @@ android {
         aidl = true
     }
     defaultConfig {
-        minSdk = 26
-        consumerProguardFiles("proguard-rules.pro")
+        minSdk { version = release(26) }
     }
     namespace = "androidx.wear.watchface.complications.data"
 }
@@ -72,6 +77,5 @@ androidx {
     type = SoftwareType.PUBLISHED_LIBRARY
     inceptionYear = "2020"
     description = "Android Wear Complications Data"
-    legacyDisableKotlinStrictApiMode = true
     enableRobolectric()
 }

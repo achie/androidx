@@ -23,7 +23,8 @@ package androidx.appfunctions
  *   [content].
  * @param content The text content of the resource.
  */
-@AppFunctionSerializable(isDescribedByKdoc = true)
+@ExperimentalAppFunctionsApi
+@AppFunctionSerializable(isDescribedByKDoc = true)
 public class AppFunctionTextResource(public val mimeType: String, public val content: String) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

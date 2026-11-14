@@ -19,7 +19,6 @@ package androidx.compose.foundation.text.selection.gestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.text.contextmenu.test.ContextMenuFlagFlipperRunner
 import androidx.compose.foundation.text.selection.fetchTextLayoutResult
 import androidx.compose.foundation.text.selection.gestures.util.MultiSelectionSubject
 import androidx.compose.foundation.text.selection.gestures.util.TextSelectionAsserter
@@ -44,6 +43,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.ResolvedTextDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.fastForEach
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth
 import org.junit.Before
@@ -51,7 +51,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @MediumTest
-@RunWith(ContextMenuFlagFlipperRunner::class)
+@RunWith(AndroidJUnit4::class)
 internal class MultiTextSelectionGesturesRtlTest : TextSelectionGesturesTest() {
 
     override val pointerAreaTag = "selectionContainer"
@@ -74,7 +74,7 @@ internal class MultiTextSelectionGesturesRtlTest : TextSelectionGesturesTest() {
                         textToolbar = textToolbar,
                         spyTextActionModeCallback = spyTextActionModeCallback,
                         hapticFeedback = hapticFeedback,
-                        getActual = { selection.value },
+                        getActual = { state.selection },
                     ) {
                     override fun subAssert() {
                         Truth.assertAbout(MultiSelectionSubject.withContent(texts.value))
@@ -137,6 +137,32 @@ internal class MultiTextSelectionGesturesRtlTest : TextSelectionGesturesTest() {
         asserter.applyAndAssert { selection = 23.collapsed }
 
         mouseDragTo(characterPosition(offset = 24))
+
+        asserter.applyAndAssert { selection = 23 to 24 }
+
+        performTouchGesture {
+            swipe(start = bounds.center, end = bounds.bottomCenter + Offset(0f, 10f))
+        }
+
+        asserter.applyAndAssert {
+            selectionHandlesShown = true
+
+            // only difference from the parent function, the selection is empty,
+            // so the toolbar for copying won't appear.
+            textToolbarShown = false
+        }
+    }
+
+    @Test
+    override fun whenTrackpadCollapsedSelectionAcrossLines_thenTouch_showUi() {
+        performTrackpadGesture {
+            moveTo(centerEnd)
+            press()
+        }
+
+        asserter.applyAndAssert { selection = 23.collapsed }
+
+        trackpadDragTo(characterPosition(offset = 24))
 
         asserter.applyAndAssert { selection = 23 to 24 }
 

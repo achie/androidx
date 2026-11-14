@@ -46,7 +46,6 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsNodeInteractionCollection
 import androidx.compose.ui.test.assertIsDisplayed
@@ -57,7 +56,7 @@ import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -70,13 +69,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 class ModalNavigationDrawerTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun modalNavigationDrawer_initialStateClosed_closedStateComposableDisplayed() {
@@ -137,7 +135,6 @@ class ModalNavigationDrawerTest {
         rule.onAllNodesWithText("Opened").assertAnyAreDisplayed()
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun modalNavigationDrawer_focusMovesOutOfDrawer_closedStateComposableDisplayed() {
         InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
@@ -168,7 +165,6 @@ class ModalNavigationDrawerTest {
         rule.onAllNodesWithText("Closed").assertAnyAreDisplayed()
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun modalNavigationDrawer_focusMovesIntoDrawer_openStateComposableDisplayed() {
         InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
@@ -314,7 +310,6 @@ class ModalNavigationDrawerTest {
         assert(endPositionInClosedState.value > endPositionInOpenState.value)
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun modalNavigationDrawer_parentContainerGainsFocus_onBackPress() {
         val drawerFocusRequester = FocusRequester()

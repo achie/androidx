@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.util.fastRoundToInt
 import kotlin.math.ceil
 
-object TextPainter {
+public object TextPainter {
 
     // TODO(b/236964276): Deprecate when TextMeasurer and drawText are no longer Experimental
     /**
@@ -49,7 +49,7 @@ object TextPainter {
      * @param canvas a canvas to be drawn
      * @param textLayoutResult a result of text layout
      */
-    fun paint(canvas: Canvas, textLayoutResult: TextLayoutResult) {
+    public fun paint(canvas: Canvas, textLayoutResult: TextLayoutResult) {
         val needClipping =
             textLayoutResult.hasVisualOverflow &&
                 textLayoutResult.layoutInput.overflow != TextOverflow.Visible
@@ -122,9 +122,9 @@ object TextPainter {
  * @param topLeft Offsets the text from top left point of the current coordinate system.
  * @param style the [TextStyle] to be applied to the text
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
@@ -140,7 +140,7 @@ object TextPainter {
  * @param blendMode Blending algorithm to be applied to the text
  * @sample androidx.compose.ui.text.samples.DrawTextAnnotatedStringSample
  */
-fun DrawScope.drawText(
+public fun DrawScope.drawText(
     textMeasurer: TextMeasurer,
     text: AnnotatedString,
     topLeft: Offset = Offset.Zero,
@@ -169,7 +169,9 @@ fun DrawScope.drawText(
         translate(topLeft.x, topLeft.y)
         clip(textLayoutResult)
     }) {
+        drawAnnotationsBehind(text, textLayoutResult)
         textLayoutResult.multiParagraph.paint(canvas = drawContext.canvas, blendMode = blendMode)
+        drawAnnotationsOver(text, textLayoutResult)
     }
 }
 
@@ -189,9 +191,9 @@ fun DrawScope.drawText(
  * @param topLeft Offsets the text from top left point of the current coordinate system.
  * @param style the [TextStyle] to be applied to the text
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
@@ -205,7 +207,7 @@ fun DrawScope.drawText(
  * @sample androidx.compose.ui.text.samples.DrawTextSample
  * @sample androidx.compose.ui.text.samples.DrawTextStyledSample
  */
-fun DrawScope.drawText(
+public fun DrawScope.drawText(
     textMeasurer: TextMeasurer,
     text: String,
     topLeft: Offset = Offset.Zero,
@@ -254,7 +256,7 @@ fun DrawScope.drawText(
  * @sample androidx.compose.ui.text.samples.DrawTextMeasureInLayoutSample
  * @sample androidx.compose.ui.text.samples.DrawTextDrawWithCacheSample
  */
-fun DrawScope.drawText(
+public fun DrawScope.drawText(
     textLayoutResult: TextLayoutResult,
     color: Color = Color.Unspecified,
     topLeft: Offset = Offset.Zero,
@@ -272,6 +274,7 @@ fun DrawScope.drawText(
         translate(topLeft.x, topLeft.y)
         clip(textLayoutResult)
     }) {
+        drawAnnotationsBehind(textLayoutResult.layoutInput.text, textLayoutResult)
         // if text layout was created using brush, and [color] is unspecified, we should treat this
         // like drawText(brush) call
         val brush = textLayoutResult.layoutInput.style.brush
@@ -295,6 +298,7 @@ fun DrawScope.drawText(
                 blendMode,
             )
         }
+        drawAnnotationsOver(textLayoutResult.layoutInput.text, textLayoutResult)
     }
 }
 
@@ -314,7 +318,7 @@ fun DrawScope.drawText(
  * @param drawStyle Whether or not the text is stroked or filled in.
  * @param blendMode Blending algorithm to be applied to the text
  */
-fun DrawScope.drawText(
+public fun DrawScope.drawText(
     textLayoutResult: TextLayoutResult,
     brush: Brush,
     topLeft: Offset = Offset.Zero,
@@ -332,6 +336,7 @@ fun DrawScope.drawText(
         translate(topLeft.x, topLeft.y)
         clip(textLayoutResult)
     }) {
+        drawAnnotationsBehind(textLayoutResult.layoutInput.text, textLayoutResult)
         textLayoutResult.multiParagraph.paint(
             drawContext.canvas,
             brush,
@@ -341,6 +346,7 @@ fun DrawScope.drawText(
             newDrawStyle,
             blendMode,
         )
+        drawAnnotationsOver(textLayoutResult.layoutInput.text, textLayoutResult)
     }
 }
 

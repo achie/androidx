@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.resetInTouchModeCompat
 import androidx.compose.ui.focus.setFocusableContent
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputMode.Companion.Keyboard
@@ -36,7 +35,7 @@ import androidx.compose.ui.semantics.semanticsId
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.unit.dp
@@ -45,8 +44,6 @@ import androidx.test.filters.MediumTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.Test
-import kotlinx.coroutines.test.StandardTestDispatcher
-import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.runner.RunWith
@@ -56,13 +53,10 @@ import org.junit.runners.Parameterized
 @RunWith(Parameterized::class)
 class AccessibilityTouchModeTest(private val param: Param) {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var inputModeManager: InputModeManager
     private lateinit var view: View
-
-    @After
-    fun resetTouchMode() = InstrumentationRegistry.getInstrumentation().resetInTouchModeCompat()
 
     @Test
     fun requestFocus_doesNotChangeInputMode() {

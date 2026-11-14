@@ -33,10 +33,10 @@ import androidx.appfunctions.metadata.CompileTimeAppFunctionMetadata
  * package com.example.imageeditor
  *
  * class ImageFunctions : RotateImage, BlurImage {
- *   @AppFunction
+ *   @AppFunctionDeclaration(isDescribedByKDoc = false)
  *   override suspend fun rotateImage(...): Image { ... }
  *
- *   @AppFunction
+ *   @AppFunctionDeclaration(isDescribedByKDoc = false)
  *   override suspend fun blurImage(...): Image? { ... }
  * }
  * ```

@@ -24,10 +24,13 @@ import android.media.EncoderProfiles.VideoProfile.HDR_HLG
 import android.media.EncoderProfiles.VideoProfile.HDR_NONE
 import androidx.camera.core.DynamicRange.DOLBY_VISION_10_BIT
 import androidx.camera.core.DynamicRange.HDR10_10_BIT
+import androidx.camera.core.DynamicRange.HDR10_10_BIT_SMPTE_2094_50
 import androidx.camera.core.DynamicRange.HDR10_PLUS_10_BIT
 import androidx.camera.core.DynamicRange.HDR_UNSPECIFIED_10_BIT
 import androidx.camera.core.DynamicRange.HLG_10_BIT
+import androidx.camera.core.DynamicRange.HLG_10_BIT_SMPTE_2094_50
 import androidx.camera.core.DynamicRange.SDR
+import androidx.camera.core.DynamicRange.SDR_SMPTE_2094_50
 import androidx.camera.core.impl.EncoderProfilesProvider
 import androidx.camera.core.impl.EncoderProfilesProxy
 import androidx.camera.core.impl.EncoderProfilesProxy.ImmutableEncoderProfilesProxy
@@ -141,6 +144,42 @@ class DynamicRangeMatchedEncoderProfilesProviderTest {
     }
 
     @Test
+    fun hlgSmpte209450_onlyContainsHlgProfile() {
+        val provider =
+            DynamicRangeMatchedEncoderProfilesProvider(defaultProvider, HLG_10_BIT_SMPTE_2094_50)
+
+        assertThat(provider.hasProfile(QUALITY_1080P)).isTrue()
+        val videoProfiles = provider.getAll(QUALITY_1080P)!!.videoProfiles
+        assertThat(videoProfiles.size == 1).isTrue()
+        assertThat(videoProfiles[0].hdrFormat == HDR_HLG).isTrue()
+        assertThat(videoProfiles[0].bitDepth == BIT_DEPTH_10).isTrue()
+    }
+
+    @Test
+    fun sdrSmpte209450_onlyContainsSdrProfile() {
+        val provider =
+            DynamicRangeMatchedEncoderProfilesProvider(defaultProvider, SDR_SMPTE_2094_50)
+
+        assertThat(provider.hasProfile(QUALITY_1080P)).isTrue()
+        val videoProfiles = provider.getAll(QUALITY_1080P)!!.videoProfiles
+        assertThat(videoProfiles.size == 1).isTrue()
+        assertThat(videoProfiles[0].hdrFormat == HDR_NONE).isTrue()
+        assertThat(videoProfiles[0].bitDepth == BIT_DEPTH_8).isTrue()
+    }
+
+    @Test
+    fun hdr10Smpte209450_onlyContainsHdr10Profile() {
+        val provider =
+            DynamicRangeMatchedEncoderProfilesProvider(defaultProvider, HDR10_10_BIT_SMPTE_2094_50)
+
+        assertThat(provider.hasProfile(QUALITY_1080P)).isTrue()
+        val videoProfiles = provider.getAll(QUALITY_1080P)!!.videoProfiles
+        assertThat(videoProfiles.size == 1).isTrue()
+        assertThat(videoProfiles[0].hdrFormat == HDR_HDR10).isTrue()
+        assertThat(videoProfiles[0].bitDepth == BIT_DEPTH_10).isTrue()
+    }
+
+    @Test
     fun hdrUnspecified_containsAllHdrProfiles() {
         val provider =
             DynamicRangeMatchedEncoderProfilesProvider(defaultProvider, HDR_UNSPECIFIED_10_BIT)
@@ -180,6 +219,8 @@ class DynamicRangeMatchedEncoderProfilesProviderTest {
             VIDEO_PROFILES_1080P_SDR.modifyDynamicRangeInfo(HDR_HDR10PLUS, BIT_DEPTH_10)
         private val VIDEO_PROFILES_1080P_DOLBY_VISION =
             VIDEO_PROFILES_1080P_SDR.modifyDynamicRangeInfo(HDR_DOLBY_VISION, BIT_DEPTH_10)
+        private val VIDEO_PROFILES_1080P_DOLBY_VISION_8B =
+            VIDEO_PROFILES_1080P_SDR.modifyDynamicRangeInfo(HDR_DOLBY_VISION, BIT_DEPTH_8)
         private val PROFILES_1080P_FULL_DYNAMIC_RANGE =
             ImmutableEncoderProfilesProxy.create(
                 EncoderProfilesUtil.DEFAULT_DURATION,
@@ -191,6 +232,7 @@ class DynamicRangeMatchedEncoderProfilesProviderTest {
                     VIDEO_PROFILES_1080P_HDR10,
                     VIDEO_PROFILES_1080P_HDR10_PLUS,
                     VIDEO_PROFILES_1080P_DOLBY_VISION,
+                    VIDEO_PROFILES_1080P_DOLBY_VISION_8B,
                 ),
             )
 

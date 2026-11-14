@@ -16,9 +16,11 @@
 
 package androidx.compose.material
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -26,29 +28,29 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.UiComposable
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.SubcomposeLayout
-import androidx.compose.ui.platform.debugInspectorInfo
+import androidx.compose.ui.node.LayoutModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
@@ -132,7 +134,7 @@ import kotlinx.coroutines.launch
 @Suppress("ComposableLambdaInMeasurePolicy")
 @Composable
 @UiComposable
-fun TabRow(
+public fun TabRow(
     selectedTabIndex: Int,
     modifier: Modifier = Modifier,
     backgroundColor: Color = MaterialTheme.colors.primarySurface,
@@ -154,10 +156,9 @@ fun TabRow(
             val tabMeasurables = subcompose(TabSlots.Tabs, tabs)
             val tabCount = tabMeasurables.size
             val tabWidth = (tabRowWidth / tabCount)
-            val tabPlaceables =
-                tabMeasurables.fastMap {
-                    it.measure(constraints.copy(minWidth = tabWidth, maxWidth = tabWidth))
-                }
+            val tabPlaceables = tabMeasurables.fastMap {
+                it.measure(constraints.copy(minWidth = tabWidth, maxWidth = tabWidth))
+            }
 
             val tabRowHeight = tabPlaceables.fastMaxBy { it.height }?.height ?: 0
 
@@ -222,7 +223,7 @@ fun TabRow(
 @Suppress("ComposableLambdaInMeasurePolicy")
 @Composable
 @UiComposable
-fun ScrollableTabRow(
+public fun ScrollableTabRow(
     selectedTabIndex: Int,
     modifier: Modifier = Modifier,
     backgroundColor: Color = MaterialTheme.colors.primarySurface,
@@ -315,8 +316,8 @@ fun ScrollableTabRow(
  * @property width the width of this tab
  */
 @Immutable
-class TabPosition internal constructor(val left: Dp, val width: Dp) {
-    val right: Dp
+public class TabPosition internal constructor(public val left: Dp, public val width: Dp) {
+    public val right: Dp
         get() = left + width
 
     override fun equals(other: Any?): Boolean {
@@ -341,7 +342,7 @@ class TabPosition internal constructor(val left: Dp, val width: Dp) {
 }
 
 /** Contains default implementations and values used for TabRow. */
-object TabRowDefaults {
+public object TabRowDefaults {
     /**
      * Default [Divider], which will be positioned at the bottom of the [TabRow], underneath the
      * indicator.
@@ -351,7 +352,7 @@ object TabRowDefaults {
      * @param color color of the divider
      */
     @Composable
-    fun Divider(
+    public fun Divider(
         modifier: Modifier = Modifier,
         thickness: Dp = DividerThickness,
         color: Color = LocalContentColor.current.copy(alpha = DividerOpacity),
@@ -368,7 +369,7 @@ object TabRowDefaults {
      * @param color color of the indicator
      */
     @Composable
-    fun Indicator(
+    public fun Indicator(
         modifier: Modifier = Modifier,
         height: Dp = IndicatorHeight,
         color: Color = LocalContentColor.current,
@@ -383,41 +384,99 @@ object TabRowDefaults {
      * @param currentTabPosition [TabPosition] of the currently selected tab. This is used to
      *   calculate the offset of the indicator this modifier is applied to, as well as its width.
      */
-    fun Modifier.tabIndicatorOffset(currentTabPosition: TabPosition): Modifier =
-        composed(
-            inspectorInfo =
-                debugInspectorInfo {
-                    name = "tabIndicatorOffset"
-                    value = currentTabPosition
-                }
-        ) {
-            val currentTabWidth by
-                animateDpAsState(
-                    targetValue = currentTabPosition.width,
-                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
-                )
-            val indicatorOffset by
-                animateDpAsState(
-                    targetValue = currentTabPosition.left,
-                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
-                )
-            fillMaxWidth()
-                .wrapContentSize(Alignment.BottomStart)
-                .offset { IntOffset(x = indicatorOffset.roundToPx(), y = 0) }
-                .width(currentTabWidth)
-        }
+    public fun Modifier.tabIndicatorOffset(currentTabPosition: TabPosition): Modifier =
+        this.fillMaxWidth()
+            .wrapContentSize(Alignment.BottomStart)
+            .then(TabIndicatorOffsetElement(currentTabPosition))
 
     /** Default opacity for the color of [Divider] */
-    const val DividerOpacity = 0.12f
+    public const val DividerOpacity: Float = 0.12f
 
     /** Default thickness for [Divider] */
-    val DividerThickness = 1.dp
+    public val DividerThickness: Dp = 1.dp
 
     /** Default height for [Indicator] */
-    val IndicatorHeight = 2.dp
+    public val IndicatorHeight: Dp = 2.dp
 
     /** The default padding from the starting edge before a tab in a [ScrollableTabRow]. */
-    val ScrollableTabRowPadding = 52.dp
+    public val ScrollableTabRowPadding: Dp = 52.dp
+}
+
+private class TabIndicatorOffsetElement(private val currentTabPosition: TabPosition) :
+    ModifierNodeElement<TabIndicatorOffsetNode>() {
+    override fun create(): TabIndicatorOffsetNode = TabIndicatorOffsetNode(currentTabPosition)
+
+    override fun update(node: TabIndicatorOffsetNode) {
+        node.currentTabPosition = currentTabPosition
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "tabIndicatorOffset"
+        value = currentTabPosition
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is TabIndicatorOffsetElement) return false
+        return currentTabPosition == other.currentTabPosition
+    }
+
+    override fun hashCode(): Int = currentTabPosition.hashCode()
+}
+
+private class TabIndicatorOffsetNode(var currentTabPosition: TabPosition) :
+    Modifier.Node(), LayoutModifierNode {
+    private var offsetAnimatable: Animatable<Dp, AnimationVector1D>? = null
+    private var widthAnimatable: Animatable<Dp, AnimationVector1D>? = null
+    private var initialOffset: Dp? = null
+    private var initialWidth: Dp? = null
+
+    override fun MeasureScope.measure(
+        measurable: Measurable,
+        constraints: Constraints,
+    ): MeasureResult {
+        val currentTabWidth = currentTabPosition.width
+        if (initialWidth != null) {
+            val widthAnim =
+                widthAnimatable
+                    ?: Animatable(initialWidth!!, Dp.VectorConverter).also { widthAnimatable = it }
+            if (currentTabWidth != widthAnim.targetValue) {
+                coroutineScope.launch {
+                    widthAnim.animateTo(currentTabWidth, TabIndicatorAnimationSpec)
+                }
+            }
+        } else {
+            initialWidth = currentTabWidth
+        }
+
+        val indicatorOffset = currentTabPosition.left
+        if (initialOffset != null) {
+            val offsetAnim =
+                offsetAnimatable
+                    ?: Animatable(initialOffset!!, Dp.VectorConverter).also {
+                        offsetAnimatable = it
+                    }
+            if (indicatorOffset != offsetAnim.targetValue) {
+                coroutineScope.launch {
+                    offsetAnim.animateTo(indicatorOffset, TabIndicatorAnimationSpec)
+                }
+            }
+        } else {
+            initialOffset = indicatorOffset
+        }
+
+        val offset = offsetAnimatable?.value ?: indicatorOffset
+        val width = widthAnimatable?.value ?: currentTabWidth
+
+        val placeable =
+            measurable.measure(
+                constraints.copy(minWidth = width.roundToPx(), maxWidth = width.roundToPx())
+            )
+
+        return layout(placeable.width, placeable.height) {
+            placeable.placeRelative(offset.roundToPx(), 0)
+        }
+    }
 }
 
 private enum class TabSlots {
@@ -483,8 +542,12 @@ private class ScrollableTabData(
         }
 }
 
-private val ScrollableTabRowMinimumTabWidth = 90.dp
+private val ScrollableTabRowMinimumTabWidth
+    get() = 90.dp
 
 /** [AnimationSpec] used when scrolling to a tab that is not fully visible. */
 private val ScrollableTabRowScrollSpec: AnimationSpec<Float> =
+    tween(durationMillis = 250, easing = FastOutSlowInEasing)
+
+private val TabIndicatorAnimationSpec: AnimationSpec<Dp> =
     tween(durationMillis = 250, easing = FastOutSlowInEasing)

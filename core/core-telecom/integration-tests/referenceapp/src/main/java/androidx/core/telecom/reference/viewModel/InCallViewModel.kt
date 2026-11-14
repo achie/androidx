@@ -31,7 +31,6 @@ import androidx.core.telecom.reference.CallRepository
 import androidx.core.telecom.reference.model.CallData
 import androidx.core.telecom.reference.model.CallState
 import androidx.core.telecom.reference.model.InCallItemUiState
-import androidx.core.telecom.util.ExperimentalAppActions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +40,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalAppActions::class)
 class InCallViewModel(
     private val context: Context,
     private val callRepository: CallRepository = CallRepository(),
@@ -80,6 +78,7 @@ class InCallViewModel(
                         isCallIconExtensionEnabled = call.isCallIconExtensionEnabled,
                         callIconData = call.iconData,
                         isLocallyMuted = call.isLocallyMuted,
+                        canUserUpdateSilence = call.canUserUpdateSilence,
                     )
                 }
             }
@@ -189,6 +188,11 @@ class InCallViewModel(
         Log.d(TAG, "Requesting toggleLocalMute: isMuted = $isMuted")
         maybeStopAudioLoopback(isMuted)
         callRepository.toggleLocalCallSilence(callId, isMuted)
+    }
+
+    fun toggleCanUserUpdateSilence(callId: String, canUserUpdateSilence: Boolean) {
+        Log.d(TAG, "toggleCanUserUpdateSilence: canUserUpdateSilence = $canUserUpdateSilence")
+        callRepository.toggleCanUserUpdateSilence(callId, canUserUpdateSilence)
     }
 
     fun maybeStopAudioLoopback(isMuted: Boolean) {

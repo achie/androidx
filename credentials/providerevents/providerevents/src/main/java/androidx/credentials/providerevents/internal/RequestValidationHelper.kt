@@ -17,7 +17,9 @@
 package androidx.credentials.providerevents.internal
 
 import androidx.annotation.RestrictTo
+import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 
 internal class RequestValidationHelper {
     companion object {
@@ -29,10 +31,23 @@ internal class RequestValidationHelper {
                 return false
             }
             return try {
-                JSONObject(jsonString)
-                true
+                val value = JSONTokener(jsonString).nextValue()
+                value is JSONObject || value is JSONArray
             } catch (ex: Exception) {
                 false
+            }
+        }
+
+        /**
+         * Throws [IllegalArgumentException] if [packageNames] contains a package name more than
+         * once. Batch results are routed back to relying parties by package name.
+         */
+        @RestrictTo(RestrictTo.Scope.LIBRARY)
+        @JvmStatic
+        fun requireUniquePackageNames(packageNames: List<String>) {
+            val seen = HashSet<String>(packageNames.size)
+            for (packageName in packageNames) {
+                require(seen.add(packageName)) { "Duplicate package name in batch: $packageName" }
             }
         }
     }

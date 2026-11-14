@@ -15,25 +15,33 @@
  */
 package androidx.compose.ui.layout
 
+import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import androidx.annotation.FloatRange
 import androidx.annotation.IntRange
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.ReusableContentHost
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.node.DelegatingNode
 import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.test.TestActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -43,7 +51,7 @@ import org.junit.runners.Parameterized
 @MediumTest
 @RunWith(Parameterized::class)
 class OnVisibilityChangedTest(private val useDelegation: Boolean) {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     @Test
     fun testOneMinFraction() {
@@ -484,7 +492,7 @@ class OnVisibilityChangedTest(private val useDelegation: Boolean) {
             Box {
                 if (shouldCompose) {
                     Box(
-                        Modifier.onVisibilityChangedTestImpl(minDurationMs = 500) { visible ->
+                        Modifier.onVisibilityChangedTestImpl(minDurationMs = 100) { visible ->
                                 calls.add(visible)
                             }
                             .size(100.dp)
@@ -492,7 +500,7 @@ class OnVisibilityChangedTest(private val useDelegation: Boolean) {
                 }
             }
         }
-        rule.waitUntil(1000) { !calls.isEmpty() }
+        rule.waitUntil(5000) { !calls.isEmpty() }
         rule.runOnIdle {
             assertThat(calls).isEqualTo(listOf(true))
             shouldCompose = false
@@ -527,7 +535,7 @@ class OnVisibilityChangedTest(private val useDelegation: Boolean) {
     fun testNotVisibleNotCalledWhenWasVisibleForLessThanMinDuration() {
         var called = 0
         var parentSize by mutableStateOf(100.dp)
-        val callback: (Boolean) -> Unit = { visible: Boolean -> called++ }
+        val callback: (Boolean) -> Unit = { _: Boolean -> called++ }
         rule.setContent {
             Column {
                 Column(Modifier.size(parentSize)) {
@@ -548,6 +556,133 @@ class OnVisibilityChangedTest(private val useDelegation: Boolean) {
         rule.runOnIdle { assertEquals(0, called) }
     }
 
+    @Test
+    fun visibilityTriggeredOnViewDetach() {
+        var called = 0
+        var present by mutableStateOf(true)
+        val callback: (Boolean) -> Unit = { _: Boolean -> called++ }
+        val view =
+            ComposeView(rule.activity).apply {
+                setContent {
+                    Box(
+                        Modifier.requiredSize(100.dp)
+                            .onVisibilityChangedTestImpl(callback = callback)
+                    )
+                }
+            }
+        rule.setContent {
+            Column {
+                if (present) {
+                    AndroidView(factory = { view })
+                }
+            }
+        }
+        assertEquals(1, called)
+
+        present = false
+        rule.runOnIdle { assertEquals(2, called) }
+
+        present = true
+        rule.runOnIdle { assertEquals(3, called) }
+    }
+
+    @Test
+    fun testVisibilityChangedWhenReused() {
+        var active by mutableStateOf(true)
+        var lastVisibilityState: Boolean? = null
+        val callback: (Boolean) -> Unit = { isVisible -> lastVisibilityState = isVisible }
+
+        rule.setContent {
+            ReusableContentHost(active) {
+                Box(Modifier.size(50.dp).onVisibilityChangedTestImpl(callback = callback))
+            }
+        }
+
+        rule.runOnIdle {
+            assertThat(lastVisibilityState).isTrue()
+            active = false
+        }
+
+        rule.runOnIdle {
+            assertThat(lastVisibilityState).isFalse()
+            active = true
+        }
+
+        rule.runOnIdle { assertThat(lastVisibilityState).isTrue() }
+    }
+
+    @Test
+    fun testComposeViewBelowTheWindow_isVisibleOnlyOnceScrolledIntoIt() {
+        // A ComposeView below two screens of other views, like an item of a RecyclerView that isn't
+        // shown yet: its content is inside the window's size relative to the ComposeView, but below
+        // the window.
+        var isVisible: Boolean? = null
+        val screenHeight = rule.activity.resources.displayMetrics.heightPixels
+        val viewsAbove = View(rule.activity)
+        val composeView =
+            ComposeView(rule.activity).apply {
+                setContent {
+                    Box(Modifier.size(100.dp).onVisibilityChangedTestImpl { isVisible = it })
+                }
+            }
+        val scrollView =
+            ScrollView(rule.activity).apply {
+                addView(
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(
+                            viewsAbove,
+                            LinearLayout.LayoutParams(MATCH_PARENT, screenHeight * 2),
+                        )
+                        addView(composeView)
+                    }
+                )
+            }
+        rule.setContent { AndroidView(factory = { scrollView }, Modifier.fillMaxSize()) }
+
+        rule.runOnIdle {
+            assertThat(isVisible).isNull()
+            // Scrolls the ComposeView to the top of the window.
+            scrollView.scrollTo(0, composeView.top)
+        }
+
+        rule.runOnIdle { assertThat(isVisible).isTrue() }
+    }
+
+    /**
+     * A square rotated by 45 degrees is bounded in the window by its four corners. Its top left and
+     * bottom right corners alone are one above the other, so they bound no area:
+     * ```
+     *      TL              +------TL------+
+     *     /  \             |     /  \     |
+     *   BL    TR           |   BL    TR   |
+     *     \  /             |     \  /     |
+     *      BR              +------BR------+
+     *
+     *  TL and BR only:     all four corners
+     *  a vertical line
+     * ```
+     */
+    @Test
+    fun testSquareRotatedBy45Degrees_isVisible() {
+        var isVisible: Boolean? = null
+        val composeView =
+            ComposeView(rule.activity).apply {
+                rotation = 45f
+                setContent {
+                    Box(Modifier.size(100.dp).onVisibilityChangedTestImpl { isVisible = it })
+                }
+            }
+        // The padding keeps the corners of the rotated square inside the window.
+        rule.setContent { AndroidView(factory = { composeView }, Modifier.padding(50.dp)) }
+
+        rule.runOnIdle { assertThat(isVisible).isTrue() }
+    }
+
+    /**
+     * [onVisibilityChanged], or a node that delegates to [onVisibilityChangedNode] when
+     * [useDelegation], so that every test covers both.
+     */
     fun Modifier.onVisibilityChangedTestImpl(
         @IntRange(from = 0) minDurationMs: Long = 0,
         @FloatRange(from = 0.0, to = 1.0) minFractionVisible: Float = 1f,

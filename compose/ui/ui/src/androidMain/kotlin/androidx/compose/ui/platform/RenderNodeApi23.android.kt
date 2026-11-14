@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.graphics.nativePaint
 
 /**
  * RenderNode on M-O devices, where RenderNode isn't officially supported. This class uses a hidden
@@ -38,7 +39,6 @@ import androidx.compose.ui.graphics.RenderEffect
  * implementation has higher performance than the View implementation by both avoiding reflection
  * and using the lower overhead RenderNode instead of Views.
  */
-@RequiresApi(Build.VERSION_CODES.M)
 internal class RenderNodeApi23(val ownerView: AndroidComposeView) : DeviceRenderNode {
     private val renderNode = RenderNode.create("Compose", ownerView)
 
@@ -261,7 +261,7 @@ internal class RenderNodeApi23(val ownerView: AndroidComposeView) : DeviceRender
         when (compositingStrategy) {
             CompositingStrategy.Offscreen -> {
                 setLayerType(View.LAYER_TYPE_HARDWARE)
-                setLayerPaint(layerPaint?.asFrameworkPaint())
+                setLayerPaint(layerPaint?.nativePaint)
                 setHasOverlappingRendering(true)
             }
             CompositingStrategy.ModulateAlpha -> {
@@ -379,15 +379,7 @@ internal class RenderNodeApi23(val ownerView: AndroidComposeView) : DeviceRender
     }
 
     private fun discardDisplayListInternal() {
-        // See b/216660268. RenderNode#discardDisplayList was originally called
-        // destroyDisplayListData on Android M and below. Make sure we gate on the corresponding
-        // API level and call the original method name on these API levels, otherwise invoke
-        // the current method name of discardDisplayList
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            RenderNodeVerificationHelper24.discardDisplayList(renderNode)
-        } else {
-            RenderNodeVerificationHelper23.destroyDisplayListData(renderNode)
-        }
+        renderNode.discardDisplayList()
     }
 
     private fun verifyShadowColorProperties(renderNode: RenderNode) {
@@ -432,21 +424,5 @@ private object RenderNodeVerificationHelper28 {
 
     fun setSpotShadowColor(renderNode: RenderNode, target: Int) {
         renderNode.spotShadowColor = target
-    }
-}
-
-@RequiresApi(Build.VERSION_CODES.N)
-private object RenderNodeVerificationHelper24 {
-
-    fun discardDisplayList(renderNode: RenderNode) {
-        renderNode.discardDisplayList()
-    }
-}
-
-@RequiresApi(Build.VERSION_CODES.M)
-private object RenderNodeVerificationHelper23 {
-
-    fun destroyDisplayListData(renderNode: RenderNode) {
-        renderNode.destroyDisplayListData()
     }
 }

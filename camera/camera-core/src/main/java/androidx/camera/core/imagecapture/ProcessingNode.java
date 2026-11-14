@@ -33,6 +33,7 @@ import static java.util.Objects.requireNonNull;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureResult;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
@@ -193,27 +194,22 @@ public class ProcessingNode implements Node<ProcessingNode.In, Void> {
         CameraXTracer.trace("processInputPacket", () -> {
             ProcessingRequest request = inputPacket.getProcessingRequest();
             try {
-                // If simultaneous capture RAW + JPEG, only trigger callback when both images
-                // are available and processed.
-                boolean isSimultaneousCaptureEnabled = mInputEdge.getOutputFormats().size() > 1;
                 if (inputPacket.getProcessingRequest().isInMemoryCapture()) {
                     ImageProxy result = processInMemoryCapture(inputPacket);
                     mainThreadExecutor().execute(() -> request.onFinalResult(result));
                 } else {
                     ImageCapture.OutputFileResults result = processOnDiskCapture(inputPacket);
-                    boolean isProcessed =
-                            !isSimultaneousCaptureEnabled || request.getTakePictureRequest()
-                                    .isFormatProcessedInSimultaneousCapture();
-                    if (isProcessed) {
-                        mainThreadExecutor().execute(() -> request.onFinalResult(result));
-                    }
+                    mainThreadExecutor().execute(() -> request.onFinalResult(result));
                 }
             } catch (ImageCaptureException e) {
+                inputPacket.getImageProxy().close();
                 sendError(request, e);
             } catch (OutOfMemoryError e) {
+                inputPacket.getImageProxy().close();
                 sendError(request, new ImageCaptureException(
                         ERROR_UNKNOWN, "Processing failed due to low memory.", e));
             } catch (RuntimeException e) {
+                inputPacket.getImageProxy().close();
                 // For unexpected exceptions, throw an ERROR_UNKNOWN ImageCaptureException.
                 sendError(request,
                         new ImageCaptureException(ERROR_UNKNOWN, "Processing failed.", e));
@@ -235,7 +231,7 @@ public class ProcessingNode implements Node<ProcessingNode.In, Void> {
                             imageFormat));
             Bitmap bitmap = mImage2Bitmap.apply(image);
             mainThreadExecutor().execute(() -> request.onPostviewBitmapAvailable(bitmap));
-        } catch (Exception e) {
+        } catch (Exception | OutOfMemoryError e) {
             inputPacket.getImageProxy().close();
             Logger.e(TAG, "process postview input packet failed.", e);
         }
@@ -306,18 +302,22 @@ public class ProcessingNode implements Node<ProcessingNode.In, Void> {
                 throw new ImageCaptureException(ERROR_UNKNOWN,
                         "CameraCharacteristics is null, DngCreator cannot be created", null);
             }
-            if (originalImage.getCameraCaptureResult().getCaptureResult() == null) {
-                throw new ImageCaptureException(ERROR_UNKNOWN,
-                        "CameraCaptureResult is null, DngCreator cannot be created", null);
-            }
-            mDngImage2Disk = new DngImage2Disk(
-                    requireNonNull(mCameraCharacteristics),
-                    requireNonNull(originalImage.getCameraCaptureResult().getCaptureResult()));
+            mDngImage2Disk = new DngImage2Disk(requireNonNull(mCameraCharacteristics));
         }
-        return mDngImage2Disk.apply(DngImage2Disk.In.of(
-                originalImage.getData(),
-                originalImage.getRotationDegrees(),
-                requireNonNull(outputFileOptions)));
+        CaptureResult captureResult = originalImage.getCameraCaptureResult().getCaptureResult();
+        if (captureResult == null) {
+            originalImage.getData().close();
+            throw new ImageCaptureException(
+                    ERROR_UNKNOWN,
+                    "CameraCaptureResult is null, DngCreator cannot be created",
+                    null);
+        }
+        return mDngImage2Disk.apply(
+                DngImage2Disk.In.of(
+                        originalImage.getData(),
+                        captureResult,
+                        originalImage.getRotationDegrees(),
+                        requireNonNull(outputFileOptions)));
     }
 
     private ImageCapture.@NonNull OutputFileResults saveJpegToDisk(

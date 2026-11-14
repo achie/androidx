@@ -20,13 +20,17 @@ import androidx.annotation.Sampled
 import androidx.lifecycle.Lifecycle
 import androidx.xr.arcore.Hand
 import androidx.xr.arcore.HandJointType
+import androidx.xr.arcore.TrackingState
 import androidx.xr.runtime.Session
-import androidx.xr.runtime.TrackingState
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector3
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 
+/**
+ * @param session the [Session] to get the hand from
+ * @param lifecycle the [Lifecycle] to scope the coroutine to
+ */
 @Sampled
 fun getLeftHand(session: Session, lifecycle: Lifecycle) {
     val gestureRecognizer =
@@ -107,27 +111,27 @@ fun getLeftHand(session: Session, lifecycle: Lifecycle) {
             private fun deriveAngles(handJoints: Map<HandJointType, Pose>): FloatArray {
                 val directions: Array<Vector3> =
                     arrayOf(
-                        handJoints[HandJointType.HAND_JOINT_TYPE_PALM]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_WRIST]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_DISTAL]!!.forward,
+                        handJoints[HandJointType.PALM]!!.forward,
+                        handJoints[HandJointType.WRIST]!!.forward,
+                        handJoints[HandJointType.THUMB_METACARPAL]!!.forward,
+                        handJoints[HandJointType.THUMB_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.THUMB_DISTAL]!!.forward,
+                        handJoints[HandJointType.INDEX_METACARPAL]!!.forward,
+                        handJoints[HandJointType.INDEX_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.INDEX_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.INDEX_DISTAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_METACARPAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.MIDDLE_DISTAL]!!.forward,
+                        handJoints[HandJointType.RING_METACARPAL]!!.forward,
+                        handJoints[HandJointType.RING_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.RING_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.RING_DISTAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_METACARPAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.LITTLE_DISTAL]!!.forward,
                     )
                 return floatArrayOf(
                     // palm to wrist
@@ -182,7 +186,7 @@ fun getLeftHand(session: Session, lifecycle: Lifecycle) {
         }
 
     yourCoroutineScope.launch {
-        Hand.left(session)?.state?.collect { leftHandState ->
+        Hand.left(session).state.collect { leftHandState ->
             // early out since we only care if the hand is actively tracking.
             if (leftHandState.trackingState != TrackingState.TRACKING) return@collect
 
@@ -192,12 +196,15 @@ fun getLeftHand(session: Session, lifecycle: Lifecycle) {
                 "Thumb" -> {
                     // Handle the user making a "thumbs up" gesture.
                 }
+
                 "Heart" -> {
                     // Handle the user making a one-handed heart gesture.
                 }
+
                 "V" -> {
                     // Handle the user making a "V" with their index and middle finger.
                 }
+
                 "Unknown" -> {}
             }
 
@@ -208,6 +215,10 @@ fun getLeftHand(session: Session, lifecycle: Lifecycle) {
     }
 }
 
+/**
+ * @param session the [Session] to get the hand from
+ * @param lifecycle the [Lifecycle] to scope the coroutine to
+ */
 @Sampled
 fun getRightHand(session: Session, lifecycle: Lifecycle) {
     val gestureRecognizer =
@@ -288,27 +299,27 @@ fun getRightHand(session: Session, lifecycle: Lifecycle) {
             private fun deriveAngles(handJoints: Map<HandJointType, Pose>): FloatArray {
                 val directions: Array<Vector3> =
                     arrayOf(
-                        handJoints[HandJointType.HAND_JOINT_TYPE_PALM]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_WRIST]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_THUMB_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_INDEX_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_MIDDLE_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_RING_DISTAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_METACARPAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_PROXIMAL]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_INTERMEDIATE]!!.forward,
-                        handJoints[HandJointType.HAND_JOINT_TYPE_LITTLE_DISTAL]!!.forward,
+                        handJoints[HandJointType.PALM]!!.forward,
+                        handJoints[HandJointType.WRIST]!!.forward,
+                        handJoints[HandJointType.THUMB_METACARPAL]!!.forward,
+                        handJoints[HandJointType.THUMB_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.THUMB_DISTAL]!!.forward,
+                        handJoints[HandJointType.INDEX_METACARPAL]!!.forward,
+                        handJoints[HandJointType.INDEX_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.INDEX_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.INDEX_DISTAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_METACARPAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.MIDDLE_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.MIDDLE_DISTAL]!!.forward,
+                        handJoints[HandJointType.RING_METACARPAL]!!.forward,
+                        handJoints[HandJointType.RING_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.RING_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.RING_DISTAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_METACARPAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_PROXIMAL]!!.forward,
+                        handJoints[HandJointType.LITTLE_INTERMEDIATE]!!.forward,
+                        handJoints[HandJointType.LITTLE_DISTAL]!!.forward,
                     )
                 return floatArrayOf(
                     // palm to wrist
@@ -363,7 +374,7 @@ fun getRightHand(session: Session, lifecycle: Lifecycle) {
         }
 
     yourCoroutineScope.launch {
-        Hand.right(session)?.state?.collect { rightHandState ->
+        Hand.right(session).state.collect { rightHandState ->
             // early out since we only care if the hand is actively tracking.
             if (rightHandState.trackingState != TrackingState.TRACKING) return@collect
 
@@ -373,12 +384,15 @@ fun getRightHand(session: Session, lifecycle: Lifecycle) {
                 "Thumb" -> {
                     // Handle the user making a "thumbs up" gesture.
                 }
+
                 "Heart" -> {
                     // Handle the user making a one-handed heart gesture.
                 }
+
                 "V" -> {
                     // Handle the user making a "V" with their index and middle finger.
                 }
+
                 "Unknown" -> {}
             }
 

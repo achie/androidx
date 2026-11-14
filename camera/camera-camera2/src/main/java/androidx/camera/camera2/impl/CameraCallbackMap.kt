@@ -32,16 +32,17 @@ import androidx.camera.camera2.config.CameraScope
 import androidx.camera.camera2.pipe.CameraTimestamp
 import androidx.camera.camera2.pipe.FrameInfo
 import androidx.camera.camera2.pipe.FrameMetadata
-import androidx.camera.camera2.pipe.FrameNumber
+import androidx.camera.camera2.pipe.OutputId
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestFailure
 import androidx.camera.camera2.pipe.RequestMetadata
 import androidx.camera.camera2.pipe.SensorTimestamp
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.unwrapAs
 import androidx.camera.core.impl.CameraCaptureCallback
 import androidx.camera.core.impl.CameraCaptureFailure
 import androidx.camera.core.impl.CaptureConfig
-import androidx.camera.core.impl.TagBundle
 import java.util.concurrent.Executor
 import javax.inject.Inject
 
@@ -73,8 +74,9 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onBufferLost(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
-        stream: StreamId,
+        frameNumber: CameraFrameNumber,
+        streamId: StreamId,
+        outputId: OutputId,
     ) {
         for ((callback, executor) in callbacks) {
             if (
@@ -82,9 +84,9 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
                     callback is CameraUseCaseAdapter.CaptureCallbackContainer
             ) {
                 val session: CameraCaptureSession? =
-                    requestMetadata.unwrapAs(CameraCaptureSession::class)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
-                val surface: Surface? = requestMetadata.streams[stream]
+                    requestMetadata.unwrapAs<CameraCaptureSession>()
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
+                val surface: Surface? = requestMetadata.streams[streamId]
                 if (session != null && request != null && surface != null) {
                     executor.execute {
                         Api24Compat.onCaptureBufferLost(
@@ -102,15 +104,19 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onComplete(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         result: FrameInfo,
     ) {
-        for ((callback, executor) in callbacks) {
+        val currentCallbacks = callbacks
+        if (currentCallbacks.isEmpty()) return
+
+        var captureResult: CaptureResultAdapter? = null
+        var captureConfigId: Int? = null
+        for ((callback, executor) in currentCallbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? = getCameraCaptureSession(requestMetadata)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
-                val totalCaptureResult: TotalCaptureResult? =
-                    result.unwrapAs(TotalCaptureResult::class)
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
+                val totalCaptureResult: TotalCaptureResult? = result.unwrapAs<TotalCaptureResult>()
                 if (session != null && request != null && totalCaptureResult != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureCompleted(
@@ -121,10 +127,15 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
                     }
                 }
             } else {
-                val captureResult = CaptureResultAdapter(requestMetadata, frameNumber, result)
-                executor.execute {
-                    callback.onCaptureCompleted(requestMetadata.getCaptureConfigId(), captureResult)
-                }
+                val adapter =
+                    captureResult
+                        ?: CaptureResultAdapter(requestMetadata, frameNumber, result).also {
+                            captureResult = it
+                        }
+                val configId =
+                    captureConfigId
+                        ?: requestMetadata.getCaptureConfigId().also { captureConfigId = it }
+                executor.execute { callback.onCaptureCompleted(configId, adapter) }
             }
         }
     }
@@ -137,14 +148,14 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onFailed(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         requestFailure: RequestFailure,
     ) {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? = getCameraCaptureSession(requestMetadata)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
-                val captureFailure = requestFailure.unwrapAs(CaptureFailure::class)
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
+                val captureFailure = requestFailure.unwrapAs<CaptureFailure>()
                 if (session != null && request != null && captureFailure != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureFailed(session, request, captureFailure)
@@ -162,7 +173,7 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
     override fun onAborted(request: Request) {
         for ((callback, executor) in callbacks) {
             // TODO: get the correct requestId
-            val tagBundle = request.extras[CAMERAX_TAG_BUNDLE] as? TagBundle
+            val tagBundle = request[CAMERAX_TAG_BUNDLE]
             val captureConfigId =
                 tagBundle?.getTag(CaptureConfig.CAPTURE_CONFIG_ID_TAG_KEY) as? Int
                     ?: CaptureConfig.DEFAULT_ID
@@ -172,15 +183,15 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onPartialCaptureResult(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         captureResult: FrameMetadata,
     ) {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? =
-                    requestMetadata.unwrapAs(CameraCaptureSession::class)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
-                val partialResult: CaptureResult? = captureResult.unwrapAs(CaptureResult::class)
+                    requestMetadata.unwrapAs<CameraCaptureSession>()
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
+                val partialResult: CaptureResult? = captureResult.unwrapAs<CaptureResult>()
                 if (session != null && request != null && partialResult != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureProgressed(
@@ -198,8 +209,8 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? =
-                    requestMetadata.unwrapAs(CameraCaptureSession::class)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
+                    requestMetadata.unwrapAs<CameraCaptureSession>()
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
                 if (session != null && request != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureSequenceAborted(
@@ -218,12 +229,12 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onRequestSequenceCompleted(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
     ) {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? = getCameraCaptureSession(requestMetadata)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
                 if (session != null && request != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureSequenceCompleted(
@@ -239,13 +250,13 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onStarted(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         timestamp: CameraTimestamp,
     ) {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? = getCameraCaptureSession(requestMetadata)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
                 if (session != null && request != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureStarted(
@@ -266,9 +277,9 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? =
-                    requestMetadata.unwrapAs(CameraCaptureSession::class)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
-                val partialResult: CaptureResult? = requestMetadata.unwrapAs(CaptureResult::class)
+                    requestMetadata.unwrapAs<CameraCaptureSession>()
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
+                val partialResult: CaptureResult? = requestMetadata.unwrapAs<CaptureResult>()
                 if (session != null && request != null && partialResult != null) {
                     executor.execute {
                         callback.captureCallback.onCaptureProgressed(
@@ -291,7 +302,7 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
 
     override fun onReadoutStarted(
         requestMetadata: RequestMetadata,
-        frameNumber: FrameNumber,
+        frameNumber: CameraFrameNumber,
         timestamp: SensorTimestamp,
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -300,8 +311,8 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
         for ((callback, executor) in callbacks) {
             if (callback is CameraUseCaseAdapter.CaptureCallbackContainer) {
                 val session: CameraCaptureSession? =
-                    requestMetadata.unwrapAs(CameraCaptureSession::class)
-                val request: CaptureRequest? = requestMetadata.unwrapAs(CaptureRequest::class)
+                    requestMetadata.unwrapAs<CameraCaptureSession>()
+                val request: CaptureRequest? = requestMetadata.unwrapAs<CaptureRequest>()
                 if (session != null && request != null) {
                     executor.execute {
                         Api34Compat.onReadoutStarted(
@@ -318,10 +329,10 @@ public class CameraCallbackMap @Inject constructor() : Request.Listener {
     }
 
     private fun getCameraCaptureSession(requestMetadata: RequestMetadata): CameraCaptureSession? =
-        requestMetadata.unwrapAs(CameraCaptureSession::class)
+        requestMetadata.unwrapAs<CameraCaptureSession>()
             // Also try the CameraExtensionSession for callback when API level is 31 or above
             ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                requestMetadata.unwrapAs(CameraExtensionSession::class)?.let {
+                requestMetadata.unwrapAs<CameraExtensionSession>()?.let {
                     rejectOperationCameraCaptureSession
                 }
             } else {

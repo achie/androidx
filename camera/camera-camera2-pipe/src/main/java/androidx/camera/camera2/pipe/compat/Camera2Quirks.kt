@@ -20,10 +20,10 @@ import android.os.Build
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraph.RepeatingRequestRequirementsBeforeCapture.CompletionBehavior.AT_LEAST
 import androidx.camera.camera2.pipe.CameraGraph.RepeatingRequestRequirementsBeforeCapture.CompletionBehavior.EXACT
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.isHardwareLevelLegacy
-import androidx.camera.camera2.pipe.CameraPipe
+import androidx.camera.camera2.pipe.StrictMode
 import androidx.camera.camera2.pipe.compat.Camera2Quirks.Companion.SHOULD_WAIT_FOR_REPEATING_DEVICE_MAP
+import androidx.camera.common.CameraId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
@@ -33,7 +33,7 @@ internal class Camera2Quirks
 @Inject
 constructor(
     private val metadataProvider: Camera2MetadataProvider,
-    private val cameraPipeFlags: CameraPipe.Flags,
+    private val strictMode: StrictMode,
 ) {
     /**
      * A quirk that waits for the last repeating capture request to start before stopping the
@@ -47,16 +47,17 @@ constructor(
     internal fun shouldWaitForRepeatingRequestStartOnDisconnect(
         graphConfig: CameraGraph.Config
     ): Boolean {
-        val isStrictModeOn = cameraPipeFlags.strictModeEnabled
+        if (strictMode.enabled) {
+            return false
+        }
 
         // First, check for overrides.
         graphConfig.flags.awaitRepeatingRequestOnDisconnect?.let {
-            return !isStrictModeOn && it
+            return it
         }
 
         // Then we verify whether we need this quirk based on hardware level.
-        return !isStrictModeOn &&
-            metadataProvider.awaitCameraMetadata(graphConfig.camera).isHardwareLevelLegacy
+        return metadataProvider.awaitCameraMetadata(graphConfig.camera).isHardwareLevelLegacy
     }
 
     /**
@@ -71,8 +72,11 @@ constructor(
      * - API levels: 24 (N) – 28 (P)
      */
     internal fun shouldCreateEmptyCaptureSessionBeforeClosing(cameraId: CameraId): Boolean {
+        if (strictMode.enabled) {
+            return false
+        }
+
         return Build.VERSION.SDK_INT in (Build.VERSION_CODES.N..Build.VERSION_CODES.P) &&
-            !cameraPipeFlags.strictModeEnabled &&
             metadataProvider.awaitCameraMetadata(cameraId).isHardwareLevelLegacy
     }
 
@@ -85,9 +89,12 @@ constructor(
      * - Device(s): Camera devices on hardware level LEGACY
      * - API levels: All
      */
-    internal fun shouldWaitForCameraDeviceOnClosed(cameraId: CameraId): Boolean =
-        !cameraPipeFlags.strictModeEnabled &&
-            metadataProvider.awaitCameraMetadata(cameraId).isHardwareLevelLegacy
+    internal fun shouldWaitForCameraDeviceOnClosed(cameraId: CameraId): Boolean {
+        if (strictMode.enabled) {
+            return false
+        }
+        return metadataProvider.awaitCameraMetadata(cameraId).isHardwareLevelLegacy
+    }
 
     /**
      * A quirk that closes the camera devices before creating a new capture session. This is needed
@@ -104,7 +111,9 @@ constructor(
      * - API levels: 23 (M) – 31 (S_V2)
      */
     internal fun shouldCloseCameraBeforeCreatingCaptureSession(cameraId: CameraId): Boolean {
-        val isStrictModeEnabled = cameraPipeFlags.strictModeEnabled
+        if (strictMode.enabled) {
+            return false
+        }
         val isLegacyDevice =
             Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2 &&
                 metadataProvider.awaitCameraMetadata(cameraId).isHardwareLevelLegacy
@@ -112,7 +121,7 @@ constructor(
             "motorola".equals(Build.BRAND, ignoreCase = true) &&
                 "moto e20".equals(Build.MODEL, ignoreCase = true) &&
                 cameraId.value == "1"
-        return !isStrictModeEnabled && (isLegacyDevice || isQuirkyDevice)
+        return isLegacyDevice || isQuirkyDevice
     }
 
     /**
@@ -127,7 +136,7 @@ constructor(
      * - API levels: Before 34 (U)
      */
     internal fun getRepeatingRequestFrameCountForCapture(graphConfigFlags: CameraGraph.Flags): Int {
-        if (cameraPipeFlags.strictModeEnabled) {
+        if (strictMode.enabled) {
             return 0
         }
 
@@ -169,15 +178,13 @@ constructor(
         internal fun shouldCloseCaptureSessionOnDisconnect() =
             when {
                 Build.VERSION.SDK_INT <= Build.VERSION_CODES.O_MR1 ->
-                    // TODO: b/277675483 - Older devices (Android version <= 8.1.0) seem to have a
-                    //  higher chance of encountering an issue where not closing the capture session
-                    //  would lead to CameraDevice.close() stalling indefinitely. This version check
-                    //  might need to be further fine-turned down the line.
+                    // Older devices (Android version <= 8.1.0) seem to have a higher chance of
+                    // encountering an issue where not closing the capture session would lead to
+                    // CameraDevice.close() stalling indefinitely. (b/277675483)
                     true
                 Build.HARDWARE == "samsungexynos7870" ->
-                    // TODO: b/282871038 - On some platforms, not closing the capture session before
-                    //  switching to a new capture session may trigger camera HAL crashes. Add more
-                    //  hardware platforms here when they're identified.
+                    // On some platforms, not closing the capture session before switching to a new
+                    // capture session may trigger camera HAL crashes. (b/282871038)
                     true
                 (Build.HARDWARE.equals("qcom", ignoreCase = true) &&
                     Build.VERSION.SDK_INT <= Build.VERSION_CODES.S) ||

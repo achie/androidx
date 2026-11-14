@@ -50,15 +50,19 @@ import androidx.compose.ui.unit.TextUnit
  * component.
  *
  * Displays the given string in a [Text], with an animation that fades text in line by line when new
- * lines of text are added or removed. This is intended to be be used for labels in a Button or
- * Card, where we want the container to expand to fit the contents when the lines of the text
- * change.
+ * lines of text are added or removed. This is intended to be used for labels in a Button or Card,
+ * where we want the container to expand to fit the contents when the lines of the text change.
  *
  * @sample androidx.wear.compose.material3.samples.FadingExpandingLabelButtonSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_FadingExpandingLabelButtonSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param text Text string that will be shown.
  * @param modifier Modifier to be applied to the animated text.
  * @param color [Color] to apply to the text. If [Color.Unspecified], and [textStyle] has no color
- *   set,this will be [LocalContentColor].
+ *   set, this will be [LocalContentColor].
  * @param fontSize The size of glyphs to use when painting the text. See [TextStyle.fontSize].
  * @param fontStyle The typeface variant to use when drawing the letters (e.g., italic). See
  *   [TextStyle.fontStyle].
@@ -70,11 +74,11 @@ import androidx.compose.ui.unit.TextUnit
  *   [TextStyle.textDecoration].
  * @param textAlign The alignment of the text within the lines of the paragraph. See
  *   [TextStyle.textAlign].
- * @param lineHeight Line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
- *   [TextStyle.lineHeight].
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   TextAlign may have unexpected effects.
+ * @param lineHeight Line height for the [androidx.compose.ui.text.Paragraph] in [TextUnit] unit,
+ *   e.g. SP or EM. See [TextStyle.lineHeight].
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space.
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If it is not null, then it must be greater than zero.
  * @param minLines The minimum height in terms of minimum number of visible lines. It is required
@@ -144,23 +148,12 @@ public fun FadingExpandingLabel(
             return@LaunchedEffect
         }
 
-        // If the text is expanding, update it before the fading lines animation, if it's
-        // collapsing, update it after the animation. This is because we can only animate the
-        // expanding fading effect on the larger text.
-        val isLinesDecreasing = currentTextMeasureResult.lineCount > textMeasureResult.lineCount
-        if (!isLinesDecreasing) {
-            currentText = text
-            currentTextMeasureResult = textMeasureResult
-        }
+        currentText = text
+        currentTextMeasureResult = textMeasureResult
 
         showAnimatedTextHeight = true
         // Animate to the new text height to reveal it with a fade-in animation
         animatedHeight.animateTo(textMeasureResult.size.height.toFloat(), animationSpec)
-
-        if (isLinesDecreasing) {
-            currentText = text
-            currentTextMeasureResult = textMeasureResult
-        }
     }
 
     Text(

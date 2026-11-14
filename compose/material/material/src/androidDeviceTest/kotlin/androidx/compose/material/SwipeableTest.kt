@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.testutils.toList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -41,7 +42,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
@@ -58,7 +59,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Before
 import org.junit.Ignore
@@ -71,7 +71,7 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalMaterialApi::class)
 class SwipeableTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val swipeableTag = "swipeableTag"
 
@@ -1457,15 +1457,19 @@ class SwipeableTest {
     fun testInspectorValue() {
         val anchors = mapOf(0f to "A", 100f to "B")
         rule.setContent {
-            val modifier =
+            val modifiers =
                 Modifier.swipeable(
-                    state = rememberSwipeableState("A"),
-                    anchors = anchors,
-                    orientation = Orientation.Horizontal,
-                ) as InspectableValue
-            assertThat(modifier.nameFallback).isEqualTo("swipeable")
-            assertThat(modifier.valueOverride).isNull()
-            assertThat(modifier.inspectableElements.map { it.name }.asIterable())
+                        state = rememberSwipeableState("A"),
+                        anchors = anchors,
+                        orientation = Orientation.Horizontal,
+                    )
+                    .toList()
+            val swipeable = modifiers[0] as InspectableValue
+            val draggable = modifiers[1] as InspectableValue
+
+            assertThat(swipeable.nameFallback).isEqualTo("swipeable")
+            assertThat(swipeable.valueOverride).isNull()
+            assertThat(swipeable.inspectableElements.map { it.name }.asIterable())
                 .containsExactly(
                     "state",
                     "anchors",
@@ -1477,6 +1481,8 @@ class SwipeableTest {
                     "resistance",
                     "velocityThreshold",
                 )
+
+            assertThat(draggable.nameFallback).isEqualTo("draggable")
         }
     }
 
@@ -1512,6 +1518,7 @@ class SwipeableTest {
         rule.onNodeWithTag(swipeableTag).performTouchInput {
             down(Offset(x = 10f, y = 10f))
             moveBy(Offset(x = 0f, y = -1500f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 
@@ -1523,6 +1530,7 @@ class SwipeableTest {
         rule.onNodeWithTag(swipeableTag).performTouchInput {
             down(Offset(x = 10f, y = 10f))
             moveBy(Offset(x = 0f, y = 1500f))
+            advanceEventTime(3000L) // Prevent fling gesture.
             up()
         }
 

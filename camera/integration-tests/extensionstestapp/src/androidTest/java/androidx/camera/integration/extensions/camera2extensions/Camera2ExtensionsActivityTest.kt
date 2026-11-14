@@ -19,6 +19,7 @@ package androidx.camera.integration.extensions.camera2extensions
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraExtensionCharacteristics
 import androidx.camera.camera2.Camera2Config
 import androidx.camera.integration.extensions.Camera2ExtensionsActivity
 import androidx.camera.integration.extensions.IntentExtraKey.INTENT_EXTRA_KEY_CAMERA_ID
@@ -26,14 +27,17 @@ import androidx.camera.integration.extensions.IntentExtraKey.INTENT_EXTRA_KEY_EX
 import androidx.camera.integration.extensions.util.BASIC_SAMPLE_PACKAGE
 import androidx.camera.integration.extensions.util.Camera2ExtensionsTestUtil
 import androidx.camera.integration.extensions.util.CameraXExtensionsTestUtil
+import androidx.camera.integration.extensions.util.useAndWaitForCameraClosed
 import androidx.camera.integration.extensions.util.waitForCaptureSessionConfiguredIdle
 import androidx.camera.integration.extensions.util.waitForImageSavedIdle
 import androidx.camera.integration.extensions.util.waitForPreviewIdle
 import androidx.camera.integration.extensions.utils.Camera2ExtensionsUtil.isCamera2ExtensionModeSupported
+import androidx.camera.integration.extensions.utils.Camera2ExtensionsUtil.isSamsungGalaxyS24
 import androidx.camera.integration.extensions.utils.CameraIdExtensionModePair
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CoreAppTestUtil
 import androidx.camera.testing.impl.ExtensionsUtil.assumePcsSupportedForImageCapture
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.testing.impl.StressTestRule
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -42,12 +46,9 @@ import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import androidx.test.uiautomator.UiDevice
 import androidx.testutils.withActivity
-import org.junit.After
-import org.junit.Assume
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
-import org.junit.Before
 import org.junit.ClassRule
 import org.junit.Rule
 import org.junit.Test
@@ -59,7 +60,12 @@ import org.junit.runners.Parameterized
 @RunWith(Parameterized::class)
 @SdkSuppress(minSdkVersion = 31)
 class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePair) {
-    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+    @get:Rule
+    val requireForegroundRule = RequireForegroundRule {
+        assumeTrue(CameraUtil.deviceHasCamera())
+        assumeTrue(CameraXExtensionsTestUtil.isTargetDeviceAvailableForExtensions())
+        assumeTrue(isCamera2ExtensionModeSupported(context, config.cameraId, config.extensionMode))
+    }
 
     @get:Rule
     val useCamera =
@@ -69,29 +75,6 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
 
     @get:Rule
     val permissionRule = GrantPermissionRule.grant(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-
-    @Before
-    fun setup() {
-        Assume.assumeTrue(CameraUtil.deviceHasCamera())
-        assumeTrue(CameraXExtensionsTestUtil.isTargetDeviceAvailableForExtensions())
-        assumeTrue(isCamera2ExtensionModeSupported(context, config.cameraId, config.extensionMode))
-        // Clears the device UI and check if there is no dialog or lock screen on the top of the
-        // window before start the test.
-        CoreAppTestUtil.prepareDeviceUI(InstrumentationRegistry.getInstrumentation())
-        // Uses the natural orientation throughout these tests to ensure the activity isn't
-        // recreated unexpectedly. This will also freeze the sensors until
-        // mDevice.unfreezeRotation() in the tearDown() method. Any simulated rotations will be
-        // explicitly initiated from within the test.
-        device.setOrientationNatural()
-    }
-
-    @After
-    fun tearDown() {
-        // Unfreezes rotation so the device can choose the orientation via its own policy. Be nice
-        // to other tests :)
-        device.unfreezeRotation()
-        device.pressHome()
-    }
 
     companion object {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -107,7 +90,7 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 // Waits for preview to receive enough frames for its IdlingResource to idle.
                 waitForPreviewIdle()
             }
@@ -117,10 +100,11 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
     @Test
     fun canCaptureSingleImage() {
         assumePcsSupportedForImageCapture(context)
+        assumeNoKnownCaptureFailure()
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 // Triggers the capture function and waits for the image being saved
                 waitForImageSavedIdle()
             }
@@ -132,7 +116,7 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 // Waits for preview to receive enough frames for its IdlingResource to idle.
                 waitForPreviewIdle()
 
@@ -148,10 +132,11 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
     @Test
     fun canCaptureImage_afterPauseResume() {
         assumePcsSupportedForImageCapture(context)
+        assumeNoKnownCaptureFailure()
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 // Triggers the capture function and waits for the image being saved
                 waitForImageSavedIdle()
 
@@ -165,6 +150,28 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
                 waitForImageSavedIdle()
             }
         }
+    }
+
+    /**
+     * Skips image capture tests for the camera and extension mode combinations where the vendor
+     * Camera2 extension implementation is known to fail when capture() is called immediately after
+     * session configuration before the first repeating preview TotalCaptureResult completes.
+     */
+    private fun assumeNoKnownCaptureFailure() {
+        // On Samsung Galaxy S24 (SM-S921U) camera 0, raw Camera2 EXTENSION_NIGHT
+        // (cx/SuperNightExt) falls back to createSinglePicture (dsCondition: 0x0) and fails with
+        // onCaptureFailed (CamX CSL frame error type 4) when capture() is called before repeating
+        // preview TotalCaptureResults initialize scene state (b/581244809). CameraX
+        // ExtensionMode.NIGHT is unaffected because CameraX attaches a coexisting repeating Preview
+        // stream and awaits repeating TotalCaptureResults (via FlashControl.awaitFlashModeUpdate
+        // and CapturePipeline.getFrameMetadata) before submitting still captures.
+        assumeFalse(
+            "Night extension capture fails before repeating preview TotalCaptureResults on " +
+                "SM-S921U camera 0 (b/581244809)",
+            isSamsungGalaxyS24() &&
+                config.cameraId == "0" &&
+                config.extensionMode == CameraExtensionCharacteristics.EXTENSION_NIGHT,
+        )
     }
 
     private fun launchAutoClosedForegroundActivity(
@@ -182,10 +189,11 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
     @Test
     fun canCaptureMultipleImages() {
         assumePcsSupportedForImageCapture(context)
+        assumeNoKnownCaptureFailure()
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 repeat(5) {
                     // Triggers the capture function and waits for the image being saved
                     waitForImageSavedIdle()
@@ -221,7 +229,7 @@ class Camera2ExtensionsActivityTest(private val config: CameraIdExtensionModePai
         val activityScenario =
             launchCamera2ExtensionsActivityAndWaitForCaptureSessionConfigured(config)
         with(activityScenario) { // Launches activity
-            use { // Ensures that ActivityScenario is cleaned up properly
+            useAndWaitForCameraClosed { // Ensures that ActivityScenario is cleaned up properly
                 // Waits for preview to receive enough frames for its IdlingResource to idle.
                 waitForPreviewIdle()
 

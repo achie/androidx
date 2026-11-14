@@ -16,9 +16,12 @@
 
 package androidx.camera.camera2.pipe
 
+import android.hardware.camera2.params.OutputConfiguration
 import android.util.Size
+import androidx.camera.camera2.pipe.testing.FakeSurfaces
 import androidx.camera.camera2.pipe.testing.RobolectricCameraPipeTestRunner
 import com.google.common.truth.Truth.assertThat
+import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -26,6 +29,13 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricCameraPipeTestRunner::class)
 @Config(sdk = [Config.ALL_SDKS])
 internal class StreamTest {
+    private val fakeSurfaces = FakeSurfaces()
+
+    @After
+    fun tearDown() {
+        fakeSurfaces.close()
+    }
+
     private val streamConfig1 =
         CameraStream.Config.create(size = Size(640, 480), format = StreamFormat.YUV_420_888)
 
@@ -63,5 +73,87 @@ internal class StreamTest {
         assertThat(sharedConfig1).isNotEqualTo(sharedConfig2)
         assertThat(sharedConfig1.outputs.single()).isEqualTo(sharedConfig2.outputs.single())
         assertThat(sharedConfig1.outputs.single()).isSameInstanceAs(sharedConfig2.outputs.single())
+    }
+
+    @Test
+    @Config(minSdk = 34)
+    fun outputConfig_useReadoutTimestampDefaultsToNull() {
+        val outputConfig =
+            OutputStream.Config.create(size = Size(640, 480), format = StreamFormat.YUV_420_888)
+        assertThat(outputConfig.useReadoutTimestamp).isNull()
+
+        val outputConfigExplicitFalse =
+            OutputStream.Config.create(
+                size = Size(640, 480),
+                format = StreamFormat.YUV_420_888,
+                useReadoutTimestamp = false,
+            )
+        assertThat(outputConfigExplicitFalse.useReadoutTimestamp).isFalse()
+    }
+
+    @Test
+    @Config(minSdk = 34)
+    fun externalOutputConfig_useReadoutTimestampMirrorsOutputConfiguration() {
+        val surface = fakeSurfaces.createFakeSurface()
+        val externalOutputConfigEnabled =
+            OutputConfiguration(surface).apply { setReadoutTimestampEnabled(true) }
+
+        val externalConfigEnabled =
+            OutputStream.Config.external(
+                size = Size(640, 480),
+                format = StreamFormat.YUV_420_888,
+                externalOutputConfig = externalOutputConfigEnabled,
+                streamUseHint = null,
+            )
+        assertThat(externalConfigEnabled.useReadoutTimestamp).isTrue()
+
+        val externalOutputConfigDefault = OutputConfiguration(surface)
+        val externalConfigDefault =
+            OutputStream.Config.external(
+                size = Size(640, 480),
+                format = StreamFormat.YUV_420_888,
+                externalOutputConfig = externalOutputConfigDefault,
+                streamUseHint = null,
+            )
+        assertThat(externalConfigDefault.useReadoutTimestamp).isFalse()
+    }
+
+    @Test
+    @Config(sdk = [33])
+    fun externalOutputConfig_api33_useReadoutTimestampIsNull() {
+        val surface = fakeSurfaces.createFakeSurface()
+        val externalOutputConfig = OutputConfiguration(surface)
+
+        val externalConfig =
+            OutputStream.Config.external(
+                size = Size(640, 480),
+                format = StreamFormat.YUV_420_888,
+                externalOutputConfig = externalOutputConfig,
+                streamUseHint = null,
+            )
+        assertThat(externalConfig.useReadoutTimestamp).isNull()
+    }
+
+    @Test
+    fun outputType_isLazilyConfigurable() {
+        assertThat(OutputStream.OutputType.SURFACE_TEXTURE.isLazilyConfigurable()).isTrue()
+        assertThat(OutputStream.OutputType.SURFACE_VIEW.isLazilyConfigurable()).isTrue()
+        assertThat(OutputStream.OutputType.SURFACE.isLazilyConfigurable()).isFalse()
+        assertThat(OutputStream.OutputType.SURFACE_DEFERRED_FOR_QUERY_ONLY.isLazilyConfigurable())
+            .isFalse()
+    }
+
+    @Test
+    @Config(maxSdk = 34)
+    fun outputType_mediaOutputsBeforeApi35_isNotLazilyConfigurable() {
+        assertThat(OutputStream.OutputType.MEDIA_CODEC.isLazilyConfigurable()).isFalse()
+        assertThat(OutputStream.OutputType.MEDIA_RECORDER.isLazilyConfigurable()).isFalse()
+    }
+
+    @Test
+    @Config(minSdk = 35)
+    fun outputType_mediaOutputsApi35AndAbove_isLazilyConfigurable() {
+        assertThat(OutputStream.OutputType.MEDIA_CODEC.isLazilyConfigurable()).isTrue()
+        assertThat(OutputStream.OutputType.MEDIA_RECORDER.isLazilyConfigurable()).isTrue()
     }
 }

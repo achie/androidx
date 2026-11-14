@@ -19,35 +19,44 @@ package androidx.wear.compose.material3
 import android.os.Build
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.testutils.assertContainsColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.DeviceConfigurationOverride
+import androidx.compose.ui.test.Locales
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.test.filters.SdkSuppress
 import androidx.wear.compose.foundation.curvedComposable
 import java.util.Calendar
-import java.util.Locale
 import java.util.TimeZone
 import org.junit.Assert
 import org.junit.Rule
 import org.junit.Test
 
 class TimeTextTest {
-    @Suppress("ComposeTestRuleDispatcher") // b/457595340
-    @get:Rule
-    val rule = createComposeRule()
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun supports_testtag() {
         rule.setContentWithTheme { TimeText(modifier = Modifier.testTag(TEST_TAG)) }
 
         rule.onNodeWithTag(TEST_TAG).assertExists()
+    }
+
+    @Test
+    fun has_default_testtag() {
+        rule.setContentWithTheme { TimeText() }
+
+        rule.onNodeWithTag("time_text").assertExists()
     }
 
     @Test
@@ -89,6 +98,53 @@ class TimeTextTest {
         }
         timeState.value = "Changed"
         rule.onNodeWithContentDescription("Changed").assertIsDisplayed()
+    }
+
+    @Test
+    fun localTimeSource_overrides_timeSource_by_default() {
+        val testTime = "10:10"
+        val customTimeSource =
+            object : TimeSource {
+                @Composable override fun currentTime(): String = testTime
+            }
+
+        rule.setContentWithTheme {
+            CompositionLocalProvider(LocalTimeSource provides customTimeSource) {
+                TimeText { time ->
+                    // Use 'curvedText' instead of 'timeTextCurvedText' so that we get a content
+                    // description that can be verified.
+                    curvedText(time)
+                }
+            }
+        }
+
+        rule.onNodeWithContentDescription(testTime).assertIsDisplayed()
+    }
+
+    @Test
+    fun localTimeSource_can_be_overridden_by_explicit_parameter() {
+        val localTime = "10:10"
+        val explicitTime = "12:12"
+        val localTimeSource =
+            object : TimeSource {
+                @Composable override fun currentTime(): String = localTime
+            }
+        val explicitTimeSource =
+            object : TimeSource {
+                @Composable override fun currentTime(): String = explicitTime
+            }
+
+        rule.setContentWithTheme {
+            CompositionLocalProvider(LocalTimeSource provides localTimeSource) {
+                TimeText(timeSource = explicitTimeSource) { time ->
+                    // Use 'curvedText' instead of 'timeTextCurvedText' so that we get a content
+                    // description that can be verified.
+                    curvedText(time)
+                }
+            }
+        }
+
+        rule.onNodeWithContentDescription(explicitTime).assertIsDisplayed()
     }
 
     @Test
@@ -174,19 +230,45 @@ class TimeTextTest {
 
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
     @Test
-    fun formats_current_time_12H_french_locale() {
+    fun formats_current_time_french_locale() {
         val currentTimeInMillis = 1631544258000L // 2021-09-13 14:44:18
-        val expectedTime = "2 h 44"
+        val expectedTime = "14 h 44"
         TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
 
         var actualTime: String? = null
-        Locale.setDefault(Locale.CANADA_FRENCH)
 
         rule.setContentWithTheme {
-            val format = TimeTextDefaults.timeFormat()
-            actualTime = currentTime({ currentTimeInMillis }, format).value
+            DeviceConfigurationOverride(
+                DeviceConfigurationOverride.Locales(
+                    LocaleList(Locale(java.util.Locale.CANADA_FRENCH))
+                )
+            ) {
+                val format = TimeTextDefaults.timeFormat()
+                actualTime = currentTime({ currentTimeInMillis }, format).value
+            }
         }
         Assert.assertEquals(expectedTime, actualTime)
+    }
+
+    @Test
+    fun formats_current_time_updates_when_format_changes() {
+        val currentTimeInMillis = 1631544258000L // 2021-09-13 14:44:18
+        val format24 = "HH:mm"
+        val format12 = "h:mm"
+        val currentCalendar = Calendar.getInstance().apply { timeInMillis = currentTimeInMillis }
+        val expectedTime24 = DateFormat.format(format24, currentCalendar).toString()
+        val expectedTime12 = DateFormat.format(format12, currentCalendar).toString()
+
+        val formatState = mutableStateOf(format24)
+        var actualTime: String? = null
+        rule.setContentWithTheme {
+            actualTime = currentTime({ currentTimeInMillis }, formatState.value).value
+        }
+        rule.runOnIdle {
+            Assert.assertEquals(expectedTime24, actualTime)
+            formatState.value = format12
+        }
+        rule.runOnIdle { Assert.assertEquals(expectedTime12, actualTime) }
     }
 
     @Composable

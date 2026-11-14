@@ -14,23 +14,28 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalBenchmarkConfigApi::class, ExperimentalPerfettoCaptureApi::class)
+
 package androidx.compose.integration.hero.pokedex.macrobenchmark
 
+import androidx.benchmark.ExperimentalBenchmarkConfigApi
+import androidx.benchmark.ExperimentalConfig
+import androidx.benchmark.MemoryProfilingConfig
+import androidx.benchmark.StartupInsightsConfig
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.StartupMode
-import androidx.benchmark.macro.junit4.MacrobenchmarkRule
+import androidx.benchmark.perfetto.ExperimentalPerfettoCaptureApi
 import androidx.compose.integration.hero.common.macrobenchmark.HeroMacrobenchmarkDefaults
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.Compose.POKEDEX_ENABLE_SHARED_ELEMENT_TRANSITIONS
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.Compose.POKEDEX_ENABLE_SHARED_TRANSITION_SCOPE
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.Compose.POKEDEX_START_DESTINATION
 import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexConstants.POKEDEX_TARGET_PACKAGE_NAME
-import androidx.compose.integration.hero.pokedex.macrobenchmark.internal.PokedexDatabaseCleanupRule
 import androidx.test.filters.LargeTest
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
+import androidx.testutils.CpuFrequencyChangeMetric
 import androidx.testutils.createStartupCompilationParams
+import androidx.testutils.getStartupMetrics
 import androidx.testutils.measureStartup
-import org.junit.Rule
+import androidx.testutils.waitOrThrow
 import org.junit.Test
-import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
@@ -41,12 +46,8 @@ class PokedexDetailsStartupBenchmark(
     private val compilation: CompilationMode,
     private val enableSharedTransitionScope: Boolean,
     private val enableSharedElementTransitions: Boolean,
-) {
-    val benchmarkRule = MacrobenchmarkRule()
-
-    @get:Rule
-    val pokedexBenchmarkRuleChain: RuleChain =
-        RuleChain.outerRule(PokedexDatabaseCleanupRule()).around(benchmarkRule)
+) : PokedexBenchmarkBase() {
+    private val PokemonToOpen = "Ablazeon"
 
     @Test
     fun startupCompose() = measureStartup("$POKEDEX_TARGET_PACKAGE_NAME.POKEDEX_COMPOSE_ACTIVITY")
@@ -55,18 +56,37 @@ class PokedexDetailsStartupBenchmark(
     fun startupViews() =
         measureStartup("$POKEDEX_TARGET_PACKAGE_NAME.POKEDEX_VIEWS_DETAIL_ACTIVITY")
 
-    private fun measureStartup(action: String) =
+    private fun measureStartup(action: String) {
+
         benchmarkRule.measureStartup(
             compilationMode = compilation,
             startupMode = startupMode,
             packageName = POKEDEX_TARGET_PACKAGE_NAME,
             iterations = HeroMacrobenchmarkDefaults.ITERATIONS,
-        ) {
-            this.action = action
-            this.putExtra(POKEDEX_ENABLE_SHARED_TRANSITION_SCOPE, enableSharedTransitionScope)
-            this.putExtra(POKEDEX_ENABLE_SHARED_ELEMENT_TRANSITIONS, enableSharedElementTransitions)
-            this.putExtra(POKEDEX_START_DESTINATION, "details")
-        }
+            metrics = getStartupMetrics() + CpuFrequencyChangeMetric(),
+            experimentalConfig =
+                ExperimentalConfig(
+                    startupInsightsConfig = StartupInsightsConfig(true),
+                    memoryProfilingConfig =
+                        MemoryProfilingConfig(
+                            isSampleArtHeapEnabled = true,
+                            isSampleNativeHeapEnabled = true,
+                        ),
+                ),
+            setupIntent = {
+                configure(
+                    action = action,
+                    enableSharedTransitionScope = enableSharedTransitionScope,
+                    enableSharedElementTransitions = enableSharedElementTransitions,
+                    startDestination = "details",
+                )
+            },
+            waitForContent = {
+                waitForAppToBeVisible(packageName)
+                device.waitOrThrow(Until.hasObject(By.text(PokemonToOpen)), timeoutMillis = 3000)
+            },
+        )
+    }
 
     companion object {
         /**

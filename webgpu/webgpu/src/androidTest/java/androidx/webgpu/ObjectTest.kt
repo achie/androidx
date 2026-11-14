@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package androidx.webgpu
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
-import androidx.webgpu.helper.Util
+import androidx.webgpu.GPU.createInstance
+import androidx.webgpu.helper.initLibrary
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -26,7 +26,7 @@ import org.junit.runner.RunWith
 @SmallTest
 class ObjectTest {
     init {
-        Util // Hack to force library initialization.
+        initLibrary()
     }
 
     @Test
@@ -34,8 +34,8 @@ class ObjectTest {
         val surface =
             createInstance()
                 .createSurface(
-                    SurfaceDescriptor(
-                        surfaceSourceAndroidNativeWindow = SurfaceSourceAndroidNativeWindow(0)
+                    GPUSurfaceDescriptor(
+                        surfaceSourceAndroidNativeWindow = GPUSurfaceSourceAndroidNativeWindow(0)
                     )
                 )
 
@@ -57,8 +57,8 @@ class ObjectTest {
         val instance = createInstance()
 
         val surfaceDescriptor =
-            SurfaceDescriptor(
-                surfaceSourceAndroidNativeWindow = SurfaceSourceAndroidNativeWindow(0)
+            GPUSurfaceDescriptor(
+                surfaceSourceAndroidNativeWindow = GPUSurfaceSourceAndroidNativeWindow(0)
             )
 
         val surface1 = instance.createSurface(surfaceDescriptor)

@@ -20,11 +20,10 @@ import androidx.compose.testutils.assertPixels
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.test.ConfigChangeActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.tests.R
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +32,7 @@ import org.junit.runner.RunWith
 @SmallTest
 class ImageResourcesTest {
 
-    @get:Rule val rule = createAndroidComposeRule<ConfigChangeActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<ConfigChangeActivity>()
 
     @Test
     fun imageResourceTest() {

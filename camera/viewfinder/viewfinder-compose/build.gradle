@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.SoftwareType
@@ -62,10 +61,17 @@ dependencies {
     androidTestImplementation(project(":compose:ui:ui-test"))
     androidTestImplementation(project(":compose:ui:ui-unit"))
     androidTestImplementation(project(":test:screenshot:screenshot"))
+
+    testImplementation("androidx.compose.ui:ui-test-junit4:1.11.0")
+    testImplementation("androidx.compose.ui:ui-test-manifest:1.11.0")
+    testImplementation(libs.espressoCore)
+    testImplementation(libs.junit)
+    testImplementation(libs.testCore)
+    testImplementation(libs.testRunner)
+    testImplementation(libs.truth)
 }
 
 android {
-    compileSdk = 36
     namespace = "androidx.camera.viewfinder.compose"
 }
 
@@ -74,6 +80,6 @@ androidx {
     type = SoftwareType.PUBLISHED_LIBRARY_ONLY_USED_BY_KOTLIN_CONSUMERS
     inceptionYear = "2023"
     description = "Standalone Composable Viewfinder for Camera"
-    legacyDisableKotlinStrictApiMode = true
     addGoldenImageAssets()
+    enableRobolectric()
 }

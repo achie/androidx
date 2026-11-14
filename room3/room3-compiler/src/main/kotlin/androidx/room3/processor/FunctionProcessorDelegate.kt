@@ -16,9 +16,6 @@
 
 package androidx.room3.processor
 
-import androidx.room3.compiler.codegen.XCodeBlock
-import androidx.room3.compiler.codegen.XPropertySpec
-import androidx.room3.compiler.codegen.XTypeSpec
 import androidx.room3.compiler.processing.XExecutableParameterElement
 import androidx.room3.compiler.processing.XMethodElement
 import androidx.room3.compiler.processing.XMethodType
@@ -28,15 +25,10 @@ import androidx.room3.compiler.processing.XVariableElement
 import androidx.room3.compiler.processing.isSuspendFunction
 import androidx.room3.ext.DEFERRED_TYPES
 import androidx.room3.ext.KotlinTypeNames
-import androidx.room3.ext.RoomCoroutinesTypeNames.COROUTINES_ROOM
 import androidx.room3.parser.ParsedQuery
 import androidx.room3.solver.TypeAdapterExtras
-import androidx.room3.solver.prepared.binder.CoroutinePreparedQueryResultBinder
 import androidx.room3.solver.prepared.binder.PreparedQueryResultBinder
-import androidx.room3.solver.query.result.CoroutineResultBinder
 import androidx.room3.solver.query.result.QueryResultBinder
-import androidx.room3.solver.shortcut.binder.CoroutineDeleteOrUpdateFunctionBinder
-import androidx.room3.solver.shortcut.binder.CoroutineInsertOrUpsertFunctionBinder
 import androidx.room3.solver.shortcut.binder.DeleteOrUpdateFunctionBinder
 import androidx.room3.solver.shortcut.binder.InsertOrUpsertFunctionBinder
 import androidx.room3.solver.transaction.binder.CoroutineTransactionFunctionBinder
@@ -116,8 +108,9 @@ abstract class FunctionProcessorDelegate(
 }
 
 fun FunctionProcessorDelegate.returnsDeferredType(): Boolean {
-    val deferredTypes =
-        DEFERRED_TYPES.mapNotNull { context.processingEnv.findType(it.canonicalName) }
+    val deferredTypes = DEFERRED_TYPES.mapNotNull {
+        context.processingEnv.findType(it.canonicalName)
+    }
     val returnType = extractReturnType()
     return deferredTypes.any { deferredType ->
         deferredType.rawType.isAssignableFrom(returnType.rawType)
@@ -195,38 +188,47 @@ class SuspendFunctionProcessorDelegate(
         query: ParsedQuery,
         extrasCreator: TypeAdapterExtras.() -> Unit,
     ) =
-        CoroutineResultBinder(
-            typeArg = returnType,
-            adapter =
-                context.typeAdapterStore.findQueryResultAdapter(returnType, query, extrasCreator),
-            continuationParamName = continuationParam.name,
+        context.typeAdapterStore.findQueryResultBinder(
+            returnType,
+            query,
+            TypeAdapterExtras().apply(extrasCreator).apply {
+                putData(ContinuationParamName::class, ContinuationParamName(continuationParam.name))
+            },
         )
 
     override fun findPreparedResultBinder(returnType: XType, query: ParsedQuery) =
-        CoroutinePreparedQueryResultBinder(
-            adapter = context.typeAdapterStore.findPreparedQueryResultAdapter(returnType, query),
-            continuationParamName = continuationParam.name,
+        context.typeAdapterStore.findPreparedQueryResultBinder(
+            returnType,
+            query,
+            TypeAdapterExtras().apply {
+                putData(ContinuationParamName::class, ContinuationParamName(continuationParam.name))
+            },
         )
 
     override fun findInsertFunctionBinder(returnType: XType, params: List<ShortcutQueryParameter>) =
-        CoroutineInsertOrUpsertFunctionBinder(
-            typeArg = returnType,
-            adapter = context.typeAdapterStore.findInsertAdapter(returnType, params),
-            continuationParamName = continuationParam.name,
+        context.typeAdapterStore.findInsertFunctionBinder(
+            returnType,
+            params,
+            TypeAdapterExtras().apply {
+                putData(ContinuationParamName::class, ContinuationParamName(continuationParam.name))
+            },
         )
 
     override fun findUpsertFunctionBinder(returnType: XType, params: List<ShortcutQueryParameter>) =
-        CoroutineInsertOrUpsertFunctionBinder(
-            typeArg = returnType,
-            adapter = context.typeAdapterStore.findUpsertAdapter(returnType, params),
-            continuationParamName = continuationParam.name,
+        context.typeAdapterStore.findUpsertFunctionBinder(
+            returnType,
+            params,
+            TypeAdapterExtras().apply {
+                putData(ContinuationParamName::class, ContinuationParamName(continuationParam.name))
+            },
         )
 
     override fun findDeleteOrUpdateFunctionBinder(returnType: XType) =
-        CoroutineDeleteOrUpdateFunctionBinder(
-            typeArg = returnType,
-            adapter = context.typeAdapterStore.findDeleteOrUpdateAdapter(returnType),
-            continuationParamName = continuationParam.name,
+        context.typeAdapterStore.findDeleteOrUpdateFunctionBinder(
+            returnType,
+            TypeAdapterExtras().apply {
+                putData(ContinuationParamName::class, ContinuationParamName(continuationParam.name))
+            },
         )
 
     override fun findTransactionFunctionBinder(callType: TransactionFunction.CallType) =
@@ -241,18 +243,11 @@ class SuspendFunctionProcessorDelegate(
                 ),
             continuationParamName = continuationParam.name,
         )
-
-    private fun XCodeBlock.Builder.addCoroutineExecuteStatement(
-        callableImpl: XTypeSpec,
-        dbProperty: XPropertySpec,
-    ) {
-
-        addStatement(
-            "return %T.execute(%N, %L, %L)",
-            COROUTINES_ROOM,
-            dbProperty,
-            "true", // inTransaction
-            callableImpl,
-        )
-    }
 }
+
+internal data class ContinuationParamName(val paramName: String)
+
+internal data class QueryParameters(val parameters: List<QueryParameter>)
+
+// Indicator that the function is a suspend function.
+fun TypeAdapterExtras.hasContinuation() = getData(ContinuationParamName::class) != null

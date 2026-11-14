@@ -22,7 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.DeviceFontFamilyName
@@ -42,7 +42,6 @@ import androidx.wear.compose.foundation.curvedRow
 import androidx.wear.compose.material3.tokens.TypographyVariableFontsTokens
 import com.google.testing.junit.testparameterinjector.TestParameter
 import com.google.testing.junit.testparameterinjector.TestParameterInjector
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -53,7 +52,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 @OptIn(ExperimentalTextApi::class)
 class TypographyScreenshotTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -263,7 +262,8 @@ class TypographyScreenshotTest {
                 text = "NumeralExtraSmall",
                 font = font,
                 style = MaterialTheme.typography.numeralExtraSmall,
-                variationSettings = TypographyVariableFontsTokens.NumeralExtraSmallVariationSettings,
+                variationSettings =
+                    TypographyVariableFontsTokens.NumeralExtraSmallVariationSettings,
             )
         }
     }
@@ -311,7 +311,8 @@ class TypographyScreenshotTest {
                 text = "NumeralExtraLarge123",
                 font = font,
                 style = MaterialTheme.typography.numeralExtraLarge,
-                variationSettings = TypographyVariableFontsTokens.NumeralExtraLargeVariationSettings,
+                variationSettings =
+                    TypographyVariableFontsTokens.NumeralExtraLargeVariationSettings,
             )
         }
     }
@@ -323,7 +324,7 @@ class TypographyScreenshotTest {
         style: TextStyle,
         variationSettings: FontVariation.Settings,
     ) {
-        ScreenConfiguration(screenSizeDp = SCREEN_SIZE_LARGE) {
+        ScreenConfiguration(desiredScreenSizeDp = SCREEN_SIZE_LARGE) {
             Box(
                 modifier = Modifier.size(SCREEN_SIZE_LARGE.dp).testTag(TEST_TAG),
                 contentAlignment = Alignment.Center,
@@ -340,7 +341,7 @@ class TypographyScreenshotTest {
         style: CurvedTextStyle,
         variationSettings: FontVariation.Settings,
     ) {
-        ScreenConfiguration(screenSizeDp = SCREEN_SIZE_LARGE) {
+        ScreenConfiguration(desiredScreenSizeDp = SCREEN_SIZE_LARGE) {
             CurvedLayout(Modifier.size(SCREEN_SIZE_LARGE.dp).testTag(TEST_TAG)) {
                 curvedRow {
                     curvedText(

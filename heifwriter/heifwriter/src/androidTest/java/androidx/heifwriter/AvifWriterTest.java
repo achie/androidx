@@ -22,11 +22,14 @@ import static androidx.heifwriter.AvifWriter.INPUT_MODE_SURFACE;
 import static androidx.test.core.app.ApplicationProvider.getApplicationContext;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -35,7 +38,6 @@ import android.util.Log;
 
 import androidx.heifwriter.test.R;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
-import androidx.test.filters.FlakyTest;
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.SmallTest;
 import androidx.test.rule.GrantPermissionRule;
@@ -56,7 +58,6 @@ import java.io.InputStream;
  * Test {@link AvifWriter}.
  */
 @RunWith(AndroidJUnit4.class)
-@FlakyTest
 public class AvifWriterTest extends TestBase {
     private static final String TAG = AvifWriterTest.class.getSimpleName();
 
@@ -70,6 +71,8 @@ public class AvifWriterTest extends TestBase {
 
     private static final boolean DEBUG = true;
     private static final boolean DUMP_YUV_INPUT = false;
+    private static final int GRID_WIDTH = 512;
+    private static final int GRID_HEIGHT = 512;
 
     private static final String AVIFWRITER_INPUT = "heifwriter_input.heic";
     private static final int[] IMAGE_RESOURCES = new int[] {
@@ -273,6 +276,92 @@ public class AvifWriterTest extends TestBase {
         avifWriter.close();
     }
 
+    /**
+     * This test ensures that the device provides an {@link MediaFormat#MIMETYPE_VIDEO_AV1}
+     * encoder supporting the 512x512 tile size with bitrate control mode
+     * {@link MediaCodecInfo.EncoderCapabilities#BITRATE_MODE_CQ} required for AVIF image encoding.
+     */
+    @Test
+    @SmallTest
+    public void testAvifEncoderAvailable() throws Throwable {
+        if (shouldSkip()) return;
+
+        final MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+
+        boolean encoderFound = false;
+        for (MediaCodecInfo info : mcl.getCodecInfos()) {
+            if (!info.isEncoder()) {
+                continue;
+            }
+            MediaCodecInfo.CodecCapabilities caps = null;
+            try {
+                caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AV1);
+            } catch (IllegalArgumentException e) { // mime is not supported
+                continue;
+            }
+            if (caps.getVideoCapabilities().isSizeSupported(GRID_WIDTH, GRID_HEIGHT)
+                    && caps.getEncoderCapabilities().isBitrateModeSupported(
+                            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ)) {
+                encoderFound = true;
+                Log.d(TAG, "found AV1 CQ encoder on " + info.getName());
+            }
+        }
+        assertTrue("No AV1 encoder supporting 512x512 and BITRATE_MODE_CQ for AVIF encoding",
+                encoderFound);
+    }
+
+    @Test
+    @SmallTest
+    public void testAddExifData_InvalidIndex() throws Throwable {
+        if (shouldSkip()) return;
+
+        final String outputPath = new File(getApplicationContext().getExternalFilesDir(null),
+                OUTPUT_FILENAME).getAbsolutePath();
+        AvifWriter avifWriter = new AvifWriter.Builder(
+                outputPath, 1920, 1080, INPUT_MODE_SURFACE)
+                .setMaxImages(1)
+                .build();
+        avifWriter.start();
+
+        try {
+            byte[] exifData = new byte[100];
+            // index 1 is invalid for maxImages = 1
+            avifWriter.addExifData(1, exifData, 0, exifData.length);
+            throw new RuntimeException("Should have thrown IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            // expected
+        } finally {
+            avifWriter.close();
+        }
+    }
+
+    @Test
+    @SmallTest
+    public void testAddExifData_TooManyBlocks() throws Throwable {
+        if (shouldSkip()) return;
+
+        final String outputPath = new File(getApplicationContext().getExternalFilesDir(null),
+                OUTPUT_FILENAME).getAbsolutePath();
+        AvifWriter avifWriter = new AvifWriter.Builder(
+                outputPath, 1920, 1080, INPUT_MODE_SURFACE)
+                .setMaxImages(1)
+                .build();
+        avifWriter.start();
+
+        try {
+            byte[] exifData = new byte[100];
+            // Add first block
+            avifWriter.addExifData(0, exifData, 0, exifData.length);
+            // Add second block, should fail as maxImages is 1
+            avifWriter.addExifData(0, exifData, 0, exifData.length);
+            throw new RuntimeException("Should have thrown IllegalStateException");
+        } catch (IllegalStateException e) {
+            // expected
+        } finally {
+            avifWriter.close();
+        }
+    }
+
     private void doTestForVariousNumberImages(TestConfig.Builder builder) throws Exception {
         builder.setHighBitDepthEnabled(false);
         builder.setNumImages(4);
@@ -283,14 +372,18 @@ public class AvifWriterTest extends TestBase {
         doTest(builder.setNumImages(1).build());
         doTest(builder.setNumImages(8).build());
 
-        builder.setHighBitDepthEnabled(true);
-        builder.setNumImages(1);
-        doTest(builder.setRotation(270).build());
-        doTest(builder.setRotation(180).build());
-        doTest(builder.setRotation(90).build());
-        doTest(builder.setRotation(0).build());
-        doTest(builder.setNumImages(1).build());
-        doTest(builder.setNumImages(8).build());
+        if (builder.mInputMode == INPUT_MODE_BUFFER || is10BitEglSupported()) {
+            builder.setHighBitDepthEnabled(true);
+            builder.setNumImages(1);
+            doTest(builder.setRotation(270).build());
+            doTest(builder.setRotation(180).build());
+            doTest(builder.setRotation(90).build());
+            doTest(builder.setRotation(0).build());
+            doTest(builder.setNumImages(1).build());
+            doTest(builder.setNumImages(8).build());
+        } else {
+            Log.i(TAG, "Skipping 10-bit EGL tests as 10-bit EGL is not supported");
+        }
     }
 
     private boolean shouldSkip() {

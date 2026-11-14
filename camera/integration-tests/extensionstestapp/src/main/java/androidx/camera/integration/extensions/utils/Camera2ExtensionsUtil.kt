@@ -99,6 +99,70 @@ object Camera2ExtensionsUtil {
         throw IllegalArgumentException("Can't find camera of lens facing $lensFacing")
     }
 
+    /**
+     * Returns the supported Camera2 extension modes of the camera, excluding the modes that are
+     * known to be broken on the device.
+     */
+    @RequiresApi(31)
+    @JvmStatic
+    fun getSupportedExtensions(cameraManager: CameraManager, cameraId: String): List<Int> =
+        cameraManager.getCameraExtensionCharacteristics(cameraId).supportedExtensions.filterNot {
+            isExtensionDisabledByQuirk(cameraId, it)
+        }
+
+    /** Returns true if the device is a Samsung Galaxy A52s (SM-A528B). */
+    @JvmStatic
+    fun isSamsungGalaxyA52s(): Boolean =
+        "Samsung".equals(Build.BRAND, ignoreCase = true) &&
+            "SM-A528B".equals(Build.MODEL, ignoreCase = true)
+
+    /** Returns true if the device is a Samsung Galaxy S24 (SM-S921U). */
+    @JvmStatic
+    fun isSamsungGalaxyS24(): Boolean =
+        "Samsung".equals(Build.BRAND, ignoreCase = true) &&
+            "SM-S921U".equals(Build.MODEL, ignoreCase = true)
+
+    /**
+     * Returns true if the extension mode is known to be broken on the device.
+     *
+     * This mirrors the Camera2 extension part of CameraX's `ExtensionDisabledQuirk` (which is
+     * internal to camera-extensions and can't be reused here) and must be kept in sync with it.
+     */
+    @Suppress("DEPRECATION") // EXTENSION_BEAUTY
+    @RequiresApi(31)
+    private fun isExtensionDisabledByQuirk(cameraId: String, extensionMode: Int): Boolean {
+        if (!"Samsung".equals(Build.BRAND, ignoreCase = true)) {
+            return false
+        }
+        // Extension modes Bokeh, Face Retouch, and HDR fail on Camera 0 for Samsung Galaxy
+        // A52s (SM-A528B) due to HAL requesting 0 max buffers or HDR crashing in still capture
+        // (CamX::ImageBuffer::Import or the MFNR post filter) (b/532825627, b/570911697,
+        // b/579702852, b/579703647, b/583485704).
+        if ("SM-A528B".equals(Build.MODEL, ignoreCase = true) && cameraId == "0") {
+            return extensionMode == CameraExtensionCharacteristics.EXTENSION_BOKEH ||
+                extensionMode == CameraExtensionCharacteristics.EXTENSION_BEAUTY ||
+                extensionMode == CameraExtensionCharacteristics.EXTENSION_HDR
+        }
+        // Extension modes fail on Camera 3 for Samsung Galaxy S22 (SM-S901U) and S22 Ultra
+        // (SM-S908U1) due to HAL rejecting still capture requests with -38 (b/579700310,
+        // b/579703647).
+        if (
+            ("SM-S901U".equals(Build.MODEL, ignoreCase = true) ||
+                "SM-S908U1".equals(Build.MODEL, ignoreCase = true)) && cameraId == "3"
+        ) {
+            return true
+        }
+        // Extension mode Auto fails on Cameras 1 and 3 for Samsung Galaxy Z Fold5 (SM-F946U1)
+        // (b/579700310, b/579703647, b/583327945).
+        if (
+            "SM-F946U1".equals(Build.MODEL, ignoreCase = true) &&
+                (cameraId == "1" || cameraId == "3")
+        ) {
+            return extensionMode == CameraExtensionCharacteristics.EXTENSION_AUTOMATIC
+        }
+        return false
+    }
+
     @RequiresApi(31)
     @JvmStatic
     fun isCamera2ExtensionModeSupported(
@@ -106,9 +170,11 @@ object Camera2ExtensionsUtil {
         cameraId: String,
         extensionMode: Int,
     ): Boolean {
-        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val extensionCharacteristics = cameraManager.getCameraExtensionCharacteristics(cameraId)
-        return extensionCharacteristics.supportedExtensions.contains(extensionMode)
+        // Always uses the application context so that the extensions service is bound and unbound
+        // with the same context, no matter which context is passed in (b/570911697).
+        val cameraManager =
+            context.applicationContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return getSupportedExtensions(cameraManager, cameraId).contains(extensionMode)
     }
 
     /**

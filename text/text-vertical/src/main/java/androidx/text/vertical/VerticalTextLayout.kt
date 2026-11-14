@@ -17,18 +17,15 @@
 package androidx.text.vertical
 
 import android.graphics.Canvas
-import android.os.Build
 import android.text.TextPaint
 import androidx.annotation.Px
+import androidx.annotation.RestrictTo
 
 /**
  * Represents the result of laying out text vertically.
  *
  * This class encapsulates the result of a vertical text layout process. It stores the layout's
  * properties and provides methods to draw the layout on a [Canvas].
- *
- * NOTE: Currently, this API leverages a platform feature added in API 36 (Android 16). For older
- * API levels, it provides a graceful fallback. We will provide a backport to API 31 in the future.
  */
 public class VerticalTextLayout
 /**
@@ -41,32 +38,95 @@ public class VerticalTextLayout
  */
 @JvmOverloads
 constructor(
-    text: CharSequence = "",
-    start: Int = 0,
-    end: Int = text.length,
-    paint: TextPaint = TextPaint(),
-    @Px height: Float = 0f,
-    orientation: Int = TextOrientation.MIXED,
+    internal val text: CharSequence = "",
+    internal val start: Int = 0,
+    internal val end: Int = text.length,
+    internal val paint: TextPaint = TextPaint(),
+    @Px internal val height: Float = 0f,
+    internal val orientation: TextOrientation = TextOrientation.Mixed,
 ) {
-    /** The width constraint of the vertical text in pixels. */
+    /** The computed width of the vertical text layout in pixels. */
     @get:Px
     public val width: Float
-        get() = impl.width
+        get() = result.width
 
-    internal val impl: VerticalTextLayoutImpl
+    /**
+     * Vertical content height in pixels.
+     *
+     * Equals the maximum [getLineHeight] across all [lineCount] lines (columns).
+     */
+    @get:Px
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public val contentHeight: Float
+        get() = result.height
+
+    /**
+     * Bounding width in pixels across the maximum left and right extents of all vertical lines
+     * (columns).
+     */
+    @get:Px
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public val columnWidth: Float
+        get() = result.lineWidth
+
+    /** The number of lines (columns) in this vertical text layout. */
+    public val lineCount: Int
+        get() = result.lineCount
+
+    /**
+     * Returns the laid-out width in pixels of the vertical line (column) at [line].
+     *
+     * @param line 0-based line (column) index (`0 <= line <` [lineCount])
+     * @return line (column) width in pixels
+     * @throws IndexOutOfBoundsException if [line] is outside `0 until` [lineCount]
+     */
+    @Px
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public fun getLineWidth(line: Int): Float = result.getLineWidth(line)
+
+    /**
+     * Returns the laid-out height in pixels of the vertical line (column) at [line].
+     *
+     * @param line 0-based line (column) index (`0 <= line <` [lineCount])
+     * @return line (column) height in pixels
+     * @throws IndexOutOfBoundsException if [line] is outside `0 until` [lineCount]
+     */
+    @Px
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public fun getLineHeight(line: Int): Float = result.getLineHeight(line)
+
+    /**
+     * Returns the inclusive start character offset of the vertical line (column) at [line].
+     *
+     * @param line 0-based line (column) index (`0 <= line <` [lineCount])
+     * @return inclusive start character offset in [text]
+     * @throws IndexOutOfBoundsException if [line] is outside `0 until` [lineCount]
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public fun getLineStart(line: Int): Int = result.getLineStart(line)
+
+    /**
+     * Returns the exclusive end character offset of the vertical line (column) at [line].
+     *
+     * @param line 0-based line (column) index (`0 <= line <` [lineCount])
+     * @return exclusive end character offset in [text]
+     * @throws IndexOutOfBoundsException if [line] is outside `0 until` [lineCount]
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public fun getLineEnd(line: Int): Int = result.getLineEnd(line)
+
+    private val result: LineBreaker.Result
 
     init {
-        require(start <= end && end <= text.length && height >= 0)
+        require(start in 0..end && end <= text.length && height >= 0)
 
-        impl =
-            when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA -> {
-                    VerticalTextLayoutApi36Impl(text, start, end, paint, height, orientation)
-                }
-                else -> {
-                    VerticalTextLayoutNoOpImpl()
-                }
-            }
+        result = LineBreaker.breakTextIntoLines(text, start, end, paint, height, orientation)
     }
 
     /**
@@ -77,14 +137,33 @@ constructor(
      * @param y The vertical offset in pixels. The drawing origin is the top-right corner.
      */
     public fun draw(canvas: Canvas, @Px x: Float, @Px y: Float) {
-        impl.draw(canvas, x, y)
+        result.draw(canvas, x, y, paint)
     }
 
     /**
-     * Capability query to determine whether or not [VerticalTextLayout] supports vertical text
-     * painting. If it is false, calling methods will have no effect.
+     * Draws the vertical lines (columns) in `[lineStart, lineEnd)` onto the specified [Canvas].
+     *
+     * Each column keeps the position it has in [draw] without a range.
+     *
+     * @param canvas [Canvas] to draw onto
+     * @param x horizontal offset in pixels; the drawing origin is the top-right corner
+     * @param y vertical offset in pixels; the drawing origin is the top-right corner
+     * @param lineStart inclusive first line (column) index (`0 <= lineStart <= lineEnd`)
+     * @param lineEnd exclusive last line (column) index (`lineStart <= lineEnd <=` [lineCount])
+     * @throws IndexOutOfBoundsException if [lineStart] or [lineEnd] is outside `0..`[lineCount] or
+     *   `lineStart > lineEnd`
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    // TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+    public fun draw(canvas: Canvas, @Px x: Float, @Px y: Float, lineStart: Int, lineEnd: Int) {
+        result.draw(canvas, x, y, paint, lineStart, lineEnd)
+    }
+
+    /**
+     * Capability query to determine whether [VerticalTextLayout] supports vertical text painting.
+     * If this returns false, [draw] will have no effect.
      */
     public fun isVerticalTextSupported(): Boolean {
-        return impl.isVerticalTextSupported()
+        return true
     }
 }

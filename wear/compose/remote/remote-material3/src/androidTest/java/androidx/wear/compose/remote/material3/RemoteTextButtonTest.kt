@@ -17,170 +17,169 @@
 package androidx.wear.compose.remote.material3
 
 import android.content.Context
-import androidx.compose.remote.creation.CreationDisplayInfo
-import androidx.compose.remote.creation.compose.layout.RemoteAlignment
-import androidx.compose.remote.creation.compose.layout.RemoteArrangement
-import androidx.compose.remote.creation.compose.layout.RemoteBox
-import androidx.compose.remote.creation.compose.layout.RemoteComposable
-import androidx.compose.remote.creation.compose.modifier.RemoteModifier
-import androidx.compose.remote.creation.compose.modifier.fillMaxSize
-import androidx.compose.remote.creation.compose.state.RemoteBoolean
-import androidx.compose.remote.creation.compose.state.RemoteColor
-import androidx.compose.remote.creation.compose.state.RemoteString
-import androidx.compose.remote.creation.compose.state.rdp
+import androidx.collection.buildObjectIntMap
+import androidx.compose.remote.creation.compose.action.hostAction
+import androidx.compose.remote.creation.compose.capture.createCreationDisplayInfo
+import androidx.compose.remote.creation.compose.state.rb
 import androidx.compose.remote.creation.compose.state.rf
-import androidx.compose.remote.player.compose.test.utils.screenshot.TargetPlayer
-import androidx.compose.remote.player.compose.test.utils.screenshot.rule.RemoteComposeScreenshotTestRule
-import androidx.compose.runtime.Composable
+import androidx.compose.remote.creation.compose.state.rs
+import androidx.compose.remote.player.compose.test.utils.ComposableWrappers
+import androidx.compose.remote.player.compose.test.utils.RemoteScreenshotTestRule
+import androidx.compose.remote.player.view.RemoteComposePlayer
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonDisabled
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonEnabled
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonOutline
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonOutlineDisabled
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonTonal
+import androidx.wear.compose.remote.material3.previews.RemoteTextButtonTonalDisabled
+import androidx.wear.compose.remote.material3.util.ComponentContainer
+import androidx.wear.compose.remote.material3.util.PathClip
+import androidx.wear.compose.remote.material3.util.SCREENSHOT_GOLDEN_DIRECTORY
+import androidx.wear.compose.remote.material3.util.TestProfiles
+import androidx.wear.compose.remote.material3.util.withPathClip
+import com.google.testing.junit.testparameterinjector.TestParameter
+import com.google.testing.junit.testparameterinjector.TestParameterInjector
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.junit.runners.JUnit4
 
 @MediumTest
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
-@RunWith(JUnit4::class)
+@RunWith(TestParameterInjector::class)
 class RemoteTextButtonTest {
     @get:Rule
     val remoteComposeTestRule =
-        RemoteComposeScreenshotTestRule(
+        RemoteScreenshotTestRule(
             moduleDirectory = SCREENSHOT_GOLDEN_DIRECTORY,
-            targetPlayer = TargetPlayer.View,
+            context = ApplicationProvider.getApplicationContext(),
         )
     private val context: Context = ApplicationProvider.getApplicationContext()
 
-    private val creationDisplayInfo =
-        CreationDisplayInfo(500, 500, context.resources.displayMetrics.densityDpi)
+    private val creationDisplayInfo = createCreationDisplayInfo(context, Size(180f, 180f))
 
     @Test
     fun remote_text_button_enabled() {
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonEnabled() }
+        }
+    }
+
+    @Test
+    fun remote_text_button_enabled_ab(@TestParameter pathClip: PathClip) {
         remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
+            profile = TestProfiles.wearWidgets.withPathClip(pathClip),
+            remoteCreationDisplayInfo = creationDisplayInfo,
         ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(enabled = RemoteBoolean(true)) { RemoteText(RemoteString("ABC")) }
-            }
+            ComponentContainer { RemoteTextButtonEnabled() }
+        }
+    }
+
+    @Test
+    fun remote_text_button_rtl() {
+        remoteComposeTestRule.runScreenshotTest(
+            remoteCreationDisplayInfo = creationDisplayInfo,
+            creationComposableWrapper = ComposableWrappers.rtl,
+        ) {
+            ComponentContainer { RemoteTextButtonEnabled() }
         }
     }
 
     @Test
     fun remote_text_button_disabled() {
-        remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
-        ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(enabled = RemoteBoolean(false)) { RemoteText(RemoteString("ABC")) }
-            }
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonDisabled() }
         }
     }
 
     @Test
     fun remote_text_button_tonal_enabled() {
-        remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
-        ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(enabled = RemoteBoolean(true), colors = FILLED_TONAL_COLOR) {
-                    RemoteText(RemoteString("ABC"))
-                }
-            }
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonTonal() }
         }
     }
 
     @Test
     fun remote_text_button_tonal_disabled() {
-        remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
-        ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(enabled = RemoteBoolean(false), colors = FILLED_TONAL_COLOR) {
-                    RemoteText(RemoteString("ABC"))
-                }
-            }
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonTonalDisabled() }
         }
     }
 
     @Test
     fun remote_text_button_outline_enabled() {
-        remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
-        ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(
-                    border = 1.rdp,
-                    borderColor = RemoteMaterialTheme.colorScheme.outline,
-                    enabled = RemoteBoolean(true),
-                    colors = OUTLINE_COLOR,
-                ) {
-                    RemoteText(RemoteString("ABC"))
-                }
-            }
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonOutline() }
         }
     }
 
     @Test
     fun remote_text_button_outline_disabled() {
-        remoteComposeTestRule.runScreenshotTest(
-            backgroundColor = Color.Black,
-            creationDisplayInfo = creationDisplayInfo,
-        ) {
-            Center(RemoteModifier.fillMaxSize()) {
-                RemoteTextButton(
-                    border = 1.rdp,
-                    borderColor = RemoteMaterialTheme.colorScheme.outline,
-                    enabled = RemoteBoolean(false),
-                    colors = OUTLINE_COLOR,
-                ) {
-                    RemoteText(RemoteString("ABC"))
-                }
-            }
+        remoteComposeTestRule.runScreenshotTest(remoteCreationDisplayInfo = creationDisplayInfo) {
+            ComponentContainer { RemoteTextButtonOutlineDisabled() }
         }
     }
 
-    private companion object {
-        val FILLED_TONAL_COLOR
-            @Composable
-            get() =
-                RemoteTextButtonDefaults.textButtonColors()
-                    .copy(
-                        containerColor = RemoteMaterialTheme.colorScheme.primary,
-                        contentColor = RemoteMaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor =
-                            RemoteMaterialTheme.colorScheme.primary.copy(alpha = 0.12f.rf),
-                        disabledContentColor =
-                            RemoteMaterialTheme.colorScheme.primary.copy(0.38f.rf),
-                    )
-
-        val OUTLINE_COLOR
-            @Composable
-            get() =
-                RemoteTextButtonDefaults.textButtonColors()
-                    .copy(
-                        containerColor = RemoteColor(Color.Transparent),
-                        contentColor = RemoteMaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = RemoteColor(Color.Transparent),
-                        disabledContentColor =
-                            RemoteMaterialTheme.colorScheme.primary.copy(0.38f.rf),
-                    )
+    @Test
+    fun remote_text_button_dynamic_color() {
+        val colorOverrides = buildObjectIntMap {
+            put("WearM3.primary", Color(0xFFB8D0A0).toArgb())
+            put("WearM3.onPrimary", Color(0xFF24361A).toArgb())
+            put("WearM3.surfaceContainer", Color(0xFF1C1D1A).toArgb())
+            put("WearM3.onSurface", Color(0xFFE2E3DC).toArgb())
+        }
+        remoteComposeTestRule.runScreenshotTest(
+            profile = TestProfiles.wearWidgets,
+            remoteCreationDisplayInfo = creationDisplayInfo,
+            update = { player ->
+                colorOverrides.forEach { name, colorInt ->
+                    player.setUserLocalColor(name, colorInt)
+                }
+            },
+        ) {
+            ComponentContainer { RemoteTextButtonEnabled() }
+        }
     }
-}
 
-@Composable
-@RemoteComposable
-private fun Center(modifier: RemoteModifier, content: @Composable @RemoteComposable () -> Unit) {
-    RemoteBox(
-        modifier,
-        horizontalAlignment = RemoteAlignment.CenterHorizontally,
-        verticalArrangement = RemoteArrangement.Center,
-        content = content,
-    )
+    @Test
+    fun remote_text_button_animated_shapes_pressed() {
+        lateinit var player: RemoteComposePlayer
+        remoteComposeTestRule.setContent(
+            remoteCreationDisplayInfo = creationDisplayInfo,
+            update = { player = it },
+        ) {
+            ComponentContainer {
+                RemoteTextButton(
+                    testAction,
+                    enabled = true.rb,
+                    shapes = RemoteTextButtonDefaults.animatedShapes(),
+                    colors = RemoteTextButtonDefaults.filledTonalTextButtonColors(),
+                ) {
+                    RemoteText("ABC".rs)
+                }
+            }
+        }
+        val root =
+            remoteComposeTestRule.composeTestRule.onNodeWithTag(
+                RemoteScreenshotTestRule.ROOT_TEST_TAG
+            )
+        root.performTouchInput { down(center) }
+        remoteComposeTestRule.composeTestRule.waitUntil(PressAnimationTimeoutMillis) {
+            player.document.document.needsRepaint() < 0
+        }
+        remoteComposeTestRule.verifyScreenshot()
+        root.performTouchInput { up() }
+    }
+
+    private companion object {
+        const val PressAnimationTimeoutMillis = 5_000L
+        private val testAction = hostAction("testAction".rs, 1.rf)
+    }
 }

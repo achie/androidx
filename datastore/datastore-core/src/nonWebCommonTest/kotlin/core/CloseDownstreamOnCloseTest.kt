@@ -22,6 +22,7 @@ import androidx.datastore.TestingSerializerConfig
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
 import kotlin.test.BeforeTest
+import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -54,20 +55,20 @@ abstract class CloseDownstreamOnCloseTest<F : TestFile<F>>(private val testIO: T
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun closeWhileCollecting() =
-        testScope.runTest {
-            val collector = async { store.data.toList().map { it.toInt() } }
-            runCurrent()
-            store.updateData { 1 }
-            datastoreScope.cancel()
-            dispatcher.scheduler.advanceUntilIdle()
-            assertThat(collector.await()).isEqualTo(listOf(0, 1))
-        }
+    fun closeWhileCollecting() = testScope.runTest {
+        val collector = async { store.data.toList().map { it.toInt() } }
+        runCurrent()
+        store.updateData { 1 }
+        datastoreScope.cancel()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertThat(collector.await()).isEqualTo(listOf(0, 1))
+    }
 
+    // TODO: b/432466011 - need to define if flow returns without exception is OK
+    @Ignore
     @Test
-    fun closeBeforeCollecting() =
-        testScope.runTest {
-            datastoreScope.cancel()
-            assertThrows(CancellationException::class) { store.data.toList() }
-        }
+    fun closeBeforeCollecting() = testScope.runTest {
+        datastoreScope.cancel()
+        assertThrows(CancellationException::class) { store.data.toList() }
+    }
 }

@@ -16,6 +16,7 @@
 
 package androidx.compose.ui.spatial
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.node.DelegatableNode
@@ -24,6 +25,9 @@ import androidx.compose.ui.node.requireOwner
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.roundToIntRect
+import androidx.compose.ui.util.fastMaxOf
+import androidx.compose.ui.util.fastMinOf
+import androidx.compose.ui.util.fastRoundToInt
 import kotlin.math.max
 import kotlin.math.min
 
@@ -33,7 +37,7 @@ import kotlin.math.min
  *
  * @see androidx.compose.ui.layout.onLayoutRectChanged
  */
-class RelativeLayoutBounds
+public class RelativeLayoutBounds
 internal constructor(
     private val topLeft: Long,
     private val bottomRight: Long,
@@ -47,11 +51,11 @@ internal constructor(
      * The top left position of the Rect in the coordinates of the root node of the compose
      * hierarchy.
      */
-    val positionInRoot: IntOffset
+    public val positionInRoot: IntOffset
         get() = IntOffset(topLeft)
 
     /** The top left position of the Rect in the coordinates of the Window it is contained in */
-    val positionInWindow: IntOffset
+    public val positionInWindow: IntOffset
         get() {
             val x = screenOffset.x - windowOffset.x
             val y = screenOffset.y - windowOffset.y
@@ -61,7 +65,7 @@ internal constructor(
         }
 
     /** The top left position of the Rect in the coordinates of the Screen it is contained in. */
-    val positionInScreen: IntOffset
+    public val positionInScreen: IntOffset
         get() {
             val x = screenOffset.x
             val y = screenOffset.y
@@ -71,7 +75,7 @@ internal constructor(
         }
 
     /** The width, in pixels, of the Rect */
-    val width: Int
+    public val width: Int
         get() {
             val l = unpackX(topLeft)
             val r = unpackX(bottomRight)
@@ -79,7 +83,7 @@ internal constructor(
         }
 
     /** The height, in pixels, of the Rect */
-    val height: Int
+    public val height: Int
         get() {
             val t = unpackY(topLeft)
             val b = unpackY(bottomRight)
@@ -89,7 +93,7 @@ internal constructor(
     /**
      * The positioned bounding Rect in the coordinates of the root node of the compose hierarchy.
      */
-    val boundsInRoot: IntRect
+    public val boundsInRoot: IntRect
         get() {
             val l = unpackX(topLeft)
             val t = unpackY(topLeft)
@@ -99,12 +103,13 @@ internal constructor(
         }
 
     /** The positioned bounding Rect in the coordinates of the Window which it is contained in. */
-    val boundsInWindow: IntRect
+    public val boundsInWindow: IntRect
         get() {
             val l = unpackX(topLeft)
             val t = unpackY(topLeft)
             val r = unpackX(bottomRight)
             val b = unpackY(bottomRight)
+
             if (viewToWindowMatrix != null) {
                 // TODO: we could implement a `Matrix.map(l, t, r, b): IntRect` that was only a
                 //  single allocation if we wanted to. this would avoid the two Rect(FFFF)
@@ -119,7 +124,7 @@ internal constructor(
         }
 
     /** The positioned bounding Rect in the coordinates of the Screen which it is contained in. */
-    val boundsInScreen: IntRect
+    public val boundsInScreen: IntRect
         get() {
             if (viewToWindowMatrix != null) {
                 val windowRect = boundsInWindow
@@ -131,6 +136,7 @@ internal constructor(
                     windowRect.bottom + offset.y,
                 )
             }
+
             val l = unpackX(topLeft)
             val t = unpackY(topLeft)
             val r = unpackX(bottomRight)
@@ -159,14 +165,17 @@ internal constructor(
      *
      * @return A [List] of the rectangles that occlude the associated Composable Layout.
      */
-    fun calculateOcclusions(): List<IntRect> {
-        val rectManager = node.requireOwner().rectManager
-        val id = node.requireLayoutNode().semanticsId
-        val rectList = rectManager.rects
-        val idIndex = rectList.indexOf(id)
-        if (idIndex < 0) {
+    public fun calculateOcclusions(): List<IntRect> {
+        val targetNode = node.requireLayoutNode()
+        if (targetNode.rectListIndex == NotFound) {
             return emptyList()
         }
+
+        val rectManager = node.requireOwner().rectManager
+        val rectList = rectManager.rects
+
+        val id = targetNode.semanticsId
+        val idIndex = rectList.indexOf(targetNode.semanticsId, targetNode.rectListIndex)
         // For the given `id`, finds intersections and determines occlusions by the result of
         // the 'RectManager.isTargetDrawnFirst', if the node for 'id' is drawn first, then it's
         // being occluded and the intersecting rect is added to the list result.
@@ -190,7 +199,7 @@ internal constructor(
      * @see fractionVisibleInRect
      * @see fractionVisibleInWindowWithInsets
      */
-    fun fractionVisibleIn(viewport: RelativeLayoutBounds): Float {
+    public fun fractionVisibleIn(viewport: RelativeLayoutBounds): Float {
         val tl = viewport.topLeft
         val br = viewport.bottomRight
         return fractionVisibleInRect(
@@ -212,25 +221,17 @@ internal constructor(
      * @see fractionVisibleIn
      * @see fractionVisibleInWindowWithInsets
      */
-    fun fractionVisibleInRect(left: Int, top: Int, right: Int, bottom: Int): Float {
-        val l = unpackX(topLeft)
-        val clippedLeft = min(max(l, left), right)
-
-        val t = unpackY(topLeft)
-        val clippedTop = min(max(t, top), bottom)
-
-        val r = unpackX(bottomRight)
-        val clippedRight = max(min(r, right), left)
-
-        val b = unpackY(bottomRight)
-        val clippedBottom = max(min(b, bottom), top)
-
-        val viewportArea = (right - left) * (bottom - top)
-        val rectArea = (r - l) * (b - t)
-        val clippedArea = max((clippedRight - clippedLeft) * (clippedBottom - clippedTop), 0)
-        val maxArea = min(viewportArea, rectArea)
-        return clippedArea.toFloat() / maxArea.toFloat()
-    }
+    public fun fractionVisibleInRect(left: Int, top: Int, right: Int, bottom: Int): Float =
+        fractionOfElementInside(
+            elementLeft = unpackX(topLeft),
+            elementTop = unpackY(topLeft),
+            elementRight = unpackX(bottomRight),
+            elementBottom = unpackY(bottomRight),
+            left = left,
+            top = top,
+            right = right,
+            bottom = bottom,
+        )
 
     /**
      * Used to determine the fraction of pixels that are inside the bounds of the window.
@@ -243,9 +244,9 @@ internal constructor(
      * @see fractionVisibleIn
      * @see fractionVisibleInWindowWithInsets
      */
-    fun fractionVisibleInWindow(): Float {
+    public fun fractionVisibleInWindow(): Float {
         val windowSize = windowSize
-        return fractionVisibleInRect(0, 0, unpackX(windowSize), unpackY(windowSize))
+        return fractionVisibleInWindowRect(0, 0, unpackX(windowSize), unpackY(windowSize))
     }
 
     /**
@@ -260,18 +261,103 @@ internal constructor(
      * @see fractionVisibleIn
      * @see fractionVisibleInWindowWithInsets
      */
-    fun fractionVisibleInWindowWithInsets(
+    public fun fractionVisibleInWindowWithInsets(
         topLeftInset: IntOffset,
         bottomRightInset: IntOffset,
     ): Float {
         val windowSize = windowSize
-        val x = windowOffset.x
-        val y = windowOffset.y
-        return fractionVisibleInRect(
-            x + topLeftInset.x,
-            y + topLeftInset.y,
-            x + unpackX(windowSize) - bottomRightInset.x,
-            y + unpackY(windowSize) - bottomRightInset.y,
+        return fractionVisibleInWindowRect(
+            topLeftInset.x,
+            topLeftInset.y,
+            unpackX(windowSize) - bottomRightInset.x,
+            unpackY(windowSize) - bottomRightInset.y,
+        )
+    }
+
+    /**
+     * The fraction of pixels of this element inside the rectangle of the window from ([left],
+     * [top]) to ([right], [bottom]).
+     *
+     * This element's bounds are relative to the root of its compose hierarchy, which isn't always
+     * at the window's origin, for example in an item of a RecyclerView:
+     * ```
+     * +--------- window ---------+
+     * |                          |
+     * |  (x, y)                  |
+     * |    +------ root ------+  |
+     * |    |  +- element -+   |  |
+     * |    |  |           |   |  |
+     * +----|--|-----------|---|--+
+     *      |  +-----------+   |
+     *      +------------------+
+     * ```
+     *
+     * So the element's bounds are moved by (x, y) into the window's coordinates, where they can be
+     * compared with the rectangle.
+     */
+    private fun fractionVisibleInWindowRect(left: Int, top: Int, right: Int, bottom: Int): Float {
+        val viewToWindowMatrix = viewToWindowMatrix
+        if (viewToWindowMatrix == null) {
+            val x = screenOffset.x - windowOffset.x
+            val y = screenOffset.y - windowOffset.y
+            return fractionOfElementInside(
+                elementLeft = unpackX(topLeft) + x,
+                elementTop = unpackY(topLeft) + y,
+                elementRight = unpackX(bottomRight) + x,
+                elementBottom = unpackY(bottomRight) + y,
+                left = left,
+                top = top,
+                right = right,
+                bottom = bottom,
+            )
+        }
+        // The root is also scaled or rotated in the window: the element is bounded there by its
+        // four corners.
+        val l = unpackX(topLeft).toFloat()
+        val t = unpackY(topLeft).toFloat()
+        val r = unpackX(bottomRight).toFloat()
+        val b = unpackY(bottomRight).toFloat()
+        val topLeftInWindow = viewToWindowMatrix.map(Offset(l, t))
+        val topRightInWindow = viewToWindowMatrix.map(Offset(r, t))
+        val bottomLeftInWindow = viewToWindowMatrix.map(Offset(l, b))
+        val bottomRightInWindow = viewToWindowMatrix.map(Offset(r, b))
+        val minX =
+            fastMinOf(
+                topLeftInWindow.x,
+                topRightInWindow.x,
+                bottomLeftInWindow.x,
+                bottomRightInWindow.x,
+            )
+        val minY =
+            fastMinOf(
+                topLeftInWindow.y,
+                topRightInWindow.y,
+                bottomLeftInWindow.y,
+                bottomRightInWindow.y,
+            )
+        val maxX =
+            fastMaxOf(
+                topLeftInWindow.x,
+                topRightInWindow.x,
+                bottomLeftInWindow.x,
+                bottomRightInWindow.x,
+            )
+        val maxY =
+            fastMaxOf(
+                topLeftInWindow.y,
+                topRightInWindow.y,
+                bottomLeftInWindow.y,
+                bottomRightInWindow.y,
+            )
+        return fractionOfElementInside(
+            elementLeft = minX.fastRoundToInt(),
+            elementTop = minY.fastRoundToInt(),
+            elementRight = maxX.fastRoundToInt(),
+            elementBottom = maxY.fastRoundToInt(),
+            left = left,
+            top = top,
+            right = right,
+            bottom = bottom,
         )
     }
 
@@ -302,4 +388,34 @@ internal constructor(
         result = 31 * result + node.hashCode()
         return result
     }
+}
+
+/**
+ * The fraction of the pixels of an element, from ([elementLeft], [elementTop]) to ([elementRight],
+ * [elementBottom]), that are inside the rectangle from ([left], [top]) to ([right], [bottom]). It
+ * is 1f when the rectangle is entirely inside the element.
+ */
+private fun fractionOfElementInside(
+    elementLeft: Int,
+    elementTop: Int,
+    elementRight: Int,
+    elementBottom: Int,
+    left: Int,
+    top: Int,
+    right: Int,
+    bottom: Int,
+): Float {
+    val clippedWidth = min(elementRight, right) - max(elementLeft, left)
+    val clippedHeight = min(elementBottom, bottom) - max(elementTop, top)
+    if (clippedWidth <= 0 || clippedHeight <= 0) return 0f
+
+    val clippedArea = clippedWidth * clippedHeight
+    val rectangleArea = (right - left) * (bottom - top)
+    val elementArea = (elementRight - elementLeft) * (elementBottom - elementTop)
+    val maxArea = min(rectangleArea, elementArea)
+
+    // One rectangle contains the other.
+    if (clippedArea == maxArea) return 1f
+
+    return clippedArea.toFloat() / maxArea.toFloat()
 }

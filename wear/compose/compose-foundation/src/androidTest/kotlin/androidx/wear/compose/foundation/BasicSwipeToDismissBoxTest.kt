@@ -47,7 +47,7 @@ import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -56,16 +56,28 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeWithVelocity
+import com.google.testing.junit.testparameterinjector.TestParameter
+import com.google.testing.junit.testparameterinjector.TestParameterInjector
 import java.lang.Math.sin
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
 
+@OptIn(ExperimentalWearFoundationApi::class)
+@RunWith(TestParameterInjector::class)
 class BasicSwipeToDismissBoxTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
+
+    private val previousNodeEnabled = WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled
+
+    @After
+    fun restoreEdgeSwipeFlag() {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = previousNodeEnabled
+    }
 
     @Test
     fun supports_testtag() {
@@ -305,12 +317,16 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_modifier_edge_swiped_right_dismissed() {
+    fun edgeswipe_modifier_edge_swiped_right_dismissed(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         verifyEdgeSwipeWithNestedScroll(gesture = { swipeRight() }, expectedToDismiss = true)
     }
 
     @Test
-    fun edgeswipe_non_edge_swiped_right_with_offset_not_dismissed() {
+    fun edgeswipe_non_edge_swiped_right_with_offset_not_dismissed(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         verifyEdgeSwipeWithNestedScroll(
             gesture = { swipeRight(200f, 400f) },
             expectedToDismiss = false,
@@ -319,7 +335,10 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_non_edge_swiped_right_without_offset_not_dismissed() {
+    fun edgeswipe_non_edge_swiped_right_without_offset_not_dismissed(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         verifyEdgeSwipeWithNestedScroll(
             gesture = { swipeRight(200f, 400f) },
             expectedToDismiss = false,
@@ -328,7 +347,8 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_edge_swiped_left_not_dismissed() {
+    fun edgeswipe_edge_swiped_left_not_dismissed(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         verifyEdgeSwipeWithNestedScroll(
             gesture = { swipeLeft(20f, -40f) },
             expectedToDismiss = false,
@@ -336,7 +356,8 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_non_edge_swiped_left_not_dismissed() {
+    fun edgeswipe_non_edge_swiped_left_not_dismissed(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         verifyEdgeSwipeWithNestedScroll(
             gesture = { swipeLeft(200f, 0f) },
             expectedToDismiss = false,
@@ -344,7 +365,8 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_swipe_edge_content_was_not_swiped_right() {
+    fun edgeswipe_swipe_edge_content_was_not_swiped_right(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         val initialScrollState = 200
         lateinit var horizontalScrollState: ScrollState
         rule.setContent {
@@ -363,7 +385,8 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_swipe_non_edge_content_was_swiped_right() {
+    fun edgeswipe_swipe_non_edge_content_was_swiped_right(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         val initialScrollState = 200
         lateinit var horizontalScrollState: ScrollState
         rule.setContent {
@@ -380,7 +403,8 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_without_swipe_box_swipe_not_crash() {
+    fun edgeswipe_without_swipe_box_swipe_not_crash(@TestParameter nodeEnabled: Boolean) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         val initialScrollState = 200
         lateinit var horizontalScrollState: ScrollState
         rule.setContent {
@@ -397,7 +421,10 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_swipe_edge_content_right_then_left_no_scroll() {
+    fun edgeswipe_swipe_edge_content_right_then_left_no_scroll(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         testBothDirectionScroll(
             initialTouch = 10,
             duration = 2000,
@@ -409,7 +436,10 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_fling_edge_content_right_then_left_no_scroll() {
+    fun edgeswipe_fling_edge_content_right_then_left_no_scroll(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         testBothDirectionScroll(
             initialTouch = 10,
             duration = 100,
@@ -421,7 +451,10 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_swipe_edge_content_left_then_right_with_scroll() {
+    fun edgeswipe_swipe_edge_content_left_then_right_with_scroll(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         testBothDirectionScroll(
             initialTouch = 10,
             duration = 2000,
@@ -435,7 +468,10 @@ class BasicSwipeToDismissBoxTest {
     }
 
     @Test
-    fun edgeswipe_fling_edge_content_left_then_right_with_scroll() {
+    fun edgeswipe_fling_edge_content_left_then_right_with_scroll(
+        @TestParameter nodeEnabled: Boolean
+    ) {
+        WearComposeFoundationFlags.isNewEdgeSwipeToDismissNodeEnabled = nodeEnabled
         testBothDirectionScroll(
             initialTouch = 10,
             duration = 100,
@@ -447,7 +483,6 @@ class BasicSwipeToDismissBoxTest {
         }
     }
 
-    @OptIn(ExperimentalWearFoundationApi::class)
     @Test
     fun partial_swipe_maintains_focus() {
         var focusedBackground by mutableStateOf(false)

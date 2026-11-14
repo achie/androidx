@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import androidx.build.AndroidXConfig
 import androidx.build.ApkCopyHelperKt
 
 plugins {
@@ -25,17 +24,17 @@ plugins {
 
 android {
     namespace = "androidx.xr.scenecore.testapp"
-    compileSdk = 35
+    compileSdk { version = release(37) { minorApiLevel = 1 } }
 
     defaultConfig {
         applicationId = "androidx.xr.scenecore.testapp"
-        minSdk = 34
+        minSdk { version = release(34) }
     }
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            optimization {
+                enable = true
+            }
         }
     }
 }
@@ -53,10 +52,11 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.foundation:foundation-layout:1.7.5")
     implementation("androidx.compose.material3:material3:1.3.1")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
     implementation("androidx.compose.runtime:runtime:1.7.5")
     implementation("androidx.compose.ui:ui:1.7.5")
     implementation("androidx.compose.ui:ui-unit:1.7.5")
-    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")
@@ -65,9 +65,28 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
 
-    compileOnly("com.android.extensions.xr:extensions-xr:1.1.0")
+    compileOnly(libs.androidExtensionsXr)
+
+    // Test dependencies
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.testExtJunit)
+    androidTestImplementation(libs.testRules)
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.truth)
+    androidTestImplementation(libs.testUiautomator)
+    androidTestImplementation(project(":xr:testutils"))
+
+    androidTestUtil(libs.testOrchestrator)
 }
 
 // Making this APK available via Android Build so the QA team can
 // access it in a convenient manner.
 ApkCopyHelperKt.setupAppApkCopy(project, "release")
+
+androidx {
+    deviceTests {
+        maxShardCount = 1
+    }
+    additionalDeviceTestTags.add("xr_optin")
+}
+

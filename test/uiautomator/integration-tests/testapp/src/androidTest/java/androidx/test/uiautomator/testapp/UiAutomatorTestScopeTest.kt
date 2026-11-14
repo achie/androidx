@@ -132,9 +132,10 @@ class UiAutomatorTestScopeTest {
         startActivity(ComposeTestActivity::class.java)
 
         onElement { simpleViewResourceName() == "top-text" }
-        val button =
-            onElement { isScrollable }
-                .scrollToElement(Direction.DOWN) { className == Button::class.java.name }
+        val button = onElement {
+            isScrollable
+        }
+            .scrollToElement(Direction.DOWN) { className == Button::class.java.name }
         val textView = onElement { textAsString() == "Initial" }
         button.click()
         assertThat(textView.text).isEqualTo("Updated")
@@ -157,6 +158,13 @@ class UiAutomatorTestScopeTest {
         onElement { textAsString() == "Show Dialog" }.click()
         onElement { textAsString() == "Dialog Result: Pressed No" }
     }
+
+    @Test
+    @LargeTest
+    fun successfullyUnregistersMultipleWatchers() = uiAutomator {
+        watchFor(TestWatcher("1")) {}
+        watchFor(TestWatcher("2")) {}
+    }
 }
 
 // Define a dialog
@@ -174,4 +182,14 @@ class MyDialog : ScopedUiWatcher<MyDialog.Scope> {
 
         fun clickNo() = uiDevice.onElement { textAsString() == "No" }.click()
     }
+}
+
+// Simple test watcher
+class TestWatcher(private val name: String) : ScopedUiWatcher<Boolean> {
+
+    override fun isVisible(): Boolean = false
+
+    override fun scope() = false
+
+    override fun toString(): String = "TestWatcher-$name"
 }

@@ -22,12 +22,18 @@ import androidx.glance.wear.parcel.WearWidgetUpdateRequestParcel;
 /**
   * Interface, implemented by Widget renderers, which allows Widget Providers to push updates.
   */
-@JavaPassthrough(annotation="@androidx.annotation.RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY)")
+@JavaPassthrough(annotation="@androidx.annotation.RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP)")
 interface IWearWidgetUpdateRequester {
     const int API_VERSION = 1;
 
-    // TODO: b/451989641 - define other update error codes here.
+    /** Baseline internal error. */
     const int UPDATE_ERROR_CODE_INTERNAL_ERROR = 1;
+
+    /**
+     * Invalid request error. This means the instance ID in the request is either invalid or not
+     * owned by the calling package.
+     */
+    const int UPDATE_ERROR_CODE_INVALID_REQUEST_ERROR = 2;
 
     /**
       * Gets the version of this interface implemented by this service.

@@ -20,18 +20,17 @@ import androidx.collection.LongSparseArray
 import androidx.collection.MutableLongObjectMap
 import androidx.collection.MutableObjectList
 import androidx.collection.mutableObjectListOf
-import androidx.compose.runtime.collection.MutableVector
-import androidx.compose.runtime.collection.mutableVectorOf
+import androidx.compose.ui.ComposeUiFlags
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.util.PointerIdArray
 import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.node.InternalCoreApi
 import androidx.compose.ui.node.Nodes
 import androidx.compose.ui.node.dispatchForKind
 import androidx.compose.ui.node.layoutCoordinates
 import androidx.compose.ui.util.fastFirstOrNull
 import androidx.compose.ui.util.fastForEach
+import androidx.compose.ui.util.fastMap
 
 /**
  * Organizes pointers and the [PointerInputFilter]s that they hit into a hierarchy such that
@@ -157,6 +156,7 @@ internal class HitPathTracker(private val rootCoordinates: LayoutCoordinates) {
      * @param internalPointerEvent The change to dispatch.
      * @return whether this event was dispatched to a [PointerInputFilter]
      */
+    @OptIn(ExperimentalComposeUiApi::class)
     fun dispatchChanges(
         internalPointerEvent: InternalPointerEvent,
         isInBounds: Boolean = true,
@@ -239,9 +239,8 @@ internal class HitPathTracker(private val rootCoordinates: LayoutCoordinates) {
  * pointer or [PointerInputFilter] information.
  */
 /*@VisibleForTesting*/
-@OptIn(InternalCoreApi::class)
 internal open class NodeParent {
-    val children: MutableVector<Node> = mutableVectorOf()
+    val children: MutableObjectList<Node> = mutableObjectListOf()
 
     // Supports removePointerInputModifierNode() function
     private val removeMatchingPointerInputModifierNodeList = MutableObjectList<NodeParent>(10)
@@ -368,12 +367,11 @@ internal open class NodeParent {
  * hit it (tracked as [PointerId]s).
  */
 /*@VisibleForTesting*/
-@OptIn(InternalCoreApi::class)
 internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
 
     // Note: pointerIds are stored in a structure specific to their value type (PointerId).
     // This structure uses a LongArray internally, which avoids auto-boxing caused by
-    // a more generic collection such as HashMap or MutableVector.
+    // a more generic collection such as HashMap or MutableObjectList.
     val pointerIds = PointerIdArray()
 
     /**
@@ -387,6 +385,7 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
     private val relevantChanges: LongSparseArray<PointerInputChange> = LongSparseArray(2)
     private var coordinates: LayoutCoordinates? = null
     private var pointerEvent: PointerEvent? = null
+    private var syntheticHoverEvent: PointerEvent? = null
     private var wasIn = false
     private var isIn = true
     private var hasExited = true
@@ -420,6 +419,26 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
         return dispatchIfNeeded {
             val event = pointerEvent!!
             val size = coordinates!!.size
+
+            // If a synthetic hover (enter/exit) event was generated during a pan gesture, dispatch
+            // it first across Initial, Main, and Final passes so hover listeners can update hover
+            // state before the pan gesture event is processed.
+            syntheticHoverEvent?.let { hoverEvent ->
+                modifierNode.dispatchForKind(Nodes.PointerInput) {
+                    it.onPointerEvent(hoverEvent, PointerEventPass.Initial, size)
+                }
+                if (modifierNode.isAttached) {
+                    modifierNode.dispatchForKind(Nodes.PointerInput) {
+                        it.onPointerEvent(hoverEvent, PointerEventPass.Main, size)
+                    }
+                }
+                if (modifierNode.isAttached) {
+                    modifierNode.dispatchForKind(Nodes.PointerInput) {
+                        it.onPointerEvent(hoverEvent, PointerEventPass.Final, size)
+                    }
+                }
+                syntheticHoverEvent = null
+            }
 
             // Dispatch on the tunneling pass.
             modifierNode.dispatchForKind(Nodes.PointerInput) {
@@ -459,6 +478,7 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
         val result = dispatchIfNeeded {
             val event = pointerEvent!!
             val size = coordinates!!.size
+
             // Dispatch on the tunneling pass.
             modifierNode.dispatchForKind(Nodes.PointerInput) {
                 it.onPointerEvent(event, PointerEventPass.Final, size)
@@ -482,6 +502,7 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
      *
      * @see clearCache
      */
+    @OptIn(ExperimentalComposeUiApi::class)
     override fun buildCache(
         changes: LongSparseArray<PointerInputChange>,
         parentCoordinates: LayoutCoordinates,
@@ -524,12 +545,15 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
                         if (historicalPosition.isValid()) {
                             historical.add(
                                 HistoricalChange(
-                                    it.uptimeMillis,
-                                    coordinates!!.localPositionOf(
-                                        parentCoordinates,
-                                        historicalPosition,
-                                    ),
-                                    it.originalEventPosition,
+                                    uptimeMillis = it.uptimeMillis,
+                                    position =
+                                        coordinates!!.localPositionOf(
+                                            parentCoordinates,
+                                            historicalPosition,
+                                        ),
+                                    scaleFactor = it.scaleFactor,
+                                    panOffset = it.panOffset,
+                                    originalEventPosition = it.originalEventPosition,
                                 )
                             )
                         }
@@ -575,13 +599,59 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
         if (activeHoverChange != null) {
             if (!isInBounds) {
                 isIn = false
-            } else if (!isIn && (activeHoverChange.pressed || activeHoverChange.previousPressed)) {
+
+                // During a trackpad pan, we suppress new hit tests to prevent entering new items
+                // while scrolling. However, we still need to recalculate `isIn` for existing hit
+                // paths so we can detect and dispatch Exit events when the scrolled items move
+                // out of bounds from under the stationary cursor.
+            } else if (
+                !isIn &&
+                    (activeHoverChange.pressed ||
+                        activeHoverChange.previousPressed ||
+                        internalPointerEvent.activeGesture == PointerClassification.Pan)
+            ) {
                 // We have to recalculate isIn because we didn't redo hit testing
                 val size = coordinates!!.size
                 @Suppress("DEPRECATION")
                 isIn = !activeHoverChange.isOutOfBounds(size)
             }
-            if (
+            val isPan =
+                internalPointerEvent.activeGesture == PointerClassification.Pan ||
+                    event.type == PointerEventType.PanStart ||
+                    event.type == PointerEventType.PanMove ||
+                    event.type == PointerEventType.PanEnd
+            if (isIn != wasIn && isPan) {
+                // Create a synthetic Enter or Exit event to dispatch to hover listeners
+                // without altering the pan gesture event. Construct new PointerInputChange
+                // instances instead of calling copy() so they do not share consumedDelegate with
+                // the original pan changes.
+                syntheticHoverEvent =
+                    PointerEvent(
+                            changesList.fastMap {
+                                PointerInputChange(
+                                    id = it.id,
+                                    uptimeMillis = it.uptimeMillis,
+                                    position = it.position,
+                                    pressed = it.pressed,
+                                    pressure = it.pressure,
+                                    previousUptimeMillis = it.previousUptimeMillis,
+                                    previousPosition = it.previousPosition,
+                                    previousPressed = it.previousPressed,
+                                    isInitiallyConsumed = it.isConsumed,
+                                    type = it.type,
+                                    historical = it.historical,
+                                    scrollDelta = it.scrollDelta,
+                                    scaleFactor = it.scaleFactor,
+                                    panOffset = it.panOffset,
+                                    originalEventPosition = it.originalEventPosition,
+                                )
+                            },
+                            internalPointerEvent,
+                        )
+                        .also {
+                            it.type = if (isIn) PointerEventType.Enter else PointerEventType.Exit
+                        }
+            } else if (
                 isIn != wasIn &&
                     (event.type == PointerEventType.Move ||
                         event.type == PointerEventType.Enter ||
@@ -601,9 +671,13 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
         }
 
         val changed =
-            childChanged ||
-                event.type != PointerEventType.Move ||
-                hasPositionChanged(pointerEvent, event)
+            // Fixes Draggable Velocity Tracker
+            ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled ||
+                // Older way optimizes not triggering move events when location hasn't changed
+                (childChanged ||
+                    event.type != PointerEventType.Move ||
+                    syntheticHoverEvent != null ||
+                    hasPositionChanged(pointerEvent, event))
         pointerEvent = event
         return changed
     }
@@ -631,6 +705,7 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
     private fun clearCache() {
         relevantChanges.clear()
         coordinates = null
+        syntheticHoverEvent = null
     }
 
     /**
@@ -641,8 +716,15 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
     private inline fun dispatchIfNeeded(block: () -> Unit): Boolean {
         // If there are no relevant changes, there is nothing to process so return false.
         if (relevantChanges.isEmpty()) return false
-        // If the input filter is not attached, avoid dispatching
+        // If the input filter is not attached, avoid dispatching.
         if (!modifierNode.isAttached) return false
+
+        // If the ui node with input is not placed, avoid dispatching.
+        // There is no direct callback for placement status changes (unlike the onAttach listener).
+        // Consequently, the hit path tree is not pruned when a node becomes "unplaced"
+        // programmatically. Instead, we verify that the node isPlaced during event dispatch.
+        val isPlaced = modifierNode.coordinator?.layoutNode?.isPlaced ?: false
+        if (!isPlaced) return false
 
         block()
 
@@ -682,7 +764,16 @@ internal class Node(val modifierNode: Modifier.Node) : NodeParent() {
 
             val removePointerId = (released && nonHoverEventStream) || (released && outsideArea)
 
-            if (removePointerId) {
+            // During a trackpad Pan (scroll) gesture, items scroll off-screen and should be pruned
+            // immediately to trigger hover Exit events and clear their hover state.
+            // Other gestures (like Pinch) should not prune intermediate nodes until the gesture
+            // ends.
+            val isPan = internalPointerEvent.activeGesture == PointerClassification.Pan
+            val isGestureOngoing =
+                internalPointerEvent.activeGesture != PointerClassification.None &&
+                    !internalPointerEvent.isGestureEnd
+
+            if (removePointerId && (isPan || !isGestureOngoing)) {
                 pointerIds.remove(change.id)
             }
         }

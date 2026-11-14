@@ -1,0 +1,246 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.appstate.datastore
+
+import androidx.appstate.statestore.StateStore
+import androidx.appstate.statestore.StateStoreKey
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot.Companion.sendApplyNotifications
+import androidx.kruth.assertThat
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class StateStoreDataStoreTest {
+
+    @AfterTest
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    val defaultValue = "default"
+
+    @Serializable
+    object StringKey : StateStoreKey<String>("default"), PersistToDataStore<String> {
+        override val name: String = "string"
+        override val serializer: KSerializer<String> = String.serializer()
+    }
+
+    @Serializable
+    object IntKey : StateStoreKey<Int>(0), PersistToDataStore<Int> {
+        override val name: String = "int"
+        override val serializer: KSerializer<Int> = Int.serializer()
+    }
+
+    @Serializable object NonPersistedStringKey : StateStoreKey<String>("default")
+
+    @Test
+    fun testStateStoreGetStateReturnsDefaultValue() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val stateStore = StateStore()
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        val state = stateStore.getState(StringKey)
+        assertThat(state.value).isEqualTo(defaultValue)
+
+        // Nothing is written until the value changes
+        sendApplyNotifications()
+        advanceUntilIdle()
+        assertThat(dataStore.data.first().asMap().isEmpty()).isTrue()
+
+        job.cancel()
+    }
+
+    @Test
+    fun testStateStoreSetStateUpdatesDataStore() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val updatedValue = "new value"
+        val stateStore = StateStore()
+        stateStore.getState(StringKey)
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        // Update StateStore key value
+        stateStore.setState(StringKey, updatedValue)
+
+        // Ensure compose snapshot effects are propagated
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        val state = stateStore.getState(StringKey)
+        assertThat(state.value).isEqualTo(updatedValue)
+
+        val stateStoreValue = stateStore.getState(StringKey).value
+        val stateStoreDataStore = dataStore.data.first { it[StringKey] == updatedValue }
+
+        // Confirm datastore reflects the updated state store
+        assertThat(stateStoreDataStore[StringKey]).isEqualTo(stateStoreValue)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testStateStoreUpdateStateUpdatesDataStore() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val initialValue = 5
+        val updatedValue = 10
+
+        val stateStore = StateStore()
+        stateStore.getState(IntKey)
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        // Set initial StateStore value
+        stateStore.setState(IntKey, initialValue)
+        // Update StateStore key value
+        stateStore.updateState(IntKey) { it + 5 }
+
+        // Ensure compose snapshot effects are propagated
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        val stateStoreValue = stateStore.getState(IntKey).value
+        val stateStoreDataStore = dataStore.data.first { it[IntKey] == updatedValue }
+
+        // Confirm datastore reflects the updated state store
+        assertThat(stateStoreDataStore[IntKey]).isEqualTo(stateStoreValue)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testStateStoreSetStateDoesNotUpdateDataStoreWhenNotPersisted() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val updatedValue = "new value"
+        val stateStore = StateStore()
+        stateStore.getState(NonPersistedStringKey)
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        // Update StateStore key value
+        stateStore.setState(NonPersistedStringKey, updatedValue)
+
+        // Ensure compose snapshot effects are propagated
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        val state = stateStore.getState(NonPersistedStringKey)
+        assertThat(state.value).isEqualTo(updatedValue)
+
+        val stateStoreDataStore = dataStore.data.first()
+
+        // Confirm datastore does not reflect the updated state store
+        assertThat(stateStoreDataStore.asMap()).isEmpty()
+
+        job.cancel()
+    }
+
+    @Test
+    fun testDataStoreRestoresIntoStateStoreOnListenerRegistration() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val storedValue = "stored value"
+
+        // Setup the datastore with an existing value first
+        dataStore.edit { settings -> settings[StringKey] = storedValue }
+
+        val stateStore = StateStore()
+        // Initialize StateStore with default value
+        val state = stateStore.getState(StringKey)
+        assertThat(state.value).isEqualTo(defaultValue)
+
+        // Register the listener, which should trigger a datastore read and update stateStore
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        // Wait until StateStore has been updated with the value from DataStore
+        snapshotFlow { state.value }.first { it == storedValue }
+
+        // Verify that StateStore has been updated with the value from DataStore
+        assertThat(state.value).isEqualTo(storedValue)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testCancelStateStoreToDataStoreListenerStopsWrites() = runTest {
+        // Required for Compose state observation in JVM tests, even though our logic runs on
+        // Dispatchers.Default.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dataStore = inMemoryStateStoreDataStore()
+        val firstValue = "first value"
+        val secondValue = "second value"
+
+        val stateStore = StateStore()
+        stateStore.getState(StringKey)
+
+        // Register the listener and capture the job so we can cancel for cleanup
+        val job = launch { stateStore.syncToDataStore(dataStore) }
+
+        // Update StateStore key value
+        stateStore.setState(StringKey, firstValue)
+
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        // Confirm datastore reflects the first update
+        var stateStoreDataStore = dataStore.data.first { it[StringKey] == firstValue }
+        assertThat(stateStoreDataStore[StringKey]).isEqualTo(firstValue)
+
+        // Cancel the listener
+        job.cancel()
+
+        // Update StateStore key value again
+        stateStore.setState(StringKey, secondValue)
+
+        sendApplyNotifications()
+        advanceUntilIdle()
+
+        // Confirm StateStore was updated
+        val state = stateStore.getState(StringKey)
+        assertThat(state.value).isEqualTo(secondValue)
+
+        // Confirm datastore does NOT reflect the second update
+        stateStoreDataStore = dataStore.data.first()
+        assertThat(stateStoreDataStore[StringKey]).isEqualTo(firstValue)
+    }
+}

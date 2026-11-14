@@ -24,6 +24,7 @@ import androidx.car.app.Screen
 import androidx.car.app.annotations.ExperimentalCarApi
 import androidx.car.app.annotations.RequiresCarApi
 import androidx.car.app.model.Action
+import androidx.car.app.model.CarColor
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Header
 import androidx.car.app.model.Row
@@ -51,10 +52,9 @@ class EndImageAndActionsDemo(carContext: CarContext) : Screen(carContext) {
     private val actionIconClickable: Action =
         Action.Builder()
             .setIcon(
-                CarIcon.Builder(
-                        IconCompat.createWithResource(carContext, R.drawable.ic_commute_24px)
-                    )
-                    .build()
+                CarIcon.createTintedIcon(
+                    IconCompat.createWithResource(carContext, R.drawable.ic_commute_24px)
+                )
             )
             .setOnClickListener { showToast("Clicked on Commute") }
             .build()
@@ -62,20 +62,20 @@ class EndImageAndActionsDemo(carContext: CarContext) : Screen(carContext) {
     private val actionIconNonClickable: Action =
         Action.Builder()
             .setIcon(
-                CarIcon.Builder(
-                        IconCompat.createWithResource(
-                            carContext,
-                            R.drawable.baseline_directions_boat_filled_24,
-                        )
+                CarIcon.createTintedIcon(
+                    IconCompat.createWithResource(
+                        carContext,
+                        R.drawable.baseline_directions_boat_filled_24,
                     )
-                    .build()
+                )
             )
             // No setOnClickListener means this action is NOT interactable/clickable
             .build()
 
     private val endImage: CarIcon =
-        CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.test_image_square))
-            .build()
+        CarIcon.createOriginalIcon(
+            IconCompat.createWithResource(carContext, R.drawable.test_image_square)
+        )
 
     override fun onGetTemplate(): Template {
         return SectionedItemTemplate.Builder()
@@ -87,6 +87,12 @@ class EndImageAndActionsDemo(carContext: CarContext) : Screen(carContext) {
                     .setTitle(carContext.getString(R.string.end_image_and_action_demo_title))
                     .setStartHeaderAction(Action.BACK)
                     .build()
+            )
+            .setActions(
+                listOf(
+                    createAction("Primary button clicked"),
+                    createAction("Secondary button clicked"),
+                )
             )
             .build()
     }
@@ -184,6 +190,21 @@ class EndImageAndActionsDemo(carContext: CarContext) : Screen(carContext) {
         )
 
         return rowList
+    }
+
+    private fun createAction(toastString: String): Action {
+        return Action.Builder()
+            .setIcon(
+                CarIcon.createTintedIcon(
+                    IconCompat.createWithResource(
+                        carContext,
+                        R.drawable.baseline_question_mark_24,
+                    )
+                )
+            )
+            .setOnClickListener { showToast(toastString) }
+            .setBackgroundColor(CarColor.PRIMARY)
+            .build()
     }
 
     private fun showToast(text: String) {

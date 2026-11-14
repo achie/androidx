@@ -16,7 +16,21 @@
 package androidx.compose.remote.player.compose.context
 
 import android.annotation.SuppressLint
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Color
+import android.graphics.DiscretePathEffect
+import android.graphics.LinearGradient
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.PathDashPathEffect
+import android.graphics.PorterDuffColorFilter
+import android.graphics.RadialGradient
+import android.graphics.RuntimeShader
+import android.graphics.Shader
+import android.graphics.SumPathEffect
+import android.graphics.SweepGradient
+import android.graphics.Typeface
 import android.graphics.Typeface.CustomFallbackBuilder
 import android.graphics.fonts.Font
 import android.graphics.fonts.FontFamily
@@ -30,20 +44,32 @@ import androidx.compose.remote.core.operations.ShaderData
 import androidx.compose.remote.core.operations.Utils
 import androidx.compose.remote.core.operations.paint.PaintBundle
 import androidx.compose.remote.core.operations.paint.PaintChanges
+import androidx.compose.remote.core.operations.paint.PaintPathEffects
+import androidx.compose.remote.player.compose.utils.getPath
 import androidx.compose.remote.player.compose.utils.remoteToBlendMode
 import androidx.compose.remote.player.compose.utils.remoteToPorterDuffMode
 import androidx.compose.remote.player.compose.utils.toPaintingStyle
+import androidx.compose.remote.player.compose.utils.toStampedPathEffectStyle
 import androidx.compose.remote.player.compose.utils.toStrokeCap
 import androidx.compose.remote.player.compose.utils.toStrokeJoin
-import androidx.compose.remote.player.core.platform.AndroidRemoteContext
-import androidx.compose.ui.graphics.NativePaint
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathEffect.Companion.chainPathEffect
+import androidx.compose.ui.graphics.PathEffect.Companion.dashPathEffect
+import androidx.compose.ui.graphics.PathEffect.Companion.stampedPathEffect
+import androidx.compose.ui.graphics.asAndroidPathEffect
+import androidx.compose.ui.graphics.toComposePathEffect
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
 
 /** A [PaintChanges] implementation for [ComposePaintContext]. */
 internal class ComposePaintChanges(
-    private val remoteContext: RemoteContext,
+    /**
+     * Supplies the context currently being painted. This is a provider rather than a fixed
+     * reference because embedded documents (rcDoc) temporarily swap the paint context's
+     * RemoteContext for their own; ids must be resolved against that child context.
+     */
+    private val getContext: () -> RemoteContext,
     private val getPaint: () -> androidx.compose.ui.graphics.Paint,
 ) : PaintChanges {
     private var fontBuilder: Font.Builder? = null
@@ -63,12 +89,14 @@ internal class ComposePaintChanges(
                 } else {
                     getNativePaint().setTypeface(Typeface.create(Typeface.DEFAULT, weight, italic))
                 }
+
             PaintBundle.FONT_TYPE_SERIF ->
                 if (weight == 400 && !italic) { // for normal case
                     getNativePaint().setTypeface(Typeface.SERIF)
                 } else {
                     getNativePaint().setTypeface(Typeface.create(Typeface.SERIF, weight, italic))
                 }
+
             PaintBundle.FONT_TYPE_SANS_SERIF ->
                 if (weight == 400 && !italic) { //  for normal case
                     getNativePaint().setTypeface(Typeface.SANS_SERIF)
@@ -76,6 +104,7 @@ internal class ComposePaintChanges(
                     getNativePaint()
                         .setTypeface(Typeface.create(Typeface.SANS_SERIF, weight, italic))
                 }
+
             PaintBundle.FONT_TYPE_MONOSPACE ->
                 if (weight == 400 && !italic) { //  for normal case
                     getNativePaint().setTypeface(Typeface.MONOSPACE)
@@ -83,8 +112,9 @@ internal class ComposePaintChanges(
                     getNativePaint()
                         .setTypeface(Typeface.create(Typeface.MONOSPACE, weight, italic))
                 }
+
             else -> {
-                val fi = remoteContext.getObject(fontType) as RemoteContext.FontInfo?
+                val fi = getContext().getObject(fontType) as RemoteContext.FontInfo?
                 var builder = fi!!.fontBuilder as Font.Builder?
                 if (builder == null) {
                     builder = createFontBuilder(fi.mFontData, weight, italic)
@@ -96,13 +126,17 @@ internal class ComposePaintChanges(
         }
     }
 
+    override fun setFallbackTypeFace(fontType: Int, weight: Int, italic: Boolean) {
+        // @Todo implement
+    }
+
     override fun setShaderMatrix(matrixId: Float) {
         val id = Utils.idFromNan(matrixId)
         if (id == 0) {
             getNativePaint().shader.setLocalMatrix(null)
             return
         }
-        val matAccess = remoteContext.getObject(id) as MatrixAccess?
+        val matAccess = getContext().getObject(id) as MatrixAccess?
         tmpMatrix.setValues(MatrixAccess.to3x3(matAccess!!.get()))
         val s: Shader = getNativePaint().shader
         s.setLocalMatrix(tmpMatrix)
@@ -115,7 +149,13 @@ internal class ComposePaintChanges(
      */
     override fun setTypeFace(fontType: String, weight: Int, italic: Boolean) {
         val path = getFontPath(fontType)
+        if (path == null) {
+            return
+        }
         fontBuilder = Font.Builder(File(path!!))
+        if (fontBuilder == null) {
+            return
+        }
         fontBuilder!!.setWeight(weight)
         fontBuilder!!.setSlant(
             if (italic) FontStyle.FONT_SLANT_ITALIC else FontStyle.FONT_SLANT_UPRIGHT
@@ -140,6 +180,9 @@ internal class ComposePaintChanges(
 
     private fun setAxis(axis: Array<FontVariationAxis?>?) {
         var font: Font?
+        if (fontBuilder == null) {
+            return
+        }
         try {
             if (axis != null) {
                 fontBuilder!!.setFontVariationSettings(axis)
@@ -211,7 +254,7 @@ internal class ComposePaintChanges(
     ) {
 
         // TODO implement getBitmap(bitmapId)
-        val bitmap = remoteContext.mRemoteComposeState.getFromId(bitmapId) as Bitmap ?: return
+        val bitmap = getContext().mRemoteComposeState.getFromId(bitmapId) as Bitmap ?: return
         val bs =
             BitmapShader(
                 bitmap,
@@ -231,8 +274,53 @@ internal class ComposePaintChanges(
     }
 
     override fun setPathEffect(pathEffect: FloatArray?) {
-        TODO("Not yet implemented")
+        if (pathEffect == null) {
+            getPaint().pathEffect = null
+        } else {
+            val pe = PaintPathEffects.parse(pathEffect, 0)
+            getPaint().pathEffect = getPathEffect(pe)
+        }
     }
+
+    private fun getPathEffect(pe: PaintPathEffects?): PathEffect? =
+        when (pe) {
+            is PaintPathEffects.Dash -> dashPathEffect(pe.mIntervals, pe.mPhase)
+
+            is PaintPathEffects.Discrete ->
+                // TODO(b/450104887): Use compose implementation
+                DiscretePathEffect(pe.mSegmentLength, pe.mDeviation).toComposePathEffect()
+
+            is PaintPathEffects.PathDash ->
+                stampedPathEffect(
+                    getContext().mRemoteComposeState.getPath(pe.mShapeId, 0f, 1f),
+                    pe.mAdvance,
+                    pe.mPhase,
+                    PathDashPathEffect.Style.entries[pe.mStyle].toStampedPathEffectStyle(),
+                )
+
+            is PaintPathEffects.Sum -> {
+                // TODO(b/450104887): Use compose implementation
+                val first = getPathEffect(pe.mFirst)?.asAndroidPathEffect()
+                val second = getPathEffect(pe.mSecond)?.asAndroidPathEffect()
+                if (first != null && second != null) {
+                    SumPathEffect(first, second).toComposePathEffect()
+                } else {
+                    null
+                }
+            }
+
+            is PaintPathEffects.Compose -> {
+                val outer = getPathEffect(pe.mOuterPE)
+                val inner = getPathEffect(pe.mInnerPE)
+                if (outer != null && inner != null) {
+                    chainPathEffect(outer, inner)
+                } else {
+                    null
+                }
+            }
+
+            else -> null
+        }
 
     override fun setStrokeWidth(width: Float) {
         getPaint().strokeWidth = width
@@ -261,7 +349,7 @@ internal class ComposePaintChanges(
         if (data == null) {
             return
         }
-        val shader = RuntimeShader(remoteContext.getText(data.shaderTextId)!!)
+        val shader = RuntimeShader(getContext().getText(data.shaderTextId)!!)
         var names = data.getUniformFloatNames()
         for (i in names.indices) {
             val name = names[i]
@@ -278,8 +366,7 @@ internal class ComposePaintChanges(
         for (i in names.indices) {
             val name = names[i]
             val `val` = data.getUniformBitmapId(name)
-            val androidContext = remoteContext as AndroidRemoteContext
-            val bitmap = androidContext.mRemoteComposeState.getFromId(`val`) as Bitmap?
+            val bitmap = getContext().mRemoteComposeState.getFromId(`val`) as Bitmap?
             val bitmapShader = BitmapShader(bitmap!!, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
             shader.setInputShader(name, bitmapShader)
         }
@@ -347,6 +434,43 @@ internal class ComposePaintChanges(
             .setShader(RadialGradient(centerX, centerY, radius, colors, stops, tileModes[tileMode]))
     }
 
+    override fun setRadialGradient(
+        colors: IntArray,
+        stops: FloatArray?,
+        startX: Float,
+        startY: Float,
+        startRadius: Float,
+        endX: Float,
+        endY: Float,
+        endRadius: Float,
+        tileMode: Int,
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // The two-circle (focal) constructor only accepts packed colors.
+            val packed = LongArray(colors.size) { Color.pack(colors[it]) }
+            getNativePaint()
+                .setShader(
+                    RadialGradient(
+                        startX,
+                        startY,
+                        startRadius,
+                        endX,
+                        endY,
+                        endRadius,
+                        packed,
+                        stops,
+                        tileModes[tileMode],
+                    )
+                )
+        } else {
+            // Degrade to the end circle so the document still renders something sensible.
+            getNativePaint()
+                .setShader(
+                    RadialGradient(endX, endY, endRadius, colors, stops, tileModes[tileMode])
+                )
+        }
+    }
+
     override fun setSweepGradient(
         colors: IntArray,
         stops: FloatArray?,
@@ -361,10 +485,11 @@ internal class ComposePaintChanges(
         getNativePaint().setColorFilter(PorterDuffColorFilter(color, porterDuffMode))
     }
 
-    private fun getNativePaint(): NativePaint = getPaint().asFrameworkPaint()
+    @Suppress("DEPRECATION", "DEPRECATION_ERROR")
+    private fun getNativePaint(): android.graphics.Paint = getPaint().asFrameworkPaint()
 
     private fun getShaderData(id: Int): ShaderData? {
-        return remoteContext.mRemoteComposeState.getFromId(id) as ShaderData?
+        return getContext().mRemoteComposeState.getFromId(id) as ShaderData?
     }
 
     companion object {

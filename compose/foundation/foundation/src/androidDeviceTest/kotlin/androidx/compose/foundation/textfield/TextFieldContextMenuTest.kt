@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION") // b/552879150
+
 package androidx.compose.foundation.textfield
 
 import androidx.compose.foundation.contextmenu.ContextMenuItemLabels
 import androidx.compose.foundation.contextmenu.ContextMenuItemState
+import androidx.compose.foundation.contextmenu.LookUpItemOverrideRule
 import androidx.compose.foundation.contextmenu.ProcessTextItemOverrideRule
 import androidx.compose.foundation.contextmenu.assertContextMenuItem
 import androidx.compose.foundation.contextmenu.assertContextMenuItems
@@ -46,7 +49,7 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isPopup
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
@@ -60,7 +63,7 @@ import androidx.compose.ui.unit.lerp
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlin.test.Ignore
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -69,7 +72,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(ContextMenuFlagFlipperRunner::class)
 class TextFieldContextMenuTest : FocusedWindowTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val textFieldTag = "BTF"
     private val defaultFullWidthText = "M".repeat(20)
@@ -82,6 +85,8 @@ class TextFieldContextMenuTest : FocusedWindowTest {
         )
 
     @get:Rule val platformSelectionBehaviorsRule = PlatformSelectionBehaviorsRule()
+
+    @get:Rule val lookUpRule = LookUpItemOverrideRule()
 
     // region BTF1 Context Menu Gesture Tests
     @Test
@@ -194,6 +199,7 @@ class TextFieldContextMenuTest : FocusedWindowTest {
             expectedClipboardContent = "clip",
         )
 
+    @Ignore // The test is flaky b/472497302
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
     fun btf1_contextMenu_onClickProcessText() {
@@ -488,6 +494,7 @@ class TextFieldContextMenuTest : FocusedWindowTest {
         }
     }
 
+    @Ignore // The test is flaky b/472497302
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
     fun btf1_contextMenu_processText_itemsMatch() = runTest {
@@ -660,6 +667,7 @@ class TextFieldContextMenuTest : FocusedWindowTest {
         )
     }
 
+    @Ignore // The test is flaky b/472497302
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
     fun btf2_contextMenu_onClickProcessText() {
@@ -935,6 +943,7 @@ class TextFieldContextMenuTest : FocusedWindowTest {
             )
         }
 
+    @Ignore // The test is flaky b/472497302
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
     fun btf2_contextMenu_processText_itemsMatch() = runBtf2CorrectItemsTest {

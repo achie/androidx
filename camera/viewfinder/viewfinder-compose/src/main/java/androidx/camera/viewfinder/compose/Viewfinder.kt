@@ -23,14 +23,17 @@ import android.view.Surface
 import androidx.camera.viewfinder.compose.internal.ViewfinderEmbeddedExternalSurface
 import androidx.camera.viewfinder.compose.internal.ViewfinderExternalSurface
 import androidx.camera.viewfinder.compose.internal.ViewfinderExternalSurfaceScope
+import androidx.camera.viewfinder.compose.internal.ViewfinderSurfaceHolder
+import androidx.camera.viewfinder.core.FrameRenderedListener
 import androidx.camera.viewfinder.core.ImplementationMode
 import androidx.camera.viewfinder.core.TransformationInfo
 import androidx.camera.viewfinder.core.TransformationInfo.Companion.DEFAULT
+import androidx.camera.viewfinder.core.TransformationMode
 import androidx.camera.viewfinder.core.ViewfinderDefaults
 import androidx.camera.viewfinder.core.ViewfinderSurfaceRequest
 import androidx.camera.viewfinder.core.ViewfinderSurfaceSessionScope
+import androidx.camera.viewfinder.core.impl.ImplementationModeCompat
 import androidx.camera.viewfinder.core.impl.OffsetF
-import androidx.camera.viewfinder.core.impl.RefCounted
 import androidx.camera.viewfinder.core.impl.ScaleFactorF
 import androidx.camera.viewfinder.core.impl.Transformations
 import androidx.camera.viewfinder.core.impl.ViewfinderSurfaceSessionImpl
@@ -51,9 +54,9 @@ import androidx.compose.ui.graphics.setFrom
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.util.fastRoundToInt
+import java.util.concurrent.Executor
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
@@ -70,10 +73,16 @@ import kotlinx.coroutines.coroutineScope
  * [androidx.compose.foundation.AndroidEmbeddedExternalSurface] for [ImplementationMode.EMBEDDED] or
  * on [androidx.compose.foundation.AndroidExternalSurface] for [ImplementationMode.EXTERNAL]. These
  * can be set by the [ImplementationMode] argument in the [surfaceRequest] constructor. If
- * `implementationMode` is `null`, a default is chosen based on device compatibility. This default
- * value, which can be retrieved from [ViewfinderDefaults.implementationMode], will be
+ * `implementationMode` is `null`, a default is chosen based on device compatibility:
  * [ImplementationMode.EXTERNAL] by default, switching to [ImplementationMode.EMBEDDED] on API
- * levels 24 and below, or on devices with known compatibility issues with the `EXTERNAL` mode.
+ * levels 24 and below, on devices with known compatibility issues with the `EXTERNAL` mode (which
+ * can be retrieved from [ViewfinderDefaults.implementationMode]), or on API levels below 29 for
+ * [TransformationMode.PRE_APPLIED] sources because [ImplementationMode.EXTERNAL] cannot apply
+ * non-zero [TransformationInfo.sourceRotation] before API 29.
+ *
+ * Explicitly specifying [ImplementationMode.EXTERNAL] overrides this default; on API levels below
+ * 29 with [TransformationMode.PRE_APPLIED], non-zero [TransformationInfo.sourceRotation] values
+ * will not be applied.
  *
  * The [onInit] lambda, and the callback registered with [ViewfinderInitScope.onSurfaceSession], are
  * always called from the main thread. [onInit] will be called every time a new [surfaceRequest] is
@@ -85,7 +94,10 @@ import kotlinx.coroutines.coroutineScope
  * @param coordinateTransformer Coordinate transformer that can be used to convert Compose space
  *   coordinates such as touch coordinates to surface space coordinates. When the Viewfinder is
  *   displaying content from the camera, this transformer can be used to translate touch events into
- *   camera sensor coordinates for focus and metering actions.
+ *   camera sensor coordinates for focus and metering actions. The Viewfinder updates the
+ *   transformer during layout, so in the frame the Viewfinder is resized, e.g. when the display
+ *   rotates, composition still sees the previous transform. Read it during layout, drawing or input
+ *   handling, for example in a `Modifier.offset {}` lambda, rather than during composition.
  * @param alignment Optional alignment parameter used to place the [Surface] in the given bounds of
  *   the [Viewfinder]. Defaults to [Alignment.Center].
  * @param contentScale Optional scale parameter used to determine the aspect ratio scaling to be
@@ -97,7 +109,7 @@ import kotlinx.coroutines.coroutineScope
  * TODO(b/322420487): Add a sample with `@sample`
  */
 @Composable
-fun Viewfinder(
+public fun Viewfinder(
     surfaceRequest: ViewfinderSurfaceRequest,
     modifier: Modifier = Modifier,
     transformationInfo: TransformationInfo = DEFAULT,
@@ -112,8 +124,11 @@ fun Viewfinder(
             val surfaceWidth = surfaceRequest.width
             val surfaceHeight = surfaceRequest.height
             val implementationMode =
-                remember(surfaceRequest.implementationMode) {
-                    surfaceRequest.implementationMode ?: ViewfinderDefaults.implementationMode
+                remember(surfaceRequest.implementationMode, transformationInfo.transformationMode) {
+                    ImplementationModeCompat.resolveImplementationMode(
+                        surfaceRequest.implementationMode,
+                        transformationInfo.transformationMode,
+                    )
                 }
 
             // Due to https://issuetracker.google.com/183864890, we should only perform
@@ -147,9 +162,6 @@ fun Viewfinder(
                             0.coerceAtLeast((placeable.height - constraints.maxHeight) / 2)
                         layout(placeable.width, placeable.height) {
                             placeable.placeWithLayer(widthOffset, heightOffset) {
-                                // Do not perform transformations on the surface until ready
-                                if (!canTransformSurface) return@placeWithLayer
-
                                 val surfaceToViewFinderMatrix =
                                     Transformations.getSurfaceToViewfinderMatrix(
                                         viewfinderSize =
@@ -166,6 +178,9 @@ fun Viewfinder(
                                         setFrom(surfaceToViewFinderMatrix)
                                         invert()
                                     }
+
+                                // Do not perform transformations on the surface until ready
+                                if (!canTransformSurface) return@placeWithLayer
 
                                 val surfaceRectInViewfinder =
                                     RectF(0f, 0f, surfaceWidth.toFloat(), surfaceHeight.toFloat())
@@ -192,9 +207,7 @@ fun Viewfinder(
                     // the surface in layout
                     canTransformSurface = true
                     // Dispatch surface to registered onSurfaceSession callback
-                    viewfinderInitScope.dispatchOnSurfaceSession(
-                        viewfinderSurfaceHolder.refCountedSurface
-                    )
+                    viewfinderInitScope.dispatchOnSurfaceSession(viewfinderSurfaceHolder)
                 }
             }
         }
@@ -212,28 +225,39 @@ private fun TransformedSurface(
 ) {
     when (implementationMode) {
         ImplementationMode.EXTERNAL -> {
-            ViewfinderExternalSurface(modifier = modifier, onInit = onInit)
+            // A SurfaceView can't be rotated by View transformations, so the rotation is applied
+            // to the surface's content. The display rotation doesn't affect it in this mode, so
+            // don't track it.
+            ViewfinderExternalSurface(
+                modifier = modifier,
+                contentRotationDegrees =
+                    Transformations.getContentRotationDegrees(
+                        transformationInfo,
+                        Surface.ROTATION_0,
+                        implementationMode,
+                    ),
+                onInit = onInit,
+            )
         }
         ImplementationMode.EMBEDDED -> {
-            val displayRotationDegrees =
-                key(LocalConfiguration.current) {
-                    Transformations.surfaceRotationToRotationDegrees(
-                        LocalView.current.display.rotation
-                    )
-                }
-
-            // For TextureView, correct the orientation to match the display rotation.
-            val correctionMatrix = remember { Matrix() }
-
-            transformationInfo.let {
-                correctionMatrix.setFrom(
-                    Transformations.getTextureViewCorrectionMatrix(
-                        displayRotationDegrees = displayRotationDegrees,
-                        width = surfaceWidth,
-                        height = surfaceHeight,
-                    )
+            val contentRotationDegrees =
+                Transformations.getContentRotationDegrees(
+                    transformationInfo,
+                    rememberDisplayRotation(),
+                    implementationMode,
                 )
-            }
+            val correctionMatrix =
+                remember(contentRotationDegrees, surfaceWidth, surfaceHeight) {
+                    Matrix().apply {
+                        setFrom(
+                            Transformations.getContentRotationMatrix(
+                                contentRotationDegrees,
+                                surfaceWidth,
+                                surfaceHeight,
+                            )
+                        )
+                    }
+                }
 
             ViewfinderEmbeddedExternalSurface(
                 modifier = modifier,
@@ -286,7 +310,7 @@ private fun ContentScale.toInternalContentScale():
  * The environment can be used to register a lambda to invoke when a new
  * [ViewfinderSurfaceSessionScope] is available.
  */
-interface ViewfinderInitScope {
+public interface ViewfinderInitScope {
     /**
      * Registers a callback to be invoked when a new [ViewfinderSurfaceSessionScope] is created.
      *
@@ -296,7 +320,7 @@ interface ViewfinderInitScope {
      *
      * The provided callback will always be invoked from the main thread.
      */
-    fun onSurfaceSession(block: suspend ViewfinderSurfaceSessionScope.() -> Unit)
+    public fun onSurfaceSession(block: suspend ViewfinderSurfaceSessionScope.() -> Unit)
 }
 
 private class ViewfinderInitScopeImpl(val viewfinderSurfaceRequest: ViewfinderSurfaceRequest) :
@@ -307,22 +331,58 @@ private class ViewfinderInitScopeImpl(val viewfinderSurfaceRequest: ViewfinderSu
         this.onSurfaceSession = block
     }
 
-    suspend fun dispatchOnSurfaceSession(refCountedSurface: RefCounted<Surface>) {
+    suspend fun dispatchOnSurfaceSession(viewfinderSurfaceHolder: ViewfinderSurfaceHolder) {
         onSurfaceSession?.let { block ->
-            refCountedSurface.acquire()?.let { surface ->
+            viewfinderSurfaceHolder.refCountedSurface.acquire()?.let { surface ->
                 ViewfinderSurfaceSessionImpl(surface, viewfinderSurfaceRequest) {
-                        refCountedSurface.release()
+                        viewfinderSurfaceHolder.refCountedSurface.release()
                     }
                     .use { surfaceSession ->
-                        coroutineScope {
-                            val receiver =
-                                object :
-                                    ViewfinderSurfaceSessionScope,
-                                    CoroutineScope by this@coroutineScope {
-                                    override val surface = surfaceSession.surface
-                                    override val request = surfaceSession.request
+                        val sessionListeners = mutableListOf<FrameRenderedListener>()
+                        try {
+                            coroutineScope {
+                                val receiver =
+                                    object :
+                                        ViewfinderSurfaceSessionScope,
+                                        CoroutineScope by this@coroutineScope {
+                                        override val surface = surfaceSession.surface
+                                        override val request = surfaceSession.request
+
+                                        override fun addFrameRenderedListener(
+                                            executor: Executor,
+                                            listener: FrameRenderedListener,
+                                        ) {
+                                            synchronized(sessionListeners) {
+                                                sessionListeners.add(listener)
+                                                viewfinderSurfaceHolder.addFrameRenderedListener(
+                                                    executor,
+                                                    listener,
+                                                )
+                                            }
+                                        }
+
+                                        override fun removeFrameRenderedListener(
+                                            listener: FrameRenderedListener
+                                        ) {
+                                            synchronized(sessionListeners) {
+                                                sessionListeners.remove(listener)
+                                                viewfinderSurfaceHolder.removeFrameRenderedListener(
+                                                    listener
+                                                )
+                                            }
+                                        }
+                                    }
+                                block.invoke(receiver)
+                            }
+                        } finally {
+                            synchronized(sessionListeners) {
+                                for (i in sessionListeners.indices) {
+                                    viewfinderSurfaceHolder.removeFrameRenderedListener(
+                                        sessionListeners[i]
+                                    )
                                 }
-                            block.invoke(receiver)
+                                sessionListeners.clear()
+                            }
                         }
                     }
             }

@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.PlatformTextInputSessionScope
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.TaskDispatchers
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.WindowInfo
@@ -56,6 +57,7 @@ import androidx.compose.ui.spatial.RectManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextInputService
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
@@ -381,7 +383,7 @@ private class MockOwner(
     var semanticsChanged: Boolean = false
     val invalidatedLayers = mutableListOf<OwnedLayer>()
 
-    @InternalCoreApi override var showLayoutBounds: Boolean = false
+    override var showLayoutBounds: Boolean = false
     override val snapshotObserver = OwnerSnapshotObserver { it.invoke() }
     override val modifierLocalManager: ModifierLocalManager = ModifierLocalManager(this)
     override var measureIteration: Long = 0
@@ -442,6 +444,9 @@ private class MockOwner(
     override val windowInfo: WindowInfo
         get() = TODO("Not yet implemented")
 
+    override val taskDispatchers: TaskDispatchers
+        get() = TODO("Not yet implemented")
+
     override val fontFamilyResolver: FontFamily.Resolver
         get() = TODO("Not yet implemented")
 
@@ -458,6 +463,9 @@ private class MockOwner(
         get() = TODO("Not yet implemented")
 
     override val softwareKeyboardController: SoftwareKeyboardController
+        get() = TODO("Not yet implemented")
+
+    override val localeList: LocaleList
         get() = TODO("Not yet implemented")
 
     override suspend fun textInputSession(

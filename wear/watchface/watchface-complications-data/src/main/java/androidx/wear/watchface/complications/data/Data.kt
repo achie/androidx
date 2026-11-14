@@ -70,6 +70,7 @@ public object ComplicationPersistencePolicies {
         ],
 )
 @RestrictTo(RestrictTo.Scope.LIBRARY)
+@Retention(AnnotationRetention.SOURCE)
 public annotation class ComplicationPersistencePolicy
 
 /** The policies that control when complications should be displayed. */
@@ -90,6 +91,7 @@ public object ComplicationDisplayPolicies {
         ],
 )
 @RestrictTo(RestrictTo.Scope.LIBRARY)
+@Retention(AnnotationRetention.SOURCE)
 public annotation class ComplicationDisplayPolicy
 
 /**
@@ -157,7 +159,7 @@ constructor(
     public val extras: PersistableBundle,
 ) {
     /** Throws [IllegalArgumentException] if the [ComplicationData] is invalid. */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) open fun validate() {}
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public open fun validate() {}
 
     /**
      * [tapAction] which is a [PendingIntent] unfortunately can't be serialized. This property is
@@ -211,7 +213,7 @@ constructor(
         cachedWearSdkComplicationData?.let {
             return it
         }
-        var input = this
+        val input = this
         fun WearSdkComplicationData.Builder.setTimeRange() {
             input.validTimeRange.let {
                 if (it.startDateTimeMillis > Instant.MIN) {
@@ -223,7 +225,7 @@ constructor(
             }
         }
 
-        var builder =
+        val builder =
             when (input) {
                 is NoDataComplicationData ->
                     WearSdkComplicationData.Builder(
@@ -249,6 +251,7 @@ constructor(
                             setShortTitle(input.title?.asWearSdkComplicationText())
                             setIcon(input.monochromaticImage?.image)
                             setBurnInProtectionIcon(input.monochromaticImage?.ambientImage)
+                            input.smallImage?.addToWearSdkComplicationData(this)
                             setContentDescription(
                                 input.contentDescription?.asWearSdkComplicationText()
                             )
@@ -264,6 +267,7 @@ constructor(
                             setLongTitle(input.title?.asWearSdkComplicationText())
                             setIcon(input.monochromaticImage?.image)
                             setBurnInProtectionIcon(input.monochromaticImage?.ambientImage)
+                            input.smallImage?.addToWearSdkComplicationData(this)
                             setContentDescription(
                                 input.contentDescription?.asWearSdkComplicationText()
                             )
@@ -343,6 +347,7 @@ constructor(
                             setShortTitle(input.title?.asWearSdkComplicationText())
                             setIcon(input.monochromaticImage?.image)
                             setBurnInProtectionIcon(input.monochromaticImage?.ambientImage)
+                            input.smallImage?.addToWearSdkComplicationData(this)
                         }
                 is GoalProgressComplicationData ->
                     WearSdkComplicationData.Builder(
@@ -379,8 +384,8 @@ constructor(
                                 setElementColors(IntArray(0))
                                 setElementWeights(FloatArray(0))
                             } else {
-                                var weights = ArrayList<Float>()
-                                var colors = ArrayList<Int>()
+                                val weights = ArrayList<Float>()
+                                val colors = ArrayList<Int>()
                                 input.elements.forEach {
                                     weights.add(it.weight)
                                     colors.add(it.color)
@@ -421,7 +426,7 @@ constructor(
      * [MonochromaticImage.PLACEHOLDER], [PhotoImageComplicationData.PLACEHOLDER], or
      * [RangedValueComplicationData.PLACEHOLDER].
      */
-    open fun hasPlaceholderFields(): Boolean = false
+    public open fun hasPlaceholderFields(): Boolean = false
 
     /**
      * Returns the next [Instant] after [afterInstant] at which any field of the complication may
@@ -435,14 +440,14 @@ constructor(
 
     /** The content description field for accessibility. */
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    abstract fun getContentDescription(context: Context): TimeDependentText?
+    public abstract fun getContentDescription(context: Context): TimeDependentText?
 
     override fun equals(other: Any?): Boolean =
         other is ComplicationData && asWireComplicationData() == other.asWireComplicationData()
 
     /** Similar to [equals], but avoids comparing evaluated fields (if dynamic values exist). */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
-    infix fun equalsUnevaluated(other: ComplicationData): Boolean =
+    public infix fun equalsUnevaluated(other: ComplicationData): Boolean =
         asWireComplicationData() equalsUnevaluated other.asWireComplicationData()
 
     override fun hashCode(): Int = asWireComplicationData().hashCode()
@@ -526,7 +531,7 @@ constructor(
         }
 
         /** Builds the ComplicationData */
-        abstract fun build(): BuiltT
+        public abstract fun build(): BuiltT
     }
 }
 
@@ -572,14 +577,14 @@ internal constructor(
     ) {
 
     /** Constructs a NoDataComplicationData without a [placeholder]. */
-    constructor() : this(null, null, null, PersistableBundle.EMPTY)
+    public constructor() : this(null, null, null, PersistableBundle.EMPTY)
 
     /**
      * Constructs a NoDataComplicationData with a [placeholder] [ComplicationData] which is allowed
      * to contain placeholder fields (see [hasPlaceholderFields]) which must be drawn to look like
      * placeholders. E.g. with grey boxes / arcs.
      */
-    constructor(
+    public constructor(
         placeholder: ComplicationData
     ) : this(placeholder, null, null, PersistableBundle.EMPTY)
 
@@ -590,7 +595,7 @@ internal constructor(
 
     /** The content description field for accessibility. */
     @SuppressLint("NewApi")
-    val contentDescription: ComplicationText? =
+    public val contentDescription: ComplicationText? =
         when (placeholder) {
             is ShortTextComplicationData -> placeholder.contentDescription
             is LongTextComplicationData -> placeholder.contentDescription
@@ -603,9 +608,7 @@ internal constructor(
             else -> null
         }
 
-    override fun fillWireComplicationDataBuilder(
-        builder: android.support.wearable.complications.ComplicationData.Builder
-    ) {
+    override fun fillWireComplicationDataBuilder(builder: WireComplicationDataBuilder) {
         super.fillWireComplicationDataBuilder(builder)
         if (invalidatedData == null) {
             builder.setInvalidatedData(null)
@@ -852,7 +855,7 @@ internal constructor(
             ?: ComplicationTextTemplate.Builder().addTextAndTitle(text, title).buildOrNull()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         return "ShortTextComplicationData(text=$text, title=$title, " +
@@ -865,7 +868,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() =
+    override fun hasPlaceholderFields(): Boolean =
         text.isPlaceholder() ||
             title?.isPlaceholder() == true ||
             monochromaticImage?.isPlaceholder() == true ||
@@ -890,7 +893,7 @@ internal constructor(
         @JvmField public val TYPE: ComplicationType = ComplicationType.SHORT_TEXT
 
         /** The maximum length of [ShortTextComplicationData.text] in characters. */
-        @JvmField public val MAX_TEXT_LENGTH = 7
+        @JvmField public val MAX_TEXT_LENGTH: Int = 7
     }
 }
 
@@ -1041,7 +1044,7 @@ internal constructor(
             ?: ComplicationTextTemplate.Builder().addTextAndTitle(text, title).buildOrNull()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         return "LongTextComplicationData(text=$text, title=$title, " +
@@ -1054,7 +1057,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() =
+    override fun hasPlaceholderFields(): Boolean =
         text.isPlaceholder() ||
             title?.isPlaceholder() == true ||
             monochromaticImage?.isPlaceholder() == true ||
@@ -1100,8 +1103,8 @@ internal constructor(
  *   color, resulting in a noticeable step between each color.
  */
 public class ColorRamp(
-    @ColorInt val colors: IntArray,
-    @get:JvmName("isInterpolated") val interpolated: Boolean,
+    @ColorInt public val colors: IntArray,
+    @get:JvmName("isInterpolated") public val interpolated: Boolean,
 ) {
     /** Throws [IllegalArgumentException] if the [ColorRamp] is invalid. */
     internal fun validate() {
@@ -1250,6 +1253,7 @@ internal constructor(
 
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     @IntDef(value = [TYPE_UNDEFINED, TYPE_RATING, TYPE_PERCENTAGE])
+    @Retention(AnnotationRetention.SOURCE)
     public annotation class RangedValueType
 
     /**
@@ -1454,7 +1458,7 @@ internal constructor(
             ?: WireComplicationText(context.getString(R.string.a11y_template_range, value, max))
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         val valueString =
@@ -1481,7 +1485,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() =
+    override fun hasPlaceholderFields(): Boolean =
         value == PLACEHOLDER ||
             text?.isPlaceholder() == true ||
             title?.isPlaceholder() == true ||
@@ -1510,22 +1514,22 @@ internal constructor(
          * Note a placeholder may only be used in the context of
          * [NoDataComplicationData.placeholder].
          */
-        @JvmField public val PLACEHOLDER = Float.MAX_VALUE
+        @JvmField public val PLACEHOLDER: Float = Float.MAX_VALUE
 
         /**
          * The ranged value's semantic hasn't been explicitly defined, most commonly it's a
          * percentage however.
          */
-        const val TYPE_UNDEFINED = 0
+        public const val TYPE_UNDEFINED: Int = 0
 
         /**
          * The ranged value represents a rating or score for something unrelated to the user, e.g.
          * the air quality index or the UV index.
          */
-        const val TYPE_RATING = 1
+        public const val TYPE_RATING: Int = 1
 
         /** The ranged value represents a percentage in the range [0..100]. E.g. Battery charge. */
-        const val TYPE_PERCENTAGE = 2
+        public const val TYPE_PERCENTAGE: Int = 2
     }
 }
 
@@ -1765,7 +1769,7 @@ internal constructor(
         }
 
         /** Builds the [GoalProgressComplicationData]. */
-        public override fun build() =
+        public override fun build(): GoalProgressComplicationData =
             GoalProgressComplicationData(
                 value,
                 dynamicValue,
@@ -1815,7 +1819,7 @@ internal constructor(
             )
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         val valueString =
@@ -1842,7 +1846,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() =
+    override fun hasPlaceholderFields(): Boolean =
         value == PLACEHOLDER ||
             text?.isPlaceholder() == true ||
             title?.isPlaceholder() == true ||
@@ -1871,7 +1875,7 @@ internal constructor(
          * Note a placeholder may only be used in the context of
          * [NoDataComplicationData.placeholder].
          */
-        @JvmField public val PLACEHOLDER = Float.MAX_VALUE
+        @JvmField public val PLACEHOLDER: Float = Float.MAX_VALUE
     }
 }
 
@@ -1986,9 +1990,9 @@ internal constructor(
      *   experience where the data is presented in more detail. Care must be taken to ensure the
      *   colors used are consistent with the launched experience.
      */
-    class Element(
-        @FloatRange(from = 0.0, fromInclusive = false) val weight: Float,
-        @ColorInt val color: Int,
+    public class Element(
+        @FloatRange(from = 0.0, fromInclusive = false) public val weight: Float,
+        @ColorInt public val color: Int,
     ) {
         /** Throws [IllegalArgumentException] if the [Element] is invalid. */
         internal fun validate() {
@@ -2101,7 +2105,7 @@ internal constructor(
         public fun setText(text: ComplicationText?): Builder = apply { this.text = text }
 
         /** Builds the [GoalProgressComplicationData]. */
-        public override fun build() =
+        public override fun build(): WeightedElementsComplicationData =
             WeightedElementsComplicationData(
                 elements,
                 elementBackgroundColor,
@@ -2142,7 +2146,7 @@ internal constructor(
             ?: ComplicationTextTemplate.Builder().addTextAndTitle(text, title).buildOrNull()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun getNextChangeInstant(afterInstant: Instant): Instant {
         val titleChangeInstant = title?.getNextChangeTime(afterInstant) ?: Instant.MAX
@@ -2172,7 +2176,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() =
+    override fun hasPlaceholderFields(): Boolean =
         elements == PLACEHOLDER ||
             text?.isPlaceholder() == true ||
             title?.isPlaceholder() == true ||
@@ -2191,14 +2195,14 @@ internal constructor(
          * Note a placeholder may only be used in the context of
          * [NoDataComplicationData.placeholder].
          */
-        @JvmField public val PLACEHOLDER = emptyList<Element>()
+        @JvmField public val PLACEHOLDER: List<Element> = emptyList<Element>()
 
         /**
          * Returns the maximum size for [elements]. Complications are small and if we have a very
          * large number of elements we likely won't be able to render them properly because the
          * individual elements will be too small on screen.
          */
-        @JvmStatic public fun getMaxElements() = 7
+        @JvmStatic public fun getMaxElements(): Int = 7
     }
 }
 
@@ -2304,9 +2308,9 @@ internal constructor(
         _contentDescription?.toWireComplicationText()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
-    override fun hasPlaceholderFields() = monochromaticImage.isPlaceholder()
+    override fun hasPlaceholderFields(): Boolean = monochromaticImage.isPlaceholder()
 
     override fun toString(): String {
         return "MonochromaticImageComplicationData(monochromaticImage=$monochromaticImage, " +
@@ -2426,7 +2430,7 @@ internal constructor(
         _contentDescription?.toWireComplicationText()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         return "SmallImageComplicationData(smallImage=$smallImage, " +
@@ -2438,7 +2442,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() = smallImage.isPlaceholder()
+    override fun hasPlaceholderFields(): Boolean = smallImage.isPlaceholder()
 
     public companion object {
         /** The [ComplicationType] corresponding to objects of this type. */
@@ -2554,7 +2558,7 @@ internal constructor(
         _contentDescription?.toWireComplicationText()
 
     /** The content description field for accessibility. */
-    val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
+    public val contentDescription: ComplicationText? = _contentDescription ?: ComplicationText.EMPTY
 
     override fun toString(): String {
         return "PhotoImageComplicationData(photoImage=$photoImage, " +
@@ -2566,7 +2570,7 @@ internal constructor(
             "extras=$extras)"
     }
 
-    override fun hasPlaceholderFields() = photoImage.isPlaceholder()
+    override fun hasPlaceholderFields(): Boolean = photoImage.isPlaceholder()
 
     public companion object {
         /** The [ComplicationType] corresponding to objects of this type. */
@@ -2887,9 +2891,7 @@ private fun WireComplicationData.toApiComplicationData(
                             elementWeights
                                 .asSequence()
                                 .zip(elementColors.asSequence())
-                                .map { (weight, color) ->
-                                    WeightedElementsComplicationData.Element(weight, color)
-                                }
+                                .map { (weight, color) -> Element(weight, color) }
                                 .toList()
                         },
                     elementBackgroundColor = elementBackgroundColor,
@@ -2915,7 +2917,7 @@ private fun WireComplicationData.toApiComplicationData(
             "WireComplicationData.toApiComplicationData failed for " + toStringNoRedaction(),
             e,
         )
-        throw e
+        return NoDataComplicationData()
     }
 }
 
@@ -2934,14 +2936,13 @@ private fun WireComplicationData.parseTimeRange() =
         )
     }
 
-private fun WireComplicationData.parseIcon(placeholderAware: Boolean = false) =
-    icon?.let {
-        if (placeholderAware && it.isPlaceholder()) {
-            MonochromaticImage.PLACEHOLDER
-        } else {
-            MonochromaticImage.Builder(it).apply { setAmbientImage(burnInProtectionIcon) }.build()
-        }
+private fun WireComplicationData.parseIcon(placeholderAware: Boolean = false) = icon?.let {
+    if (placeholderAware && it.isPlaceholder()) {
+        MonochromaticImage.PLACEHOLDER
+    } else {
+        MonochromaticImage.Builder(it).apply { setAmbientImage(burnInProtectionIcon) }.build()
     }
+}
 
 private fun WireComplicationData.parseSmallImage(placeholderAware: Boolean = false) =
     smallImage?.let {

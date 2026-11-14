@@ -17,10 +17,12 @@
 package androidx.xr.scenecore
 
 import androidx.annotation.MainThread
+import androidx.annotation.RestrictTo
 import androidx.xr.runtime.Session
 import androidx.xr.scenecore.runtime.RenderingRuntime
 import androidx.xr.scenecore.runtime.TextureResource as RtTextureResource
 import java.io.File
+import java.io.IOException
 import java.nio.file.Path
 
 /**
@@ -33,8 +35,10 @@ import java.nio.file.Path
  * done by calling the [close] method or letting it get garbage collected.
  */
 public open class Texture
-internal constructor(internal val texture: RtTextureResource, internal val session: Session) :
-    AutoCloseable {
+internal constructor(
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public val texture: RtTextureResource,
+    internal val session: Session,
+) : AutoCloseable {
 
     /**
      * Closes the given [Texture].
@@ -42,6 +46,8 @@ internal constructor(internal val texture: RtTextureResource, internal val sessi
      * The [Texture] can be explicitly closed at anytime or garbage collected. In both cases, its
      * resources are freed and an exception will be thrown if the [Texture] is used after being
      * closed.
+     *
+     * @throws IllegalStateException if the resource has already been closed.
      */
     @MainThread
     override public open fun close() {
@@ -54,7 +60,7 @@ internal constructor(internal val texture: RtTextureResource, internal val sessi
             name: String,
             session: Session,
         ): Texture {
-            val textureResource = renderingRuntime.loadTextureAsync(name)
+            val textureResource = renderingRuntime.loadTexture(name)
             return Texture(textureResource, session)
         }
 
@@ -70,6 +76,8 @@ internal constructor(internal val texture: RtTextureResource, internal val sessi
          * @return a [Texture] upon completion.
          * @throws IllegalArgumentException if [Path.isAbsolute] is true, as this method requires a
          *   relative path.
+         * @throws IOException if no file exists at the specified path, or if the file cannot be
+         *   read or decoded.
          */
         @MainThread
         @JvmStatic

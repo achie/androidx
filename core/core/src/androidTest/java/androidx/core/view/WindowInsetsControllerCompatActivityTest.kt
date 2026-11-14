@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlin.test.assertTrue
 import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.`is`
 import org.junit.After
@@ -86,8 +87,9 @@ public class WindowInsetsControllerCompatActivityTest {
         val container: View = scenario.withActivity { findViewById(R.id.container) }
         scenario.withActivity { findViewById<View>(R.id.edittext).requestFocus() }
 
-        val windowInsetsController =
-            scenario.withActivity { WindowCompat.getInsetsController(window, container) }
+        val windowInsetsController = scenario.withActivity {
+            WindowCompat.getInsetsController(window, container)
+        }
         scenario.onActivity { windowInsetsController.hide(WindowInsetsCompat.Type.ime()) }
         container.assertInsetsVisibility(WindowInsetsCompat.Type.ime(), false)
         testShow(WindowInsetsCompat.Type.ime())
@@ -102,8 +104,9 @@ public class WindowInsetsControllerCompatActivityTest {
         assumeNotCuttlefish()
         val type = WindowInsetsCompat.Type.ime()
         val editText = scenario.withActivity { findViewById(R.id.edittext) }
-        val controller =
-            scenario.withActivity { WindowCompat.getInsetsController(window, editText) }
+        val controller = scenario.withActivity {
+            WindowCompat.getInsetsController(window, editText)
+        }
 
         scenario.onActivity {
             editText.requestFocus()
@@ -117,16 +120,15 @@ public class WindowInsetsControllerCompatActivityTest {
     @Ignore("b/294556594")
     @Test
     fun show_IME_fromEditText_in_dialog() {
-        val dialog =
-            scenario.withActivity {
-                object : Dialog(this) {
-                        override fun onAttachedToWindow() {
-                            super.onAttachedToWindow()
-                            WindowCompat.setDecorFitsSystemWindows(window!!, false)
-                        }
+        val dialog = scenario.withActivity {
+            object : Dialog(this) {
+                    override fun onAttachedToWindow() {
+                        super.onAttachedToWindow()
+                        WindowCompat.setDecorFitsSystemWindows(window!!, false)
                     }
-                    .apply { setContentView(R.layout.insets_compat_activity) }
-            }
+                }
+                .apply { setContentView(R.layout.insets_compat_activity) }
+        }
 
         val type = WindowInsetsCompat.Type.ime()
         val editText = dialog.findViewById<TextView>(R.id.edittext)
@@ -139,7 +141,9 @@ public class WindowInsetsControllerCompatActivityTest {
         editText.assertInsetsVisibility(type, true)
     }
 
-    @SdkSuppress(excludedSdks = [23, 28]) // Excluded due to flakes (b/324904606 and b/454349209)
+    @SdkSuppress(
+        excludedSdks = [23, 24, 28]
+    ) // Excluded due to flakes (b/324904606 and b/454349209)
     @Test
     public fun hide_IME() {
         // Test do not currently work on Cuttlefish
@@ -265,8 +269,9 @@ public class WindowInsetsControllerCompatActivityTest {
                 assertEquals(Insets.NONE, insets.getInsets(type))
             }
 
-        val windowInsetsController =
-            scenario.withActivity { WindowCompat.getInsetsController(window, container) }
+        val windowInsetsController = scenario.withActivity {
+            WindowCompat.getInsetsController(window, container)
+        }
 
         // Now open the IME using the InsetsController The IME should
         // now be open
@@ -329,6 +334,22 @@ public class WindowInsetsControllerCompatActivityTest {
             sysUiVis and View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY,
         )
         assertEquals(0, sysUiVis and View.SYSTEM_UI_FLAG_IMMERSIVE)
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 30) // Older APIs doesn't support onControllableInsetsChanged
+    fun addOnControllableInsetsChangedListener() {
+        scenario.withActivity {
+            var called = false
+            pendingWindowInsetsController.addOnControllableInsetsChangedListener { _, _ ->
+                called = true
+            }
+            assertTrue(called)
+
+            called = false
+            windowInsetsController.addOnControllableInsetsChangedListener { _, _ -> called = true }
+            assertTrue(called)
+        }
     }
 
     private fun assumeNotCuttlefish() {

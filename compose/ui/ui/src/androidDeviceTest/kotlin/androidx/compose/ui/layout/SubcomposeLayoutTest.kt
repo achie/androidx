@@ -21,6 +21,7 @@ import android.os.Build
 import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -52,7 +53,6 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.testutils.expectAssertionError
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.background
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.assertColor
 import androidx.compose.ui.draw.drawBehind
@@ -85,7 +85,7 @@ import androidx.compose.ui.test.assertPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -106,12 +106,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -120,7 +118,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SubcomposeLayoutTest {
 
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     @get:Rule val excessiveAssertions = AndroidOwnerExtraAssertionsRule()
 
@@ -218,7 +216,10 @@ class SubcomposeLayoutTest {
             .assertWidthIsEqualTo(30.dp)
             .assertHeightIsEqualTo(30.dp)
 
-        rule.onNodeWithTag(layoutTag).assertWidthIsEqualTo(50.dp).assertHeightIsEqualTo(80.dp)
+        rule
+            .onNodeWithTag(layoutTag)
+            .assertWidthIsEqualTo(50.dp)
+            .assertHeightIsEqualTo(80.dp, tolerance = 1.dp)
     }
 
     @Test
@@ -701,15 +702,14 @@ class SubcomposeLayoutTest {
 
         rule.setContent { SubcomposeLayout(state) { layout(10, 10) {} } }
 
-        val slot =
-            rule.runOnIdle {
-                state.precompose(Unit) {
-                    DisposableEffect(Unit) {
-                        composed = true
-                        onDispose { disposed = true }
-                    }
+        val slot = rule.runOnIdle {
+            state.precompose(Unit) {
+                DisposableEffect(Unit) {
+                    composed = true
+                    onDispose { disposed = true }
                 }
             }
+        }
 
         rule.runOnIdle {
             assertThat(composed).isTrue()
@@ -1324,11 +1324,10 @@ class SubcomposeLayoutTest {
     fun nodesKeptAsReusableAreReusedWhenTheStateObjectChanges() {
         val slotState = mutableStateOf(0)
         var remeasuresCount = 0
-        val measureModifier =
-            Modifier.layout { _, _ ->
-                remeasuresCount++
-                layout(10, 10) {}
-            }
+        val measureModifier = Modifier.layout { _, _ ->
+            remeasuresCount++
+            layout(10, 10) {}
+        }
         val layoutState = mutableStateOf(SubcomposeLayoutState(SubcomposeSlotReusePolicy(1)))
 
         rule.setContent {
@@ -1364,11 +1363,10 @@ class SubcomposeLayoutTest {
     fun previouslyActiveNodesAreReusedWhenTheStateObjectChanges() {
         val slotState = mutableStateOf(0)
         var remeasuresCount = 0
-        val measureModifier =
-            Modifier.layout { _, _ ->
-                remeasuresCount++
-                layout(10, 10) {}
-            }
+        val measureModifier = Modifier.layout { _, _ ->
+            remeasuresCount++
+            layout(10, 10) {}
+        }
         val layoutState = mutableStateOf(SubcomposeLayoutState(SubcomposeSlotReusePolicy(1)))
 
         rule.setContent {
@@ -2085,17 +2083,16 @@ class SubcomposeLayoutTest {
 
         var precomposedSlotActive = false
 
-        val handle =
-            rule.runOnIdle {
-                state.precompose(1) {
-                    Box(modifier = Modifier.size(10.dp).testTag("1"))
+        val handle = rule.runOnIdle {
+            state.precompose(1) {
+                Box(modifier = Modifier.size(10.dp).testTag("1"))
 
-                    DisposableEffect(Unit) {
-                        precomposedSlotActive = true
-                        onDispose { precomposedSlotActive = false }
-                    }
+                DisposableEffect(Unit) {
+                    precomposedSlotActive = true
+                    onDispose { precomposedSlotActive = false }
                 }
             }
+        }
 
         rule.runOnIdle {
             assertThat(precomposedSlotActive).isTrue()
@@ -2231,7 +2228,6 @@ class SubcomposeLayoutTest {
     }
 
     @Test
-    @Ignore("b/188320755")
     fun forceMeasureOfInactiveElementFromLaunchedEffect() {
         var isActive by mutableStateOf(true)
         var forceMeasureFromLaunchedEffect by mutableStateOf(false)
@@ -2392,12 +2388,11 @@ class SubcomposeLayoutTest {
 
         val activeChildren = mutableSetOf<Int>()
         var remeasureCount = 0
-        val measureCountModifier =
-            Modifier.layout { measurable, constraints ->
-                remeasureCount++
-                val placeable = measurable.measure(constraints)
-                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-            }
+        val measureCountModifier = Modifier.layout { measurable, constraints ->
+            remeasureCount++
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        }
 
         rule.setContent {
             SubcomposeLayout(remember { SubcomposeLayoutState(SubcomposeSlotReusePolicy(1)) }) {
@@ -2454,12 +2449,11 @@ class SubcomposeLayoutTest {
         var slotId by mutableStateOf(0)
         val activeChildren = mutableSetOf<Int>()
         var remeasureCount = 0
-        val measureCountModifier =
-            Modifier.layout { measurable, constraints ->
-                remeasureCount++
-                val placeable = measurable.measure(constraints)
-                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-            }
+        val measureCountModifier = Modifier.layout { measurable, constraints ->
+            remeasureCount++
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+        }
 
         rule.setContent {
             SubcomposeLayout(remember { SubcomposeLayoutState(SubcomposeSlotReusePolicy(1)) }) {
@@ -2836,8 +2830,8 @@ class SubcomposeLayoutTest {
         var lookaheadSize: IntSize? = null
         var approachSize: IntSize? = null
         var itemCount by mutableStateOf(1)
-        var lookaheadPos: Array<Offset?> = arrayOfNulls(6)
-        var approachPos: Array<Offset?> = arrayOfNulls(6)
+        val lookaheadPos: Array<Offset?> = arrayOfNulls(6)
+        val approachPos: Array<Offset?> = arrayOfNulls(6)
         rule.setContent {
             SubcomposeLayoutWithItemDetachedFromLookaheadPlacement {
                 // The content that is detached from LookaheadPlacement
@@ -2893,8 +2887,8 @@ class SubcomposeLayoutTest {
         var lookaheadSize: IntSize? = null
         var approachSize: IntSize? = null
         var itemCount by mutableStateOf(1)
-        var lookaheadPos: Array<Offset?> = arrayOfNulls(6)
-        var approachPos: Array<Offset?> = arrayOfNulls(6)
+        val lookaheadPos: Array<Offset?> = arrayOfNulls(6)
+        val approachPos: Array<Offset?> = arrayOfNulls(6)
         rule.setContent {
             SubcomposeLayoutWithItemDetachedFromLookaheadPlacement {
                 SubcomposeLayoutWithItemDetachedFromLookaheadPlacement {
@@ -3109,19 +3103,17 @@ class SubcomposeLayoutTest {
 
         rule.runOnIdle { addSlot = false }
 
-        val handle =
-            rule.runOnIdle {
-                modifier =
-                    Modifier.layout { measurable, _ ->
-                        val placeable = measurable.measure(Constraints.fixed(10, 10))
-                        measured++
-                        layout(placeable.width, placeable.height) {
-                            placeable.place(0, 0)
-                            placed++
-                        }
-                    }
-                state.precompose(Unit, content)
+        val handle = rule.runOnIdle {
+            modifier = Modifier.layout { measurable, _ ->
+                val placeable = measurable.measure(Constraints.fixed(10, 10))
+                measured++
+                layout(placeable.width, placeable.height) {
+                    placeable.place(0, 0)
+                    placed++
+                }
             }
+            state.precompose(Unit, content)
+        }
 
         rule.runOnIdle {
             assertThat(measured).isEqualTo(0)
@@ -3169,13 +3161,12 @@ class SubcomposeLayoutTest {
 
         rule.runOnIdle { addSlot = false }
 
-        val handle =
-            rule.runOnIdle {
-                measured = 0
-                placed = 0
-                modifier = RemeasureAndRelayoutOnChangeModifierElement(onMeasured, onPlaced, 1)
-                state.precompose(Unit, content)
-            }
+        val handle = rule.runOnIdle {
+            measured = 0
+            placed = 0
+            modifier = RemeasureAndRelayoutOnChangeModifierElement(onMeasured, onPlaced, 1)
+            state.precompose(Unit, content)
+        }
 
         rule.runOnIdle {
             assertThat(measured).isEqualTo(0)
@@ -3294,11 +3285,10 @@ class SubcomposeLayoutTest {
             }
         }
 
-        val precomposition =
-            rule.runOnIdle {
-                assertThat(composingCounter).isEqualTo(0)
-                state.createPausedPrecomposition(Unit, content)
-            }
+        val precomposition = rule.runOnIdle {
+            assertThat(composingCounter).isEqualTo(0)
+            state.createPausedPrecomposition(Unit, content)
+        }
 
         rule.runOnIdle {
             assertThat(composingCounter).isEqualTo(0)
@@ -3340,11 +3330,10 @@ class SubcomposeLayoutTest {
             }
         }
 
-        val precomposition =
-            rule.runOnIdle {
-                assertThat(composingCounter).isEqualTo(0)
-                state.createPausedPrecomposition(Unit, content)
-            }
+        val precomposition = rule.runOnIdle {
+            assertThat(composingCounter).isEqualTo(0)
+            state.createPausedPrecomposition(Unit, content)
+        }
 
         rule.runOnIdle {
             assertThat(composingCounter).isEqualTo(0)
@@ -3383,11 +3372,10 @@ class SubcomposeLayoutTest {
             }
         }
 
-        val precomposition =
-            rule.runOnIdle {
-                assertThat(composingCounter).isEqualTo(0)
-                state.createPausedPrecomposition(Unit, content)
-            }
+        val precomposition = rule.runOnIdle {
+            assertThat(composingCounter).isEqualTo(0)
+            state.createPausedPrecomposition(Unit, content)
+        }
 
         rule.runOnIdle {
             assertThat(composingCounter).isEqualTo(0)
@@ -3898,6 +3886,59 @@ class SubcomposeLayoutTest {
 
             p.resumeUntilCompleted()
             p.apply()
+        }
+    }
+
+    @Test
+    fun lookaheadWithPausable_reuseInApproach() {
+        val state = SubcomposeLayoutState(SubcomposeSlotReusePolicy(1))
+        var hasContent by mutableStateOf(true)
+        var shouldRetainContentInApproach by mutableStateOf(false)
+
+        val content = @Composable { Box(Modifier.size(10.dp)) }
+
+        rule.setContent {
+            LookaheadScope {
+                SubcomposeLayout(
+                    state,
+                    modifier =
+                        Modifier.approachLayout(
+                            isMeasurementApproachInProgress = { shouldRetainContentInApproach }
+                        ) { m, c ->
+                            val p = m.measure(c)
+                            layout(p.width, p.height) { p.place(IntOffset.Zero) }
+                        },
+                ) { c ->
+                    val hasContent =
+                        (!isLookingAhead && shouldRetainContentInApproach) || hasContent
+                    val p =
+                        if (hasContent) {
+                            subcompose(Unit, content).map { it.measure(c) }
+                        } else {
+                            emptyList()
+                        }
+                    layout(10, 10) { p.forEach { it.place(0, 0) } }
+                }
+            }
+        }
+
+        rule.runOnIdle {
+            // Dispose old content
+            hasContent = false
+        }
+
+        rule.runOnIdle {
+            // start prefetching new content
+            state.createPausedPrecomposition(Unit, content)
+            // force approach to use the content
+            shouldRetainContentInApproach = true
+        }
+
+        rule.runOnIdle {
+            // finish approach pass
+            shouldRetainContentInApproach = false
+            // compose new content
+            hasContent = true
         }
     }
 

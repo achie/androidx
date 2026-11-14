@@ -24,7 +24,9 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.media.MediaCodec
 import android.os.Build
 import android.view.SurfaceHolder
+import androidx.annotation.GuardedBy
 import androidx.camera.camera2.adapter.GraphStateToCameraStateAdapter
+import androidx.camera.camera2.adapter.SurfaceConfigOptions
 import androidx.camera.camera2.adapter.ZslControl
 import androidx.camera.camera2.compat.DynamicRangeProfilesCompat
 import androidx.camera.camera2.compat.quirk.CameraQuirks
@@ -44,7 +46,6 @@ import androidx.camera.camera2.interop.getCamera2CaptureRequestConfigurator
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraph.OperatingMode
 import androidx.camera.camera2.pipe.CameraGraph.RepeatingRequestRequirementsBeforeCapture.CompletionBehavior.AT_LEAST
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.CameraStream
 import androidx.camera.camera2.pipe.InputStream
@@ -54,6 +55,7 @@ import androidx.camera.camera2.pipe.OutputStream.OutputType
 import androidx.camera.camera2.pipe.RequestTemplate
 import androidx.camera.camera2.pipe.StreamFormat
 import androidx.camera.camera2.pipe.compat.CameraPipeKeys
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.MirrorMode
@@ -96,10 +98,20 @@ constructor(
             null
         }
 
-    public data class CameraGraphCreationResult(
-        val config: CameraGraph.Config,
-        val streamConfigMap: Map<CameraStream.Config, DeferrableSurface>,
-    )
+    private val lock = Any()
+    @GuardedBy("lock") private var hasAttachedUseCases = true
+    @GuardedBy("lock") private var closedDeviceOnLastGraphClose = false
+
+    public fun onUseCasesAttached() {
+        synchronized(lock) { hasAttachedUseCases = true }
+    }
+
+    public fun onUseCasesEmpty() {
+        synchronized(lock) {
+            hasAttachedUseCases = false
+            cameraInteropStateCallbackRepository?.clearWhenClosed(cameraConfig.cameraId)
+        }
+    }
 
     public fun create(
         operatingMode: OperatingMode,
@@ -107,25 +119,46 @@ constructor(
         setOutputType: Boolean,
         graphStateToCameraStateAdapter: GraphStateToCameraStateAdapter? = null,
         camera2ExtensionMode: Int? = null,
-        surfaceToStreamUseCaseMap: Map<DeferrableSurface, Long> = emptyMap(),
-        surfaceToStreamUseHintMap: Map<DeferrableSurface, Long> = emptyMap(),
-    ): CameraGraphCreationResult {
+        surfaceConfigOptionsMap: Map<DeferrableSurface, SurfaceConfigOptions> = emptyMap(),
+    ): GraphConfigBundle {
         val isExtensions = operatingMode == OperatingMode.EXTENSION
         val enableStreamUseCase = !isExtensions // Enable StreamUseCase if not in Extension mode
+        val combinedFlags = createCameraGraphFlags(cameraQuirks, isExtensions)
 
         val streamGroupMap = mutableMapOf<Int, MutableList<CameraStream.Config>>()
         val inputStreams = mutableListOf<InputStream.Config>()
         var sessionTemplate = RequestTemplate(TEMPLATE_PREVIEW)
         val sessionParameters: MutableMap<Any, Any> = mutableMapOf()
         val streamConfigMap: MutableMap<CameraStream.Config, DeferrableSurface> = mutableMapOf()
+        synchronized(lock) {
+            if (hasAttachedUseCases) {
+                val reuseOpenDevices = !closedDeviceOnLastGraphClose
+                closedDeviceOnLastGraphClose = combinedFlags.closeCameraDeviceOnClose
+                if (sessionConfig != null) {
+                    cameraInteropStateCallbackRepository?.updateCallbacks(
+                        sessionConfig = sessionConfig,
+                        cameraId = cameraConfig.cameraId,
+                        reuseOpenDevices = reuseOpenDevices,
+                    )
+                } else {
+                    cameraInteropStateCallbackRepository?.clearWhenClosed(cameraConfig.cameraId)
+                }
+            }
+        }
         sessionConfig?.let { sessionConfig ->
-            cameraInteropStateCallbackRepository?.updateCallbacks(sessionConfig)
-
-            if (sessionConfig.templateType != CaptureConfig.TEMPLATE_TYPE_NONE) {
-                sessionTemplate = RequestTemplate(sessionConfig.templateType)
+            val templateType =
+                sessionConfig
+                    .toCamera2ImplConfig()
+                    .getCaptureRequestTemplate(sessionConfig.templateType)
+            if (templateType != CaptureConfig.TEMPLATE_TYPE_NONE) {
+                sessionTemplate = RequestTemplate(templateType)
             }
             sessionParameters.putAll(templateParamsOverride.getOverrideParams(sessionTemplate))
             sessionParameters.putAll(sessionConfig.implementationOptions.toParameters())
+            sessionParameters.putAll(
+                sessionConfig.repeatingCaptureConfig.implementationOptions
+                    .extractSessionParameters()
+            )
             if (operatingMode == OperatingMode.EXTENSION) {
                 // camera2ExtensionMode must be non-null when operatingMode is EXTENSION
                 sessionParameters[CameraPipeKeys.camera2ExtensionMode] = camera2ExtensionMode!!
@@ -140,9 +173,17 @@ constructor(
                     physicalCameraIdForAllStreams ?: outputConfig.physicalCameraId
                 val dynamicRange = outputConfig.dynamicRange
                 val mirrorMode = outputConfig.mirrorMode
+                val surfaceOptions = surfaceConfigOptionsMap[deferrableSurface]
+                val customDynamicRangeProfile = surfaceOptions?.dynamicRangeProfile
+                val customMirrorMode = surfaceOptions?.mirrorMode
+                val timestampBase = surfaceOptions?.timestampBase
+                val surfaceGroupId = surfaceOptions?.surfaceGroupId ?: outputConfig.surfaceGroupId
+
                 val outputStreamConfig =
                     OutputStream.Config.create(
-                        dynamicRangeProfile = dynamicRange.toDynamicRangeProfile(),
+                        dynamicRangeProfile =
+                            customDynamicRangeProfile?.let { OutputStream.DynamicRangeProfile(it) }
+                                ?: dynamicRange.toDynamicRangeProfile(),
                         size = deferrableSurface.prescribedSize,
                         format = StreamFormat(deferrableSurface.prescribedStreamFormat),
                         camera =
@@ -151,16 +192,21 @@ constructor(
                             } else {
                                 CameraId.fromCamera2Id(physicalCameraId)
                             },
-                        // No need to map MIRROR_MODE_ON_FRONT_ONLY to MIRROR_MODE_AUTO
-                        // since its default value in framework
                         mirrorMode =
-                            when (mirrorMode) {
-                                MirrorMode.MIRROR_MODE_OFF ->
-                                    OutputStream.MirrorMode(OutputConfiguration.MIRROR_MODE_NONE)
-                                MirrorMode.MIRROR_MODE_ON ->
-                                    OutputStream.MirrorMode(OutputConfiguration.MIRROR_MODE_H)
-                                else -> null
+                            if (customMirrorMode != null) {
+                                OutputStream.MirrorMode(customMirrorMode)
+                            } else {
+                                when (mirrorMode) {
+                                    MirrorMode.MIRROR_MODE_OFF ->
+                                        OutputStream.MirrorMode(
+                                            OutputConfiguration.MIRROR_MODE_NONE
+                                        )
+                                    MirrorMode.MIRROR_MODE_ON ->
+                                        OutputStream.MirrorMode(OutputConfiguration.MIRROR_MODE_H)
+                                    else -> null
+                                }
                             },
+                        timestampBase = timestampBase?.let { OutputStream.TimestampBase(it) },
                         outputType =
                             if (setOutputType) {
                                 when (outputConfig.surface.containerClass) {
@@ -183,29 +229,29 @@ constructor(
                             },
                         streamUseCase =
                             if (enableStreamUseCase) {
-                                getStreamUseCase(
-                                    deferrableSurface,
-                                    surfaceToStreamUseCaseMap,
-                                    cameraMetadata,
-                                )
+                                getStreamUseCase(deferrableSurface, surfaceOptions, cameraMetadata)
                             } else {
                                 null
                             },
                         streamUseHint =
                             if (enableStreamUseCase) {
-                                getStreamUseHint(deferrableSurface, surfaceToStreamUseHintMap)
+                                getStreamUseHint(surfaceOptions)
                             } else {
                                 null
                             },
+                        sensorPixelModes =
+                            surfaceOptions?.sensorPixelModes?.map {
+                                OutputStream.SensorPixelMode(it)
+                            } ?: emptyList(),
                     )
                 val surfaces = outputConfig.sharedSurfaces + deferrableSurface
                 for (surface in surfaces) {
                     val stream = CameraStream.Config.create(outputStreamConfig)
                     streamConfigMap[stream] = surface
-                    if (outputConfig.surfaceGroupId != SURFACE_GROUP_ID_NONE) {
-                        val streamList = streamGroupMap[outputConfig.surfaceGroupId]
+                    if (surfaceGroupId != SURFACE_GROUP_ID_NONE) {
+                        val streamList = streamGroupMap[surfaceGroupId]
                         if (streamList == null) {
-                            streamGroupMap[outputConfig.surfaceGroupId] = mutableListOf(stream)
+                            streamGroupMap[surfaceGroupId] = mutableListOf(stream)
                         } else {
                             streamList.add(stream)
                         }
@@ -228,8 +274,6 @@ constructor(
                 }
             }
         }
-
-        val combinedFlags = createCameraGraphFlags(cameraQuirks, isExtensions)
 
         // Set video stabilization mode to capture request
         var videoStabilizationMode: Int? = null
@@ -275,15 +319,15 @@ constructor(
                 videoStabilizationMode
         }
 
-        val postviewStream =
-            sessionConfig?.let { config ->
-                val physicalCameraIdForAllStreams =
-                    config.toCamera2ImplConfig().getPhysicalCameraId(null)
-                config.postviewOutputConfig?.let { postviewOutputConfig ->
-                    createPostviewStream(postviewOutputConfig, physicalCameraIdForAllStreams)
-                        ?.also { streamConfigMap[it] = postviewOutputConfig.surface }
+        val postviewStream = sessionConfig?.let { config ->
+            val physicalCameraIdForAllStreams =
+                config.toCamera2ImplConfig().getPhysicalCameraId(null)
+            config.postviewOutputConfig?.let { postviewOutputConfig ->
+                createPostviewStream(postviewOutputConfig, physicalCameraIdForAllStreams)?.also {
+                    streamConfigMap[it] = postviewOutputConfig.surface
                 }
             }
+        }
 
         cameraXConfig
             ?.getCamera2CaptureRequestConfigurator()
@@ -291,6 +335,25 @@ constructor(
 
         // TODO: b/327517884 - Add a quirk to not abort captures on stop for certain OEMs during
         //   extension sessions.
+
+        var sessionColorSpace: androidx.camera.camera2.pipe.CameraColorSpace? = null
+        if (Build.VERSION.SDK_INT >= 34) {
+            val colorSpaceInt =
+                sessionConfig?.toCamera2ImplConfig()?.getColorSpace(null)
+                    ?: sessionConfig?.repeatingCaptureConfig?.implementationOptions?.let {
+                        Camera2ImplConfig(it).getColorSpace(null)
+                    }
+            if (
+                colorSpaceInt != null &&
+                    colorSpaceInt >= 0 &&
+                    colorSpaceInt < android.graphics.ColorSpace.Named.values().size
+            ) {
+                sessionColorSpace =
+                    androidx.camera.camera2.pipe.CameraColorSpace.fromColorSpaceNamed(
+                        android.graphics.ColorSpace.Named.values()[colorSpaceInt]
+                    )
+            }
+        }
 
         // Build up a config (using TEMPLATE_PREVIEW by default)
         val graphConfig =
@@ -302,6 +365,7 @@ constructor(
                 postviewStream = postviewStream,
                 sessionTemplate = sessionTemplate,
                 sessionParameters = sessionParameters,
+                sessionColorSpace = sessionColorSpace,
                 sessionMode = operatingMode,
                 defaultListeners = listOf(callbackMap, requestListener),
                 defaultParameters = defaultParameters,
@@ -309,9 +373,9 @@ constructor(
                 graphStateListeners = listOfNotNull(graphStateToCameraStateAdapter),
             )
 
-        return CameraGraphCreationResult(
-            config = graphConfig,
-            streamConfigMap = streamConfigMap.toMap(),
+        return GraphConfigBundle(
+            graphConfig = graphConfig,
+            streamToSurfaceMap = streamConfigMap.toMap(),
         )
     }
 
@@ -348,11 +412,11 @@ constructor(
 
     private fun getStreamUseCase(
         deferrableSurface: DeferrableSurface,
-        mapping: Map<DeferrableSurface, Long>,
+        surfaceOptions: SurfaceConfigOptions?,
         cameraMetadata: CameraMetadata?,
     ): OutputStream.StreamUseCase? {
         val expectedStreamUseCase =
-            mapping[deferrableSurface]?.let { OutputStream.StreamUseCase(it) }
+            surfaceOptions?.streamUseCase?.let { OutputStream.StreamUseCase(it) }
         return if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 expectedStreamUseCase != null &&
@@ -371,10 +435,9 @@ constructor(
     }
 
     private fun getStreamUseHint(
-        deferrableSurface: DeferrableSurface,
-        mapping: Map<DeferrableSurface, Long>,
+        surfaceOptions: SurfaceConfigOptions?
     ): OutputStream.StreamUseHint? {
-        return mapping[deferrableSurface]?.let { OutputStream.StreamUseHint(it) }
+        return surfaceOptions?.streamUseHint?.let { OutputStream.StreamUseHint(it) }
     }
 
     private fun createCameraGraphFlags(
@@ -490,3 +553,12 @@ constructor(
 
     override fun toString(): String = "CameraGraphConfigProvider<${cameraConfig.cameraId}>"
 }
+
+/**
+ * A bundle containing the [CameraGraph.Config] and the mapping of [CameraStream.Config] to
+ * [DeferrableSurface] used to bridge CameraPipe and CameraX.
+ */
+public data class GraphConfigBundle(
+    val graphConfig: CameraGraph.Config,
+    val streamToSurfaceMap: Map<CameraStream.Config, DeferrableSurface>,
+)

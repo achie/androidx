@@ -39,7 +39,7 @@ import androidx.compose.ui.util.fastMaxOfOrNull
  *   center [CurvedAlignment.Radial.Outer] or in the middle point [CurvedAlignment.Radial.Center].
  *   If unspecified, they can choose for themselves.
  * @param angularDirection Specify if the children are laid out clockwise or anti-clockwise, and if
- *   those needs to be reversed in a Rtl layout. If not specified, it will be inherited from the
+ *   those need to be reversed in a Rtl layout. If not specified, it will be inherited from the
  *   enclosing [curvedRow] or [CurvedLayout] See [CurvedDirection.Angular].
  * @param contentBuilder Scope used to provide the content for this row.
  */
@@ -73,20 +73,19 @@ internal class CurvedRowChild(
     ): PartialLayoutInfo {
         // position children, sum angles.
         @Suppress("ListIterator")
-        var totalSweep =
-            children.sumOf { child ->
-                var childRadialPosition = parentOuterRadius
-                var childThickness = parentThickness
-                if (radialAlignment != null) {
-                    childRadialPosition =
-                        parentOuterRadius -
-                            radialAlignment.ratio * (parentThickness - child.estimatedThickness)
-                    childThickness = child.estimatedThickness
-                }
-
-                child.radialPosition(childRadialPosition, childThickness)
-                child.sweepRadians
+        val totalSweep = children.sumOf { child ->
+            var childRadialPosition = parentOuterRadius
+            var childThickness = parentThickness
+            if (radialAlignment != null) {
+                childRadialPosition =
+                    parentOuterRadius -
+                        radialAlignment.ratio * (parentThickness - child.estimatedThickness)
+                childThickness = child.estimatedThickness
             }
+
+            child.radialPosition(childRadialPosition, childThickness)
+            child.sweepRadians
+        }
 
         return PartialLayoutInfo(
             totalSweep,
@@ -96,15 +95,15 @@ internal class CurvedRowChild(
         )
     }
 
+    @Suppress("ListIterator")
     override fun doAngularPosition(
         parentStartAngleRadians: Float,
         parentSweepRadians: Float,
         centerOffset: Offset,
     ): Float {
-        val weights =
-            childrenInLayoutOrder.fastMap { node ->
-                (node.computeParentData() as? CurvedScopeParentData)?.weight ?: 0f
-            }
+        val weights = childrenInLayoutOrder.fastMap { node ->
+            (node.computeParentData() as? CurvedScopeParentData)?.weight ?: 0f
+        }
         val sumWeights = weights.sum()
         val extraSpace =
             parentSweepRadians -

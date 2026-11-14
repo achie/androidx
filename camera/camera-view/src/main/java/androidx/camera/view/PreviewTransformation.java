@@ -23,8 +23,11 @@ import static android.graphics.Paint.FILTER_BITMAP_FLAG;
 import static androidx.camera.core.impl.ImageOutputConfig.ROTATION_NOT_SPECIFIED;
 import static androidx.camera.core.impl.utils.CameraOrientationUtil.surfaceRotationToDegrees;
 import static androidx.camera.core.impl.utils.TransformUtils.getRectToRect;
+import static androidx.camera.core.impl.utils.TransformUtils.getRotationDegrees;
 import static androidx.camera.core.impl.utils.TransformUtils.is90or270;
 import static androidx.camera.core.impl.utils.TransformUtils.isAspectRatioMatchingWithRoundingError;
+import static androidx.camera.core.impl.utils.TransformUtils.isMirrored;
+import static androidx.camera.core.impl.utils.TransformUtils.within360;
 import static androidx.camera.view.PreviewView.ScaleType.FILL_CENTER;
 import static androidx.camera.view.PreviewView.ScaleType.FIT_CENTER;
 import static androidx.camera.view.PreviewView.ScaleType.FIT_END;
@@ -45,9 +48,11 @@ import android.view.TextureView;
 import android.view.View;
 
 import androidx.annotation.VisibleForTesting;
+import androidx.camera.core.CameraInfo;
 import androidx.camera.core.Logger;
 import androidx.camera.core.SurfaceRequest;
 import androidx.camera.core.ViewPort;
+import androidx.camera.core.impl.CameraInfoInternal;
 import androidx.core.util.Preconditions;
 
 import org.jspecify.annotations.NonNull;
@@ -108,10 +113,18 @@ final class PreviewTransformation {
     private Matrix mSensorToBufferTransform;
     // TransformationInfo.getTargetRotation.
     private int mTargetRotation;
-    // Whether the preview is using front camera.
-    private boolean mIsFrontCamera;
+    // Whether the rotation follows the front camera convention, i.e. the image rotation is
+    // (sensor orientation + display rotation). This is true for any lens facing other than
+    // LENS_FACING_BACK (including external cameras), matching how CameraX core calculates
+    // rotation degrees for ImageCapture/VideoCapture. It doesn't imply the physical facing of
+    // the camera or whether the stream is mirrored.
+    private boolean mUseFrontCameraRotation;
+    // TransformationInfo.isMirroring(). Whether the preview stream is mirrored.
+    private boolean mIsMirrored;
     // Whether the Surface contains camera transform.
     private boolean mHasCameraTransform;
+    // Whether mTargetRotation was overridden with the display rotation.
+    private boolean mIsDisplayRotationOverridden;
 
     private PreviewView.ScaleType mScaleType = DEFAULT_SCALE_TYPE;
 
@@ -122,34 +135,99 @@ final class PreviewTransformation {
      * Sets the inputs.
      *
      * <p> All the values originally come from a {@link SurfaceRequest}.
+     *
+     * @param useFrontCameraRotation whether the rotation follows the front camera convention.
+     *                               It should be true for any lens facing other than
+     *                               {@code LENS_FACING_BACK}.
      */
     void setTransformationInfo(SurfaceRequest.@NonNull TransformationInfo transformationInfo,
-            Size resolution, boolean isFrontCamera) {
+            Size resolution, boolean useFrontCameraRotation) {
         Logger.d(TAG, "Transformation info set: " + transformationInfo + " " + resolution + " "
-                + isFrontCamera);
+                + useFrontCameraRotation);
         mSurfaceCropRect = transformationInfo.getCropRect();
         mPreviewRotationDegrees = transformationInfo.getRotationDegrees();
         mTargetRotation = transformationInfo.getTargetRotation();
         mResolution = resolution;
-        mIsFrontCamera = isFrontCamera;
+        mUseFrontCameraRotation = useFrontCameraRotation;
+        mIsMirrored = transformationInfo.isMirroring();
         mHasCameraTransform = transformationInfo.hasCameraTransform();
         mSensorToBufferTransform = transformationInfo.getSensorToBufferTransform();
+        mIsDisplayRotationOverridden = false;
     }
 
     /**
-     * Override with display rotation when Preview does not have a target rotation set.
+     * Overrides the rotation with the display rotation, when Preview does not have a target
+     * rotation set or the target rotation cannot be applied.
      *
-     * TODO: move the PreviewView#updateDisplayRotationIfNeeded logic into PreviewTransformation
-     *  so all the transformation logic will be in one place.
+     * <p>For a stream with the camera transform, the rotation is derived from the sensor
+     * orientation. For a stream without the camera transform (e.g. from a {@code CameraEffect} or
+     * stream sharing), it is derived from the rotation already applied to the buffer, so that the
+     * preview follows the display rotation without waiting for
+     * {@code Preview#setTargetRotation(int)}.
      */
-    void overrideWithDisplayRotation(int rotationDegrees, int displayRotation) {
-        if (!mHasCameraTransform) {
-            // When the Surface doesn't have the camera transform, we use mPreviewRotationDegrees
-            // from the core directly. There is no need to override the values.
-            return;
+    void overrideWithDisplayRotation(@NonNull CameraInfoInternal cameraInfo, int displayRotation) {
+        if (mHasCameraTransform) {
+            mPreviewRotationDegrees = cameraInfo.getSensorRotationDegrees(displayRotation);
+        } else {
+            if (mSensorToBufferTransform == null) {
+                return;
+            }
+            mPreviewRotationDegrees = getRemainingRotationDegrees(mSensorToBufferTransform,
+                    cameraInfo, displayRotation);
         }
-        mPreviewRotationDegrees = rotationDegrees;
         mTargetRotation = displayRotation;
+        mIsDisplayRotationOverridden = true;
+    }
+
+    /**
+     * Returns the remaining rotation of a stream without the camera transform for the given
+     * display rotation.
+     *
+     * <p>When CameraX copies a stream (e.g. for a {@code CameraEffect} or stream sharing),
+     * {@code sensorToBufferTransform} records the rotation and mirroring already applied to the
+     * buffer relative to the camera sensor. Subtracting that rotation from the sensor rotation
+     * for {@code displayRotation} (negated when the buffer is mirrored) gives the rotation that
+     * remains to orient the buffer upright on the display, regardless of the target rotation the
+     * stream was produced with.
+     */
+    @VisibleForTesting
+    static int getRemainingRotationDegrees(@NonNull Matrix sensorToBufferTransform,
+            @NonNull CameraInfoInternal cameraInfo, int displayRotation) {
+        boolean isBufferMirrored = isMirrored(sensorToBufferTransform);
+        Matrix unmirrored = sensorToBufferTransform;
+        if (isBufferMirrored) {
+            unmirrored = new Matrix(sensorToBufferTransform);
+            unmirrored.postScale(-1f, 1f);
+        }
+        int appliedRotation = getRotationDegrees(unmirrored);
+        int sensorRotation = getSensorCameraInfo(cameraInfo).getSensorRotationDegrees(
+                displayRotation);
+        int remaining = sensorRotation - appliedRotation;
+        return within360(isBufferMirrored ? -remaining : remaining);
+    }
+
+    /**
+     * Returns the {@link CameraInfo} of the camera whose sensor {@code sensorToBufferTransform}
+     * is relative to.
+     *
+     * <p>The {@link CameraInfoInternal} of a {@link SurfaceRequest} may wrap the camera, e.g. a
+     * virtual camera for stream sharing that reports the sensor rotation minus the rotation it
+     * has already applied. Unwrap it to the implementation camera, or to its physical camera if
+     * one is selected.
+     */
+    @VisibleForTesting
+    static @NonNull CameraInfo getSensorCameraInfo(@NonNull CameraInfoInternal cameraInfo) {
+        CameraInfoInternal implementation = cameraInfo.getImplementation();
+        String physicalCameraId = cameraInfo.getCameraSelector().getPhysicalCameraId();
+        if (physicalCameraId != null) {
+            for (CameraInfo physicalCameraInfo : implementation.getPhysicalCameraInfos()) {
+                if (physicalCameraId.equals(
+                        physicalCameraInfo.getCameraSelector().getPhysicalCameraId())) {
+                    return physicalCameraInfo;
+                }
+            }
+        }
+        return implementation;
     }
 
     /**
@@ -189,8 +267,28 @@ final class PreviewTransformation {
             // If the Surface is connected to the camera, then the SurfaceView/TextureView
             // will be the one to apply the camera orientation. In that case, only the Surface
             // rotation needs to be applied by PreviewView.
-            return -surfaceRotationToDegrees(mTargetRotation);
+            int degrees = surfaceRotationToDegrees(mTargetRotation);
+            // The camera transform rotates the buffer to the device natural orientation and then
+            // flips it horizontally if the stream is mirrored. The remaining rotation is
+            // +degrees for the front camera convention and -degrees otherwise. Mirroring
+            // reverses the direction, which makes a 180-degree difference when the target
+            // rotation is 90 or 270 degrees.
+            return mUseFrontCameraRotation == mIsMirrored ? -degrees : degrees;
         }
+    }
+
+    /**
+     * Gets the rotation degrees that a {@link SurfaceView} needs to apply to its content.
+     *
+     * <p>A {@link SurfaceView} applies the camera transform encoded in the {@link Surface}, but
+     * not the remaining rotation of a {@link Surface} without the camera transform. Returns 0 if
+     * the transformation info is not ready.
+     */
+    int getSurfaceViewContentRotationDegrees() {
+        if (!isTransformationInfoReady() || mHasCameraTransform) {
+            return 0;
+        }
+        return getRemainingRotationDegrees();
     }
 
     /**
@@ -211,15 +309,23 @@ final class PreviewTransformation {
 
         if (preview instanceof TextureView) {
             // For TextureView, correct the orientation to match the target rotation.
-            ((TextureView) preview).setTransform(getTextureViewCorrectionMatrix());
+            TextureView textureView = (TextureView) preview;
+            Matrix correction = getTextureViewCorrectionMatrix();
+            if (!correction.equals(textureView.getTransform(null))) {
+                textureView.setTransform(correction);
+                // TextureView only applies a new transform when it redraws, so redraw it together
+                // with the View transformation below instead of waiting for the next frame.
+                textureView.invalidate();
+            }
         } else {
-            // Logs an error if non-display rotation is used with SurfaceView.
+            // Logs an error if non-display rotation is used with SurfaceView. The remaining
+            // rotation of a Surface without the camera transform is applied by
+            // SurfaceViewImplementation.
             Display display = preview.getDisplay();
-            boolean mismatchedDisplayRotation = mHasCameraTransform && display != null
+            boolean mismatchedDisplayRotation = mHasCameraTransform
+                    && !mIsDisplayRotationOverridden && display != null
                     && display.getRotation() != mTargetRotation;
-            boolean hasRemainingRotation =
-                    !mHasCameraTransform && getRemainingRotationDegrees() != 0;
-            if (mismatchedDisplayRotation || hasRemainingRotation) {
+            if (mismatchedDisplayRotation) {
                 Logger.e(TAG, "Custom rotation not supported with SurfaceView/PERFORMANCE mode.");
             }
         }
@@ -304,10 +410,10 @@ final class PreviewTransformation {
         }
         Matrix matrix = getRectToRect(new RectF(mSurfaceCropRect), previewViewCropRect,
                 mPreviewRotationDegrees);
-        if (mIsFrontCamera && mHasCameraTransform) {
-            // SurfaceView/TextureView automatically mirrors the Surface for front camera, which
-            // needs to be compensated by mirroring the Surface around the upright direction of the
-            // output image. This is only necessary if the stream has camera transform.
+        if (mIsMirrored && mHasCameraTransform) {
+            // SurfaceView/TextureView automatically mirrors the Surface when mirroring is active,
+            // which needs to be compensated by mirroring the Surface around the upright direction
+            // of the output image. This is only necessary if the stream has camera transform.
             // Otherwise, an internal GL processor would have mirrored it already.
             if (is90or270(mPreviewRotationDegrees)) {
                 // If the rotation is 90/270, the Surface should be flipped vertically.

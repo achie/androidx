@@ -18,50 +18,44 @@ package androidx.camera.camera2.pipe.testing
 
 import android.graphics.Rect
 import android.hardware.HardwareBuffer
-import android.os.Build
-import androidx.camera.camera2.pipe.media.ImagePlane
-import androidx.camera.camera2.pipe.media.ImageWrapper
-import kotlin.reflect.KClass
-import kotlinx.atomicfu.atomic
+import androidx.camera.common.ImageWrapper
+import androidx.camera.common.MutableImageWrapper
+import androidx.camera.common.testing.FakeImage as CommonFakeImage
+import java.lang.Class
 
 /** FakeImage that can be used for testing classes that accept [ImageWrapper]. */
-public class FakeImage(
-    override val width: Int,
-    override val height: Int,
-    override val format: Int,
-    override val timestamp: Long,
-    override val hardwareBuffer: HardwareBuffer? = null,
-    override var cropRect: Rect = Rect(0, 0, width, height),
-) : ImageWrapper {
-    private val debugId = debugIds.incrementAndGet()
-    private val closed = atomic(false)
+public class FakeImage private constructor(private val delegate: CommonFakeImage) :
+    MutableImageWrapper by delegate {
+    public constructor(
+        width: Int,
+        height: Int,
+        format: Int,
+        timestamp: Long,
+        cropRect: Rect = Rect(0, 0, width, height),
+        hardwareBuffer: HardwareBuffer? = null,
+    ) : this(
+        CommonFakeImage(
+            width = width,
+            height = height,
+            format = format,
+            timestamp = timestamp,
+            hardwareBuffer = hardwareBuffer,
+            cropRect = cropRect,
+        )
+    )
+
+    public val numberOfTimesClosed: Int
+        get() = delegate.closeCount
+
     public val isClosed: Boolean
-        get() = closed.value
-
-    public var numberOfTimesClosed: Int = 0
-        private set
-
-    override val planes: List<ImagePlane>
-        get() = throw UnsupportedOperationException("FakeImage does not support planes.")
+        get() = delegate.isClosed
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? {
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O_MR1 && type == HardwareBuffer::class) {
-            return hardwareBuffer as T?
+    override fun <T : Any> unwrapAs(type: Class<T>): T? =
+        when {
+            type.isInstance(this) -> this as T
+            else -> delegate.unwrapAs(type)
         }
-        return null
-    }
 
-    override fun close() {
-        numberOfTimesClosed++
-        if (closed.compareAndSet(expect = false, update = true)) {
-            // FakeImage close is a NoOp
-        }
-    }
-
-    override fun toString(): String = "FakeImage-$debugId"
-
-    public companion object {
-        private val debugIds = atomic(0)
-    }
+    override fun toString(): String = delegate.toString()
 }

@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 
@@ -39,18 +38,33 @@ dependencies {
     implementation(libs.androidx.core)
     implementation("androidx.concurrent:concurrent-futures:1.0.0")
     implementation("com.google.errorprone:error_prone_annotations:2.30.0")
+    implementation("androidx.media3:media3-exoplayer:1.10.0")
 
-    // For com.android.xr.extensions.
-    // TODO(b/447454270): Remove this once extensions are in g3.
-    compileOnly("com.android.extensions.xr:extensions-xr:1.1.0")
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinTest)
+    testImplementation(libs.testExtJunit)
+    testImplementation(libs.mockitoCore4)
+    testImplementation(libs.truth)
+    testImplementation(libs.mockitoKotlin)
+    testImplementation(libs.testRunner)
+    testImplementation(project(":xr:runtime:runtime-testing"))
+    testImplementation(project(":xr:scenecore:scenecore-testing"))
+
+    // For com.android.extensions.xr
     testImplementation(files(new File(AndroidXConfig.getPrebuiltsRoot(project), "androidx/xr/extensions/com.android.extensions.xr.host.test.jar")))
-    testImplementation("com.android.extensions.xr:extensions-xr:1.1.0")
+    testImplementation(libs.androidExtensionsXr)
+}
+
+dependencies {
+    constraints {
+        implementation(libs.guavaAndroid) {
+            because("b/578714386 - upgrading to fix vulns")
+        }
+    }
 }
 
 android {
-    defaultConfig {
-        minSdk = 24
-    }
+    compileSdk { version = release(36) }
     namespace = "androidx.xr.scenecore.runtime"
 }
 
@@ -59,4 +73,5 @@ androidx {
     type = SoftwareType.PUBLISHED_LIBRARY
     inceptionYear = "2025"
     description = "Contains the runtime APIs that allow SceneCore to work on multiple devices. Developers are not expected to interact directly with these APIs, but rather use the ones from the top-level SceneCore library."
+    enableRobolectric()
 }

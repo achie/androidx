@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.foundation.text.BasicText
@@ -36,42 +38,76 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.foundation.pager.HorizontalPager
 import androidx.wear.compose.foundation.pager.PagerState
 import androidx.wear.compose.foundation.pager.VerticalPager
 import androidx.wear.compose.foundation.pager.rememberPagerState
+import androidx.wear.compose.integration.demos.common.Centralize
 import androidx.wear.compose.integration.demos.common.ComposableDemo
 import androidx.wear.compose.material3.AnimatedPage
 import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.AppScaffoldDefaults
 import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.EdgeButton
+import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.HorizontalPagerScaffold
+import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.PagerScaffoldDefaults
 import androidx.wear.compose.material3.RadioButton
 import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.Stepper
+import androidx.wear.compose.material3.SwitchButton
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TimeText
 import androidx.wear.compose.material3.VerticalPagerScaffold
+import androidx.wear.compose.material3.samples.AppScaffoldSuppressStatusBarSample
+import androidx.wear.compose.material3.samples.ComponentSuppressStatusBarSample
 import androidx.wear.compose.material3.samples.HorizontalPagerScaffoldSample
 import androidx.wear.compose.material3.samples.HorizontalPagerScaffoldWithLowSensitivitySample
 import androidx.wear.compose.material3.samples.ScaffoldSample
-import androidx.wear.compose.material3.samples.ScaffoldWithSLCEdgeButtonSample
 import androidx.wear.compose.material3.samples.ScaffoldWithTLCEdgeButtonSample
+import androidx.wear.compose.material3.samples.ScreenScaffoldSuppressStatusBarSample
 import androidx.wear.compose.material3.samples.VerticalPagerScaffoldSample
 import androidx.wear.compose.material3.samples.VerticalPagerScaffoldWithLowSensitivitySample
+import androidx.wear.compose.material3.suppressStatusBar
+import androidx.wear.compose.material3.timeTextCurvedText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 val ScaffoldDemos =
     listOf(
+        ComposableDemo("AppScaffold (system status bar)") { AppScaffoldSystemStatusBarDemo() },
+        ComposableDemo("AppScaffold (custom time text)") { AppScaffoldCustomTimeTextDemo() },
+        ComposableDemo("AppScaffold (explicit default)") {
+            AppScaffoldExplicitDefaultTimeTextDemo()
+        },
+        ComposableDemo("ScreenScaffold (system status bar)") {
+            ScreenScaffoldSystemStatusBarDemo()
+        },
+        ComposableDemo("ScreenScaffold (custom time text)") { ScreenScaffoldCustomTimeTextDemo() },
+        ComposableDemo("ScreenScaffold (immersive / hidden)") { ScreenScaffoldImmersiveDemo() },
+        ComposableDemo("ScreenScaffold (suppress status bar)") {
+            ScreenScaffoldStatusBarSuppressionDemo()
+        },
+        ComposableDemo("Component suppression (Stepper)") {
+            StatusBarSuppressionComponentDemo()
+        },
+        ComposableDemo("Component suppression Sample") {
+            Centralize { ComponentSuppressStatusBarSample() }
+        },
+        ComposableDemo("ScreenScaffold suppression Sample") {
+            Centralize { ScreenScaffoldSuppressStatusBarSample() }
+        },
+        ComposableDemo("AppScaffold suppression Sample") {
+            Centralize { AppScaffoldSuppressStatusBarSample() }
+        },
         ComposableDemo("Scaffold Sample") { ScaffoldSample() },
-        ComposableDemo("Screen Scaffold with SLC") { ScaffoldWithSLCEdgeButtonSample() },
-        ComposableDemo("Screen Scaffold Loading SLC") { ScaffoldLoadingSLCEdgeButtonSample() },
+        ComposableDemo("Screen Scaffold Loading TLC") { ScaffoldLoadingTLCEdgeButtonDemo() },
         ComposableDemo("Screen Scaffold with TLC") { ScaffoldWithTLCEdgeButtonSample() },
         ComposableDemo("Screen Scaffold with TLC2") { ScaffoldWithTLCNavigationSample() },
         ComposableDemo("Horizontal Pager Scaffold") {
@@ -92,7 +128,107 @@ val ScaffoldDemos =
         ComposableDemo("Vertical Pager (PagerSensitivity.Low)") {
             VerticalPagerScaffoldWithLowSensitivitySample()
         },
+        ComposableDemo("Horizontal Pager (suppress status bar)") {
+            HorizontalPagerScaffoldSuppressionDemo(it.navigateBack)
+        },
     )
+
+@Composable
+fun AppScaffoldSystemStatusBarDemo() {
+    AppScaffold { Centralize { Text("AppScaffold default\n(System status bar enabled)") } }
+}
+
+@Composable
+fun AppScaffoldCustomTimeTextDemo() {
+    AppScaffold(timeText = { TimeText { timeTextCurvedText("CUSTOM TIME") } }) {
+        Centralize { Text("AppScaffold custom time text\n(Status bar disabled)") }
+    }
+}
+
+@Composable
+fun AppScaffoldExplicitDefaultTimeTextDemo() {
+    AppScaffold(timeText = AppScaffoldDefaults.timeText) {
+        Centralize { Text("AppScaffold explicit default\n(System status bar enabled)") }
+    }
+}
+
+@Composable
+fun ScreenScaffoldSystemStatusBarDemo() {
+    AppScaffold {
+        val listState = rememberTransformingLazyColumnState()
+        ScreenScaffold(scrollState = listState) { contentPadding ->
+            TransformingLazyColumn(
+                state = listState,
+                contentPadding = contentPadding,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                item {
+                    Text(
+                        "ScreenScaffold default\n(Status bar scrolls away)",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                items(15) {
+                    Button(
+                        onClick = {},
+                        label = { Text("Item ${it + 1}") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ScreenScaffoldCustomTimeTextDemo() {
+    AppScaffold {
+        val listState = rememberTransformingLazyColumnState()
+        ScreenScaffold(
+            scrollState = listState,
+            timeText = { TimeText { timeTextCurvedText("CUSTOM TIME") } },
+        ) { contentPadding ->
+            TransformingLazyColumn(
+                state = listState,
+                contentPadding = contentPadding,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                item {
+                    Text(
+                        "ScreenScaffold custom time text\n(Status bar disabled)",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                items(15) {
+                    Button(
+                        onClick = {},
+                        label = { Text("Item ${it + 1}") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ScreenScaffoldImmersiveDemo() {
+    AppScaffold {
+        ScreenScaffold(timeText = {}) {
+            Centralize {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("ScreenScaffold Immersive")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("(No status bar, no TimeText)")
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun RandomComponent(page: Int) {
@@ -185,7 +321,7 @@ fun VerticalPagerScaffoldFadeOutIndicatorDemo() {
 }
 
 @Composable
-fun ScaffoldLoadingSLCEdgeButtonSample() {
+fun ScaffoldLoadingTLCEdgeButtonDemo() {
     // Simulate the loading of the UI's content
     val loaded = remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -195,18 +331,28 @@ fun ScaffoldLoadingSLCEdgeButtonSample() {
         }
     }
 
-    val loadedListState = rememberScalingLazyListState()
-    val unLoadedListState = rememberScalingLazyListState()
+    val loadedListState = rememberTransformingLazyColumnState()
+    val unLoadedListState = rememberTransformingLazyColumnState()
 
     val listState = if (loaded.value) loadedListState else unLoadedListState
     ScreenScaffold(scrollState = listState, timeText = { TimeText() }) { contentPadding ->
-        ScalingLazyColumn(
+        TransformingLazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = contentPadding,
         ) {
             if (loaded.value) {
-                items(10) { Button(onClick = {}, label = { Text("Item ${it + 1}") }) }
+                items(10) {
+                    Button(
+                        onClick = {},
+                        label = { Text("Item ${it + 1}") },
+                        modifier =
+                            Modifier.minimumVerticalContentPadding(
+                                    ButtonDefaults.minimumVerticalListContentPadding
+                                )
+                                .fillMaxWidth(),
+                    )
+                }
             } else {
                 item { Text("Loading...") }
             }
@@ -218,7 +364,8 @@ fun ScaffoldLoadingSLCEdgeButtonSample() {
 fun ComplexHorizontalPager() {
     AppScaffold {
         val pageCount = 3
-        val pagerState = PagerState(currentPage = 0, currentPageOffsetFraction = 0f) { pageCount }
+        val pagerState =
+            rememberPagerState(initialPage = 0, initialPageOffsetFraction = 0f) { pageCount }
 
         HorizontalPagerScaffold(
             pagerState = pagerState,
@@ -253,7 +400,7 @@ fun ComplexHorizontalPager() {
 fun NestedPagers() {
     val pageCount = 3
     val horizontalPagerState =
-        PagerState(currentPage = 0, currentPageOffsetFraction = 0f) { pageCount }
+        rememberPagerState(initialPage = 0, initialPageOffsetFraction = 0f) { pageCount }
     val verticalPagerStates = remember {
         Array(pageCount) { PagerState(currentPage = 0, currentPageOffsetFraction = 0f) { 5 } }
     }
@@ -261,9 +408,26 @@ fun NestedPagers() {
     HorizontalPagerScaffold(pagerState = horizontalPagerState, modifier = Modifier.fillMaxSize()) {
         HorizontalPager(state = horizontalPagerState) { pageIndex ->
             VerticalPagerScaffold(pagerState = verticalPagerStates[pageIndex]) {
-                VerticalPager(state = verticalPagerStates[pageIndex]) { innerPage ->
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Page #$pageIndex-$innerPage")
+                VerticalPager(
+                    state = verticalPagerStates[pageIndex],
+                    flingBehavior =
+                        PagerScaffoldDefaults.snapWithSpringFlingBehavior(
+                            state = verticalPagerStates[pageIndex]
+                        ),
+                ) { innerPage ->
+                    AnimatedPage(
+                        pageIndex = innerPage,
+                        pagerState = verticalPagerStates[pageIndex],
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text("Page #$pageIndex-$innerPage")
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = {}) { Text("Button #$pageIndex-$innerPage") }
+                        }
                     }
                 }
             }
@@ -294,6 +458,182 @@ fun ScaffoldWithTLCNavigationSample() {
             BasicText("Page $page", style = TextStyle(color = Color.White))
             Spacer(Modifier.height(5.dp))
             Button(onClick = { page = -1 }) { BasicText("Back") }
+        }
+    }
+}
+
+@Composable
+fun ScreenScaffoldStatusBarSuppressionDemo() {
+    var isSuppressed by remember { mutableStateOf(true) }
+
+    AppScaffold {
+        val listState = rememberTransformingLazyColumnState()
+        ScreenScaffold(
+            scrollState = listState,
+            modifier = if (isSuppressed) Modifier.suppressStatusBar() else Modifier,
+        ) { contentPadding ->
+            TransformingLazyColumn(
+                state = listState,
+                contentPadding = contentPadding,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                item {
+                    ListHeader {
+                        Text(
+                            "StatusBar Suppression (Modifier)",
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                item {
+                    Text(
+                        text =
+                            if (isSuppressed)
+                                "Status Bar: SUPPRESSED\nTop Padding: ${contentPadding.calculateTopPadding()}"
+                            else
+                                "Status Bar: VISIBLE\nTop Padding: ${contentPadding.calculateTopPadding()}",
+                        color = if (isSuppressed) Color(0xFFFF5252) else Color(0xFF4CAF50),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    )
+                }
+                item {
+                    SwitchButton(
+                        checked = isSuppressed,
+                        onCheckedChange = { isSuppressed = it },
+                        label = { Text("Suppress Status Bar") },
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+                    )
+                }
+                items(8) { index ->
+                    FilledTonalButton(
+                        onClick = {},
+                        label = { Text("Item ${index + 1}") },
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusBarSuppressionComponentDemo() {
+    var showOverlay by remember { mutableStateOf(false) }
+
+    AppScaffold {
+        val listState = rememberTransformingLazyColumnState()
+        ScreenScaffold(scrollState = listState) { contentPadding ->
+            Box(modifier = Modifier.fillMaxSize()) {
+                TransformingLazyColumn(
+                    state = listState,
+                    contentPadding = contentPadding,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    item {
+                        ListHeader {
+                            Text(
+                                "Component Suppression",
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    item {
+                        Text(
+                            "Status bar is visible until a component with Modifier.suppressStatusBar() is composed.",
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        )
+                    }
+                    item {
+                        Button(
+                            onClick = { showOverlay = true },
+                            label = { Text("Open Stepper Overlay") },
+                            modifier =
+                                Modifier.fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 4.dp),
+                        )
+                    }
+                    items(8) { index ->
+                        FilledTonalButton(
+                            onClick = {},
+                            label = { Text("Item ${index + 1}") },
+                            modifier =
+                                Modifier.fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                if (showOverlay) {
+                    var value by remember { mutableIntStateOf(5) }
+                    Stepper(
+                        value = value,
+                        onValueChange = { value = it },
+                        valueProgression = 1..10,
+                        increaseIcon = { Text("+") },
+                        decreaseIcon = { Text("-") },
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        ) {
+                            Text("Stepper Suppresses Status Bar")
+                            Text("Value: $value")
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(onClick = { showOverlay = false }) { Text("Close") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HorizontalPagerScaffoldSuppressionDemo(navigateBack: () -> Unit) {
+    AppScaffold {
+        val pagerState = rememberPagerState(pageCount = { 3 })
+        HorizontalPagerScaffold(pagerState = pagerState) {
+            HorizontalPager(state = pagerState) { page ->
+                val pageSuppression = remember(page) { mutableStateOf(page % 2 == 0) }
+                AnimatedPage(pageIndex = page, pagerState = pagerState) {
+                    ScreenScaffold(
+                        modifier =
+                            if (pageSuppression.value) Modifier.suppressStatusBar() else Modifier
+                    ) { contentPadding ->
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(contentPadding),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text("Page #$page", textAlign = TextAlign.Center)
+                            Text(
+                                text =
+                                    if (pageSuppression.value) "Status Bar: SUPPRESSED"
+                                    else "Status Bar: VISIBLE",
+                                color =
+                                    if (pageSuppression.value) Color(0xFFFF5252)
+                                    else Color(0xFF4CAF50),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            SwitchButton(
+                                checked = pageSuppression.value,
+                                onCheckedChange = { pageSuppression.value = it },
+                                label = { Text("Suppress") },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(onClick = navigateBack) { Text("Back") }
+                        }
+                    }
+                }
+            }
         }
     }
 }

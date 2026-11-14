@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 The Android Open Source Project
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+  -->
+
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!--
+          Opt in to experimental (*X1) OpenXR extensions. The Vitreous runtime omits
+          extensions tagged [EXPERIMENTAL] - including XR_EXTX1_system_renderer and
+          XR_ANDROIDX1_system_renderer - from xrEnumerateInstanceExtensionProperties()
+          unless this is declared, and the OpenXR loader refuses to enable any
+          extension that was not enumerated.
+          -->
+        <meta-data
+            android:name="com.android.extensions.xr.uses_experimental_openxr_feature"
+            android:value="true" />
+        <activity android:name="androidx.activity.ComponentActivity" />
+        <activity
+            android:name="androidx.xr.scenecore.openxr.smoketest.SceneCoreOpenXrLauncherActivity"
+            android:exported="true"
+            android:label="SceneCore OpenXR">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="androidx.xr.scenecore.openxr.smoketest.SceneCoreOpenXrSmokeTestActivity"
+            android:exported="true"
+            android:label="SceneCore OpenXR Smoke Test">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="androidx.xr.scenecore.openxr.smoketest.SceneCorePanelActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:requiredDisplayCategory="android.hardware.display.category.XR_PROJECTED"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:label="SceneCore Panel (Glasses)">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

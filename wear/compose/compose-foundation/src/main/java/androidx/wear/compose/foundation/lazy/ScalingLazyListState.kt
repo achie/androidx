@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
+import androidx.compose.runtime.annotation.RememberInComposition
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,7 +82,9 @@ public fun rememberScalingLazyListState(
  * [centerItemIndex] and [centerItemScrollOffset] can be read from the state.
  */
 @Stable
-public class ScalingLazyListState(
+public class ScalingLazyListState
+@RememberInComposition
+constructor(
     private var initialCenterItemIndex: Int = 1,
     private var initialCenterItemScrollOffset: Int = 0,
 ) : ScrollableState {
@@ -147,6 +151,7 @@ public class ScalingLazyListState(
      * viewport center-line.
      */
     public val centerItemScrollOffset: Int
+        @FrequentlyChangingValue
         get() =
             (layoutInfo as? DefaultScalingLazyListLayoutInfo)?.let {
                 if (it.initialized) it.centerItemScrollOffset else null
@@ -156,13 +161,14 @@ public class ScalingLazyListState(
      * The object of [ScalingLazyListLayoutInfo] calculated during the last layout pass. For
      * example, you can use it to calculate what items are currently visible.
      */
+    @get:FrequentlyChangingValue
     public val layoutInfo: ScalingLazyListLayoutInfo by
         derivedStateOf(referentialEqualityPolicy()) {
             val config = config.value
             if (config == null) {
                 EmptyScalingLazyListLayoutInfo
             } else {
-                // read list state once here to for performance reasons and to ensure consistency
+                // read list state once here for performance reasons and to ensure consistency
                 val lazyListLayoutInfo = lazyListState.layoutInfo
                 val initialized = initialized.value
 
@@ -335,7 +341,7 @@ public class ScalingLazyListState(
                                 (
                                 // or Empty list (other than the 2 spacers)
                                 lazyListLayoutInfo.visibleItemsInfo.size == 2 ||
-                                    // or first item is correctly size
+                                    // or first item is correctly sized
                                     topSpacerIsCorrectlySized(
                                         config,
                                         lazyListLayoutInfo.visibleItemsInfo,
@@ -449,7 +455,7 @@ public class ScalingLazyListState(
 
     /**
      * Instantly brings the item at [index] to the center of the viewport and positions it based on
-     * the [anchorType] and applies the [scrollOffset] pixels.
+     * the [Configuration.anchorType] and applies the [scrollOffset] pixels.
      *
      * @param index the index to which to scroll. Must be non-negative.
      * @param scrollOffset the offset that the item should end up after the scroll. Note that
@@ -467,7 +473,7 @@ public class ScalingLazyListState(
 
     /**
      * Brings the item at [index] to the center of the viewport and positions it based on the
-     * [anchorType] and applies the [scrollOffset] pixels.
+     * [Configuration.anchorType] and applies the [scrollOffset] pixels.
      *
      * @param animated whether to animate the scroll
      * @param index the index to which to scroll. Must be non-negative.
@@ -549,7 +555,7 @@ public class ScalingLazyListState(
 
     /**
      * Animate (smooth scroll) the given item at [index] to the center of the viewport and position
-     * it based on the [anchorType] and applies the [scrollOffset] pixels.
+     * it based on the [Configuration.anchorType] and applies the [scrollOffset] pixels.
      *
      * @param index the index to which to scroll. Must be non-negative.
      * @param scrollOffset the offset that the item should end up after the scroll (same as
@@ -623,7 +629,7 @@ public class ScalingLazyListState(
         visibleItems: List<LazyListItemInfo>,
         totalItemCount: Int,
     ): Boolean {
-        // If the top items has a non-zero size we know that it has been correctly inflated.
+        // If the top item has a non-zero size we know that it has been correctly inflated.
         if (visibleItems.first().size > 0) return true
 
         // Work out the index we want to find - if there are less items in the list than would be
@@ -650,7 +656,7 @@ public class ScalingLazyListState(
                 }
             }
         }
-        // Finally if the remaining space needed is less that the gap between items then we do not
+        // Finally if the remaining space needed is less than the gap between items then we do not
         // need to add any additional space so the spacer being size zero is correct. Otherwise we
         // need to wait for it to be inflated.
         return spaceNeeded < params.gapBetweenItemsPx

@@ -25,6 +25,10 @@ import androidx.camera.camera2.pipe.AudioRestrictionMode.Companion.AUDIO_RESTRIC
 import androidx.camera.camera2.pipe.AwbMode
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraphId
+import androidx.camera.camera2.pipe.ControlMode
+import androidx.camera.camera2.pipe.Converge3ABehavior
+import androidx.camera.camera2.pipe.FlashMode
+import androidx.camera.camera2.pipe.FrameInfo
 import androidx.camera.camera2.pipe.FrameMetadata
 import androidx.camera.camera2.pipe.GraphState
 import androidx.camera.camera2.pipe.Lock3ABehavior
@@ -33,11 +37,14 @@ import androidx.camera.camera2.pipe.RequestListeners
 import androidx.camera.camera2.pipe.Result3A
 import androidx.camera.camera2.pipe.StreamGraph
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.common.CameraFrameNumber
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 class FakeCameraGraph(
@@ -46,6 +53,19 @@ class FakeCameraGraph(
 
     val setSurfaceResults = mutableMapOf<StreamId, Surface?>()
     private var isClosed = false
+    var acquireSessionGate: CompletableDeferred<Unit>? = null
+    var sessionAcquireCount = 0
+        private set
+
+    val sessionCloseCount: Int
+        get() = fakeCameraGraphSession.closeCount
+
+    val activeSessionCount: Int
+        get() = fakeCameraGraphSession.activeCount
+
+    val maxConcurrentSessions: Int
+        get() = fakeCameraGraphSession.maxActiveCount
+
     override val id: CameraGraphId
         get() = throw NotImplementedError("Not used in testing")
 
@@ -53,6 +73,12 @@ class FakeCameraGraph(
         get() = throw NotImplementedError("Not used in testing")
 
     override val graphState: StateFlow<GraphState>
+        get() = throw NotImplementedError("Not used in testing")
+
+    override val latestFrameNumber: Flow<CameraFrameNumber>
+        get() = throw NotImplementedError("Not used in testing")
+
+    override val latestFrameInfo: Flow<FrameInfo>
         get() = throw NotImplementedError("Not used in testing")
 
     override var isForeground = true
@@ -65,17 +91,31 @@ class FakeCameraGraph(
         get() = throw NotImplementedError("Not used in testing")
 
     override suspend fun acquireSession(): CameraGraph.Session {
+        acquireSessionGate?.await()
         if (isClosed) {
             throw CancellationException()
         }
+        sessionAcquireCount++
+        fakeCameraGraphSession.onAcquired()
         return fakeCameraGraphSession
     }
 
-    override fun acquireSessionOrNull() = if (isClosed) null else fakeCameraGraphSession
+    override fun acquireSessionOrNull() =
+        if (isClosed) {
+            null
+        } else {
+            sessionAcquireCount++
+            fakeCameraGraphSession.onAcquired()
+            fakeCameraGraphSession
+        }
 
     override suspend fun <T> useSession(
         action: suspend CoroutineScope.(CameraGraph.Session) -> T
-    ): T = fakeCameraGraphSession.use { coroutineScope { action(it) } }
+    ): T {
+        sessionAcquireCount++
+        fakeCameraGraphSession.onAcquired()
+        return fakeCameraGraphSession.use { coroutineScope { action(it) } }
+    }
 
     override fun <T> useSessionIn(
         scope: CoroutineScope,
@@ -106,9 +146,12 @@ class FakeCameraGraph(
         aeMode: AeMode?,
         afMode: AfMode?,
         awbMode: AwbMode?,
+        controlMode: ControlMode?,
+        flashMode: FlashMode?,
         aeRegions: List<MeteringRectangle>?,
         afRegions: List<MeteringRectangle>?,
         awbRegions: List<MeteringRectangle>?,
+        retainLocks: Boolean,
     ): Deferred<Result3A> {
         throw NotImplementedError("Not used in testing")
     }
@@ -129,6 +172,20 @@ class FakeCameraGraph(
     }
 
     override fun setTorchOff(aeMode: AeMode?): Deferred<Result3A> {
+        throw NotImplementedError("Not used in testing")
+    }
+
+    override fun converge3A(
+        aeRegions: List<MeteringRectangle>?,
+        afRegions: List<MeteringRectangle>?,
+        awbRegions: List<MeteringRectangle>?,
+        aeBehavior: Converge3ABehavior?,
+        afBehavior: Converge3ABehavior?,
+        awbBehavior: Converge3ABehavior?,
+        convergedCondition: ((FrameMetadata) -> Boolean)?,
+        frameLimit: Int?,
+        timeLimitNs: Long?,
+    ): Deferred<Result3A> {
         throw NotImplementedError("Not used in testing")
     }
 

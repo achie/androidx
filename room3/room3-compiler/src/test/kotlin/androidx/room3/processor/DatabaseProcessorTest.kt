@@ -134,7 +134,7 @@ class DatabaseProcessorTest {
                     @Query("SELECT * FROM user where uid = :uid")
                     public User loadOne(int uid);
 
-                    @TypeConverters(Converter.class)
+                    @ColumnTypeConverters(Converter.class)
                     @Query("SELECT * FROM user where uid = :uid")
                     public User loadWithConverter(int uid);
 
@@ -144,12 +144,12 @@ class DatabaseProcessorTest {
                     @Query("SELECT * FROM user")
                     public java.util.List<DataClass> loadAllDataClasses();
 
-                    @TypeConverters(Converter.class)
+                    @ColumnTypeConverters(Converter.class)
                     @Query("SELECT * FROM user where uid = :uid")
                     public DataClass loadDataClassWithConverter(int uid);
 
                     public static class Converter {
-                        @TypeConverter
+                        @ColumnTypeConverter
                         public static java.util.Date foo(Long input) {return null;}
                     }
 
@@ -367,16 +367,16 @@ class DatabaseProcessorTest {
             Source.java(
                 "test.library.MissingEntityAnnotationDataClass",
                 """
-            package test.library;
-            import androidx.room3.*;
-            public class MissingEntityAnnotationDataClass {
-                @PrimaryKey
-                private long id;
+                package test.library;
+                import androidx.room3.*;
+                public class MissingEntityAnnotationDataClass {
+                    @PrimaryKey
+                    private long id;
 
-                public void setId(int id) {this.id = id;}
-                public long getId() {return this.id;}
-            }
-            """
+                    public void setId(int id) {this.id = id;}
+                    public long getId() {return this.id;}
+                }
+                """
                     .trimIndent(),
             )
         val libraryClasspath = compileFiles(sources = listOf(librarySource))
@@ -404,12 +404,12 @@ class DatabaseProcessorTest {
             Source.java(
                 "test.library.MissingAnnotationsBaseDao",
                 """
-            package test.library;
-            import androidx.room3.*;
-            public interface MissingAnnotationsBaseDao {
-                int getFoo();
-            }
-            """
+                package test.library;
+                import androidx.room3.*;
+                public interface MissingAnnotationsBaseDao {
+                    int getFoo();
+                }
+                """
                     .trimIndent(),
             )
         val libraryClasspath = compileFiles(sources = listOf(librarySource))
@@ -912,12 +912,12 @@ class DatabaseProcessorTest {
                         @Query("SELECT * FROM user where uid = :uid")
                         public User loadOne(int uid);
 
-                        @TypeConverters(Converter.class)
+                        @ColumnTypeConverters(Converter.class)
                         @Query("SELECT * FROM user where uid = :uid")
                         public User loadWithConverter(int uid);
                     }
                     public static class Converter {
-                        @TypeConverter
+                        @ColumnTypeConverter
                         public static java.util.Date foo(Long input) {return null;}
                     }
                 }
@@ -1497,11 +1497,11 @@ class DatabaseProcessorTest {
             Source.java(
                 "foo.bar.MyDb",
                 """
-            package foo.bar;
-            import androidx.room3.*;
-            @Database(entities = {User.class}, version = 1, exportSchema = true)
-            public abstract class MyDb extends RoomDatabase {}
-            """
+                package foo.bar;
+                import androidx.room3.*;
+                @Database(entities = {User.class}, version = 1, exportSchema = true)
+                public abstract class MyDb extends RoomDatabase {}
+                """
                     .trimIndent(),
             )
         runKspTest(
@@ -1606,25 +1606,25 @@ class DatabaseProcessorTest {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
+                import androidx.room3.*
 
-            @Database(entities = [MyEntity::class], version = 1, exportSchema = false)
-            abstract class MyDatabase : RoomDatabase() {
-              abstract val dao: MyDao
-            }
+                @Database(entities = [MyEntity::class], version = 1, exportSchema = false)
+                abstract class MyDatabase : RoomDatabase() {
+                  abstract val dao: MyDao
+                }
 
-            @Dao
-            interface MyDao {
-              @Query("SELECT * FROM MyEntity")
-              fun getEntity(): MyEntity
-            }
+                @Dao
+                interface MyDao {
+                  @Query("SELECT * FROM MyEntity")
+                  fun getEntity(): MyEntity
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
-            """
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -1653,6 +1653,76 @@ class DatabaseProcessorTest {
         }
     }
 
+    @Test
+    fun nonConstColumnDefaultValue() {
+        val source =
+            Source.kotlin(
+                "MyDb.kt",
+                """
+                package foo.bar
+                import androidx.room3.*
+                enum class LogoDisplayMode { FLOAT }
+                @Entity
+                data class Song(
+                    @PrimaryKey val id: Int,
+                    @ColumnInfo(defaultValue = "'${'$'}{LogoDisplayMode.FLOAT}'")
+                    val logoDisplayMode: LogoDisplayMode = LogoDisplayMode.FLOAT,
+                )
+                @Database(entities = [Song::class], version = 1, exportSchema = false)
+                abstract class MyDb : RoomDatabase()
+                """
+                    .trimIndent(),
+            )
+        runKspProcessorTest(
+            sources = listOf(source),
+            symbolProcessorProviders = listOf(RoomProcessor.Provider()),
+        ) { result ->
+            result.hasErrorCount(2)
+            result
+                .hasErrorContaining(
+                    "Element 'logoDisplayMode' references a type that is not present"
+                )
+                .onLine(8)
+            result.hasErrorContaining("RoomProcessor was unable to process 'foo.bar.MyDb'")
+        }
+    }
+
+    @Test
+    fun nonConstInheritedColumnDefaultValue() {
+        val source =
+            Source.kotlin(
+                "MyDb.kt",
+                """
+                package foo.bar
+                import androidx.room3.*
+                enum class LogoDisplayMode { FLOAT }
+                abstract class BaseSong {
+                    @ColumnInfo(defaultValue = "'${'$'}{LogoDisplayMode.FLOAT}'")
+                    val logoDisplayMode: LogoDisplayMode = LogoDisplayMode.FLOAT
+                }
+                @Entity
+                data class Song(@PrimaryKey val id: Int) : BaseSong()
+                @Entity
+                data class Album(@PrimaryKey val id: Int) : BaseSong()
+                @Database(entities = [Song::class, Album::class], version = 1, exportSchema = false)
+                abstract class MyDb : RoomDatabase()
+                """
+                    .trimIndent(),
+            )
+        runKspProcessorTest(
+            sources = listOf(source),
+            symbolProcessorProviders = listOf(RoomProcessor.Provider()),
+        ) { result ->
+            result.hasErrorCount(2)
+            result
+                .hasErrorContaining(
+                    "Element 'logoDisplayMode' references a type that is not present"
+                )
+                .onLine(6)
+            result.hasErrorContaining("RoomProcessor was unable to process 'foo.bar.MyDb'")
+        }
+    }
+
     private fun resolveDatabaseViews(
         views: Map<String, Set<String>>,
         body: (List<DatabaseView>, XTestInvocation) -> Unit,
@@ -1665,26 +1735,25 @@ class DatabaseProcessorTest {
                     .first()
             val processor = DatabaseProcessor(invocation.context, database)
 
-            val list =
-                views.map { (viewName, names) ->
-                    DatabaseView(
-                        element = mock(XTypeElement::class.java),
-                        viewName = viewName,
-                        query =
-                            ParsedQuery(
-                                "",
-                                QueryType.SELECT,
-                                emptyList(),
-                                names.map { Table(it, it) }.toSet(),
-                                null,
-                                emptyList(),
-                            ),
-                        type = mock(XType::class.java),
-                        fields = emptyList(),
-                        embeddedProperties = emptyList(),
-                        constructor = null,
-                    )
-                }
+            val list = views.map { (viewName, names) ->
+                DatabaseView(
+                    element = mock(XTypeElement::class.java),
+                    viewName = viewName,
+                    query =
+                        ParsedQuery(
+                            "",
+                            QueryType.SELECT,
+                            emptyList(),
+                            names.map { Table(it, it) }.toSet(),
+                            null,
+                            emptyList(),
+                        ),
+                    type = mock(XType::class.java),
+                    fields = emptyList(),
+                    embeddedProperties = emptyList(),
+                    constructor = null,
+                )
+            }
             val resolvedViews = processor.resolveDatabaseViews(list)
             body(resolvedViews, invocation)
         }

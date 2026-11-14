@@ -18,20 +18,28 @@ package androidx.camera.camera2.impl
 
 import android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
 import android.hardware.camera2.CameraMetadata.CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult.CONTROL_AE_MODE
 import android.hardware.camera2.CaptureResult.CONTROL_LOW_LIGHT_BOOST_STATE
 import android.os.Build
+import androidx.annotation.VisibleForTesting
 import androidx.camera.camera2.adapter.propagateTo
 import androidx.camera.camera2.config.CameraScope
+import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.supportsLowLightBoost
 import androidx.camera.camera2.pipe.FrameInfo
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestMetadata
+import androidx.camera.common.CameraFrameNumber
 import androidx.camera.core.CameraControl
 import androidx.camera.core.LowLightBoostState
+import androidx.camera.core.UseCase
 import androidx.camera.core.impl.CameraControlInternal
+import androidx.camera.core.impl.SessionConfig
+import androidx.camera.core.impl.SessionConfig.ValidatingBuilder
 import androidx.camera.core.impl.utils.Threads
+import androidx.camera.core.impl.utils.executor.CameraXExecutors
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import dagger.Binds
@@ -41,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 
 /** Implementation of LowLightBoost control exposed by [CameraControlInternal]. */
 @CameraScope
@@ -53,31 +62,54 @@ constructor(
     private val comboRequestListener: ComboRequestListener,
 ) : UseCaseCameraControl {
 
-    private var _requestControl: UseCaseCameraRequestControl? = null
+    private val stateLock = Any()
+
+    @Volatile private var _requestControl: UseCaseCameraRequestControl? = null
     override var requestControl: UseCaseCameraRequestControl?
         get() = _requestControl
         set(value) {
-            _requestControl = value
-
-            if (isLowLightBoostOn) {
-                if (value != null) {
-                    setLowLightBoostAsync(lowLightBoost = true, cancelPreviousTask = false)
-                } else {
-                    // Updates the state to be INACTIVE when the LLB is ON but the control becomes
-                    // inactive.
-                    _lowLightBoostState.setLiveDataValue(LowLightBoostState.INACTIVE)
+            var shouldEnable = false
+            var stateChanged = false
+            synchronized(stateLock) {
+                _requestControl = value
+                if (isLowLightBoostOn) {
+                    if (value != null) {
+                        shouldEnable = true
+                    } else {
+                        // Updates the state to be INACTIVE when the LLB is ON but the control
+                        // becomes inactive.
+                        stateChanged = updateStateLocked(LowLightBoostState.INACTIVE)
+                    }
                 }
+            }
+            if (stateChanged) {
+                updateLiveData()
+            }
+            if (shouldEnable) {
+                setLowLightBoostAsync(lowLightBoost = true, cancelPreviousTask = false)
             }
         }
 
     override fun reset() {
+        synchronized(stateLock) {
+            flashOverrideCount.set(0)
+            isTemporarilyDisabledForFlash = false
+        }
         stopRunningTaskInternal()
         setLowLightBoostAsync(false)
     }
 
     private val isLowLightBoostSupported: Boolean = cameraMetadata?.supportsLowLightBoost == true
 
-    private var isLowLightBoostOn = false
+    @Volatile
+    internal var isLowLightBoostOn: Boolean = false
+        private set
+
+    @Volatile
+    internal var isTemporarilyDisabledForFlash: Boolean = false
+        private set
+
+    private val flashOverrideCount = AtomicInteger(0)
 
     private val _lowLightBoostState = MutableLiveData(LowLightBoostState.OFF)
     public val lowLightBoostStateLiveData: LiveData<Int>
@@ -87,39 +119,90 @@ constructor(
 
     private var _updateSignal: CompletableDeferred<Unit>? = null
 
+    @VisibleForTesting internal var checkFrameRateJob: Deferred<Boolean>? = null
+
     init {
         /** Sets the state update listener when low-light boost is supported */
         if (isLowLightBoostSupported) {
             object : Request.Listener {
                     override fun onTotalCaptureResult(
                         requestMetadata: RequestMetadata,
-                        frameNumber: FrameNumber,
+                        frameNumber: CameraFrameNumber,
                         totalCaptureResult: FrameInfo,
                     ) {
+                        // Updates the state to the LLB state live data.
+                        // Only evaluate capture results whose corresponding CaptureRequest
+                        // explicitly requested
+                        // CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY.
+                        // Otherwise, in-flight frames submitted with another AE mode right
+                        // before enableLowLightBoostAsync(true) took effect (or during flash
+                        // capture restoration) would cause lowLightBoostState to flicker to
+                        // OFF.
                         if (
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM &&
-                                _requestControl != null
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM ||
+                                _requestControl == null ||
+                                !isLowLightBoostOn ||
+                                isTemporarilyDisabledForFlash ||
+                                requestMetadata[CaptureRequest.CONTROL_AE_MODE] !=
+                                    CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
                         ) {
-                            // Updates the state to the LLB state live data
-                            if (isLowLightBoostOn) {
-                                totalCaptureResult.metadata[CONTROL_LOW_LIGHT_BOOST_STATE]?.let {
-                                    _lowLightBoostState.setLiveDataValue(
-                                        when (it) {
-                                            CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE ->
-                                                LowLightBoostState.ACTIVE
-                                            else -> LowLightBoostState.INACTIVE
-                                        }
-                                    )
+                            return
+                        }
+                        // CaptureResult.CONTROL_AE_MODE reports the AE mode actually
+                        // applied. If the camera device applied any AE mode other than
+                        // the requested Low Light Boost mode, Low Light Boost is not
+                        // enabled, regardless of which mode it fell back to.
+                        val resultAeMode = totalCaptureResult.metadata[CONTROL_AE_MODE]
+                        val newState =
+                            if (
+                                resultAeMode != null &&
+                                    resultAeMode !=
+                                        CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
+                            ) {
+                                LowLightBoostState.OFF
+                            } else {
+                                when (
+                                    totalCaptureResult.metadata[CONTROL_LOW_LIGHT_BOOST_STATE]
+                                        ?: return
+                                ) {
+                                    CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE ->
+                                        LowLightBoostState.ACTIVE
+                                    else -> LowLightBoostState.INACTIVE
                                 }
                             }
+                        if (lowLightBoostStateAtomic.get() == newState) {
+                            return
+                        }
+                        val stateChanged =
+                            synchronized(stateLock) {
+                                _requestControl != null &&
+                                    isLowLightBoostOn &&
+                                    !isTemporarilyDisabledForFlash &&
+                                    updateStateLocked(newState)
+                            }
+                        if (stateChanged) {
+                            updateLiveData()
                         }
                     }
                 }
-                .let { comboRequestListener.addListener(it, threads.sequentialExecutor) }
+                .let { comboRequestListener.addListener(it, CameraXExecutors.directExecutor()) }
         }
     }
 
-    private var isLowLightBoostDisabledByUseCaseSessionConfig = false
+    public fun onSessionConfigChanged(useCases: List<UseCase>) {
+        if (!isLowLightBoostSupported) return
+        if (useCases.isEmpty()) {
+            checkFrameRateJob = CompletableDeferred(false)
+        } else {
+            checkFrameRateJob =
+                threads.sequentialScope.async {
+                    useCases.getSessionConfig().expectedFrameRateRange.upper > 30
+                }
+        }
+    }
+
+    private fun Collection<UseCase>.getSessionConfig(): SessionConfig =
+        ValidatingBuilder().apply { forEach { useCase -> add(useCase.sessionConfig) } }.build()
 
     /**
      * Turn the Low Light Boost on or off.
@@ -143,67 +226,141 @@ constructor(
             )
         }
 
-        if (isLowLightBoostDisabledByUseCaseSessionConfig) {
-            _lowLightBoostState.setLiveDataValue(LowLightBoostState.OFF)
-            return signal.createFailureResult(
-                IllegalStateException(
-                    "Low Light Boost is disabled" +
-                        " when expected frame rate range exceeds 30 or HDR 10-bit is on."
-                )
-            )
-        }
+        threads.confineLaunch {
+            val isDisabled = checkFrameRateJob?.await() ?: false
 
-        isLowLightBoostOn = lowLightBoost
-
-        if (!lowLightBoost) {
-            _lowLightBoostState.setLiveDataValue(LowLightBoostState.OFF)
-        }
-
-        requestControl?.let {
-            if (lowLightBoost) {
-                _lowLightBoostState.setLiveDataValue(LowLightBoostState.INACTIVE)
-            }
-
-            if (cancelPreviousTask) {
-                stopRunningTaskInternal()
-            } else {
-                // Propagate the result to the previous updateSignal
-                _updateSignal?.let { previousUpdateSignal ->
-                    signal.propagateTo(previousUpdateSignal)
+            if (isDisabled) {
+                if (synchronized(stateLock) { updateStateLocked(LowLightBoostState.OFF) }) {
+                    updateLiveData()
                 }
-            }
-
-            _updateSignal = signal
-
-            // Hold the internal AE mode to ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY while the
-            // low-light boost is turned ON. If low-light boost is OFF, a value of null will make
-            // the state3AControl calculate the correct AE mode based on other settings.
-            state3AControl.preferredAeMode =
-                if (lowLightBoost) CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY else null
-
-            state3AControl.updateSignal?.propagateTo(signal) ?: run { signal.complete(Unit) }
-
-            signal.invokeOnCompletion {
-                if (signal == _updateSignal) {
-                    _updateSignal = null
-                }
-            }
-        }
-            ?: run {
                 signal.createFailureResult(
-                    CameraControl.OperationCanceledException("Camera is not active.")
+                    IllegalStateException(
+                        "Low Light Boost is disabled when expected frame rate range exceeds 30."
+                    )
                 )
+                return@confineLaunch
             }
+
+            var stateChanged = false
+            val currentRequestControl =
+                synchronized(stateLock) {
+                    isLowLightBoostOn = lowLightBoost
+
+                    if (!lowLightBoost) {
+                        flashOverrideCount.set(0)
+                        isTemporarilyDisabledForFlash = false
+                        stateChanged = updateStateLocked(LowLightBoostState.OFF)
+                    } else if (_requestControl != null) {
+                        stateChanged = updateStateLocked(LowLightBoostState.INACTIVE)
+                    }
+                    _requestControl
+                }
+            if (stateChanged) {
+                updateLiveData()
+            }
+
+            currentRequestControl?.let {
+                if (cancelPreviousTask) {
+                    stopRunningTaskInternal()
+                } else {
+                    // Propagate the result to the previous updateSignal
+                    _updateSignal?.let { previousUpdateSignal ->
+                        signal.propagateTo(previousUpdateSignal)
+                    }
+                }
+
+                _updateSignal = signal
+
+                // Hold the internal AE mode to ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY while the
+                // low-light boost is turned ON. If low-light boost is OFF, a value of null will
+                // make the state3AControl calculate the correct AE mode based on other settings.
+                val updateSignal =
+                    state3AControl.setPreferredLowLightBoostAeModeAsync(
+                        if (lowLightBoost) CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
+                        else null
+                    )
+                updateSignal.invokeOnCompletion { signal.complete(Unit) }
+
+                signal.invokeOnCompletion {
+                    if (signal == _updateSignal) {
+                        _updateSignal = null
+                    }
+                }
+            }
+                ?: run {
+                    signal.createFailureResult(
+                        CameraControl.OperationCanceledException("Camera is not active.")
+                    )
+                }
+        }
 
         return signal
     }
 
-    public fun setLowLightBoostDisabledByUseCaseSessionConfig(disabled: Boolean) {
-        isLowLightBoostDisabledByUseCaseSessionConfig = disabled
+    /**
+     * Temporarily disables low-light boost for a transient flash capture.
+     *
+     * Drops the [CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY] AE mode in
+     * [State3AControl] and freezes the public state so it does not flicker to
+     * [LowLightBoostState.OFF].
+     */
+    public fun disableForFlashCaptureAsync(session: CameraGraph.Session? = null): Deferred<Unit> {
+        val shouldDisable =
+            synchronized(stateLock) {
+                if (!isLowLightBoostSupported || !isLowLightBoostOn) {
+                    return CompletableDeferred(Unit)
+                }
+                if (flashOverrideCount.getAndIncrement() == 0) {
+                    isTemporarilyDisabledForFlash = true
+                    true
+                } else {
+                    false
+                }
+            }
+        if (shouldDisable) {
+            return state3AControl.setPreferredLowLightBoostAeModeAsync(null, session = session)
+        }
+        return CompletableDeferred(Unit)
     }
 
-    public fun isLowLightBoostDisabledByUseCaseSessionConfig(): Boolean =
-        isLowLightBoostDisabledByUseCaseSessionConfig
+    /**
+     * Restores low-light boost after flash capture completes.
+     *
+     * Restores the [CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY] AE mode in
+     * [State3AControl] and clears the temporary flash override flag.
+     */
+    public fun restoreAfterFlashCaptureAsync(session: CameraGraph.Session? = null): Deferred<Unit> {
+        if (!isLowLightBoostSupported) {
+            return CompletableDeferred(Unit)
+        }
+        val shouldRestore =
+            synchronized(stateLock) {
+                val count = flashOverrideCount.decrementAndGet()
+                if (count <= 0) {
+                    flashOverrideCount.set(0)
+                    isTemporarilyDisabledForFlash = false
+                    isLowLightBoostOn
+                } else {
+                    false
+                }
+            }
+        if (shouldRestore) {
+            return state3AControl.setPreferredLowLightBoostAeModeAsync(
+                CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY,
+                session = session,
+            )
+        }
+        return CompletableDeferred(Unit)
+    }
+
+    /**
+     * Returns the preferred AE mode to use when Low Light Boost is temporarily disabled for flash
+     * capture, sanitized by supported AE modes.
+     */
+    internal fun getFlashOverrideAeMode(): Int {
+        val calculatedMode = state3AControl.getFinalPreferredAeMode(preferredAeMode = null)
+        return cameraMetadata?.getSupportedAeMode(calculatedMode) ?: calculatedMode
+    }
 
     private fun stopRunningTaskInternal() {
         _updateSignal?.createFailureResult(
@@ -216,12 +373,21 @@ constructor(
         completeExceptionally(exception)
     }
 
-    private fun MutableLiveData<Int>.setLiveDataValue(@LowLightBoostState.State state: Int) {
-        if (lowLightBoostStateAtomic.getAndSet(state) != state) {
-            if (Threads.isMainThread()) {
-                this.value = state
+    private fun updateStateLocked(@LowLightBoostState.State state: Int): Boolean {
+        val finalState =
+            if (isTemporarilyDisabledForFlash && state == LowLightBoostState.OFF) {
+                LowLightBoostState.INACTIVE
             } else {
-                this.postValue(state)
+                state
+            }
+        return lowLightBoostStateAtomic.getAndSet(finalState) != finalState
+    }
+
+    private fun updateLiveData() {
+        Threads.runOnMain {
+            val currentState = lowLightBoostStateAtomic.get()
+            if (_lowLightBoostState.value != currentState) {
+                _lowLightBoostState.value = currentState
             }
         }
     }

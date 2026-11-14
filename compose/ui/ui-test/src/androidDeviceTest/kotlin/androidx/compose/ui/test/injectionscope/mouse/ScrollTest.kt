@@ -31,10 +31,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.ComposeUiFlags
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType.Companion.Enter
+import androidx.compose.ui.input.pointer.PointerEventType.Companion.Exit
+import androidx.compose.ui.input.pointer.PointerEventType.Companion.Move
 import androidx.compose.ui.input.pointer.PointerEventType.Companion.Press
 import androidx.compose.ui.input.pointer.PointerEventType.Companion.Scroll
 import androidx.compose.ui.platform.testTag
@@ -48,12 +52,11 @@ import androidx.compose.ui.test.injectionscope.mouse.Common.runMouseInputInjecti
 import androidx.compose.ui.test.injectionscope.mouse.Common.verifyMouseEvent
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
-import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.smoothScroll
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -61,6 +64,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @OptIn(ExperimentalTestApi::class)
 class ScrollTest {
+    @OptIn(ExperimentalComposeUiApi::class)
+    private fun expectedMoveEnabled() =
+        ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled
+
     companion object {
         // Used in the smoothScroll tests
         private val T = InputDispatcher.eventPeriodMillis
@@ -80,7 +87,9 @@ class ScrollTest {
             eventVerifiers =
                 arrayOf(
                     { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(0, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(0, Scroll, false, Offset.Zero, Offset(0f, 10f)) },
+                    { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
                 ),
         )
 
@@ -94,7 +103,9 @@ class ScrollTest {
             eventVerifiers =
                 arrayOf(
                     { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(0, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(0, Scroll, false, Offset.Zero, Offset(10f, 0f)) },
+                    { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
                 ),
         )
 
@@ -108,20 +119,40 @@ class ScrollTest {
                 scroll(10f)
             },
             eventVerifiers =
-                arrayOf(
-                    { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
-                    { this.verifyMouseEvent(0, Press, true, Offset.Zero, PrimaryButton) },
-                    {
-                        this.verifyMouseEvent(
-                            0,
-                            Scroll,
-                            true,
-                            Offset.Zero,
-                            Offset(0f, 10f),
-                            PrimaryButton,
-                        )
-                    },
-                ),
+                if (expectedMoveEnabled()) {
+                    arrayOf(
+                        { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
+                        { this.verifyMouseEvent(0, Press, true, Offset.Zero, PrimaryButton) },
+                        // Move event sent on scroll (now processed instead of skipped due to
+                        // isDraggableVelocityTrackerFixEnabled)
+                        { this.verifyMouseEvent(0, Move, true, Offset.Zero, PrimaryButton) },
+                        {
+                            this.verifyMouseEvent(
+                                0,
+                                Scroll,
+                                true,
+                                Offset.Zero,
+                                Offset(0f, 10f),
+                                PrimaryButton,
+                            )
+                        },
+                    )
+                } else {
+                    arrayOf(
+                        { this.verifyMouseEvent(0, Enter, false, Offset.Zero) },
+                        { this.verifyMouseEvent(0, Press, true, Offset.Zero, PrimaryButton) },
+                        {
+                            this.verifyMouseEvent(
+                                0,
+                                Scroll,
+                                true,
+                                Offset.Zero,
+                                Offset(0f, 10f),
+                                PrimaryButton,
+                            )
+                        },
+                    )
+                },
         )
 
     @Test
@@ -131,10 +162,18 @@ class ScrollTest {
             eventVerifiers =
                 arrayOf(
                     { this.verifyMouseEvent(1 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(1 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(1 * T, Scroll, false, Offset.Zero, Offset(0f, delta)) },
+                    { this.verifyMouseEvent(1 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(2 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(2 * T, Scroll, false, Offset.Zero, Offset(0f, delta)) },
+                    { this.verifyMouseEvent(2 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(3 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(3 * T, Scroll, false, Offset.Zero, Offset(0f, delta)) },
+                    { this.verifyMouseEvent(3 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(4 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(4 * T, Scroll, false, Offset.Zero, Offset(0f, delta)) },
+                    { this.verifyMouseEvent(4 * T, Enter, false, Offset.Zero) },
                 ),
         )
 
@@ -145,10 +184,18 @@ class ScrollTest {
             eventVerifiers =
                 arrayOf(
                     { this.verifyMouseEvent(1 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(1 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(1 * T, Scroll, false, Offset.Zero, Offset(delta, 0f)) },
+                    { this.verifyMouseEvent(1 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(2 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(2 * T, Scroll, false, Offset.Zero, Offset(delta, 0f)) },
+                    { this.verifyMouseEvent(2 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(3 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(3 * T, Scroll, false, Offset.Zero, Offset(delta, 0f)) },
+                    { this.verifyMouseEvent(3 * T, Enter, false, Offset.Zero) },
+                    { this.verifyMouseEvent(4 * T, Exit, false, Offset.Zero) },
                     { this.verifyMouseEvent(4 * T, Scroll, false, Offset.Zero, Offset(delta, 0f)) },
+                    { this.verifyMouseEvent(4 * T, Enter, false, Offset.Zero) },
                 ),
         )
 
@@ -156,77 +203,65 @@ class ScrollTest {
      * Integration test: checks if we are actually seeing lazy column respond to vertical scroll.
      */
     @Test
-    fun smoothScrollLazyColumn() =
-        runComposeUiTest(effectContext = StandardTestDispatcher()) {
-            val items = 200
-            setContent {
-                LazyColumn(listModifier.width(50.dp)) {
-                    items(items) { TestItem(it, items, Modifier.fillParentMaxWidth()) }
-                }
+    fun smoothScrollLazyColumn() = runComposeUiTest {
+        val items = 200
+        setContent {
+            LazyColumn(listModifier.width(50.dp)) {
+                items(items) { TestItem(it, items, Modifier.fillParentMaxWidth()) }
             }
-
-            onNodeWithTag("list").performMouseInput {
-                smoothScroll(100f, 500L, ScrollWheel.Vertical)
-            }
-            onNodeWithTag("item-${items - 1}").assertIsDisplayed()
         }
+
+        onNodeWithTag("list").performMouseInput { smoothScroll(100f, 500L, ScrollWheel.Vertical) }
+        onNodeWithTag("item-${items - 1}").assertIsDisplayed()
+    }
 
     /**
      * Integration test: checks if we are actually seeing a scrollable column respond to vertical
      * scroll.
      */
     @Test
-    fun smoothScrollColumn() =
-        runComposeUiTest(effectContext = StandardTestDispatcher()) {
-            val items = 200
-            setContent {
-                Column(listModifier.width(50.dp).verticalScroll(rememberScrollState())) {
-                    repeat(items) { TestItem(it, items, Modifier.fillMaxWidth()) }
-                }
+    fun smoothScrollColumn() = runComposeUiTest {
+        val items = 200
+        setContent {
+            Column(listModifier.width(50.dp).verticalScroll(rememberScrollState())) {
+                repeat(items) { TestItem(it, items, Modifier.fillMaxWidth()) }
             }
-
-            onNodeWithTag("list").performMouseInput {
-                smoothScroll(100f, 500L, ScrollWheel.Vertical)
-            }
-            onNodeWithTag("item-${items - 1}").assertIsDisplayed()
         }
+
+        onNodeWithTag("list").performMouseInput { smoothScroll(100f, 500L, ScrollWheel.Vertical) }
+        onNodeWithTag("item-${items - 1}").assertIsDisplayed()
+    }
 
     /** Integration test: checks if we are actually seeing lazy row respond to horizontal scroll. */
     @Test
-    fun smoothScrollLazyRow() =
-        runComposeUiTest(effectContext = StandardTestDispatcher()) {
-            val items = 200
-            setContent {
-                LazyRow(listModifier.height(50.dp)) {
-                    items(items) { TestItem(it, items, Modifier.fillParentMaxHeight()) }
-                }
+    fun smoothScrollLazyRow() = runComposeUiTest {
+        val items = 200
+        setContent {
+            LazyRow(listModifier.height(50.dp)) {
+                items(items) { TestItem(it, items, Modifier.fillParentMaxHeight()) }
             }
-
-            onNodeWithTag("list").performMouseInput {
-                smoothScroll(100f, 500L, ScrollWheel.Horizontal)
-            }
-            onNodeWithTag("item-${items - 1}").assertIsDisplayed()
         }
+
+        onNodeWithTag("list").performMouseInput { smoothScroll(100f, 500L, ScrollWheel.Horizontal) }
+        onNodeWithTag("item-${items - 1}").assertIsDisplayed()
+    }
 
     /**
      * Integration test: checks if we are actually seeing a scrollable row respond to horizontal
      * scroll.
      */
     @Test
-    fun smoothScrollRow() =
-        runComposeUiTest(effectContext = StandardTestDispatcher()) {
-            val items = 200
-            setContent {
-                Row(listModifier.height(50.dp).horizontalScroll(rememberScrollState())) {
-                    repeat(items) { TestItem(it, items, Modifier.fillMaxHeight()) }
-                }
+    fun smoothScrollRow() = runComposeUiTest {
+        val items = 200
+        setContent {
+            Row(listModifier.height(50.dp).horizontalScroll(rememberScrollState())) {
+                repeat(items) { TestItem(it, items, Modifier.fillMaxHeight()) }
             }
-
-            onNodeWithTag("list").performMouseInput {
-                smoothScroll(100f, 500L, ScrollWheel.Horizontal)
-            }
-            onNodeWithTag("item-${items - 1}").assertIsDisplayed()
         }
+
+        onNodeWithTag("list").performMouseInput { smoothScroll(100f, 500L, ScrollWheel.Horizontal) }
+        onNodeWithTag("item-${items - 1}").assertIsDisplayed()
+    }
 
     @Composable
     fun TestItem(i: Int, n: Int, modifier: Modifier = Modifier) {

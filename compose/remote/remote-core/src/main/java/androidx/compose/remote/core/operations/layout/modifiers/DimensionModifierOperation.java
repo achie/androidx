@@ -16,6 +16,7 @@
 package androidx.compose.remote.core.operations.layout.modifiers;
 
 import androidx.annotation.RestrictTo;
+import androidx.compose.remote.core.CoreDocument;
 import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.VariableSupport;
@@ -36,7 +37,9 @@ public abstract class DimensionModifierOperation extends Operation
         WEIGHT,
         INTRINSIC_MIN,
         INTRINSIC_MAX,
-        EXACT_DP;
+        EXACT_DP,
+        FILL_PARENT_MAX_WIDTH,
+        FILL_PARENT_MAX_HEIGHT;
 
         @NonNull
         public static Type fromInt(int value) {
@@ -55,6 +58,10 @@ public abstract class DimensionModifierOperation extends Operation
                     return INTRINSIC_MAX;
                 case 6:
                     return EXACT_DP;
+                case 7:
+                    return FILL_PARENT_MAX_WIDTH;
+                case 8:
+                    return FILL_PARENT_MAX_HEIGHT;
             }
             return EXACT;
         }
@@ -80,13 +87,24 @@ public abstract class DimensionModifierOperation extends Operation
     @Override
     public void updateVariables(@NonNull RemoteContext context) {
         if (mType == Type.EXACT) {
+            float pre = mOutValue;
             mOutValue = Float.isNaN(mValue) ? context.getFloat(Utils.idFromNan(mValue)) : mValue;
+            if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP) {
+                mOutValue *= context.getDensity();
+            }
+            if (pre != mOutValue
+                    && context.getDocument() != null
+                    && context.getDocument().getRootLayoutComponent() != null) {
+                context.getDocument().getRootLayoutComponent().invalidateMeasure();
+            }
         }
         if (mType == Type.EXACT_DP) {
             float pre = mOutValue;
             mOutValue = Float.isNaN(mValue) ? context.getFloat(Utils.idFromNan(mValue)) : mValue;
             mOutValue *= context.getDensity();
-            if (pre != mOutValue) {
+            if (pre != mOutValue
+                    && context.getDocument() != null
+                    && context.getDocument().getRootLayoutComponent() != null) {
                 context.getDocument().getRootLayoutComponent().invalidateMeasure();
             }
         }
@@ -98,11 +116,15 @@ public abstract class DimensionModifierOperation extends Operation
             if (Float.isNaN(mValue)) {
                 context.listensTo(Utils.idFromNan(mValue), this);
             }
+            if (context.getDensityBehavior() == CoreDocument.DENSITY_BEHAVIOR_DP) {
+                context.listensTo(RemoteContext.ID_DENSITY, this);
+            }
         }
         if (mType == Type.EXACT_DP) {
             if (Float.isNaN(mValue)) {
                 context.listensTo(Utils.idFromNan(mValue), this);
             }
+            context.listensTo(RemoteContext.ID_DENSITY, this);
         }
     }
 
@@ -121,6 +143,18 @@ public abstract class DimensionModifierOperation extends Operation
 
     public boolean isFill() {
         return mType == Type.FILL;
+    }
+
+    public boolean isExact() {
+        return mType == Type.EXACT || mType == Type.EXACT_DP;
+    }
+
+    public boolean isFillParentMaxWidth() {
+        return mType == Type.FILL_PARENT_MAX_WIDTH;
+    }
+
+    public boolean isFillParentMaxHeight() {
+        return mType == Type.FILL_PARENT_MAX_HEIGHT;
     }
 
     public boolean isIntrinsicMin() {
@@ -180,5 +214,10 @@ public abstract class DimensionModifierOperation extends Operation
     @Override
     public String toString() {
         return "DimensionModifierOperation(" + mValue + ")";
+    }
+
+    /** Returns the raw (possibly NaN-encoded variable id) {@code mValue}. */
+    public float getRawValue() {
+        return mValue;
     }
 }

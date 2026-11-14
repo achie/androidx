@@ -43,11 +43,18 @@ import androidx.work.impl.utils.taskexecutor.TaskExecutor
 import androidx.work.worker.LatchWorker
 import androidx.work.worker.StopAwareWorker
 import androidx.work.worker.StopLatchWorker
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,6 +103,7 @@ class ProcessorTests : DatabaseTest() {
         val taskExecutor =
             object : TaskExecutor {
                 val mainExecutor = Executor { runnable -> runnable.run() }
+                val workCoroutineScope = CoroutineScope(taskCoroutineDispatcher)
 
                 override fun getMainThreadExecutor(): Executor {
                     return mainExecutor
@@ -104,6 +112,8 @@ class ProcessorTests : DatabaseTest() {
                 override fun getSerialTaskExecutor(): SerialExecutorImpl {
                     return serialExecutor
                 }
+
+                override fun getCoroutineScope(): CoroutineScope = workCoroutineScope
             }
         val configuration =
             Configuration.Builder().setWorkerFactory(factory).setExecutor(defaultExecutor).build()
@@ -189,6 +199,8 @@ class ProcessorTests : DatabaseTest() {
         processor.stopForegroundWork(startStopToken, STOP_REASON_CONSTRAINT_CONNECTIVITY)
         assertFalse(processor.isEnqueued(startStopToken.id.workSpecId))
         assertTrue(executionFinished.await(3, TimeUnit.SECONDS))
+        // The stop intent is dispatched from the task executor, not inline.
+        awaitSerialExecutorIdle()
         val stopIntentExpected = createStopForegroundIntent(context)
 
         val intent = context.intents.getOrNull(1) ?: throw AssertionError("Stop Intent wasn't sent")
@@ -266,19 +278,481 @@ class ProcessorTests : DatabaseTest() {
         assertTrue(called)
     }
 
+    @Test
+    @MediumTest
+    fun testListenerCanModifyListDuringRunOnExecuted() {
+        var firstListenerCalled = false
+        var secondListenerCalled = false
+
+        val secondListener = ExecutionListener { _, _ -> secondListenerCalled = true }
+
+        val firstListener =
+            object : ExecutionListener {
+                override fun onExecuted(id: WorkGenerationalId, needsReschedule: Boolean) {
+                    firstListenerCalled = true
+                    processor.removeExecutionListener(this)
+                    processor.addExecutionListener(secondListener)
+                }
+            }
+
+        processor.addExecutionListener(firstListener)
+
+        // 1. Test runOnExecuted pathway (startWork on non-existent work spec)
+        val nonExistentToken = StartStopToken(WorkGenerationalId("non-existent-id", 0))
+        assertFalse(processor.startWork(nonExistentToken))
+        assertTrue(firstListenerCalled)
+        // secondListener was added during the dispatch, so it shouldn't be called in the current
+        // dispatch pass
+        assertFalse(secondListenerCalled)
+
+        // Reset state to verify secondListener is now active and firstListener is removed
+        firstListenerCalled = false
+        secondListenerCalled = false
+
+        // 2. Test runOnExecuted pathway subsequent dispatch (to verify secondListener is now active
+        // and firstListener is removed)
+        val anotherNonExistentToken =
+            StartStopToken(WorkGenerationalId("another-non-existent-id", 0))
+        assertFalse(processor.startWork(anotherNonExistentToken))
+        assertTrue(secondListenerCalled)
+        assertFalse(firstListenerCalled)
+    }
+
+    @Test
+    @MediumTest
+    fun testListenerCanModifyListDuringOnExecuted() {
+        var firstListenerCalled = false
+        var secondListenerCalled = false
+
+        val secondListener = ExecutionListener { _, _ -> secondListenerCalled = true }
+
+        val firstListener =
+            object : ExecutionListener {
+                override fun onExecuted(id: WorkGenerationalId, needsReschedule: Boolean) {
+                    firstListenerCalled = true
+                    processor.removeExecutionListener(this)
+                    processor.addExecutionListener(secondListener)
+                }
+            }
+
+        processor.addExecutionListener(firstListener)
+
+        // 1. Test onExecuted pathway
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val token = StartStopToken(WorkGenerationalId(request.workSpec.id, 0))
+        assertTrue(processor.startWork(token))
+        val worker = factory.awaitWorker(request.id)
+
+        // Use a CountDownLatch to block the test thread until the asynchronous worker completes
+        // and all preceding execution listeners (including the ones under test) have finished
+        // running.
+        val executionFinished = CountDownLatch(1)
+        processor.addExecutionListener { _, _ -> executionFinished.countDown() }
+
+        (worker as LatchWorker).mLatch.countDown()
+        assertTrue(executionFinished.await(3, TimeUnit.SECONDS))
+
+        assertTrue(firstListenerCalled)
+        // secondListener was added during the dispatch, so it shouldn't be called in the current
+        // dispatch pass
+        assertFalse(secondListenerCalled)
+
+        // 2. Test onExecuted pathway subsequent dispatch (to verify secondListener is now active
+        // and firstListener is removed)
+        firstListenerCalled = false
+        secondListenerCalled = false
+
+        val request2 = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request2)
+        val token2 = StartStopToken(WorkGenerationalId(request2.workSpec.id, 0))
+
+        assertTrue(processor.startWork(token2))
+        val worker2 = factory.awaitWorker(request2.id)
+
+        // Block until the second worker completes and all listeners have finished running
+        val executionFinished2 = CountDownLatch(1)
+        processor.addExecutionListener { _, _ -> executionFinished2.countDown() }
+
+        (worker2 as LatchWorker).mLatch.countDown()
+        assertTrue(executionFinished2.await(3, TimeUnit.SECONDS))
+
+        assertTrue(secondListenerCalled)
+        assertFalse(firstListenerCalled)
+    }
+
+    @Test
+    @MediumTest
+    fun testForegroundStart_notifiesListener() = runBlocking {
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val id = request.workSpec.generationalId()
+        val startStopToken = StartStopToken(id)
+
+        val deferred = CompletableDeferred<Pair<WorkGenerationalId, Boolean>>()
+
+        val listener = ForegroundListener { generationalId, isForeground ->
+            deferred.complete(generationalId to isForeground)
+        }
+
+        processor.addForegroundListener(listener)
+
+        processor.startWork(startStopToken)
+
+        // Promote to foreground
+        processor.startForeground(startStopToken.id.workSpecId, foregroundInfo)
+
+        val (notifiedId, foregroundState) = withTimeout(3000) { deferred.await() }
+        assertEquals(id, notifiedId)
+        assertTrue(foregroundState)
+
+        // Clean up / stop work so it doesn't leak into teardown
+        val executionFinished = CompletableDeferred<Unit>()
+        processor.addExecutionListener { _, _ -> executionFinished.complete(Unit) }
+        val firstWorker = factory.awaitWorker(request.id)
+        (firstWorker as LatchWorker).mLatch.countDown()
+        withTimeout(3000) { executionFinished.await() }
+    }
+
+    @Test
+    @MediumTest
+    fun testExecutionFinishes_notifiesForegroundListener() = runBlocking {
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val id = request.workSpec.generationalId()
+        val startStopToken = StartStopToken(id)
+
+        val deferred = CompletableDeferred<Pair<WorkGenerationalId, Boolean>>()
+
+        val listener = ForegroundListener { generationalId, isForeground ->
+            if (!isForeground) {
+                deferred.complete(generationalId to isForeground)
+            }
+        }
+
+        processor.addForegroundListener(listener)
+
+        processor.startWork(startStopToken)
+
+        // Promote to foreground
+        processor.startForeground(startStopToken.id.workSpecId, foregroundInfo)
+
+        // Clean up / stop foreground work
+        val executionFinished = CompletableDeferred<Unit>()
+        processor.addExecutionListener { _, _ -> executionFinished.complete(Unit) }
+        val firstWorker = factory.awaitWorker(request.id)
+        (firstWorker as LatchWorker).mLatch.countDown()
+        withTimeout(3000) { executionFinished.await() }
+
+        val (notifiedId, foregroundState) = withTimeout(3000) { deferred.await() }
+        assertEquals(id, notifiedId)
+        assertFalse(foregroundState)
+    }
+
+    @Test
+    @MediumTest
+    fun testStopForegroundWork_notifiesListener() = runBlocking {
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val id = request.workSpec.generationalId()
+        val startStopToken = StartStopToken(id)
+
+        val deferred = CompletableDeferred<Pair<WorkGenerationalId, Boolean>>()
+
+        val listener = ForegroundListener { generationalId, isForeground ->
+            if (!isForeground) {
+                deferred.complete(generationalId to isForeground)
+            }
+        }
+
+        processor.addForegroundListener(listener)
+
+        processor.startWork(startStopToken)
+
+        // Promote to foreground
+        processor.startForeground(startStopToken.id.workSpecId, foregroundInfo)
+
+        val executionFinished = CompletableDeferred<Unit>()
+        processor.addExecutionListener { _, _ -> executionFinished.complete(Unit) }
+
+        // Stop foreground work explicitly
+        processor.stopForegroundWork(startStopToken, 0)
+
+        val (notifiedId, foregroundState) = withTimeout(3000) { deferred.await() }
+        assertEquals(id, notifiedId)
+        assertFalse(foregroundState)
+
+        // Wait for worker execution finish to clean up (stopForegroundWork interrupts LatchWorker)
+        withTimeout(3000) { executionFinished.await() }
+    }
+
+    /**
+     * b/571217003: Processor must not hold mLock while inside a binder transaction
+     * (startForegroundService). Otherwise every other mLock user — including the main-thread
+     * callers SystemJobService.onStopJob()/onStartJob() and Processor.onExecuted() — stalls for as
+     * long as ActivityManager takes, which on a loaded device is enough to miss JobScheduler's
+     * onStopJob deadline (JOB_SERVICE_STOP ANR).
+     */
+    @Test
+    @MediumTest
+    fun testStartForeground_doesNotBlockLockUsersWhileBinderIsSlow() {
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val id = request.workSpec.generationalId()
+        processor.startWork(StartStopToken(id))
+        val worker = factory.awaitWorker(request.id) as LatchWorker
+
+        // Emulate a slow ActivityManager: the next service transaction blocks until released.
+        // Dispatch startForeground on the serial task executor, matching WorkForegroundUpdater.
+        val slowBinder = context.gateNextTransaction()
+        serialExecutor.execute { processor.startForeground(id.workSpecId, foregroundInfo) }
+        try {
+            assertTrue(context.awaitTransactionStarted(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            // Exactly what SystemJobService does on the main thread while that binder is in
+            // flight.
+            assertFalse(callWithTimeout { processor.isCancelled(id.workSpecId) }) // onStopJob
+            assertTrue(callWithTimeout { processor.isForeground(id) }) // onStartJob
+            assertTrue(callWithTimeout { processor.hasWork() })
+            // And what any other worker's stop / onExecuted needs: the lock itself.
+            val other = StartStopToken(WorkGenerationalId("some-other-id", 0))
+            assertFalse(callWithTimeout { processor.stopWork(other, 0) })
+        } finally {
+            slowBinder.countDown()
+        }
+        awaitSerialExecutorIdle()
+
+        val executionFinished = CountDownLatch(1)
+        processor.addExecutionListener { _, _ -> executionFinished.countDown() }
+        worker.mLatch.countDown()
+        assertTrue(executionFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        awaitSerialExecutorIdle()
+    }
+
+    /**
+     * b/571217003: when a foreground worker finishes, Processor.onExecuted() runs on the main
+     * thread holding mLock. The stop-foreground-service transaction must not be issued from that
+     * path; it is deferred to the task executor and the lock is free while it is in flight.
+     */
+    @Test
+    @MediumTest
+    fun testForegroundWorkerFinished_stopServiceTransactionIsOffTheExecutedPath() {
+        val request = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(request)
+        val id = request.workSpec.generationalId()
+        processor.startWork(StartStopToken(id))
+        val worker = factory.awaitWorker(request.id) as LatchWorker
+        // Called directly on the test thread for setup while serialExecutor is idle.
+        processor.startForeground(id.workSpecId, foregroundInfo)
+        assertEquals(1, context.intents.size)
+
+        val slowBinder = context.gateNextTransaction()
+        val executionFinished = CountDownLatch(1)
+        var intentsDuringOnExecuted = -1
+        processor.addExecutionListener { _, _ ->
+            intentsDuringOnExecuted = context.intents.size
+            executionFinished.countDown()
+        }
+        worker.mLatch.countDown()
+        try {
+            // Listeners run at the end of onExecuted() after leaving its critical section. The
+            // stop-service transaction must not have been issued inline during onExecuted().
+            assertTrue(
+                "onExecuted() is blocked behind the stop-service transaction",
+                executionFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+            )
+            assertEquals(1, intentsDuringOnExecuted)
+            assertTrue(context.awaitTransactionStarted(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            // Transaction in flight on the task executor; mLock must be free.
+            assertFalse(callWithTimeout { processor.hasWork() })
+        } finally {
+            slowBinder.countDown()
+        }
+        awaitSerialExecutorIdle()
+        assertEquals(2, context.intents.size)
+        assertTrue(context.intents[1].filterEquals(createStopForegroundIntent(context)))
+    }
+
+    /**
+     * A deferred stop must be dropped if new foreground work started before it ran. Otherwise
+     * ACTION_STOP_FOREGROUND reaches SystemForegroundService after the newer start, and its stop()
+     * calls stopForeground(true) on a service that still has live foreground work.
+     */
+    @Test
+    @MediumTest
+    fun testDeferredStopForeground_isSkippedWhenNewForegroundWorkStarted() {
+        val first = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        val second = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(first)
+        insertWork(second)
+        val firstId = first.workSpec.generationalId()
+        val secondId = second.workSpec.generationalId()
+        processor.startWork(StartStopToken(firstId))
+        processor.startWork(StartStopToken(secondId))
+        val firstWorker = factory.awaitWorker(first.id) as LatchWorker
+        val secondWorker = factory.awaitWorker(second.id) as LatchWorker
+        // Called directly on the test thread for setup while serialExecutor is idle.
+        processor.startForeground(firstId.workSpecId, foregroundInfo)
+
+        // Park the task executor so a queued startForeground(secondId) and a subsequent stop of
+        // firstId accumulate on the serial queue in production FIFO order.
+        val parked = CountDownLatch(1)
+        serialExecutor.execute { parked.await(TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+        try {
+            serialExecutor.execute {
+                processor.startForeground(secondId.workSpecId, foregroundInfo)
+            }
+            processor.stopForegroundWork(StartStopToken(firstId), 0) // queues the deferred stop
+        } finally {
+            parked.countDown()
+        }
+        awaitSerialExecutorIdle()
+
+        val stopIntent = createStopForegroundIntent(context)
+        assertEquals(2, context.intents.size) // START first, START second — no STOP
+        assertTrue(context.intents.none { it.filterEquals(stopIntent) })
+        assertTrue(processor.isForeground(secondId))
+
+        processor.stopForegroundWork(StartStopToken(secondId), 0)
+        awaitSerialExecutorIdle()
+        assertEquals(3, context.intents.size)
+        assertTrue(context.intents.last().filterEquals(stopIntent))
+        firstWorker.mLatch.countDown()
+        secondWorker.mLatch.countDown()
+    }
+
+    /**
+     * When two foreground sessions drain before the first deferred stop runnable executes, the
+     * first runnable stops the service and nulls `mForegroundLock`, and the second runnable sees
+     * `mForegroundLock == null` and drops the redundant `ACTION_STOP_FOREGROUND`.
+     */
+    @Test
+    @MediumTest
+    fun testDeferredStopForeground_coalescesBackToBackStops() {
+        val first = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        val second = OneTimeWorkRequest.Builder(LatchWorker::class.java).build()
+        insertWork(first)
+        insertWork(second)
+        val firstId = first.workSpec.generationalId()
+        val secondId = second.workSpec.generationalId()
+        processor.startWork(StartStopToken(firstId))
+        processor.startWork(StartStopToken(secondId))
+        val firstWorker = factory.awaitWorker(first.id) as LatchWorker
+        val secondWorker = factory.awaitWorker(second.id) as LatchWorker
+        // Called directly on the test thread for setup while serialExecutor is idle.
+        processor.startForeground(firstId.workSpecId, foregroundInfo)
+
+        // Simulate setForegroundAsync(secondId) already running on serialExecutor when firstId
+        // stops (queuing stop #1), then promoting secondId on serialExecutor, and secondId
+        // stopping (queuing stop #2) before the active serialExecutor task finishes.
+        val firstStopped = CountDownLatch(1)
+        val secondPromoted = CountDownLatch(1)
+        val secondStopped = CountDownLatch(1)
+        serialExecutor.execute {
+            firstStopped.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            processor.startForeground(secondId.workSpecId, foregroundInfo)
+            secondPromoted.countDown()
+            secondStopped.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+        try {
+            processor.stopForegroundWork(StartStopToken(firstId), 0) // queues stop #1
+            firstStopped.countDown()
+            assertTrue(secondPromoted.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            processor.stopForegroundWork(StartStopToken(secondId), 0) // queues stop #2
+        } finally {
+            firstStopped.countDown()
+            secondStopped.countDown()
+        }
+        awaitSerialExecutorIdle()
+
+        val stopIntent = createStopForegroundIntent(context)
+        assertEquals(3, context.intents.size) // START first, START second, single STOP
+        assertEquals(1, context.intents.count { it.filterEquals(stopIntent) })
+        assertTrue(context.intents.last().filterEquals(stopIntent))
+        firstWorker.mLatch.countDown()
+        secondWorker.mLatch.countDown()
+    }
+
+    /**
+     * Runs [block] on its own thread and fails if it has not returned within [LOCK_WAIT_LIMIT_MS] —
+     * i.e. if it is waiting on a lock that is held across a binder.
+     */
+    private fun <T> callWithTimeout(block: () -> T): T {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val future = executor.submit(block)
+            return try {
+                future.get(LOCK_WAIT_LIMIT_MS, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                throw AssertionError(
+                    "Processor call blocked for > $LOCK_WAIT_LIMIT_MS ms " +
+                        "(mLock held across a binder transaction?)",
+                    e,
+                )
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
     @After
     fun tearDown() {
+        // Workers first: they are what enqueues follow up work onto the task executor.
         defaultExecutor.shutdownNow()
-        backgroundExecutor.shutdownNow()
         assertTrue(defaultExecutor.awaitTermination(3, TimeUnit.SECONDS))
+        // Then drain before shutting the task executor down. Shutting its delegate down while
+        // SerialExecutorImpl still holds queued work makes it hand a task to a dead executor, and
+        // that rejection surfaces on the task executor's own thread, where no caller can catch it,
+        // so it kills the test process instead of failing a test. b/560357724
+        awaitSerialExecutorIdle()
+        backgroundExecutor.shutdownNow()
         assertTrue(backgroundExecutor.awaitTermination(3, TimeUnit.SECONDS))
     }
 
+    /**
+     * Blocks until the task executor has run everything queued on it.
+     *
+     * A single barrier isn't enough, because a drained task can enqueue more work behind the
+     * barrier. The runnable re-posts itself until it finds the queue empty.
+     */
+    private fun awaitSerialExecutorIdle() {
+        val drained = CountDownLatch(1)
+        lateinit var idleRunnable: Runnable
+        idleRunnable = Runnable {
+            if (serialExecutor.hasPendingTasks()) {
+                serialExecutor.execute(idleRunnable)
+            } else {
+                drained.countDown()
+            }
+        }
+        serialExecutor.execute(idleRunnable)
+        assertTrue(drained.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+    }
+
     private class TrackingContext(base: Context) : ContextWrapper(base) {
-        val intents = mutableListOf<Intent>()
+        /** Service intents "sent"; written from several threads once stops are deferred. */
+        val intents = CopyOnWriteArrayList<Intent>()
+        private val transactionStarted = Semaphore(0)
+        @Volatile private var binderGate: CountDownLatch? = null
+
+        /** Makes the next start/stop-service transaction block, emulating a slow AMS. */
+        fun gateNextTransaction(): CountDownLatch {
+            transactionStarted.drainPermits()
+            return CountDownLatch(1).also { binderGate = it }
+        }
+
+        fun awaitTransactionStarted(timeout: Long, unit: TimeUnit): Boolean =
+            transactionStarted.tryAcquire(timeout, unit)
 
         override fun startService(service: Intent): ComponentName? {
             // don't start anything, simply track requests
+            transactionStarted.release()
+            // Bounded (and longer than any assertion timeout) so a failing test reports the
+            // assertion that timed out instead of wedging the executor.
+            val gate = binderGate
+            if (gate != null) {
+                gate.await(2 * TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                binderGate = null
+            }
             intents.add(service)
             // result isn't used so simply return null
             return null
@@ -288,5 +762,13 @@ class ProcessorTests : DatabaseTest() {
             // simply track it
             return startService(service)
         }
+    }
+
+    private companion object {
+        // Satisfied immediately in the happy path; the bound exists so a regression fails the
+        // test rather than hanging it.
+        const val TIMEOUT_SECONDS = 10L
+        // Generous upper bound for a Processor call that must not wait on a binder.
+        const val LOCK_WAIT_LIMIT_MS = 5_000L
     }
 }

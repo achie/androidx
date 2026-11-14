@@ -35,7 +35,8 @@ public final class MetadataExtras {
      *
      * <p>NOTE: media1 and media3 apps setting this extra <b>must implement</b>
      * {@link androidx.media.MediaBrowserServiceCompat#onLoadItem} or
-     * {@link  androidx.media3.session.MediaLibraryService.Callback#onGetItem} respectively.
+     * {@link  androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback#onGetItem}
+     * respectively.
      * <p>NOTE: media apps setting this extra <b>must explicitly set the subtitle property</b>.
      * <p>See {@link android.support.v4.media.MediaMetadataCompat#METADATA_KEY_DISPLAY_SUBTITLE}
      * <p>See {@link androidx.media3.common.MediaMetadata#subtitle}
@@ -69,7 +70,8 @@ public final class MetadataExtras {
      *
      * <p>NOTE: media1 and media3 apps setting this extra <b>must implement</b>
      * {@link androidx.media.MediaBrowserServiceCompat#onLoadItem} or
-     * {@link androidx.media3.session.MediaLibraryService.Callback#onGetItem} respectively.
+     * {@link androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback#onGetItem}
+     * respectively.
      * <p>NOTE: media apps setting this extra <b>must explicitly set the description property</b>.
      * <p>See {@link android.support.v4.media.MediaMetadataCompat#METADATA_KEY_DISPLAY_DESCRIPTION}
      * <p>See {@link androidx.media3.common.MediaMetadata#description}
@@ -155,4 +157,38 @@ public final class MetadataExtras {
      */
     public static final String KEY_TINTABLE_INDICATOR_ICON_URI_LIST =
             "androidx.car.app.mediaextensions.KEY_TINTABLE_INDICATOR_ICON_URI_LIST";
+
+    /**
+     * {@link Bundle} key used in the metadata of the currently playing media item to request a
+     * custom accent color for media playback controls (such as the play/pause button and the
+     * progress bar) when the host displays dark surfaces, for example in a dark theme. Choose a
+     * light color that contrasts with dark backgrounds, for example white.
+     *
+     * <p>The host uses its default colors if the contrast requirements are not met. It is
+     * recommended to set both this key and {@link #KEY_MEDIA_ACCENT_COLOR_DARK}.
+     *
+     * <p>TYPE: long - an ARGB color, for example {@code 0xFFFFFFFFL}. The color is always drawn
+     * fully opaque.
+     *
+     * @see #KEY_MEDIA_ACCENT_COLOR_DARK
+     */
+    public static final String KEY_MEDIA_ACCENT_COLOR =
+            "androidx.car.app.mediaextensions.KEY_MEDIA_ACCENT_COLOR";
+
+    /**
+     * {@link Bundle} key used in the metadata of the currently playing media item to request a
+     * custom accent color for media playback controls (such as the play/pause button and the
+     * progress bar) when the host displays light surfaces, for example in a light theme. Choose a
+     * dark color that contrasts with light backgrounds, for example black.
+     *
+     * <p>The host uses its default colors if the contrast requirements are not met. It is
+     * recommended to set both this key and {@link #KEY_MEDIA_ACCENT_COLOR}.
+     *
+     * <p>TYPE: long - an ARGB color, for example {@code 0xFF000000L}. The color is always drawn
+     * fully opaque.
+     *
+     * @see #KEY_MEDIA_ACCENT_COLOR
+     */
+    public static final String KEY_MEDIA_ACCENT_COLOR_DARK =
+            "androidx.car.app.mediaextensions.KEY_MEDIA_ACCENT_COLOR_DARK";
 }

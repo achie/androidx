@@ -16,17 +16,29 @@
 
 package androidx.camera.camera2.adapter
 
+import android.graphics.ColorSpace
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW
+import android.hardware.camera2.CameraDevice.TEMPLATE_RECORD
+import android.hardware.camera2.CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG
+import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
+import android.os.Build
 import android.util.Range
 import android.view.Surface
 import androidx.camera.camera2.impl.Camera2ImplConfig
+import androidx.camera.camera2.impl.createCaptureRequestOption
+import androidx.camera.camera2.impl.createSessionParameterOption
 import androidx.camera.camera2.pipe.OutputStream.StreamUseHint
 import androidx.camera.core.Preview
 import androidx.camera.core.impl.DeferrableSurface
 import androidx.camera.core.impl.MutableOptionsBundle
 import androidx.camera.core.impl.SessionConfig
+import androidx.camera.core.impl.UseCaseConfig
+import androidx.camera.core.impl.UseCaseConfigFactory
 import androidx.camera.core.impl.utils.futures.Futures
 import androidx.camera.core.streamsharing.StreamSharing
 import androidx.camera.testing.impl.fakes.FakeUseCase
@@ -37,7 +49,11 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import junit.framework.TestCase
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Rule
 import org.junit.Test
@@ -130,6 +146,142 @@ class SessionConfigAdapterTest {
         // at a time.
         assertThat(errorListener.results.size).isEqualTo(1)
         assertThat(errorListener.results[0].second)
+            .isEqualTo(SessionConfig.SessionError.SESSION_ERROR_SURFACE_NEEDS_RESET)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun reportInvalidSurface_sessionConfigReplacedBeforeMainDispatch_doesNotNotifyStaleOrNew() {
+        val testDispatcher = StandardTestDispatcher()
+        Dispatchers.setMain(testDispatcher)
+        try {
+            // Arrange: UseCase initially has sessionConfig1 with surface1 and errorListener1
+            val surface1 = createTestDeferrableSurface().apply { close() }
+            val surface2 = createTestDeferrableSurface()
+            val errorListener1 =
+                object : SessionConfig.ErrorListener {
+                    val results = mutableListOf<Pair<SessionConfig, SessionConfig.SessionError>>()
+
+                    override fun onError(
+                        sessionConfig: SessionConfig,
+                        error: SessionConfig.SessionError,
+                    ) {
+                        results.add(Pair(sessionConfig, error))
+                    }
+                }
+            val errorListener2 =
+                object : SessionConfig.ErrorListener {
+                    val results = mutableListOf<Pair<SessionConfig, SessionConfig.SessionError>>()
+
+                    override fun onError(
+                        sessionConfig: SessionConfig,
+                        error: SessionConfig.SessionError,
+                    ) {
+                        results.add(Pair(sessionConfig, error))
+                    }
+                }
+
+            val fakeTestUseCase = createFakeTestUseCase {
+                it.setupSessionConfig(
+                    SessionConfig.Builder().apply {
+                        setTemplateType(TEMPLATE_PREVIEW)
+                        addSurface(surface1)
+                        setErrorListener(errorListener1)
+                    }
+                )
+            }
+            val adapter = SessionConfigAdapter(useCases = listOf(fakeTestUseCase))
+
+            // Act: background thread reports surface1 invalid before main-thread dispatch runs,
+            // and the main thread concurrently replaces the UseCase's SessionConfig with surface2.
+            adapter.reportSurfaceInvalid(surface1)
+            fakeTestUseCase.setupSessionConfig(
+                SessionConfig.Builder().apply {
+                    setTemplateType(TEMPLATE_PREVIEW)
+                    addSurface(surface2)
+                    setErrorListener(errorListener2)
+                }
+            )
+            testDispatcher.scheduler.advanceUntilIdle()
+
+            // Assert: neither the stale SessionConfig nor the newly attached SessionConfig
+            // should receive SESSION_ERROR_SURFACE_NEEDS_RESET for surface1.
+            assertThat(errorListener1.results).isEmpty()
+            assertThat(errorListener2.results).isEmpty()
+        } finally {
+            Dispatchers.setMain(MoreExecutors.directExecutor().asCoroutineDispatcher())
+        }
+    }
+
+    @Test
+    fun reportInvalidSurface_secondarySessionConfig_notifiesSecondaryErrorListener() {
+        // Arrange
+        val primarySurface = createTestDeferrableSurface()
+        val secondarySurface = createTestDeferrableSurface().apply { close() }
+        val primaryErrorResults = mutableListOf<Pair<SessionConfig, SessionConfig.SessionError>>()
+        val secondaryErrorResults = mutableListOf<Pair<SessionConfig, SessionConfig.SessionError>>()
+
+        val fakeTestUseCase = createFakeTestUseCase {
+            it.setupSessionConfigs(
+                primarySessionConfigBuilder =
+                    SessionConfig.Builder().apply {
+                        setTemplateType(TEMPLATE_PREVIEW)
+                        addSurface(primarySurface)
+                        setErrorListener { sessionConfig, error ->
+                            primaryErrorResults.add(Pair(sessionConfig, error))
+                        }
+                    },
+                secondarySessionConfigBuilder =
+                    SessionConfig.Builder().apply {
+                        setTemplateType(TEMPLATE_PREVIEW)
+                        addSurface(secondarySurface)
+                        setErrorListener { sessionConfig, error ->
+                            secondaryErrorResults.add(Pair(sessionConfig, error))
+                        }
+                    },
+            )
+        }
+
+        // Act
+        SessionConfigAdapter(useCases = listOf(fakeTestUseCase), isPrimary = false)
+            .reportSurfaceInvalid(secondarySurface)
+
+        // Assert
+        assertThat(primaryErrorResults).isEmpty()
+        assertThat(secondaryErrorResults).hasSize(1)
+        assertThat(secondaryErrorResults[0].first).isEqualTo(fakeTestUseCase.secondarySessionConfig)
+        assertThat(secondaryErrorResults[0].second)
+            .isEqualTo(SessionConfig.SessionError.SESSION_ERROR_SURFACE_NEEDS_RESET)
+    }
+
+    @Test
+    fun reportInvalidSurface_postviewSurface_notifiesErrorListener() {
+        // Arrange
+        val primarySurface = createTestDeferrableSurface()
+        val postviewSurface = createTestDeferrableSurface().apply { close() }
+        val errorResults = mutableListOf<Pair<SessionConfig, SessionConfig.SessionError>>()
+
+        val fakeTestUseCase = createFakeTestUseCase {
+            it.setupSessionConfig(
+                SessionConfig.Builder().apply {
+                    setTemplateType(TEMPLATE_PREVIEW)
+                    addSurface(primarySurface)
+                    setPostviewSurface(postviewSurface)
+                    setErrorListener { sessionConfig, error ->
+                        errorResults.add(Pair(sessionConfig, error))
+                    }
+                }
+            )
+        }
+
+        // Act
+        SessionConfigAdapter(useCases = listOf(fakeTestUseCase))
+            .reportSurfaceInvalid(postviewSurface)
+
+        // Assert
+        assertThat(errorResults).hasSize(1)
+        assertThat(errorResults[0].first).isEqualTo(fakeTestUseCase.sessionConfig)
+        assertThat(errorResults[0].second)
             .isEqualTo(SessionConfig.SessionError.SESSION_ERROR_SURFACE_NEEDS_RESET)
     }
 
@@ -250,6 +402,153 @@ class SessionConfigAdapterTest {
         assertThat(mapping[fakeSurface2]).isEqualTo(StreamUseHint.DEFAULT.value)
     }
 
+    @Test
+    fun sessionInteropConfig_overridesTemplateTypeAndPropagatesCallbacksAndOptions() {
+        val surface = createTestDeferrableSurface()
+        val videoUseCase = createFakeTestUseCase {
+            it.setupSessionConfig(
+                SessionConfig.Builder().apply {
+                    setTemplateType(TEMPLATE_RECORD)
+                    addSurface(surface)
+                }
+            )
+        }
+        val deviceCallback =
+            object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {}
+
+                override fun onDisconnected(camera: CameraDevice) {}
+
+                override fun onError(camera: CameraDevice, error: Int) {}
+            }
+        val sessionCallback =
+            object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {}
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {}
+            }
+        val repeatingCallback = object : CameraCaptureSession.CaptureCallback() {}
+        val sessionParamOpt = CaptureRequest.CONTROL_AWB_MODE.createSessionParameterOption()
+        val interopConfig =
+            MutableOptionsBundle.create().apply {
+                insertOption(Camera2ImplConfig.TEMPLATE_TYPE_OPTION, TEMPLATE_PREVIEW)
+                insertOption(Camera2ImplConfig.DEVICE_STATE_CALLBACK_OPTION, deviceCallback)
+                insertOption(Camera2ImplConfig.SESSION_STATE_CALLBACK_OPTION, sessionCallback)
+                insertOption(
+                    Camera2ImplConfig.SESSION_REPEATING_CAPTURE_CALLBACK_OPTION,
+                    repeatingCallback,
+                )
+                insertOption(Camera2ImplConfig.SESSION_PHYSICAL_CAMERA_ID_OPTION, "2")
+                insertOption(Camera2ImplConfig.SESSION_TYPE_OPTION, 1)
+                if (Build.VERSION.SDK_INT >= 34) {
+                    insertOption(
+                        Camera2ImplConfig.SESSION_COLOR_SPACE_OPTION,
+                        ColorSpace.Named.DISPLAY_P3.ordinal,
+                    )
+                }
+                insertOption(
+                    sessionParamOpt,
+                    androidx.camera.core.impl.Config.OptionPriority.ALWAYS_OVERRIDE,
+                    CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT,
+                )
+                insertOption(
+                    CaptureRequest.CONTROL_AE_MODE.createCaptureRequestOption(),
+                    androidx.camera.core.impl.Config.OptionPriority.ALWAYS_OVERRIDE,
+                    CaptureRequest.CONTROL_AE_MODE_OFF,
+                )
+            }
+
+        val resolved =
+            SessionConfigAdapter(
+                    useCases = listOf(videoUseCase),
+                    sessionInteropConfig = interopConfig,
+                )
+                .getValidSessionConfigOrNull()
+
+        assertThat(resolved).isNotNull()
+        assertThat(resolved!!.templateType).isEqualTo(TEMPLATE_PREVIEW)
+        assertThat(resolved.deviceStateCallbacks).contains(deviceCallback)
+        assertThat(resolved.sessionStateCallbacks).contains(sessionCallback)
+        assertThat(resolved.repeatingCameraCaptureCallbacks)
+            .contains(CameraUseCaseAdapter.CaptureCallbackContainer.create(repeatingCallback))
+        val resolvedCamera2Config = Camera2ImplConfig(resolved.implementationOptions)
+        assertThat(resolvedCamera2Config.getPhysicalCameraId(null)).isEqualTo("2")
+        assertThat(resolvedCamera2Config.getSessionType(-1)).isEqualTo(1)
+        if (Build.VERSION.SDK_INT >= 34) {
+            assertThat(resolvedCamera2Config.getColorSpace(null))
+                .isEqualTo(ColorSpace.Named.DISPLAY_P3.ordinal)
+        }
+        assertThat(resolved.implementationOptions.retrieveOption(sessionParamOpt))
+            .isEqualTo(CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT)
+        assertThat(
+                resolvedCamera2Config.getCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, -1)
+            )
+            .isEqualTo(CaptureRequest.CONTROL_AE_MODE_OFF)
+    }
+
+    @Test
+    @Config(minSdk = 33)
+    fun sessionInteropConfig_withZslTemplate_suppressesStreamUseCaseMapping() {
+        val surface = createTestDeferrableSurface()
+        val useCaseConfig =
+            FakeUseCaseConfig.Builder(UseCaseConfigFactory.CaptureType.PREVIEW)
+                .apply {
+                    mutableConfig.insertOption(
+                        UseCaseConfig.OPTION_INPUT_FORMAT,
+                        ImageFormat.PRIVATE,
+                    )
+                }
+                .useCaseConfig
+        val previewUseCase =
+            FakeTestUseCase(useCaseConfig).apply {
+                setupSessionConfig(
+                    SessionConfig.Builder().apply {
+                        setTemplateType(TEMPLATE_PREVIEW)
+                        addSurface(surface)
+                        addImplementationOptions(
+                            MutableOptionsBundle.create().apply {
+                                insertOption(
+                                    androidx.camera.camera2.internal.StreamUseCaseUtil
+                                        .STREAM_USE_CASE_STREAM_SPEC_OPTION,
+                                    android.hardware.camera2.CameraMetadata
+                                        .SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW
+                                        .toLong(),
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        val zslInteropConfig =
+            MutableOptionsBundle.create().apply {
+                insertOption(Camera2ImplConfig.TEMPLATE_TYPE_OPTION, TEMPLATE_ZERO_SHUTTER_LAG)
+            }
+
+        val nonZslAdapter = SessionConfigAdapter(useCases = listOf(previewUseCase))
+        val zslAdapter =
+            SessionConfigAdapter(
+                useCases = listOf(previewUseCase),
+                sessionInteropConfig = zslInteropConfig,
+            )
+
+        assertThat(nonZslAdapter.surfaceConfigOptionsMap[surface]?.streamUseCase).isNotNull()
+        assertThat(zslAdapter.surfaceConfigOptionsMap[surface]?.streamUseCase).isNull()
+    }
+
+    @Test
+    fun sessionInteropConfig_withEmptyUseCases_keepsAdapterInvalid() {
+        val interopConfig =
+            MutableOptionsBundle.create().apply {
+                insertOption(Camera2ImplConfig.TEMPLATE_TYPE_OPTION, TEMPLATE_RECORD)
+            }
+
+        val adapter =
+            SessionConfigAdapter(useCases = emptyList(), sessionInteropConfig = interopConfig)
+
+        assertThat(adapter.isSessionConfigValid()).isFalse()
+        assertThat(adapter.getValidSessionConfigOrNull()).isNull()
+    }
+
     private fun createFakeTestUseCase(block: (FakeTestUseCase) -> Unit): FakeTestUseCase = run {
         val configBuilder = FakeUseCaseConfig.Builder().setTargetName("UseCase")
         FakeTestUseCase(configBuilder.useCaseConfig).also { block(it) }
@@ -283,6 +582,16 @@ class FakeTestUseCase(config: FakeUseCaseConfig) : FakeUseCase(config) {
 
     fun setupSessionConfig(sessionConfigBuilder: SessionConfig.Builder) {
         updateSessionConfig(listOf(sessionConfigBuilder.build()))
+        notifyActive()
+    }
+
+    fun setupSessionConfigs(
+        primarySessionConfigBuilder: SessionConfig.Builder,
+        secondarySessionConfigBuilder: SessionConfig.Builder,
+    ) {
+        updateSessionConfig(
+            listOf(primarySessionConfigBuilder.build(), secondarySessionConfigBuilder.build())
+        )
         notifyActive()
     }
 

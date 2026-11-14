@@ -18,7 +18,16 @@ package androidx.wear.compose.material3
 
 import android.app.Activity
 import androidx.activity.ComponentActivity
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.TargetedFlingBehavior
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +35,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Delete
@@ -33,12 +44,23 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.LookaheadScope
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -48,14 +70,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso.onView
@@ -69,7 +94,10 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.wear.compose.foundation.BasicSwipeToDismissBox
 import androidx.wear.compose.foundation.GestureInclusion
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.foundation.rememberSwipeToDismissBoxState
 import androidx.wear.compose.material3.RevealActionType.Companion.None
 import androidx.wear.compose.material3.RevealActionType.Companion.PrimaryAction
@@ -92,13 +120,22 @@ import androidx.wear.widget.SwipeDismissFrameLayout
 import com.google.common.truth.StringSubject
 import com.google.common.truth.Truth.assertThat
 import junit.framework.TestCase.assertEquals
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.hamcrest.CoreMatchers.equalTo
+import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -106,70 +143,105 @@ import org.junit.Rule
 import org.junit.Test
 
 class SwipeToRevealTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Before
     fun setUp() {
         SingleSwipeCoordinator.lastUpdatedState.set(null)
     }
 
+    @After
+    fun tearDown() {
+        SingleSwipeCoordinator.lastUpdatedState.set(null)
+    }
+
     @Test
     fun onStateChangeToRevealed_performsHaptics() {
-        val results = mutableMapOf<HapticFeedbackType, Int>()
-        val haptics = hapticFeedback(collectResultsFromHapticFeedback(results))
-        lateinit var revealState: RevealState
-        lateinit var coroutineScope: CoroutineScope
+        assertHapticFeedback(
+            initialValue = RightRevealing,
+            action = { coroutineScope, revealState ->
+                rule.runOnIdle { coroutineScope.launch { revealState.animateTo(RightRevealed) } }
+            },
+            expectedHapticCount = 1,
+        )
+    }
 
-        rule.setContent {
-            revealState = rememberRevealState(initialValue = RightRevealing)
-            coroutineScope = rememberCoroutineScope()
-            CompositionLocalProvider(LocalHapticFeedback provides haptics) {
-                SwipeToRevealWithDefaults(
-                    modifier = Modifier.testTag(TEST_TAG),
-                    revealState = revealState,
-                )
-            }
-        }
+    @Test
+    fun onStateChangeToRevealing_performsHaptics() {
+        assertHapticFeedback(
+            initialValue = Covered,
+            action = { coroutineScope, revealState ->
+                rule.runOnIdle { coroutineScope.launch { revealState.animateTo(RightRevealing) } }
+            },
+            expectedHapticCount = 1,
+        )
+    }
 
-        rule.runOnIdle { assertThat(results).isEmpty() }
+    @Test
+    fun onSwipeSlowlyToFullyRevealed_performsHapticsTwice() {
+        assertHapticFeedback(
+            initialValue = Covered,
+            action = { _, _ ->
+                // We can not use swipeLeft/swipeRight for slowly swiping in test since
+                // composeTestRule will advance clock automatically and make it run very fast.
+                try {
+                    rule.mainClock.autoAdvance = false
 
-        rule.runOnIdle { coroutineScope.launch { revealState.animateTo(RightRevealed) } }
+                    rule.onNodeWithTag(TEST_TAG).performTouchInput {
+                        down(Offset(LARGE_SCREEN_WIDTH_DP * density * 0.9f, centerY))
+                    }
 
-        rule.runOnIdle {
-            assertThat(results).hasSize(1)
-            assertThat(results).containsKey(HapticFeedbackType.GestureThresholdActivate)
-            assertThat(results[HapticFeedbackType.GestureThresholdActivate]).isEqualTo(1)
-        }
+                    repeat(20) {
+                        rule.onNodeWithTag(TEST_TAG).performTouchInput { moveBy(Offset(-20f, 0f)) }
+                        rule.mainClock.advanceTimeBy(16)
+                        rule.waitForIdle()
+                    }
+
+                    rule.onNodeWithTag(TEST_TAG).performTouchInput { up() }
+                } finally {
+                    rule.mainClock.autoAdvance = true
+                }
+            },
+            expectedHapticCount = 2,
+        )
+    }
+
+    @Test
+    fun onFastFlingBeforeRevealing_performsHapticsOnce() {
+        assertHapticFeedback(
+            initialValue = Covered,
+            action = { _, _ ->
+                rule.onNodeWithTag(TEST_TAG).performTouchInput {
+                    swipeLeft(startX = 50 * density, endX = 0f, durationMillis = 100)
+                }
+            },
+            expectedHapticCount = 1,
+        )
+    }
+
+    @Test
+    fun onFastFlingAfterRevealing_performsHapticsOnce() {
+        assertHapticFeedback(
+            initialValue = Covered,
+            action = { _, _ ->
+                rule.onNodeWithTag(TEST_TAG).performTouchInput {
+                    swipeLeft(startX = 130 * density, endX = 0f, durationMillis = 100)
+                }
+            },
+            expectedHapticCount = 1,
+        )
     }
 
     @Test
     fun onStateChangeToLeftRevealed_performsHaptics() {
-        val results = mutableMapOf<HapticFeedbackType, Int>()
-        val haptics = hapticFeedback(collectResultsFromHapticFeedback(results))
-        lateinit var revealState: RevealState
-        lateinit var coroutineScope: CoroutineScope
-
-        rule.setContent {
-            CompositionLocalProvider(LocalHapticFeedback provides haptics) {
-                revealState = rememberRevealState(initialValue = LeftRevealing)
-                coroutineScope = rememberCoroutineScope()
-                SwipeToRevealWithDefaults(
-                    modifier = Modifier.testTag(TEST_TAG),
-                    revealState = revealState,
-                    revealDirection = Bidirectional,
-                )
-            }
-        }
-
-        rule.runOnIdle { assertThat(results).isEmpty() }
-
-        rule.runOnIdle { coroutineScope.launch { revealState.animateTo(LeftRevealed) } }
-
-        rule.runOnIdle {
-            assertThat(results).hasSize(1)
-            assertThat(results).containsKey(HapticFeedbackType.GestureThresholdActivate)
-            assertThat(results[HapticFeedbackType.GestureThresholdActivate]).isEqualTo(1)
-        }
+        assertHapticFeedback(
+            revealDirection = Bidirectional,
+            initialValue = LeftRevealing,
+            action = { coroutineScope, revealState ->
+                rule.runOnIdle { coroutineScope.launch { revealState.animateTo(LeftRevealed) } }
+            },
+            expectedHapticCount = 1,
+        )
     }
 
     @Test
@@ -359,6 +431,136 @@ class SwipeToRevealTest {
     }
 
     @Test
+    fun onSwipeRight_twoActions_swipePastRevealingState_doesNotShowSecondAction() {
+        verifyGestureTwoActions(
+            gesture = { swipeRight(startX = 0f, endX = 140 * density) },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertDoesNotExist()
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeRight_twoActions_swipeBelowRevealingThreshold_showsSecondAction() {
+        verifyGestureTwoActions(
+            gesture = { swipeRight(startX = 0f, endX = 120 * density) },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertExists()
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeRight_twoActions_swipePast75Percent_triggersAction() {
+        var onSwipePrimaryAction = false
+        verifyGestureTwoActions(
+            onSwipePrimaryAction = { onSwipePrimaryAction = true },
+            gesture = {
+                swipeRight(
+                    startX = 0f,
+                    endX = LARGE_SCREEN_WIDTH_DP * density * 0.76f,
+                    durationMillis = 2000,
+                )
+            },
+            assertions = {
+                rule.waitForIdle()
+                rule.runOnIdle { assertTrue(onSwipePrimaryAction) }
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeRight_twoActions_swipeBelow75Percent_doesNotTriggerAction() {
+        var onSwipePrimaryAction = false
+
+        verifyGestureTwoActions(
+            onSwipePrimaryAction = { onSwipePrimaryAction = true },
+            gesture = {
+                swipeRight(
+                    startX = 0f,
+                    endX = LARGE_SCREEN_WIDTH_DP * density * 0.74f,
+                    durationMillis = 2000,
+                )
+            },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertExists()
+                rule.runOnIdle { assertFalse(onSwipePrimaryAction) }
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeLeft_twoActions_swipePastRevealingThreshold_doesNotShowSecondAction() {
+        verifyGestureTwoActions(
+            gesture = { swipeLeft(startX = 140 * density, endX = 0f) },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertDoesNotExist()
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeLeft_twoActions_swipeBelowRevealingThreshold_showsSecondAction() {
+        verifyGestureTwoActions(
+            gesture = { swipeLeft(startX = 120 * density, endX = 0f) },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertExists()
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeLeft_twoActions_swipePast75Percent_triggersAction() {
+        var onSwipePrimaryAction = false
+        verifyGestureTwoActions(
+            onSwipePrimaryAction = { onSwipePrimaryAction = true },
+            gesture = {
+                swipeLeft(
+                    startX = LARGE_SCREEN_WIDTH_DP * density * 0.76f,
+                    endX = 0f,
+                    durationMillis = 2000,
+                )
+            },
+            assertions = {
+                rule.waitForIdle()
+                rule.runOnIdle { assertTrue(onSwipePrimaryAction) }
+            },
+        )
+    }
+
+    @Test
+    fun onSwipeLeft_twoActions_swipeBelow75Percent_doesNotTriggerAction() {
+        var onSwipePrimaryAction = false
+
+        verifyGestureTwoActions(
+            onSwipePrimaryAction = { onSwipePrimaryAction = true },
+            gesture = {
+                swipeLeft(
+                    startX = LARGE_SCREEN_WIDTH_DP * density * 0.74f,
+                    endX = 0f,
+                    durationMillis = 2000,
+                )
+            },
+            assertions = {
+                rule.waitForIdle()
+                rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+                rule.onNodeWithTag(SECONDARY_ACTION_TAG).assertExists()
+                rule.runOnIdle { assertFalse(onSwipePrimaryAction) }
+            },
+        )
+    }
+
+    @Test
     fun onFullSwipe_drawsAction() {
         rule.setContent {
             SwipeToRevealWithDefaults(
@@ -374,6 +576,26 @@ class SwipeToRevealTest {
 
         rule.waitForIdle()
         rule.onNodeWithTag(UNDO_PRIMARY_ACTION_TAG).assertExists()
+    }
+
+    @Test
+    fun onFullSwipeLeft_singleAction_hideMainButton() {
+        verifyFullSwipeShouldHideContent()
+    }
+
+    @Test
+    fun onFullSwipeRight_singleAction_hideMainButton() {
+        verifyFullSwipeShouldHideContent(swipeRight = true)
+    }
+
+    @Test
+    fun onFullSwipeLeft_twoActions_hideMainButton() {
+        verifyFullSwipeShouldHideContent(hasSecondAction = true)
+    }
+
+    @Test
+    fun onFullSwipeRight_twoActions_hideMainButton() {
+        verifyFullSwipeShouldHideContent(hasSecondAction = true, swipeRight = true)
     }
 
     @Test
@@ -475,8 +697,15 @@ class SwipeToRevealTest {
     }
 
     @Test
-    fun onAboveVelocityThresholdSmallDistanceSwipe_stateToRevealing() {
+    fun onAboveVelocityRevealingThresholdSmallDistanceSwipe_stateToRevealing() {
         verifyGesture(expectedRevealValue = RightRevealing, enableTouchSlop = false) { density ->
+            swipeLeft(endX = (LARGE_SCREEN_WIDTH_DP - 32) * density, durationMillis = 100L)
+        }
+    }
+
+    @Test
+    fun onAboveVelocityRevealedThresholdSmallDistanceSwipe_stateToRevealing() {
+        verifyGesture(expectedRevealValue = RightRevealed, enableTouchSlop = false) { density ->
             swipeLeft(endX = (LARGE_SCREEN_WIDTH_DP - 32) * density, durationMillis = 30L)
         }
     }
@@ -489,8 +718,15 @@ class SwipeToRevealTest {
     }
 
     @Test
-    fun onAboveVelocityThresholdLongDistanceSwipe_stateToRevealing() {
+    fun onAboveVelocityRevealingThresholdLongDistanceSwipe_stateToRevealing() {
         verifyGesture(expectedRevealValue = RightRevealing, enableTouchSlop = false) { density ->
+            swipeLeft(endX = (LARGE_SCREEN_WIDTH_DP - 64) * density, durationMillis = 100L)
+        }
+    }
+
+    @Test
+    fun onAboveVelocityRevealedThresholdLongDistanceSwipe_stateToRevealing() {
+        verifyGesture(expectedRevealValue = RightRevealed, enableTouchSlop = false) { density ->
             swipeLeft(endX = (LARGE_SCREEN_WIDTH_DP - 64) * density, durationMillis = 30L)
         }
     }
@@ -505,7 +741,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipe_lastStateRevealing_resetsLastState() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealing state
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
                     swipeLeftToRevealing(density)
@@ -526,7 +762,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipe_whenLastStateRevealed_doesNotReset() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealed (full screen swipe)
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
 
@@ -546,7 +782,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipeRight_lastStateRevealing_resetsLastState() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealing state
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
                     swipeRightToRevealing(density)
@@ -568,7 +804,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipeRight_whenLastStateRevealed_doesNotReset() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealed (full screen swipe)
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeRight() }
 
@@ -589,7 +825,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipeRightAndLeft_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealing state
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
                     swipeRightToRevealing(density)
@@ -611,7 +847,7 @@ class SwipeToRevealTest {
     @Test
     fun onPartialSwipeLeftAndRight_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actions = { revealStateOne, revealStateTwo, density ->
+            actions = { _, _, density ->
                 // swipe the first S2R to Revealing state
                 rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
                     swipeLeftToRevealing(density)
@@ -633,7 +869,7 @@ class SwipeToRevealTest {
     @Test
     fun onMultiSnap_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, revealStateTwo, _ ->
                 // First change
                 revealStateOne.snapTo(RightRevealing)
                 // Second change, in a different component
@@ -650,11 +886,11 @@ class SwipeToRevealTest {
     fun onMultiSnap_sameComponents_doesNotReset() {
         val lastValue = RightRevealed
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, _, _ ->
                 revealStateOne.snapTo(RightRevealing) // First change
                 revealStateOne.snapTo(lastValue) // Second change, same component
             },
-            assertions = { revealStateOne, revealStateTwo ->
+            assertions = { revealStateOne, _ ->
                 assertEquals(lastValue, revealStateOne.currentValue)
             },
         )
@@ -663,7 +899,7 @@ class SwipeToRevealTest {
     @Test
     fun onMultiSnapRight_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, revealStateTwo, _ ->
                 // First change
                 revealStateOne.snapTo(LeftRevealing)
                 // Second change, in a different component
@@ -681,12 +917,12 @@ class SwipeToRevealTest {
     fun onMultiSnapRight_sameComponents_doesNotReset() {
         val lastValue = LeftRevealed
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, _, _ ->
                 revealStateOne.snapTo(LeftRevealing) // First change
                 revealStateOne.snapTo(lastValue) // Second change, same component
             },
             revealDirection = Bidirectional,
-            assertions = { revealStateOne, revealStateTwo ->
+            assertions = { revealStateOne, _ ->
                 assertEquals(lastValue, revealStateOne.currentValue)
             },
         )
@@ -695,7 +931,7 @@ class SwipeToRevealTest {
     @Test
     fun onMultiSnapRightAndLeft_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, revealStateTwo, _ ->
                 // First change
                 revealStateOne.snapTo(RightRevealing)
                 // Second change, in a different component
@@ -712,7 +948,7 @@ class SwipeToRevealTest {
     @Test
     fun onMultiSnapLeftAndRight_differentComponents_lastOneGetsReset() {
         verifyStateMultipleSwipeToReveal(
-            actionsSuspended = { revealStateOne, revealStateTwo, density ->
+            actionsSuspended = { revealStateOne, revealStateTwo, _ ->
                 // First change
                 revealStateOne.snapTo(LeftRevealing)
                 // Second change, in a different component
@@ -862,7 +1098,7 @@ class SwipeToRevealTest {
         var density = 0f
         rule.setContent {
             with(LocalDensity.current) { density = this.density }
-            ScreenConfiguration(screenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
                 revealState = rememberRevealState(Covered)
                 SwipeToRevealWithDefaults(
                     modifier = Modifier.testTag(TEST_TAG),
@@ -922,6 +1158,460 @@ class SwipeToRevealTest {
         verifyActionCenterVerticalAligned(60.dp, 70.dp)
     }
 
+    @Test
+    fun anchoredDrag_customAnimation_updatesOffset() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        val targetValue = RightRevealing
+
+        rule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = { DefaultPrimaryActionButton() },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+        }
+
+        val targetOffset = rule.runOnIdle {
+            revealState.anchoredDraggableState.anchors.positionOf(targetValue)
+        }
+        assertFalse(targetOffset.isNaN())
+
+        rule.mainClock.autoAdvance = false
+        rule.runOnIdle {
+            coroutineScope.launch {
+                revealState.drag {
+                    animate(
+                        initialValue = revealState.offset,
+                        targetValue = targetOffset,
+                        animationSpec = tween(durationMillis = 100),
+                    ) { value, _ ->
+                        dragTo(value)
+                    }
+                }
+            }
+        }
+
+        rule.mainClock.advanceTimeBy(50)
+        val offsetAt50 = revealState.offset
+        assertTrue(abs(offsetAt50) > 0)
+        assertTrue(abs(offsetAt50) < abs(targetOffset))
+
+        rule.mainClock.advanceTimeBy(50)
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+        assertEquals(targetOffset, revealState.offset, 0.1f)
+        assertEquals(targetValue, revealState.currentValue)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun anchoredDrag_higherPriorityDrag_cancelsLowerPriorityDrag() {
+        lateinit var revealState: RevealState
+        var lowPriorityStarted = false
+        var lowPriorityCancelled = false
+        var highPriorityStarted = false
+        rule.setContent {
+            revealState = rememberRevealState(Covered)
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = { DefaultPrimaryActionButton() },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+        }
+
+        rule.waitForIdle()
+
+        runTest {
+            val lowPriorityJob = launch {
+                try {
+                    revealState.drag(MutatePriority.Default) {
+                        lowPriorityStarted = true
+                        // Suspend indefinitely to simulate an ongoing drag
+                        awaitCancellation()
+                    }
+                } catch (e: CancellationException) {
+                    lowPriorityCancelled = true
+                    throw e
+                }
+            }
+            runCurrent()
+
+            val highPriorityJob = launch {
+                revealState.drag(MutatePriority.UserInput) { highPriorityStarted = true }
+            }
+            runCurrent()
+
+            assertTrue("Low priority drag should have started", lowPriorityStarted)
+            assertTrue("Higher priority drag should have started", highPriorityStarted)
+            assertTrue("Lower priority drag should have been cancelled", lowPriorityCancelled)
+
+            lowPriorityJob.cancel()
+            highPriorityJob.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun anchoredDrag_lowerPriorityDrag_isCancelledIfHigherPriorityIsRunning() {
+        lateinit var revealState: RevealState
+        var lowPriorityStarted = false
+        var lowPriorityCancelled = false
+        var highPriorityCancelled = false
+        var highPriorityStarted = false
+        rule.setContent {
+            revealState = rememberRevealState(Covered)
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = { DefaultPrimaryActionButton() },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+        }
+
+        rule.waitForIdle()
+
+        runTest {
+            val highPriorityJob = launch {
+                try {
+                    revealState.drag(MutatePriority.UserInput) {
+                        highPriorityStarted = true
+                        // Suspend indefinitely to simulate an ongoing drag
+                        awaitCancellation()
+                    }
+                } catch (e: CancellationException) {
+                    highPriorityCancelled = true
+                    throw e
+                }
+            }
+            runCurrent()
+
+            val lowPriorityJob = launch {
+                try {
+                    revealState.drag(MutatePriority.Default) {
+                        lowPriorityStarted = true
+                        // Suspend indefinitely to simulate an ongoing drag
+                        awaitCancellation()
+                    }
+                } catch (e: CancellationException) {
+                    lowPriorityCancelled = true
+                    throw e
+                }
+            }
+            runCurrent()
+
+            assertTrue("Higher priority drag should have started", highPriorityStarted)
+            assertFalse("Higher priority drag should have not cancelled", highPriorityCancelled)
+            assertFalse("Lower priority drag should have not started", lowPriorityStarted)
+            assertTrue("Lower priority drag should have been cancelled", lowPriorityCancelled)
+
+            highPriorityJob.cancel()
+            lowPriorityJob.cancel()
+        }
+    }
+
+    @Test
+    fun anchoredDrag_withLowFlingVelocity_settlesAtRevealing() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        lateinit var flingBehavior: TargetedFlingBehavior
+
+        rule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = {
+                    DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                },
+                secondaryAction = {
+                    DefaultSecondaryActionButton(modifier = Modifier.testTag(SECONDARY_ACTION_TAG))
+                },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+            flingBehavior = SwipeToRevealDefaults.flingBehavior(revealState)
+        }
+
+        val directionMultiplier = -1
+        val scrollDistance =
+            with(rule.density) { directionMultiplier * MinimalSwipeDistance.toPx() }
+        val velocity = with(rule.density) { directionMultiplier * LowFlingVelocity.toPx() }
+
+        rule.runOnIdle {
+            coroutineScope.launch {
+                revealState.drag {
+                    val scrollScope =
+                        object : ScrollScope {
+                            override fun scrollBy(pixels: Float): Float {
+                                val start = revealState.offset
+                                if (start.isNaN()) return 0f
+
+                                dragTo(start + pixels)
+                                return revealState.offset - start
+                            }
+                        }
+                    scrollScope.scrollBy(scrollDistance)
+                    // Let the provided behavior run the physics!
+                    with(flingBehavior) {
+                        @Suppress("UNUSED_VARIABLE") val unused = scrollScope.performFling(velocity)
+                    }
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        assertEquals(RightRevealing, revealState.currentValue)
+    }
+
+    @Test
+    fun anchoredDrag_withHighFlingVelocity_settlesAtRevealed() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        lateinit var flingBehavior: TargetedFlingBehavior
+
+        rule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = {
+                    DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                },
+                secondaryAction = {
+                    DefaultSecondaryActionButton(modifier = Modifier.testTag(SECONDARY_ACTION_TAG))
+                },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+            flingBehavior = SwipeToRevealDefaults.flingBehavior(revealState)
+        }
+
+        val directionMultiplier = -1
+        val scrollDistance =
+            with(rule.density) { directionMultiplier * MinimalSwipeDistance.toPx() }
+        val velocity = with(rule.density) { directionMultiplier * HighFlingVelocity.toPx() }
+
+        rule.runOnIdle {
+            coroutineScope.launch {
+                revealState.drag {
+                    val scrollScope =
+                        object : ScrollScope {
+                            override fun scrollBy(pixels: Float): Float {
+                                val start = revealState.offset
+                                if (start.isNaN()) return 0f
+
+                                dragTo(start + pixels)
+                                return revealState.offset - start
+                            }
+                        }
+                    scrollScope.scrollBy(scrollDistance)
+                    // Let the provided behavior run the physics!
+                    with(flingBehavior) {
+                        @Suppress("UNUSED_VARIABLE") val unused = scrollScope.performFling(velocity)
+                    }
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        assertEquals(RightRevealed, revealState.currentValue)
+    }
+
+    @Test
+    fun anchoredDrag_dragTo_coercesToAnchors() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+
+        rule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                primaryAction = { DefaultPrimaryActionButton() },
+                content = { Box(Modifier.fillMaxSize().testTag(SWIPE_TO_REVEAL_TAG)) },
+            )
+        }
+
+        val minOffset = rule.runOnIdle { revealState.anchoredDraggableState.anchors.minPosition() }
+        val maxOffset = rule.runOnIdle { revealState.anchoredDraggableState.anchors.maxPosition() }
+
+        rule.runOnIdle {
+            coroutineScope.launch {
+                revealState.drag {
+                    // try to drag way beyond the anchors
+                    dragTo(minOffset - 1000f)
+                }
+            }
+        }
+        rule.waitForIdle()
+        assertEquals(minOffset, revealState.offset, 0.1f)
+
+        rule.runOnIdle { coroutineScope.launch { revealState.drag { dragTo(maxOffset + 1000f) } } }
+        rule.waitForIdle()
+        assertEquals(maxOffset, revealState.offset, 0.1f)
+    }
+
+    @Test
+    fun onDispatchRawDelta_withNestedScroll_updatesState() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        val scrollableContentTag = "scrollable-content"
+
+        val nestedScrollConnection =
+            object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    // When a vertical scroll happens, consume the delta and
+                    // dispatch it horizontally to the RevealState.
+                    // A negative delta from swiping up will cause a swipe-left motion.
+                    coroutineScope.launch { revealState.dispatchRawDelta(available.y) }
+                    // Consume the vertical scroll entirely.
+                    return available
+                }
+            }
+
+        rule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            revealState = rememberRevealState()
+            Box(Modifier.nestedScroll(nestedScrollConnection)) {
+                SwipeToRevealWithDefaults(
+                    revealState = revealState,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                ) {
+                    // A scrollable child is needed to generate scroll events.
+                    Box(
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .height(100.dp)
+                                .scrollable(
+                                    rememberScrollState(),
+                                    orientation = Orientation.Vertical,
+                                )
+                                .testTag(scrollableContentTag)
+                    ) {
+                        DefaultContent()
+                    }
+                }
+            }
+        }
+
+        // Perform a vertical swipe on the child content.
+        rule.onNodeWithTag(scrollableContentTag).performTouchInput { swipeUp() }
+        rule.waitForIdle()
+
+        // Verify that the underlying action is now visible.
+        rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+    }
+
+    @Test
+    fun onSwipeLeft_twoActions_actionContentSpacingSetCorrectly() {
+        verifyActionContentSpacingSetCorrectly(
+            isSwipeLeft = true,
+            hasSecondaryAction = true,
+            actionContentSpacing = ActionContentSpacing,
+        )
+    }
+
+    @Test
+    fun onSwipeLeft_singleAction_actionContentSpacingSetCorrectly() {
+        verifyActionContentSpacingSetCorrectly(
+            isSwipeLeft = true,
+            hasSecondaryAction = false,
+            actionContentSpacing = ActionContentSpacing,
+        )
+    }
+
+    @Test
+    fun onSwipeRight_twoActions_actionContentSpacingSetCorrectly() {
+        verifyActionContentSpacingSetCorrectly(
+            isSwipeLeft = false,
+            hasSecondaryAction = true,
+            actionContentSpacing = ActionContentSpacing,
+        )
+    }
+
+    @Test
+    fun onSwipeRight_singleAction_actionContentSpacingSetCorrectly() {
+        verifyActionContentSpacingSetCorrectly(
+            isSwipeLeft = false,
+            hasSecondaryAction = false,
+            actionContentSpacing = ActionContentSpacing,
+        )
+    }
+
+    @Test
+    fun defaultActionContentSpacingSetCorrectly() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            revealState = rememberRevealState(RightRevealing)
+            SwipeToReveal(
+                modifier = Modifier.testTag(TEST_TAG),
+                primaryAction = {
+                    DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                },
+                onSwipePrimaryAction = {},
+                revealState = revealState,
+                revealDirection = Bidirectional,
+                content = {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                },
+            )
+        }
+
+        rule.waitForIdle()
+
+        val contentBound = rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getBoundsInRoot()
+        rule
+            .onNodeWithTag(PRIMARY_ACTION_TAG)
+            .assertLeftPositionInRootIsEqualTo(contentBound.right + ActionContentSpacingDefault)
+    }
+
+    fun verifyActionContentSpacingSetCorrectly(
+        isSwipeLeft: Boolean,
+        hasSecondaryAction: Boolean,
+        actionContentSpacing: Dp,
+    ) {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            revealState = rememberRevealState(if (isSwipeLeft) RightRevealing else LeftRevealing)
+            SwipeToRevealWithDefaults(
+                modifier = Modifier.testTag(TEST_TAG),
+                primaryAction = {
+                    DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                },
+                secondaryAction =
+                    if (hasSecondaryAction) {
+                        {
+                            DefaultSecondaryActionButton(
+                                modifier = Modifier.testTag(SECONDARY_ACTION_TAG)
+                            )
+                        }
+                    } else null,
+                revealDirection = Bidirectional,
+                revealState = revealState,
+                actionContentSpacing = actionContentSpacing,
+                content = {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                },
+            )
+        }
+
+        rule.waitForIdle()
+        val tagToCheck = if (hasSecondaryAction) SECONDARY_ACTION_TAG else PRIMARY_ACTION_TAG
+        if (isSwipeLeft) {
+            val contentBound = rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getBoundsInRoot()
+            rule
+                .onNodeWithTag(tagToCheck)
+                .assertLeftPositionInRootIsEqualTo(contentBound.right + actionContentSpacing)
+        } else {
+            val actionBound = rule.onNodeWithTag(tagToCheck).getBoundsInRoot()
+            rule
+                .onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG)
+                .assertLeftPositionInRootIsEqualTo(actionBound.right + actionContentSpacing)
+        }
+    }
+
     private fun verifyActionCenterVerticalAligned(
         primaryActionHeight: Dp,
         secondaryActionHeight: Dp,
@@ -959,8 +1649,9 @@ class SwipeToRevealTest {
                 }
                 .value
 
+        val halfPixelInDp = with(rule.density) { 0.5f.toDp().value }
         // actions are center vertical aligned when their centerY
-        assertEquals(0f, abs(primaryActionCenterY - secondaryActionCenterY), 0.1f)
+        assertEquals(0f, abs(primaryActionCenterY - secondaryActionCenterY), halfPixelInDp)
     }
 
     @Test
@@ -971,6 +1662,49 @@ class SwipeToRevealTest {
     @Test
     fun onCreation_rtlWithLeftRevealed_throwsHelpfulMessage() {
         assertThrowsHelpfulMessage(initialValue = LeftRevealed)
+    }
+
+    @Test
+    fun positionOfLeftRevealValue_inRtl_isNaN() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(revealState = revealState, revealDirection = RightToLeft)
+        }
+        assertTrue(revealState.positionOf(LeftRevealing).isNaN())
+        assertTrue(revealState.positionOf(LeftRevealed).isNaN())
+    }
+
+    @Test
+    fun positionOfRevealedValues_equalsToScreenWidth() {
+        lateinit var revealState: RevealState
+        val smallScreenWidthPx: Float = with(rule.density) { SMALL_SCREEN_WIDTH_DP.dp.toPx() }
+        rule.setContent {
+            revealState = rememberRevealState()
+            ScreenConfiguration(SMALL_SCREEN_WIDTH_DP) {
+                SwipeToRevealWithDefaults(
+                    revealState = revealState,
+                    revealDirection = Bidirectional,
+                )
+            }
+        }
+        assertEquals(revealState.positionOf(LeftRevealed), smallScreenWidthPx)
+        assertEquals(revealState.positionOf(RightRevealed), -smallScreenWidthPx)
+    }
+
+    @Test
+    fun positionOfRevealingsValues_noPartiallyRevealedState_isNaN() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            revealState = rememberRevealState()
+            SwipeToRevealWithDefaults(
+                revealState = revealState,
+                revealDirection = Bidirectional,
+                hasPartiallyRevealedState = false,
+            )
+        }
+        assertTrue(revealState.positionOf(LeftRevealing).isNaN())
+        assertTrue(revealState.positionOf(RightRevealing).isNaN())
     }
 
     @Test
@@ -1064,6 +1798,34 @@ class SwipeToRevealTest {
         )
     }
 
+    @Test
+    fun onFastFling_twoActions_fullSwipes() {
+        rule.setContent {
+            ScreenConfiguration(SCREEN_SIZE_LARGE) {
+                val revealState = rememberRevealState(initialValue = Covered)
+                SwipeToRevealWithDefaults(
+                    modifier = Modifier.testTag(TEST_TAG),
+                    primaryAction = { DefaultPrimaryActionButton(onClick = {}) },
+                    revealState = revealState,
+                    secondaryAction = { DefaultSecondaryActionButton(onClick = {}) },
+                    undoPrimaryAction = {
+                        DefaultUndoActionButton(
+                            modifier = Modifier.testTag(UNDO_PRIMARY_ACTION_TAG),
+                            onClick = {},
+                        )
+                    },
+                )
+            }
+        }
+
+        rule.onNodeWithTag(TEST_TAG).performTouchInput {
+            swipeLeft(startX = centerX, endX = 0f, 100)
+        }
+        rule.waitForIdle()
+
+        rule.onNodeWithTag(UNDO_PRIMARY_ACTION_TAG).assertExists()
+    }
+
     private fun verifyAnimateToIllegalState(
         targetValue: RevealValue,
         revealDirection: RevealDirection = RightToLeft,
@@ -1116,6 +1878,42 @@ class SwipeToRevealTest {
             ) {
                 Button({}, Modifier.fillMaxWidth().padding(horizontal = 4.dp)) { Text(text) }
             }
+        }
+    }
+
+    private fun assertHapticFeedback(
+        revealDirection: RevealDirection = RightToLeft,
+        initialValue: RevealValue = Covered,
+        action: (CoroutineScope, RevealState) -> Unit,
+        expectedHapticCount: Int,
+    ) {
+        val results = mutableMapOf<HapticFeedbackType, Int>()
+        val haptics = hapticFeedback(collectResultsFromHapticFeedback(results))
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+
+        rule.setContent {
+            revealState = rememberRevealState(initialValue = initialValue)
+            coroutineScope = rememberCoroutineScope()
+            CompositionLocalProvider(LocalHapticFeedback provides haptics) {
+                ScreenConfiguration(LARGE_SCREEN_WIDTH_DP) {
+                    SwipeToRevealTwoActionsWithDefault(
+                        revealState = revealState,
+                        revealDirection = revealDirection,
+                    )
+                }
+            }
+        }
+
+        rule.runOnIdle { assertThat(results).isEmpty() }
+
+        action(coroutineScope, revealState)
+
+        rule.runOnIdle {
+            assertThat(results).hasSize(1)
+            assertThat(results).containsKey(HapticFeedbackType.GestureThresholdActivate)
+            assertThat(results[HapticFeedbackType.GestureThresholdActivate])
+                .isEqualTo(expectedHapticCount)
         }
     }
 
@@ -1191,6 +1989,38 @@ class SwipeToRevealTest {
         rule.runOnIdle { assertEquals(expectedClickType, revealState.lastActionType) }
     }
 
+    private fun verifyGestureTwoActions(
+        onSwipePrimaryAction: () -> Unit = {},
+        gesture: TouchInjectionScope.(density: Float) -> Unit,
+        assertions: () -> Unit = {},
+    ) {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                revealState = rememberRevealState()
+                SwipeToRevealWithDefaults(
+                    modifier = Modifier.testTag(TEST_TAG),
+                    revealState = revealState,
+                    onSwipePrimaryAction = onSwipePrimaryAction,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                    secondaryAction = {
+                        DefaultSecondaryActionButton(
+                            modifier = Modifier.testTag(SECONDARY_ACTION_TAG)
+                        )
+                    },
+                    revealDirection = Bidirectional,
+                    enableTouchSlop = false,
+                )
+            }
+        }
+
+        rule.onNodeWithTag(TEST_TAG).performTouchInput { gesture(density) }
+
+        assertions()
+    }
+
     private fun verifyGesture(
         initialRevealValue: RevealValue = Covered,
         expectedRevealValue: RevealValue,
@@ -1215,7 +2045,7 @@ class SwipeToRevealTest {
                 @Composable {
                     with(LocalDensity.current) { density = this.density }
 
-                    ScreenConfiguration(screenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                    ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
                         SwipeToRevealWithDefaults(
                             modifier = Modifier.testTag(TEST_TAG),
                             onSwipePrimaryAction = { onFullSwipeTriggerCounter++ },
@@ -1256,13 +2086,51 @@ class SwipeToRevealTest {
         assertEquals(expectedSwipeToDismissBoxDismissed, onSwipeToDismissBoxDismissed)
     }
 
+    private fun verifyFullSwipeShouldHideContent(
+        hasSecondAction: Boolean = false,
+        swipeRight: Boolean = false,
+    ) {
+        rule.setContent {
+            Box(modifier = Modifier.padding(16.dp)) {
+                SwipeToRevealWithDefaults(
+                    modifier = Modifier.testTag(TEST_TAG),
+                    secondaryAction =
+                        if (hasSecondAction) {
+                            { DefaultSecondaryActionButton() }
+                        } else null,
+                    undoPrimaryAction = { DefaultUndoActionButton() },
+                    revealDirection = Bidirectional,
+                    enableTouchSlop = false,
+                ) {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                }
+            }
+        }
+
+        rule.onNodeWithTag(TEST_TAG).performTouchInput {
+            if (swipeRight) swipeRight() else swipeLeft()
+        }
+
+        rule.waitForIdle()
+        val contentBounds =
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).fetchSemanticsNode().boundsInRoot
+        if (swipeRight) {
+            val screenRight = rule.onRoot().fetchSemanticsNode().boundsInWindow.right
+            assertTrue(contentBounds.left > screenRight)
+        } else {
+            assertTrue(contentBounds.right < 0)
+        }
+    }
+
     private fun verifyStateMultipleSwipeToReveal(
         actions:
             ((revealStateOne: RevealState, revealStateTwo: RevealState, density: Float) -> Unit)? =
             null,
         actionsSuspended:
             (suspend (
-                revealStateOne: RevealState, revealStateTwo: RevealState, density: Float,
+                revealStateOne: RevealState,
+                revealStateTwo: RevealState,
+                density: Float,
             ) -> Unit)? =
             null,
         revealDirection: RevealDirection = RightToLeft,
@@ -1275,7 +2143,7 @@ class SwipeToRevealTest {
             with(LocalDensity.current) { density = this.density }
             revealStateOne = rememberRevealState()
             revealStateTwo = rememberRevealState()
-            ScreenConfiguration(screenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
                 CustomTouchSlopProvider(newTouchSlop = 0f) {
                     Column {
                         SwipeToRevealWithDefaults(
@@ -1302,10 +2170,302 @@ class SwipeToRevealTest {
         rule.runOnIdle { assertions(revealStateOne, revealStateTwo) }
     }
 
+    @Test
+    fun appliesContainerTransformationWhenProvided() {
+        var transformationCalled = false
+        val testTransformation =
+            object : SurfaceTransformation {
+                override fun createContainerPainter(
+                    painter: Painter,
+                    shape: Shape,
+                    border: BorderStroke?,
+                ): Painter = painter
+
+                override fun GraphicsLayerScope.applyContentTransformation() {}
+
+                override fun GraphicsLayerScope.applyContainerTransformation() {
+                    transformationCalled = true
+                }
+            }
+
+        rule.setContent {
+            SwipeToReveal(
+                primaryAction = { DefaultPrimaryActionButton() },
+                onSwipePrimaryAction = {},
+                transformation = testTransformation,
+            ) {
+                DefaultContent()
+            }
+        }
+
+        rule.waitForIdle()
+        assertTrue(transformationCalled)
+    }
+
+    @Test
+    fun onFullSwipe_lastStateRevealing_resetsLastState() {
+        verifyStateMultipleSwipeToReveal(
+            actions = { _, _, density ->
+                // swipe the first S2R to Revealing state
+                rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
+                    swipeLeftToRevealing(density)
+                }
+
+                // swipe the second S2R to Revealed (full screen swipe)
+                rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput { swipeLeft() }
+            },
+            assertions = { revealStateOne, revealStateTwo ->
+                assertEquals(Covered, revealStateOne.currentValue)
+                assertEquals(RightRevealed, revealStateTwo.currentValue)
+            },
+        )
+    }
+
+    @Test
+    fun onFullSwipe_whenResettingLastStateInterrupted_triggersOnSwipePrimaryAction() {
+        lateinit var revealStateOne: RevealState
+        lateinit var revealStateTwo: RevealState
+        var onSwipePrimaryActionCalled = false
+
+        rule.setContent {
+            revealStateOne = rememberRevealState()
+            revealStateTwo = rememberRevealState()
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                CustomTouchSlopProvider(newTouchSlop = 0f) {
+                    Column {
+                        SwipeToRevealWithDefaults(
+                            modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                            revealState = revealStateOne,
+                            onSwipePrimaryAction = { onSwipePrimaryActionCalled = true },
+                        )
+                        SwipeToRevealWithDefaults(
+                            modifier = Modifier.testTag(SWIPE_TO_REVEAL_SECOND_TAG),
+                            revealState = revealStateTwo,
+                        )
+                    }
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput {
+            swipeLeftToRevealing(density)
+        }
+        rule.runOnIdle { assertEquals(RightRevealing, revealStateTwo.currentValue) }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+
+            rule.mainClock.advanceTimeUntil { revealStateOne.currentValue == RightRevealed }
+
+            rule.mainClock.advanceTimeBy(50)
+            rule.runOnIdle { assertTrue(revealStateTwo.isAnimationRunning) }
+
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput {
+                swipeLeftToRevealing(density, durationMillis = 500L)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealStateOne.currentValue)
+            assertEquals(PrimaryAction, revealStateOne.lastActionType)
+            assertTrue(onSwipePrimaryActionCalled)
+            assertEquals(RightRevealing, revealStateTwo.currentValue)
+            assertSame(revealStateTwo, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+        }
+    }
+
+    @Test
+    fun onPartialSwipe_whenResettingLastStateInterrupted_resetsFirstState() {
+        lateinit var revealStateOne: RevealState
+        lateinit var revealStateTwo: RevealState
+
+        rule.setContent {
+            revealStateOne = rememberRevealState()
+            revealStateTwo = rememberRevealState()
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                CustomTouchSlopProvider(newTouchSlop = 0f) {
+                    Column {
+                        SwipeToRevealWithDefaults(
+                            modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                            revealState = revealStateOne,
+                        )
+                        SwipeToRevealWithDefaults(
+                            modifier = Modifier.testTag(SWIPE_TO_REVEAL_SECOND_TAG),
+                            revealState = revealStateTwo,
+                        )
+                    }
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput {
+            swipeLeftToRevealing(density)
+        }
+        rule.runOnIdle { assertEquals(RightRevealing, revealStateTwo.currentValue) }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput {
+                swipeLeftToRevealing(density)
+            }
+
+            rule.mainClock.advanceTimeUntil {
+                revealStateOne.currentValue == RightRevealing && !revealStateOne.isAnimationRunning
+            }
+
+            rule.mainClock.advanceTimeBy(50)
+            rule.runOnIdle { assertTrue(revealStateTwo.isAnimationRunning) }
+
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput {
+                swipeLeftToRevealing(density, durationMillis = 500L)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+
+        rule.runOnIdle {
+            assertEquals(Covered, revealStateOne.currentValue)
+            assertEquals(RightRevealing, revealStateTwo.currentValue)
+            assertSame(revealStateTwo, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+        }
+    }
+
+    @Test
+    fun onFullSwipe_whenSwipedItemRemovedFromComposition_resetsLastState() {
+        lateinit var revealStateOne: RevealState
+        lateinit var revealStateTwo: RevealState
+        var showFirstItem by mutableStateOf(true)
+
+        rule.setContent {
+            revealStateOne = rememberRevealState()
+            revealStateTwo = rememberRevealState()
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                CustomTouchSlopProvider(newTouchSlop = 0f) {
+                    Column {
+                        if (showFirstItem) {
+                            SwipeToRevealWithDefaults(
+                                modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                                revealState = revealStateOne,
+                                onSwipePrimaryAction = { showFirstItem = false },
+                            )
+                        }
+                        SwipeToRevealWithDefaults(
+                            modifier = Modifier.testTag(SWIPE_TO_REVEAL_SECOND_TAG),
+                            revealState = revealStateTwo,
+                        )
+                    }
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_SECOND_TAG).performTouchInput {
+            swipeLeftToRevealing(density)
+        }
+        rule.runOnIdle { assertEquals(RightRevealing, revealStateTwo.currentValue) }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+
+        rule.runOnIdle {
+            assertFalse(showFirstItem)
+            assertEquals(Covered, revealStateTwo.currentValue)
+        }
+    }
+
+    @Test
+    fun onFullSwipe_afterSnapToCovered_triggersOnSwipePrimaryActionAgain() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        var onSwipePrimaryActionCount = 0
+
+        rule.setContent {
+            revealState = rememberRevealState()
+            coroutineScope = rememberCoroutineScope()
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                CustomTouchSlopProvider(newTouchSlop = 0f) {
+                    SwipeToRevealWithDefaults(
+                        modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                        revealState = revealState,
+                        onSwipePrimaryAction = { onSwipePrimaryActionCount++ },
+                    )
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealState.currentValue)
+            assertEquals(PrimaryAction, revealState.lastActionType)
+            assertEquals(1, onSwipePrimaryActionCount)
+            coroutineScope.launch { revealState.snapTo(Covered) }
+        }
+        rule.runOnIdle {
+            assertEquals(Covered, revealState.currentValue)
+            assertEquals(None, revealState.lastActionType)
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealState.currentValue)
+            assertEquals(PrimaryAction, revealState.lastActionType)
+            assertEquals(2, onSwipePrimaryActionCount)
+        }
+    }
+
+    @Test
+    fun onFullSwipe_whenAnimateToCoveredInterrupted_doesNotRetriggerOnSwipePrimaryAction() {
+        lateinit var revealState: RevealState
+        lateinit var coroutineScope: CoroutineScope
+        var onSwipePrimaryActionCount = 0
+
+        rule.setContent {
+            revealState = rememberRevealState()
+            coroutineScope = rememberCoroutineScope()
+            ScreenConfiguration(desiredScreenSizeDp = LARGE_SCREEN_WIDTH_DP) {
+                CustomTouchSlopProvider(newTouchSlop = 0f) {
+                    SwipeToRevealWithDefaults(
+                        modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                        revealState = revealState,
+                        onSwipePrimaryAction = { onSwipePrimaryActionCount++ },
+                    )
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealState.currentValue)
+            assertEquals(PrimaryAction, revealState.lastActionType)
+            assertEquals(1, onSwipePrimaryActionCount)
+        }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            var resetJob: Job? = null
+            rule.runOnIdle { resetJob = coroutineScope.launch { revealState.animateTo(Covered) } }
+            rule.mainClock.advanceTimeBy(50)
+            rule.runOnIdle {
+                assertTrue(revealState.isAnimationRunning)
+                resetJob?.cancel()
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealState.currentValue)
+            assertEquals(PrimaryAction, revealState.lastActionType)
+            assertEquals(1, onSwipePrimaryActionCount)
+        }
+    }
+
     @Composable
     fun SwipeToRevealWithDefaults(
         modifier: Modifier = Modifier,
         onSwipePrimaryAction: () -> Unit = {},
+        actionContentSpacing: Dp = 4.dp,
         primaryAction: @Composable SwipeToRevealScope.() -> Unit =
             @Composable { DefaultPrimaryActionButton(onClick = onSwipePrimaryAction) },
         secondaryAction: (@Composable SwipeToRevealScope.() -> Unit)? = null,
@@ -1329,6 +2489,7 @@ class SwipeToRevealTest {
                     primaryAction = primaryAction,
                     onSwipePrimaryAction = onSwipePrimaryAction,
                     modifier = modifier,
+                    actionContentSpacing = actionContentSpacing,
                     secondaryAction = secondaryAction,
                     undoPrimaryAction = undoPrimaryAction,
                     undoSecondaryAction = undoSecondaryAction,
@@ -1344,6 +2505,25 @@ class SwipeToRevealTest {
         } else {
             CustomTouchSlopProvider(newTouchSlop = 0f, content = swipeToRevealContent)
         }
+    }
+
+    @Composable
+    private fun SwipeToRevealTwoActionsWithDefault(
+        revealState: RevealState,
+        revealDirection: RevealDirection,
+    ) {
+        SwipeToRevealWithDefaults(
+            modifier = Modifier.testTag(TEST_TAG),
+            primaryAction = {
+                DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+            },
+            secondaryAction = {
+                DefaultSecondaryActionButton(modifier = Modifier.testTag(SECONDARY_ACTION_TAG))
+            },
+            revealDirection = revealDirection,
+            revealState = revealState,
+            enableTouchSlop = false,
+        )
     }
 
     @Composable
@@ -1387,9 +2567,10 @@ class SwipeToRevealTest {
     private fun TouchInjectionScope.swipeLeftToRevealing(
         density: Float,
         anchorWidth: Dp = SingleActionAnchorWidth,
+        durationMillis: Long = 200L,
     ) {
         val widthPx = anchorWidth.value * density
-        swipeLeft(startX = right, endX = right - widthPx)
+        swipeLeft(startX = right, endX = right - widthPx, durationMillis = durationMillis)
     }
 
     private fun TouchInjectionScope.swipeRightToRevealing(
@@ -1400,12 +2581,364 @@ class SwipeToRevealTest {
         swipeRight(startX = left, endX = left + widthPx)
     }
 
+    @Test
+    fun swipeToReveal_inTransformingLazyColumnInsideLookaheadScope_scrollDoesNotCrash() {
+        lateinit var listState: TransformingLazyColumnState
+        rule.setContent {
+            LookaheadScope {
+                listState = rememberTransformingLazyColumnState()
+                TransformingLazyColumn(
+                    state = listState,
+                    modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                ) {
+                    items(20) { index ->
+                        SwipeToReveal(
+                            primaryAction = { DefaultPrimaryActionButton() },
+                            onSwipePrimaryAction = {},
+                        ) {
+                            Button(onClick = {}, modifier = Modifier.fillMaxWidth()) {
+                                Text("Item $index")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeUp() }
+        rule.waitForIdle()
+        rule.runOnIdle { assertTrue(listState.anchorItemIndex > 0) }
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_swipeLeftToRevealing_drawsActionAndUpdatesOffset() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            LookaheadScope {
+                revealState = rememberRevealState()
+                SwipeToRevealWithDefaults(
+                    modifier = Modifier.testTag(SWIPE_TO_REVEAL_TAG),
+                    revealState = revealState,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                    enableTouchSlop = false,
+                ) {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                }
+            }
+        }
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeftToRevealing(density) }
+
+        rule.waitForIdle()
+        rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            assertTrue(revealState.requireOffset() < 0f)
+        }
+        val contentBounds =
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getUnclippedBoundsInRoot()
+        assertTrue(contentBounds.left < 0.dp)
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_initialRightRevealing_placesContentAtRevealingOffset() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            LookaheadScope {
+                revealState = rememberRevealState(initialValue = RightRevealing)
+                SwipeToRevealWithDefaults(
+                    revealState = revealState,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                ) {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertExists()
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            assertTrue(revealState.requireOffset() < 0f)
+        }
+        val contentBounds =
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getUnclippedBoundsInRoot()
+        assertTrue(contentBounds.left < 0.dp)
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_unsupportedInitialValue_fallsBackToCovered() {
+        lateinit var revealState: RevealState
+        rule.setContent {
+            LookaheadScope {
+                revealState = rememberRevealState(initialValue = RightRevealing)
+                SwipeToRevealWithDefaults(
+                    revealState = revealState,
+                    hasPartiallyRevealedState = false,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                ) {
+                    DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        rule.onNodeWithTag(PRIMARY_ACTION_TAG).assertDoesNotExist()
+        rule.runOnIdle {
+            assertEquals(Covered, revealState.currentValue)
+            assertEquals(0f, revealState.requireOffset())
+        }
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).assertLeftPositionInRootIsEqualTo(0.dp)
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_widthChange_updatesAnchorsAndOffset() {
+        lateinit var revealState: RevealState
+        val boxWidth = mutableStateOf(100.dp)
+        rule.setContent {
+            LookaheadScope {
+                Box(modifier = Modifier.width(boxWidth.value)) {
+                    revealState = rememberRevealState(initialValue = RightRevealing)
+                    SwipeToRevealWithDefaults(
+                        revealState = revealState,
+                        primaryAction = {
+                            DefaultPrimaryActionButton(
+                                modifier = Modifier.testTag(PRIMARY_ACTION_TAG)
+                            )
+                        },
+                    ) {
+                        DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                    }
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        var initialOffset = 0f
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            initialOffset = revealState.requireOffset()
+            assertTrue(initialOffset < 0f)
+        }
+        val initialContentLeft =
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getUnclippedBoundsInRoot().left
+        assertTrue(initialContentLeft < 0.dp)
+
+        rule.runOnIdle { boxWidth.value = 300.dp }
+        rule.waitForIdle()
+
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            val newOffset = revealState.requireOffset()
+            assertTrue(newOffset < initialOffset)
+        }
+        val newContentLeft =
+            rule.onNodeWithTag(SWIPE_TO_REVEAL_CONTENT_TAG).getUnclippedBoundsInRoot().left
+        assertTrue(newContentLeft < initialContentLeft)
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_doubleActionWidthShrink_preservesRightRevealing() {
+        lateinit var revealState: RevealState
+        val boxWidth = mutableStateOf(200.dp)
+        var primaryActionTriggered = false
+        rule.setContent {
+            LookaheadScope {
+                Box(modifier = Modifier.width(boxWidth.value)) {
+                    revealState = rememberRevealState(initialValue = RightRevealing)
+                    SwipeToRevealWithDefaults(
+                        revealState = revealState,
+                        onSwipePrimaryAction = { primaryActionTriggered = true },
+                        primaryAction = {
+                            DefaultPrimaryActionButton(
+                                modifier = Modifier.testTag(PRIMARY_ACTION_TAG)
+                            )
+                        },
+                        secondaryAction = {
+                            DefaultSecondaryActionButton(
+                                modifier = Modifier.testTag(SECONDARY_ACTION_TAG)
+                            )
+                        },
+                    ) {
+                        DefaultContent(modifier = Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG))
+                    }
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            assertFalse(primaryActionTriggered)
+        }
+
+        rule.runOnIdle { boxWidth.value = 80.dp }
+        rule.waitForIdle()
+
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            assertFalse(primaryActionTriggered)
+        }
+    }
+
+    @Test
+    fun swipeToReveal_insideLookaheadScope_swipeDoesNotRemeasureContentInLookahead() {
+        lateinit var revealState: RevealState
+        var rootLookaheadMeasureCount = 0
+        var contentLookaheadMeasureCount = 0
+        rule.setContent {
+            LookaheadScope {
+                revealState = rememberRevealState()
+                SwipeToRevealWithDefaults(
+                    modifier =
+                        Modifier.testTag(SWIPE_TO_REVEAL_TAG).layout { measurable, constraints ->
+                            if (isLookingAhead) {
+                                rootLookaheadMeasureCount++
+                            }
+                            val placeable = measurable.measure(constraints)
+                            layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                        },
+                    revealState = revealState,
+                    primaryAction = {
+                        DefaultPrimaryActionButton(modifier = Modifier.testTag(PRIMARY_ACTION_TAG))
+                    },
+                    enableTouchSlop = false,
+                ) {
+                    DefaultContent(
+                        modifier =
+                            Modifier.testTag(SWIPE_TO_REVEAL_CONTENT_TAG).layout {
+                                measurable,
+                                constraints ->
+                                if (isLookingAhead) {
+                                    contentLookaheadMeasureCount++
+                                }
+                                val placeable = measurable.measure(constraints)
+                                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                            }
+                    )
+                }
+            }
+        }
+
+        rule.waitForIdle()
+        assertEquals(1, rootLookaheadMeasureCount)
+        assertEquals(1, contentLookaheadMeasureCount)
+
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeftToRevealing(density) }
+        rule.waitForIdle()
+
+        rule.runOnIdle {
+            assertEquals(RightRevealing, revealState.currentValue)
+            // Remeasured only once when shouldDrawActions transitions false -> true and inserts
+            // the background actions Box, never on each intermediate drag/animation frame.
+            assertEquals(2, contentLookaheadMeasureCount)
+            assertEquals(2, rootLookaheadMeasureCount)
+        }
+
+        // Swiping further from RightRevealing to RightRevealed while shouldDrawActions remains
+        // true should not trigger any lookahead remeasurement of the root Box or foreground
+        // content.
+        rule.onNodeWithTag(SWIPE_TO_REVEAL_TAG).performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+
+        rule.runOnIdle {
+            assertEquals(RightRevealed, revealState.currentValue)
+            assertEquals(2, contentLookaheadMeasureCount)
+            assertEquals(2, rootLookaheadMeasureCount)
+        }
+    }
+
+    @Test
+    fun singleSwipeCoordinator_resetsPreviousRevealingState() = runBlocking {
+        val firstState =
+            RevealState(initialValue = Covered).apply { coroutineScope = this@runBlocking }
+        val secondState =
+            RevealState(initialValue = Covered).apply { coroutineScope = this@runBlocking }
+
+        firstState.snapTo(RightRevealing)
+        assertEquals(RightRevealing, firstState.currentValue)
+        assertSame(firstState, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+
+        secondState.snapTo(RightRevealing)
+
+        assertEquals(Covered, firstState.currentValue)
+        assertEquals(RightRevealing, secondState.currentValue)
+        assertSame(secondState, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+    }
+
+    @Test
+    fun singleSwipeCoordinator_resetsPreviousStateWhenScopeCancelled() = runBlocking {
+        val firstScope = CoroutineScope(Job())
+        val firstState =
+            RevealState(initialValue = Covered).apply {
+                coroutineScope = firstScope
+                anchoredDraggableState.updateAnchors(
+                    DraggableAnchors {
+                        Covered at 0f
+                        RightRevealing at -100f
+                    }
+                )
+            }
+        val secondState = RevealState(initialValue = Covered)
+
+        firstState.snapTo(RightRevealing)
+        firstScope.cancel()
+
+        secondState.snapTo(RightRevealing)
+
+        assertEquals(Covered, firstState.currentValue)
+        assertEquals(RightRevealing, secondState.currentValue)
+        assertSame(secondState, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+    }
+
+    @Test
+    fun singleSwipeCoordinator_handlesClearedWeakReference() = runBlocking {
+        val firstState = RevealState(initialValue = Covered)
+        val secondState = RevealState(initialValue = Covered)
+
+        firstState.snapTo(RightRevealing)
+        SingleSwipeCoordinator.lastUpdatedState.get()?.clear()
+        assertNull(SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+
+        secondState.snapTo(RightRevealing)
+        assertEquals(RightRevealing, firstState.currentValue)
+        assertEquals(RightRevealing, secondState.currentValue)
+        assertSame(secondState, SingleSwipeCoordinator.lastUpdatedState.get()?.get())
+    }
+
+    @Test
+    fun singleSwipeCoordinator_sameStateUpdatedTwice_reusesWeakReferenceAndDoesNotReset() =
+        runBlocking {
+            val state = RevealState(initialValue = Covered)
+
+            state.snapTo(RightRevealing)
+            val initialRef = SingleSwipeCoordinator.lastUpdatedState.get()
+            assertSame(state, initialRef?.get())
+
+            state.snapTo(RightRevealed)
+            assertEquals(RightRevealed, state.currentValue)
+            assertSame(initialRef, SingleSwipeCoordinator.lastUpdatedState.get())
+        }
+
     companion object {
+        private val ActionContentSpacing = 12.dp
+        private val ActionContentSpacingDefault = 4.dp
         private const val SWIPE_TO_REVEAL_TAG = TEST_TAG
         private const val SWIPE_TO_REVEAL_SECOND_TAG = "SWIPE_TO_REVEAL_SECOND_TAG"
+        private const val SWIPE_TO_REVEAL_CONTENT_TAG = "SWIPE_TO_REVEAL_CONTENT_TAG"
         private const val PRIMARY_ACTION_TAG = "PRIMARY_ACTION_TAG"
         private const val SECONDARY_ACTION_TAG = "SECONDARY_ACTION_TAG"
         private const val UNDO_PRIMARY_ACTION_TAG = "UNDO_PRIMARY_ACTION_TAG"
         private const val UNDO_SECONDARY_ACTION_TAG = "UNDO_SECONDARY_ACTION_TAG"
+        private const val SMALL_SCREEN_WIDTH_DP = 192
+        private val HighFlingVelocity: Dp = 1000.dp
+        private val LowFlingVelocity: Dp = 250.dp
+        private val MinimalSwipeDistance: Dp = 10.dp
     }
 }

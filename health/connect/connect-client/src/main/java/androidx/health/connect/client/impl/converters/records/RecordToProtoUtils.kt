@@ -82,13 +82,15 @@ private fun DataProto.DataPoint.Builder.setMetadata(metadata: Metadata) = apply 
     }
 }
 
-fun Device.toProto(): DataProto.Device {
+public fun Device.toProto(): DataProto.Device {
     val obj = this
     return DataProto.Device.newBuilder()
         .apply {
-            obj.manufacturer?.let { setManufacturer(it) }
-            obj.model?.let { setModel(it) }
+            if (obj.manufacturer != null) setManufacturer(obj.manufacturer)
+            if (obj.model != null) setModel(obj.model)
             setType(DEVICE_TYPE_INT_TO_STRING_MAP.getOrDefault(obj.type, DeviceTypes.UNKNOWN))
+            if (obj.displayName != null) setDisplayName(obj.displayName)
+            if (obj.udi != null) setUdi(obj.udi)
         }
         .build()
 }

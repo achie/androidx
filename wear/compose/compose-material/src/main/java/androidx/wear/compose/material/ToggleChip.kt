@@ -58,9 +58,8 @@ import androidx.compose.ui.unit.dp
  * label slots in the middle and a slot for the toggle control at the end.
  *
  * The [ToggleChip] is Stadium shaped and has a max height designed to take no more than two lines
- * of text of [Typography.button] style. With localisation and/or large font sizes, the [ToggleChip]
- * height adjusts to accommodate the contents. The label and secondary label should be consistently
- * aligned.
+ * of text. With localisation and/or large font sizes, the [ToggleChip] height adjusts to
+ * accommodate the contents. The label and secondary label should be consistently aligned.
  *
  * The recommended set of [ToggleChipColors] can be obtained from [ToggleChipDefaults], e.g.
  * [ToggleChipDefaults.toggleChipColors].
@@ -87,7 +86,7 @@ import androidx.compose.ui.unit.dp
  *   [ToggleChipDefaults.IconSize]. In order to correctly render when the Chip is not enabled the
  *   icon must set its alpha value to [LocalContentAlpha].
  * @param secondaryLabel A slot for providing the chip's secondary label. The contents are expected
- *   to be text which is "start" aligned if there is an icon preset and "start" or "center" aligned
+ *   to be text which is "start" aligned if there is an icon present and "start" or "center" aligned
  *   if not. label and secondaryLabel contents should be consistently aligned.
  * @param colors [ToggleChipColors] that will be used to resolve the background and content color
  *   for this chip in different states, see [ToggleChipDefaults.toggleChipColors].
@@ -184,9 +183,8 @@ public fun ToggleChip(
  * will have a visual effect applied to provide a "divider" between the two tappable areas.
  *
  * The [SplitToggleChip] is Stadium shaped and has a max height designed to take no more than two
- * lines of text of [Typography.button] style. With localisation and/or large font sizes, the
- * [SplitToggleChip] height adjusts to accommodate the contents. The label and secondary label
- * should be consistently aligned.
+ * lines of text. With localisation and/or large font sizes, the [SplitToggleChip] height adjusts to
+ * accommodate the contents. The label and secondary label should be consistently aligned.
  *
  * The recommended set of [SplitToggleChipColors] can be obtained from [ToggleChipDefaults], e.g.
  * [ToggleChipDefaults.splitToggleChipColors].
@@ -206,7 +204,7 @@ public fun ToggleChip(
  *   which is "start" aligned.
  * @param onClick Click listener called when the user clicks the main body of the chip, the area
  *   behind the labels.
- * @param toggleControl A slot for providing the chip's toggle controls(s). Two built-in types of
+ * @param toggleControl A slot for providing the chip's toggle control(s). Two built-in types of
  *   toggle control are supported, see [Checkbox] and [Switch]. For [RadioButton], use
  *   [SelectableChip] instead. [ImageVector]s can be obtained from [ToggleChipDefaults.switchIcon],
  *   [ToggleChipDefaults.radioIcon] and [ToggleChipDefaults.checkboxIcon]. In order to correctly
@@ -395,7 +393,7 @@ public object ToggleChipDefaults {
      *   of a [ToggleChip] when enabled and unchecked.
      * @param uncheckedEndBackgroundColor The background color used at the end of the gradient of a
      *   [ToggleChip] when enabled and unchecked.
-     * @param uncheckedContentColor The content color of a [ToggleChip] when enabled and checked.
+     * @param uncheckedContentColor The content color of a [ToggleChip] when enabled and unchecked.
      * @param uncheckedSecondaryContentColor The secondary content color of this [ToggleChip] when
      *   enabled and unchecked, used for secondaryLabel content
      * @param uncheckedToggleControlColor The toggle control color of this [ToggleChip] when enabled
@@ -493,7 +491,7 @@ public object ToggleChipDefaults {
      *
      * @param backgroundColor The background color of this [SplitToggleChip] when enabled
      * @param contentColor The content color of this [SplitToggleChip] when enabled.
-     * @param secondaryContentColor The secondary content color of this[SplitToggleChip] when
+     * @param secondaryContentColor The secondary content color of this [SplitToggleChip] when
      *   enabled
      * @param checkedToggleControlColor The toggle control content color of this [SplitToggleChip]
      *   when enabled.

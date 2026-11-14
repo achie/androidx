@@ -372,7 +372,7 @@ public final class SessionConfig {
      */
     public static final class CloseableErrorListener implements ErrorListener {
         private final AtomicBoolean mIsClosed = new AtomicBoolean(false);
-        private final ErrorListener mErrorListener;
+        private volatile @Nullable ErrorListener mErrorListener;
 
         public CloseableErrorListener(@NonNull ErrorListener errorListener) {
             mErrorListener = errorListener;
@@ -381,7 +381,10 @@ public final class SessionConfig {
         @Override
         public void onError(@NonNull SessionConfig sessionConfig, @NonNull SessionError error) {
             if (!mIsClosed.get()) {
-                mErrorListener.onError(sessionConfig, error);
+                ErrorListener listener = mErrorListener;
+                if (listener != null) {
+                    listener.onError(sessionConfig, error);
+                }
             }
         }
 
@@ -390,6 +393,7 @@ public final class SessionConfig {
          */
         public void close() {
             mIsClosed.set(true);
+            mErrorListener = null;
         }
     }
 
@@ -730,13 +734,37 @@ public final class SessionConfig {
         }
 
         /**
+         * Add a surface with the provided physical camera ID for the session which only used for
+         * single captures.
+         *
+         * <p>The dynamic range of this surface will default to {@link DynamicRange#SDR}.
+         */
+        public @NonNull Builder addNonRepeatingSurface(
+                @NonNull DeferrableSurface surface,
+                @Nullable String physicalCameraId) {
+            return addNonRepeatingSurface(surface, DynamicRange.SDR, physicalCameraId);
+        }
+
+        /**
          * Add a surface with the provided dynamic range for the session which only used for
          * single captures.
          */
         public @NonNull Builder addNonRepeatingSurface(@NonNull DeferrableSurface surface,
                 @NonNull DynamicRange dynamicRange) {
+            return addNonRepeatingSurface(surface, dynamicRange, null);
+        }
+
+        /**
+         * Add a surface with the provided dynamic range and physical camera ID for the session
+         * which only used for single captures.
+         */
+        public @NonNull Builder addNonRepeatingSurface(
+                @NonNull DeferrableSurface surface,
+                @NonNull DynamicRange dynamicRange,
+                @Nullable String physicalCameraId) {
             OutputConfig outputConfig = OutputConfig.builder(surface)
                     .setDynamicRange(dynamicRange)
+                    .setPhysicalCameraId(physicalCameraId)
                     .build();
             mOutputConfigs.add(outputConfig);
             return this;
@@ -746,7 +774,18 @@ public final class SessionConfig {
          * Sets the postview surface.
          */
         public @NonNull Builder setPostviewSurface(@NonNull DeferrableSurface surface) {
-            mPostviewOutputConfig = OutputConfig.builder(surface).build();
+            return setPostviewSurface(surface, null);
+        }
+
+        /**
+         * Sets the postview surface with the provided physical camera ID.
+         */
+        public @NonNull Builder setPostviewSurface(
+                @NonNull DeferrableSurface surface,
+                @Nullable String physicalCameraId) {
+            mPostviewOutputConfig = OutputConfig.builder(surface)
+                    .setPhysicalCameraId(physicalCameraId)
+                    .build();
             return this;
         }
 
@@ -823,6 +862,16 @@ public final class SessionConfig {
         public <T> void addImplementationOption(Config.@NonNull Option<T> option,
                 @NonNull T value) {
             mCaptureConfigBuilder.addImplementationOption(option, value);
+        }
+
+        /**
+         * Overrides the template type of the combined {@link SessionConfig}.
+         */
+        public void setTemplateType(int templateType) {
+            if (templateType != CaptureConfig.TEMPLATE_TYPE_NONE) {
+                mTemplateSet = true;
+                mCaptureConfigBuilder.setTemplateType(templateType);
+            }
         }
 
         /**

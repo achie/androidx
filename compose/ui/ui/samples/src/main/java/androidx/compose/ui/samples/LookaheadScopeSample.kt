@@ -20,7 +20,6 @@ import androidx.annotation.Sampled
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.DeferredTargetAnimation
-import androidx.compose.animation.core.ExperimentalAnimatableApi
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -64,7 +63,6 @@ import androidx.compose.ui.unit.round
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalAnimatableApi::class)
 @Sampled
 @Composable
 fun approachLayoutSample() {
@@ -120,7 +118,6 @@ fun approachLayoutSample() {
     }
 }
 
-@OptIn(ExperimentalAnimatableApi::class)
 @Sampled
 @Composable
 fun LookaheadLayoutCoordinatesSample() {
@@ -259,7 +256,10 @@ fun animateContentSizeAfterLookaheadPass() {
                         // Since we are in an explicit lookaheadScope, we know the lookahead pass
                         // is guaranteed to happen, therefore the lookahead size that we recorded is
                         // not null.
-                        val target = requireNotNull(lookaheadSize)
+                        val target =
+                            requireNotNull(lookaheadSize) {
+                                "lookaheadSize should be recorded in lookahead pass before main pass"
+                            }
                         val anim =
                             sizeAnim?.also { coroutineScope.launch { it.animateTo(target) } }
                                 ?: Animatable(target, IntSize.VectorConverter)

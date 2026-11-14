@@ -1,0 +1,378 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:OptIn(ExperimentalRemotePlayerApi::class)
+
+package androidx.compose.remote.player.compose.embedded.components
+
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.remote.core.RemoteContext
+import androidx.compose.remote.core.operations.layout.managers.CoreText
+import androidx.compose.remote.core.operations.layout.managers.TextLayout
+import androidx.compose.remote.player.compose.ExperimentalRemotePlayerApi
+import androidx.compose.remote.player.compose.embedded.LocalGraphContext
+import androidx.compose.remote.player.compose.embedded.LocalRcTypefaceResolver
+import androidx.compose.remote.player.compose.embedded.LocalRemoteContext
+import androidx.compose.remote.player.compose.embedded.doc.rawDimensionPx
+import androidx.compose.remote.player.compose.embedded.draw.ComposeLocalPaint
+import androidx.compose.remote.player.compose.embedded.draw.updatePaintFromBundle
+import androidx.compose.remote.player.compose.embedded.resources.buildFontFeatureSettings
+import androidx.compose.remote.player.compose.embedded.resources.resolveFontFamily
+import androidx.compose.remote.player.compose.embedded.state.MaybeVariableFloat
+import androidx.compose.remote.player.compose.embedded.state.rememberRemoteColorAsState
+import androidx.compose.remote.player.compose.embedded.state.rememberRemoteFloatAsState
+import androidx.compose.remote.player.compose.embedded.state.rememberRemoteStringAsState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+
+@Composable
+internal fun RcPlayerText(layout: CoreText, modifier: Modifier) {
+    val textId = layout.textId ?: return
+    val text by rememberRemoteStringAsState(textId)
+    val paintState = remember { ComposeLocalPaint() }.apply { reset() }
+    updatePaintFromBundle(
+        layout.mPaint,
+        paintState,
+        LocalGraphContext.current ?: LocalRemoteContext.current,
+    )
+
+    val color =
+        resolveTextColor(
+            paintState = paintState,
+            isDynamicColorEnabled = layout.isDynamicColorEnabled,
+            colorId = layout.colorId,
+            colorValue = layout.colorValue,
+        )
+    val density = LocalDensity.current
+    val fontSize = resolveTextFontSizePx(paintState, layout.fontSize)
+    val fontSizeSp = with(density) { fontSize.toSp() }
+
+    val remoteContext = LocalRemoteContext.current
+    val readContext = LocalGraphContext.current ?: remoteContext
+
+    // CoreText only exposes the weight its setup-time updateVariables resolved (or the raw NaN id
+    // before that has run), so a variable weight isn't followed after setup here.
+    val layoutFontWeight = rememberFontWeight(layout.fontWeightValue)
+    val fontWeight =
+        if (paintState.isTypefaceSet) FontWeight(paintState.fontWeight) else layoutFontWeight
+    val fontStyle =
+        if (paintState.isTypefaceSet) paintState.fontStyle
+        else {
+            if (layout.fontStyle == 1) FontStyle.Italic else FontStyle.Normal
+        }
+
+    val fontFamilyType = if (paintState.isTypefaceSet) paintState.fontFamily else layout.type
+    val customFontNameState = rememberCustomFontName(fontFamilyType, readContext)
+    val typefaceResolver = LocalRcTypefaceResolver.current
+    val effectiveFontAxis = paintState.fontAxis ?: layout.fontAxis
+    val effectiveFontAxisValues = paintState.fontAxisValues ?: layout.fontAxisValues
+    val fontFamily =
+        resolveFontFamily(
+            fontFamilyType,
+            customFontNameState.value,
+            fontWeight,
+            fontStyle,
+            effectiveFontAxis,
+            effectiveFontAxisValues,
+            readContext,
+            typefaceResolver,
+        )
+    val fontFeatureSettings =
+        buildFontFeatureSettings(effectiveFontAxis, effectiveFontAxisValues, readContext)
+
+    val textDecoration =
+        when {
+            layout.underline && layout.strikethrough ->
+                TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+            layout.underline -> TextDecoration.Underline
+            layout.strikethrough -> TextDecoration.LineThrough
+            else -> TextDecoration.None
+        }
+
+    // Font size bounds, letter spacing and line height may be NaN-encoded float variables:
+    // RemoteText
+    // writes letter spacing and line height as a ratio to the font size, which is a variable when
+    // the font size is. Core never resolves them, so resolve them here, and treat a value that
+    // doesn't resolve to a number as unset rather than handing NaN to Compose text layout.
+    val minFontSize = rememberRemoteFloatAsState(layout.minFontSize).value
+    val maxFontSize = rememberRemoteFloatAsState(layout.maxFontSize).value
+    val letterSpacing = rememberRemoteFloatAsState(layout.letterSpacing).value.finiteOr(0f)
+    val lineHeightMultiplier =
+        rememberRemoteFloatAsState(layout.lineHeightMultiplier).value.finiteOr(1f)
+    val lineHeightAdd = rememberRemoteFloatAsState(layout.lineHeightAdd).value.finiteOr(0f)
+
+    val autoSize =
+        if (layout.autosize) {
+            val min = if (!(minFontSize > 0f)) 4.sp else with(density) { minFontSize.toSp() }
+            val max = if (!(maxFontSize > 0f)) 400.sp else with(density) { maxFontSize.toSp() }
+            TextAutoSize.StepBased(minFontSize = min, maxFontSize = max, stepSize = 0.5.sp)
+        } else {
+            null
+        }
+
+    val textAlign = resolveTextAlign(layout.textAlignValue, layout.justificationMode)
+
+    val lineBreak =
+        when (layout.lineBreakStrategy) {
+            CoreText.BREAK_STRATEGY_HIGH_QUALITY -> LineBreak.Paragraph
+            CoreText.BREAK_STRATEGY_BALANCED -> LineBreak.Heading
+            else -> LineBreak.Unspecified
+        }
+
+    val hyphens =
+        if (layout.hyphenationFrequency != 0) {
+            Hyphens.Auto
+        } else {
+            Hyphens.Unspecified
+        }
+
+    val overflow =
+        when (layout.overflow) {
+            CoreText.OVERFLOW_CLIP -> TextOverflow.Clip
+            CoreText.OVERFLOW_ELLIPSIS -> TextOverflow.Ellipsis
+            CoreText.OVERFLOW_VISIBLE -> TextOverflow.Visible
+            CoreText.OVERFLOW_START_ELLIPSIS -> TextOverflow.StartEllipsis
+            CoreText.OVERFLOW_MIDDLE_ELLIPSIS -> TextOverflow.MiddleEllipsis
+            else -> TextOverflow.Clip
+        }
+
+    BasicText(
+        text = text,
+        modifier = modifier,
+        autoSize = autoSize,
+        style =
+            TextStyle(
+                color = color,
+                fontSize = fontSizeSp,
+                fontWeight = fontWeight,
+                fontFamily = fontFamily,
+                fontStyle = fontStyle,
+                fontFeatureSettings = fontFeatureSettings,
+                textAlign = textAlign,
+                lineBreak = lineBreak,
+                hyphens = hyphens,
+                letterSpacing = letterSpacing.em,
+                lineHeight =
+                    resolveCoreTextLineHeight(
+                        fontSize = fontSize,
+                        lineHeightMultiplier = lineHeightMultiplier,
+                        lineHeightAdd = lineHeightAdd,
+                        autosize = layout.autosize,
+                        density = density,
+                    ),
+                textDecoration = textDecoration,
+            ),
+        overflow = overflow,
+        maxLines = resolveEffectiveMaxLines(layout.maxLines, layout.overflow),
+    )
+}
+
+internal fun resolveCoreTextLineHeight(
+    fontSize: Float,
+    lineHeightMultiplier: Float,
+    lineHeightAdd: Float,
+    autosize: Boolean,
+    density: Density,
+): TextUnit =
+    when {
+        lineHeightMultiplier == 1f && lineHeightAdd == 0f -> TextUnit.Unspecified
+        // Autosized text keeps Compose's TextAutoSize, which picks the font size at layout time, so
+        // the line height must scale with that size: a multiplier in em does. Compose can't express
+        // "autosized size * multiplier + px", so the additive px is dropped here; core and the View
+        // player add it to the selected size, so their line spacing is lineHeightAdd px larger.
+        autosize ->
+            if (lineHeightMultiplier == 1f) TextUnit.Unspecified else lineHeightMultiplier.em
+        else -> with(density) { (fontSize * lineHeightMultiplier + lineHeightAdd).toSp() }
+    }
+
+@Composable
+internal fun RcPlayerText(layout: TextLayout, modifier: Modifier) {
+    val textId = layout.textId ?: return
+    val text by rememberRemoteStringAsState(textId)
+    val paintState = remember { ComposeLocalPaint() }.apply { reset() }
+    updatePaintFromBundle(
+        layout.mPaint,
+        paintState,
+        LocalGraphContext.current ?: LocalRemoteContext.current,
+    )
+
+    val color =
+        resolveTextColor(
+            paintState = paintState,
+            isDynamicColorEnabled = layout.isDynamicColorEnabled,
+            colorId = layout.color,
+            colorValue = layout.colorValue,
+        )
+    val density = LocalDensity.current
+    val fontSize = resolveTextFontSizePx(paintState, layout.fontSize)
+    val fontSizeSp = with(density) { fontSize.toSp() }
+
+    val layoutFontWeight = rememberFontWeight(layout.fontWeight)
+    val fontWeight =
+        if (paintState.isTypefaceSet) FontWeight(paintState.fontWeight) else layoutFontWeight
+    val fontStyle = if (paintState.isTypefaceSet) paintState.fontStyle else FontStyle.Normal
+
+    val fontFamilyType = if (paintState.isTypefaceSet) paintState.fontFamily else layout.type
+    val remoteContext = LocalRemoteContext.current
+    val readContext = LocalGraphContext.current ?: remoteContext
+    val customFontNameState = rememberCustomFontName(fontFamilyType, readContext)
+    val typefaceResolver = LocalRcTypefaceResolver.current
+    val fontFamily =
+        resolveFontFamily(
+            fontFamilyType,
+            customFontNameState.value,
+            fontWeight,
+            fontStyle,
+            paintState.fontAxis,
+            paintState.fontAxisValues,
+            readContext,
+            typefaceResolver,
+        )
+    val fontFeatureSettings =
+        buildFontFeatureSettings(paintState.fontAxis, paintState.fontAxisValues, readContext)
+
+    val overflow =
+        when (layout.overflow) {
+            TextLayout.OVERFLOW_CLIP -> TextOverflow.Clip
+            TextLayout.OVERFLOW_ELLIPSIS -> TextOverflow.Ellipsis
+            TextLayout.OVERFLOW_VISIBLE -> TextOverflow.Visible
+            TextLayout.OVERFLOW_START_ELLIPSIS -> TextOverflow.StartEllipsis
+            TextLayout.OVERFLOW_MIDDLE_ELLIPSIS -> TextOverflow.MiddleEllipsis
+            else -> TextOverflow.Clip
+        }
+
+    BasicText(
+        text = text,
+        modifier = modifier,
+        style =
+            TextStyle(
+                color = color,
+                fontSize = fontSizeSp,
+                fontWeight = fontWeight,
+                fontFamily = fontFamily,
+                fontStyle = fontStyle,
+                fontFeatureSettings = fontFeatureSettings,
+                textAlign = resolveTextAlign(layout.textAlignValue, 0),
+            ),
+        overflow = overflow,
+        maxLines = resolveEffectiveMaxLines(layout.maxLines, layout.overflow),
+    )
+}
+
+@Composable
+private fun resolveTextColor(
+    paintState: ComposeLocalPaint,
+    isDynamicColorEnabled: Boolean,
+    colorId: Int,
+    colorValue: Int,
+): Color =
+    if (paintState.isColorSet) {
+        Color(paintState.color)
+    } else if (isDynamicColorEnabled) {
+        rememberRemoteColorAsState(colorId).value
+    } else {
+        Color(colorValue)
+    }
+
+/**
+ * A text's own font weight, which may be a NaN-encoded float variable (`RemoteText`'s `fontWeight:
+ * RemoteFloat`), resolved reactively. [FontWeight] only accepts 1..1000: a weight that doesn't
+ * resolve to a number keeps the normal weight, and others are clamped, rather than throwing.
+ */
+@Composable
+private fun rememberFontWeight(rawWeight: Float): FontWeight {
+    val weight = rememberRemoteFloatAsState(rawWeight).value
+    return if (weight.isNaN()) FontWeight.Normal else FontWeight(weight.toInt().coerceIn(1, 1000))
+}
+
+private fun Float.finiteOr(default: Float): Float = if (isFinite()) this else default
+
+@Composable
+private fun resolveTextFontSizePx(paintState: ComposeLocalPaint, rawFontSize: Float): Float {
+    val resolvedFontSize by rememberRemoteFloatAsState(rawFontSize)
+    return when {
+        paintState.isTextSizeSet -> paintState.textSize
+        // A referenced font size is already in px.
+        MaybeVariableFloat(rawFontSize).isReference -> resolvedFontSize
+        else -> rawDimensionPx(resolvedFontSize)
+    }
+}
+
+/**
+ * Mirrors `AndroidPaintContext.layoutComplexText`: `StaticLayout.Builder.setMaxLines` is only
+ * applied when `maxLines == 1` or when `overflow` is an ellipsis mode (`OVERFLOW_ELLIPSIS`,
+ * `OVERFLOW_START_ELLIPSIS`, `OVERFLOW_MIDDLE_ELLIPSIS`). For `OVERFLOW_CLIP` / `OVERFLOW_VISIBLE`
+ * with `maxLines > 1`, the View player does not cap line count on the layout builder.
+ */
+internal fun resolveEffectiveMaxLines(maxLines: Int, overflow: Int): Int {
+    if (maxLines <= 0) return Int.MAX_VALUE
+    val hasEllipsis =
+        overflow == CoreText.OVERFLOW_ELLIPSIS ||
+            overflow == CoreText.OVERFLOW_START_ELLIPSIS ||
+            overflow == CoreText.OVERFLOW_MIDDLE_ELLIPSIS
+    return if (maxLines == 1 || hasEllipsis) maxLines else Int.MAX_VALUE
+}
+
+internal fun resolveTextAlign(textAlignValue: Int, justificationMode: Int = 0): TextAlign =
+    if (justificationMode != CoreText.JUSTIFICATION_MODE_NONE) {
+        TextAlign.Justify
+    } else {
+        when (textAlignValue) {
+            CoreText.TEXT_ALIGN_LEFT -> TextAlign.Left
+            CoreText.TEXT_ALIGN_RIGHT -> TextAlign.Right
+            CoreText.TEXT_ALIGN_CENTER -> TextAlign.Center
+            // The View player ignores TEXT_ALIGN_JUSTIFY in textAlign unless justificationMode
+            // is explicitly set; map to Start to match View playback.
+            CoreText.TEXT_ALIGN_JUSTIFY -> TextAlign.Start
+            CoreText.TEXT_ALIGN_START -> TextAlign.Start
+            CoreText.TEXT_ALIGN_END -> TextAlign.End
+            else -> TextAlign.Start
+        }
+    }
+
+@Composable
+private fun rememberCustomFontName(fontFamilyType: Int, context: RemoteContext): State<String?> {
+    return remember(fontFamilyType) {
+        derivedStateOf {
+            when (fontFamilyType) {
+                0 -> "default"
+                1 -> "sans-serif"
+                2 -> "serif"
+                3 -> "monospace"
+                else -> context.getText(fontFamilyType)
+            }
+        }
+    }
+}

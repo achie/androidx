@@ -23,6 +23,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.BlendMode;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ComposePathEffect;
 import android.graphics.DashPathEffect;
 import android.graphics.DiscretePathEffect;
@@ -46,22 +47,23 @@ import android.graphics.Shader;
 import android.graphics.SumPathEffect;
 import android.graphics.SweepGradient;
 import android.graphics.Typeface;
-import android.graphics.fonts.Font;
-import android.graphics.fonts.FontFamily;
-import android.graphics.fonts.FontStyle;
-import android.graphics.fonts.FontVariationAxis;
 import android.os.Build;
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 
+import androidx.annotation.DoNotInline;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.compose.remote.core.CustomContext;
 import androidx.compose.remote.core.MatrixAccess;
 import androidx.compose.remote.core.PaintContext;
 import androidx.compose.remote.core.RcPlatformServices;
 import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.operations.ClipPath;
+import androidx.compose.remote.core.operations.DrawMesh2D;
+import androidx.compose.remote.core.operations.DrawTextOnCircle;
 import androidx.compose.remote.core.operations.ShaderData;
 import androidx.compose.remote.core.operations.Utils;
 import androidx.compose.remote.core.operations.layout.managers.CoreText;
@@ -69,17 +71,14 @@ import androidx.compose.remote.core.operations.layout.modifiers.GraphicsLayerMod
 import androidx.compose.remote.core.operations.paint.PaintBundle;
 import androidx.compose.remote.core.operations.paint.PaintChanges;
 import androidx.compose.remote.core.operations.paint.PaintPathEffects;
+import androidx.compose.remote.core.operations.utilities.Mesh2DGenerator;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -87,8 +86,17 @@ import java.util.Objects;
  * operations on Android.
  */
 @RestrictTo(LIBRARY_GROUP)
-public class AndroidPaintContext extends PaintContext {
-    private static final String SYSTEM_FONTS_PATH = "/system/fonts/";
+public class AndroidPaintContext extends PaintContext implements CustomContext {
+
+    private static final Shader.TileMode[] TILE_MODES = Shader.TileMode.values();
+
+    private static Shader.@NonNull TileMode tileModeFromInt(int value) {
+        if (value < 0 || value >= TILE_MODES.length) {
+            return Shader.TileMode.CLAMP;
+        }
+        return TILE_MODES[value];
+    }
+
     Paint mPaint = new Paint();
     List<Paint> mPaintList = new ArrayList<>();
     Canvas mCanvas;
@@ -96,10 +104,109 @@ public class AndroidPaintContext extends PaintContext {
     Rect mTmpRect = new Rect(); // use in calculation of bounds
     RenderNode mNode = null;
     Canvas mPreviousCanvas = null;
+    private TypefaceResolver mTypefaceResolver;
+    private AndroidCustomContext mCustomSupport = null;
+
+    /**
+     * Set the custom support for this platform.
+     *
+     * @param customSupport the custom support to use
+     */
+
+    @Override
+    public void setCustomSupport(@NonNull CustomContext customSupport) {
+        this.mCustomSupport = (AndroidCustomContext) customSupport;
+        mCustomSupport.setCanvas(mCanvas);
+        mCustomSupport.setRemoteContext(mContext);
+        android.content.Context androidContext =
+                (mContext instanceof AndroidRemoteContext)
+                        ? ((AndroidRemoteContext) mContext).getAndroidContext()
+                        : null;
+        if (androidContext != null) {
+            mCustomSupport.setContext(androidContext);
+        }
+    }
+
+    @Override
+    public void createCustom(int id, @NonNull String config) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        android.content.Context androidContext =
+                (mContext instanceof AndroidRemoteContext)
+                        ? ((AndroidRemoteContext) mContext).getAndroidContext()
+                        : null;
+        if (androidContext != null) {
+            mCustomSupport.setContext(androidContext);
+            mCustomSupport.createCustom(id, config);
+        }
+    }
+
+    @Override
+    public void configureCustom(int id, int type, @NonNull String value) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.configureCustom(id, type, value);
+    }
+
+    @Override
+    public void configureCustom(int id, int type, int value) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.configureCustom(id, type, value);
+    }
+
+    @Override
+    public void configureCustom(int id, int type, float value) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.configureCustom(id, type, value);
+    }
+
+    @Override
+    public void measureCustom(int id, float @NonNull [] bounds) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.measureCustom(id, bounds);
+    }
+
+    @Override
+    public void layoutCustom(int id, float @NonNull [] bounds) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.layoutCustom(id, bounds);
+    }
+
+    @Override
+    public boolean touchCustom(int id, int type, float x, float y) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        return mCustomSupport.touchCustom(id, type, x, y);
+    }
+
+    @Override
+    public void drawCustom(int id) {
+        if (mCustomSupport == null) {
+            throw new RuntimeException("No Custom components supported");
+        }
+        mCustomSupport.setCanvas(mCanvas);
+        mCustomSupport.drawCustom(id);
+    }
 
     public AndroidPaintContext(@NonNull RemoteContext context, @NonNull Canvas canvas) {
         super(context);
         this.mCanvas = canvas;
+        this.mTypefaceResolver = new DefaultTypefaceResolver(context);
+    }
+
+    public void setTypefaceResolver(@NonNull TypefaceResolver typefaceResolver) {
+        this.mTypefaceResolver = typefaceResolver;
     }
 
     public @NonNull Canvas getCanvas() {
@@ -108,6 +215,9 @@ public class AndroidPaintContext extends PaintContext {
 
     public void setCanvas(@NonNull Canvas canvas) {
         this.mCanvas = mMainCanvas = canvas;
+        if (mCustomSupport != null) {
+            mCustomSupport.setCanvas(canvas);
+        }
     }
 
     @Override
@@ -115,9 +225,14 @@ public class AndroidPaintContext extends PaintContext {
         mCanvas.save();
     }
 
+    private final Paint mLayerPaint = new Paint();
+
     @Override
     public void saveLayer(float x, float y, float width, float height) {
-        mCanvas.saveLayer(x, y, x + width, y + height, mPaint);
+        mLayerPaint.reset();
+        mLayerPaint.setAlpha(mPaint.getAlpha());
+        mCanvas.saveLayer(x, y, x + width, y + height, mLayerPaint);
+        mPaint.setAlpha(255);
     }
 
     @Override
@@ -151,9 +266,8 @@ public class AndroidPaintContext extends PaintContext {
             int dstRight,
             int dstBottom,
             int cdId) {
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-        if (androidContext.mRemoteComposeState.containsId(imageId)) {
-            Bitmap bitmap = (Bitmap) androidContext.mRemoteComposeState.getFromId(imageId);
+        if (mContext.mRemoteComposeState.containsId(imageId)) {
+            Bitmap bitmap = (Bitmap) mContext.mRemoteComposeState.getFromId(imageId);
             mCanvas.drawBitmap(
                     bitmap,
                     new Rect(srcLeft, srcTop, srcRight, srcBottom),
@@ -167,6 +281,7 @@ public class AndroidPaintContext extends PaintContext {
         mCanvas.scale(scaleX, scaleY);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.Q)
     @Override
     public void startGraphicsLayer(int w, int h) {
         mNode = new RenderNode("layer");
@@ -175,6 +290,7 @@ public class AndroidPaintContext extends PaintContext {
         mCanvas = mNode.beginRecording();
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.Q)
     @Override
     public void setGraphicsLayer(@NonNull HashMap<Integer, Object> attributes) {
         if (mNode == null) {
@@ -204,7 +320,7 @@ public class AndroidPaintContext extends PaintContext {
                     mNode.setPivotX((Float) value * mNode.getWidth());
                     break;
                 case GraphicsLayerModifierOperation.TRANSFORM_ORIGIN_Y:
-                    mNode.setPivotY((Float) value * mNode.getWidth());
+                    mNode.setPivotY((Float) value * mNode.getHeight());
                     break;
                 case GraphicsLayerModifierOperation.TRANSLATION_X:
                     mNode.setTranslationX((Float) value);
@@ -305,6 +421,7 @@ public class AndroidPaintContext extends PaintContext {
         }
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.Q)
     @Override
     public void endGraphicsLayer() {
         mNode.endRecording();
@@ -337,9 +454,8 @@ public class AndroidPaintContext extends PaintContext {
 
     @Override
     public void drawBitmap(int id, float left, float top, float right, float bottom) {
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-        if (androidContext.mRemoteComposeState.containsId(id)) {
-            Bitmap bitmap = (Bitmap) androidContext.mRemoteComposeState.getFromId(id);
+        if (mContext.mRemoteComposeState.containsId(id)) {
+            Bitmap bitmap = (Bitmap) mContext.mRemoteComposeState.getFromId(id);
             Rect src = new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight());
             RectF dst = new RectF(left, top, right, bottom);
             mCanvas.drawBitmap(bitmap, src, dst, mPaint);
@@ -396,6 +512,68 @@ public class AndroidPaintContext extends PaintContext {
     @Override
     public void drawTextOnPath(int textId, int pathId, float hOffset, float vOffset) {
         mCanvas.drawTextOnPath(getText(textId), getPath(pathId, 0, 1), hOffset, vOffset, mPaint);
+    }
+
+    /**
+     * Draws text along a circular arc using Android {@link Path} and {@link Canvas#drawTextOnPath}.
+     *
+     * <p>Measures text width with the current {@link Paint}, calculates the arc sweep angle based
+     * on the final radius ({@code radius + warpRadiusOffset}), adjusts the starting angle for text
+     * alignment (START, CENTER, or END), and constructs an arc path using {@link Path#addArc}.
+     *
+     * <p>Placement specifies the drawing direction: {@code OUTSIDE} places text clockwise along the
+     * top of the arc, while {@code INSIDE} places text counter-clockwise along the bottom.
+     */
+    @Override
+    public void drawTextOnCircle(
+            int textId,
+            float centerX,
+            float centerY,
+            float radius,
+            float startAngle,
+            float warpRadiusOffset,
+            int alignment,
+            int placement) {
+        String textToDraw = getText(textId);
+        if (textToDraw == null) {
+            return;
+        }
+        float textWidth = mPaint.measureText(textToDraw);
+        float finalRadius = radius + warpRadiusOffset;
+        if (finalRadius <= 0f) {
+            return;
+        }
+        // OUTSIDE placement draws text clockwise on top of the arc;
+        // INSIDE placement draws counterclockwise.
+        boolean clockwise = placement == DrawTextOnCircle.Placement.OUTSIDE.ordinal();
+        float sweepDegrees = (float) Math.toDegrees(textWidth / finalRadius);
+        float finalStartAngle = startAngle;
+        if (!clockwise) {
+            sweepDegrees = -sweepDegrees;
+            if (alignment == DrawTextOnCircle.Alignment.CENTER.ordinal()) {
+                finalStartAngle = startAngle + Math.abs(sweepDegrees) / 2f;
+            } else if (alignment == DrawTextOnCircle.Alignment.END.ordinal()) {
+                finalStartAngle = startAngle + Math.abs(sweepDegrees);
+            }
+        } else {
+            if (alignment == DrawTextOnCircle.Alignment.CENTER.ordinal()) {
+                finalStartAngle = startAngle - sweepDegrees / 2f;
+            } else if (alignment == DrawTextOnCircle.Alignment.END.ordinal()) {
+                finalStartAngle = startAngle - sweepDegrees;
+            }
+        }
+
+        Path path = new Path();
+        path.addArc(
+                centerX - finalRadius,
+                centerY - finalRadius,
+                centerX + finalRadius,
+                centerY + finalRadius,
+                finalStartAngle,
+                sweepDegrees);
+
+        mPaint.setTextAlign(Paint.Align.LEFT);
+        mCanvas.drawTextOnPath(textToDraw, path, 0f, 0f, mPaint);
     }
 
     private Paint.FontMetrics mCachedFontMetrics;
@@ -469,7 +647,8 @@ public class AndroidPaintContext extends PaintContext {
 
         TextPaint textPaint = new TextPaint();
 
-        boolean useAdvancedFeatures = (flags & PaintContext.TEXT_MEASURE_AUTOSIZE) != 0;
+        boolean useAdvancedFeatures =
+                (flags & (PaintContext.TEXT_MEASURE_AUTOSIZE | PaintContext.TEXT_COMPLEX)) != 0;
 
         if (letterSpacing != 0f) {
             mPaint.setLetterSpacing(letterSpacing);
@@ -545,7 +724,8 @@ public class AndroidPaintContext extends PaintContext {
             boolean isHyphenatedText = getTightBoundingBox(staticLayout, bounds);
             int visibleLines = staticLayout.getLineCount();
             if (bounds.height() > maxHeight
-                    && useEllipses && staticLayout.getLineCount() >= maxLines) {
+                    && useEllipses
+                    && staticLayout.getLineCount() >= maxLines) {
                 // let's measure how many lines we can actually fit
                 int lineCount = staticLayout.getLineCount();
                 visibleLines = 0;
@@ -565,20 +745,25 @@ public class AndroidPaintContext extends PaintContext {
                 }
             }
             return new AndroidComputedTextLayout(
-                    staticLayout, bounds.width(), bounds.height(),
-                    visibleLines, isHyphenatedText);
+                    staticLayout,
+                    bounds.left,
+                    bounds.width(),
+                    bounds.height(),
+                    visibleLines,
+                    isHyphenatedText);
         } else {
             return new AndroidComputedTextLayout(
-                    staticLayout, staticLayout.getWidth(), staticLayout.getHeight(),
-                    staticLayout.getLineCount(), false);
+                    staticLayout,
+                    staticLayout.getWidth(),
+                    staticLayout.getHeight(),
+                    staticLayout.getLineCount(),
+                    false);
         }
     }
 
-    /**
-     * Returns true if a line is hyphenated.
-     */
-    public boolean isLineHyphenated(@NonNull StaticLayout layout,
-            @NonNull CharSequence originalText, int lineIndex) {
+    /** Returns true if a line is hyphenated. */
+    public boolean isLineHyphenated(
+            @NonNull StaticLayout layout, @NonNull CharSequence originalText, int lineIndex) {
         if (lineIndex >= layout.getLineCount() - 1) {
             return false;
         }
@@ -591,9 +776,7 @@ public class AndroidPaintContext extends PaintContext {
         return false;
     }
 
-    /**
-     * Returns the bounding box of the static layout
-     */
+    /** Returns the bounding box of the static layout */
     public boolean getTightBoundingBox(@NonNull StaticLayout layout, @NonNull Rect bounds) {
         int lineCount = layout.getLineCount();
         if (lineCount == 0) {
@@ -605,25 +788,25 @@ public class AndroidPaintContext extends PaintContext {
         int top = layout.getLineTop(0);
         int bottom = layout.getLineBottom(lineCount - 1);
 
-        float maxContentWidth = 0f;
-        for (int i = 0; i < lineCount; i++) {
-            float lineWidth = layout.getLineMax(i);
-            if (lineWidth > maxContentWidth) {
-                maxContentWidth = lineWidth;
-            }
-        }
-
-        float minLeft = 0f;
+        float minLeft = Float.MAX_VALUE;
+        float maxRight = 0f;
         for (int i = 0; i < lineCount; i++) {
             float lineLeft = layout.getLineLeft(i);
+            float lineRight = layout.getLineRight(i);
             if (lineLeft < minLeft) {
                 minLeft = lineLeft;
             }
+            if (lineRight > maxRight) {
+                maxRight = lineRight;
+            }
             isHyphenated |= isLineHyphenated(layout, layout.getText(), i);
+        }
+        if (minLeft == Float.MAX_VALUE) {
+            minLeft = 0f;
         }
         bounds.left = (int) minLeft;
         bounds.top = top;
-        bounds.right = (int) maxContentWidth;
+        bounds.right = (int) Math.ceil(maxRight);
         bounds.bottom = bottom;
         return isHyphenated;
     }
@@ -662,8 +845,16 @@ public class AndroidPaintContext extends PaintContext {
         if (computedTextLayout == null) {
             return;
         }
-        StaticLayout staticLayout = ((AndroidComputedTextLayout) computedTextLayout).get();
-        staticLayout.draw(mCanvas);
+        AndroidComputedTextLayout androidLayout = (AndroidComputedTextLayout) computedTextLayout;
+        StaticLayout staticLayout = androidLayout.get();
+        float left = androidLayout.getLeft();
+        if (left != 0f) {
+            mCanvas.translate(-left, 0f);
+            staticLayout.draw(mCanvas);
+            mCanvas.translate(left, 0f);
+        } else {
+            staticLayout.draw(mCanvas);
+        }
     }
 
     @Override
@@ -713,76 +904,91 @@ public class AndroidPaintContext extends PaintContext {
         return PorterDuff.Mode.SRC_OVER;
     }
 
-    private static BlendMode remoteToAndroidBlendMode(int mode) {
-        switch (mode) {
-            case PaintBundle.BLEND_MODE_CLEAR:
-                return BlendMode.CLEAR;
-            case PaintBundle.BLEND_MODE_SRC:
-                return BlendMode.SRC;
-            case PaintBundle.BLEND_MODE_DST:
-                return BlendMode.DST;
-            case PaintBundle.BLEND_MODE_SRC_OVER:
-                return BlendMode.SRC_OVER;
-            case PaintBundle.BLEND_MODE_DST_OVER:
-                return BlendMode.DST_OVER;
-            case PaintBundle.BLEND_MODE_SRC_IN:
-                return BlendMode.SRC_IN;
-            case PaintBundle.BLEND_MODE_DST_IN:
-                return BlendMode.DST_IN;
-            case PaintBundle.BLEND_MODE_SRC_OUT:
-                return BlendMode.SRC_OUT;
-            case PaintBundle.BLEND_MODE_DST_OUT:
-                return BlendMode.DST_OUT;
-            case PaintBundle.BLEND_MODE_SRC_ATOP:
-                return BlendMode.SRC_ATOP;
-            case PaintBundle.BLEND_MODE_DST_ATOP:
-                return BlendMode.DST_ATOP;
-            case PaintBundle.BLEND_MODE_XOR:
-                return BlendMode.XOR;
-            case PaintBundle.BLEND_MODE_PLUS:
-                return BlendMode.PLUS;
-            case PaintBundle.BLEND_MODE_MODULATE:
-                return BlendMode.MODULATE;
-            case PaintBundle.BLEND_MODE_SCREEN:
-                return BlendMode.SCREEN;
-            case PaintBundle.BLEND_MODE_OVERLAY:
-                return BlendMode.OVERLAY;
-            case PaintBundle.BLEND_MODE_DARKEN:
-                return BlendMode.DARKEN;
-            case PaintBundle.BLEND_MODE_LIGHTEN:
-                return BlendMode.LIGHTEN;
-            case PaintBundle.BLEND_MODE_COLOR_DODGE:
-                return BlendMode.COLOR_DODGE;
-            case PaintBundle.BLEND_MODE_COLOR_BURN:
-                return BlendMode.COLOR_BURN;
-            case PaintBundle.BLEND_MODE_HARD_LIGHT:
-                return BlendMode.HARD_LIGHT;
-            case PaintBundle.BLEND_MODE_SOFT_LIGHT:
-                return BlendMode.SOFT_LIGHT;
-            case PaintBundle.BLEND_MODE_DIFFERENCE:
-                return BlendMode.DIFFERENCE;
-            case PaintBundle.BLEND_MODE_EXCLUSION:
-                return BlendMode.EXCLUSION;
-            case PaintBundle.BLEND_MODE_MULTIPLY:
-                return BlendMode.MULTIPLY;
-            case PaintBundle.BLEND_MODE_HUE:
-                return BlendMode.HUE;
-            case PaintBundle.BLEND_MODE_SATURATION:
-                return BlendMode.SATURATION;
-            case PaintBundle.BLEND_MODE_COLOR:
-                return BlendMode.COLOR;
-            case PaintBundle.BLEND_MODE_LUMINOSITY:
-                return BlendMode.LUMINOSITY;
-            case PaintBundle.BLEND_MODE_NULL:
-                return null;
+    @SuppressLint("ObsoleteSdkInt")
+    @RequiresApi(29)
+    private static class Api29Impl {
+        @DoNotInline
+        static void setBlendMode(Paint paint, int mode) {
+            paint.setBlendMode(remoteToAndroidBlendMode(mode));
         }
-        return null;
+
+        @DoNotInline
+        private static BlendMode remoteToAndroidBlendMode(int mode) {
+            switch (mode) {
+                case PaintBundle.BLEND_MODE_CLEAR:
+                    return BlendMode.CLEAR;
+                case PaintBundle.BLEND_MODE_SRC:
+                    return BlendMode.SRC;
+                case PaintBundle.BLEND_MODE_DST:
+                    return BlendMode.DST;
+                case PaintBundle.BLEND_MODE_SRC_OVER:
+                    return BlendMode.SRC_OVER;
+                case PaintBundle.BLEND_MODE_DST_OVER:
+                    return BlendMode.DST_OVER;
+                case PaintBundle.BLEND_MODE_SRC_IN:
+                    return BlendMode.SRC_IN;
+                case PaintBundle.BLEND_MODE_DST_IN:
+                    return BlendMode.DST_IN;
+                case PaintBundle.BLEND_MODE_SRC_OUT:
+                    return BlendMode.SRC_OUT;
+                case PaintBundle.BLEND_MODE_DST_OUT:
+                    return BlendMode.DST_OUT;
+                case PaintBundle.BLEND_MODE_SRC_ATOP:
+                    return BlendMode.SRC_ATOP;
+                case PaintBundle.BLEND_MODE_DST_ATOP:
+                    return BlendMode.DST_ATOP;
+                case PaintBundle.BLEND_MODE_XOR:
+                    return BlendMode.XOR;
+                case PaintBundle.BLEND_MODE_PLUS:
+                    return BlendMode.PLUS;
+                case PaintBundle.BLEND_MODE_MODULATE:
+                    return BlendMode.MODULATE;
+                case PaintBundle.BLEND_MODE_SCREEN:
+                    return BlendMode.SCREEN;
+                case PaintBundle.BLEND_MODE_OVERLAY:
+                    return BlendMode.OVERLAY;
+                case PaintBundle.BLEND_MODE_DARKEN:
+                    return BlendMode.DARKEN;
+                case PaintBundle.BLEND_MODE_LIGHTEN:
+                    return BlendMode.LIGHTEN;
+                case PaintBundle.BLEND_MODE_COLOR_DODGE:
+                    return BlendMode.COLOR_DODGE;
+                case PaintBundle.BLEND_MODE_COLOR_BURN:
+                    return BlendMode.COLOR_BURN;
+                case PaintBundle.BLEND_MODE_HARD_LIGHT:
+                    return BlendMode.HARD_LIGHT;
+                case PaintBundle.BLEND_MODE_SOFT_LIGHT:
+                    return BlendMode.SOFT_LIGHT;
+                case PaintBundle.BLEND_MODE_DIFFERENCE:
+                    return BlendMode.DIFFERENCE;
+                case PaintBundle.BLEND_MODE_EXCLUSION:
+                    return BlendMode.EXCLUSION;
+                case PaintBundle.BLEND_MODE_MULTIPLY:
+                    return BlendMode.MULTIPLY;
+                case PaintBundle.BLEND_MODE_HUE:
+                    return BlendMode.HUE;
+                case PaintBundle.BLEND_MODE_SATURATION:
+                    return BlendMode.SATURATION;
+                case PaintBundle.BLEND_MODE_COLOR:
+                    return BlendMode.COLOR;
+                case PaintBundle.BLEND_MODE_LUMINOSITY:
+                    return BlendMode.LUMINOSITY;
+                case PaintBundle.BLEND_MODE_NULL:
+                    return null;
+            }
+            return null;
+        }
     }
 
     PaintChanges mCachedPaintChanges =
             new PaintChanges() {
-                private Font.Builder mFontBuilder;
+                private FontInstance mFontInstance;
                 final Matrix mTmpMatrix = new Matrix();
+                Typeface mFallbackTypeFace = Typeface.DEFAULT;
+                int mFallbackWeight = 400;
+                boolean mFallbackItalic = false;
+                private String[] mPendingTags;
+                private float[] mPendingValues;
 
                 @Override
                 public void setTextSize(float size) {
@@ -790,53 +996,43 @@ public class AndroidPaintContext extends PaintContext {
                 }
 
                 @Override
-                public void setTypeFace(int fontType, int weight, boolean italic) {
+                public void setFallbackTypeFace(int fontType, int weight, boolean italic) {
+                    Typeface typeface = Typeface.DEFAULT;
                     switch (fontType) {
                         case PaintBundle.FONT_TYPE_DEFAULT:
-                            if (weight == 400 && !italic) { // for normal case
-                                mPaint.setTypeface(Typeface.DEFAULT);
-                            } else {
-                                mPaint.setTypeface(
-                                        Typeface.create(Typeface.DEFAULT, weight, italic));
-                            }
                             break;
                         case PaintBundle.FONT_TYPE_SERIF:
-                            if (weight == 400 && !italic) { // for normal case
-                                mPaint.setTypeface(Typeface.SERIF);
-                            } else {
-                                mPaint.setTypeface(Typeface.create(Typeface.SERIF, weight, italic));
-                            }
+                            typeface = Typeface.SERIF;
                             break;
                         case PaintBundle.FONT_TYPE_SANS_SERIF:
-                            if (weight == 400 && !italic) { //  for normal case
-                                mPaint.setTypeface(Typeface.SANS_SERIF);
-                            } else {
-                                mPaint.setTypeface(
-                                        Typeface.create(Typeface.SANS_SERIF, weight, italic));
-                            }
+                            typeface = Typeface.SANS_SERIF;
                             break;
                         case PaintBundle.FONT_TYPE_MONOSPACE:
-                            if (weight == 400 && !italic) { //  for normal case
-                                mPaint.setTypeface(Typeface.MONOSPACE);
-                            } else {
-                                mPaint.setTypeface(
-                                        Typeface.create(Typeface.MONOSPACE, weight, italic));
-                            }
-
-                            break;
-                        default: // font data
-                            RemoteContext.FontInfo fi =
-                                    (RemoteContext.FontInfo) mContext.getObject(fontType);
-                            Font.Builder builder = (Font.Builder) fi.fontBuilder;
-                            if (builder == null) {
-                                fi.fontBuilder =
-                                        builder = createFontBuilder(fi.mFontData, weight, italic);
-                            }
-                            mFontBuilder = builder;
-                            setAxis(null);
-
-                            break;
+                            typeface = Typeface.MONOSPACE;
                     }
+                    mFallbackItalic = italic;
+                    mFallbackWeight = weight;
+                    mFallbackTypeFace = typeface;
+                }
+
+                @Override
+                @SuppressLint("NewApi")
+                public void setTypeFace(int fontType, int weight, boolean italic) {
+                    mFontInstance =
+                            mTypefaceResolver.resolve(
+                                    fontType,
+                                    weight,
+                                    italic,
+                                    mFallbackTypeFace,
+                                    mFallbackWeight,
+                                    mFallbackItalic);
+                    if (mPendingTags != null) {
+                        mPaint.setTypeface(
+                                mFontInstance.applyVariationSettings(mPendingTags, mPendingValues));
+                    } else {
+                        mPaint.setTypeface(mFontInstance.getTypeface());
+                    }
+                    mFontInstance.setOnLoadedListener(() -> mContext.needsRepaint());
                 }
 
                 @Override
@@ -852,100 +1048,47 @@ public class AndroidPaintContext extends PaintContext {
                     s.setLocalMatrix(mTmpMatrix);
                 }
 
-                /**
+                /*
                  * @param fontType String to be looked up in system
                  * @param weight the weight of the font
                  * @param italic if the font is italic
                  */
                 @Override
                 public void setTypeFace(@NonNull String fontType, int weight, boolean italic) {
-                    String path = getFontPath(fontType);
-                    if (path == null) {
-                        return;
+                    mFontInstance =
+                            mTypefaceResolver.resolve(
+                                    fontType,
+                                    weight,
+                                    italic,
+                                    mFallbackTypeFace,
+                                    mFallbackWeight,
+                                    mFallbackItalic);
+                    if (mPendingTags != null) {
+                        mPaint.setTypeface(
+                                mFontInstance.applyVariationSettings(mPendingTags, mPendingValues));
+                    } else {
+                        mPaint.setTypeface(mFontInstance.getTypeface());
                     }
-                    mFontBuilder = new Font.Builder(new File(path));
-                    mFontBuilder.setWeight(weight);
-                    mFontBuilder.setSlant(
-                            italic ? FontStyle.FONT_SLANT_ITALIC : FontStyle.FONT_SLANT_UPRIGHT);
-                    setAxis(null);
+                    mFontInstance.setOnLoadedListener(() -> mContext.needsRepaint());
                 }
 
-                private Font.Builder createFontBuilder(byte[] data, int weight, boolean italic) {
-                    ByteBuffer buffer = ByteBuffer.allocateDirect(data.length);
-
-                    // 2. Put the fontBytes into the direct buffer.
-                    buffer.put(data);
-                    buffer.rewind();
-                    mFontBuilder = new Font.Builder(buffer);
-                    mFontBuilder.setWeight(weight);
-                    mFontBuilder.setSlant(
-                            italic ? FontStyle.FONT_SLANT_ITALIC : FontStyle.FONT_SLANT_UPRIGHT);
-                    setAxis(null);
-                    return mFontBuilder;
-                }
-
-                private void setAxis(FontVariationAxis[] axis) {
-                    if (mFontBuilder == null) {
-                        return;
-                    }
-                    Font font = null;
-                    try {
-                        if (axis != null) {
-                            mFontBuilder.setFontVariationSettings(axis);
-                        }
-                        font = mFontBuilder.build();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                        throw new RuntimeException(e);
-                    }
-
-                    FontFamily.Builder fontFamilyBuilder = new FontFamily.Builder(font);
-                    FontFamily fontFamily = fontFamilyBuilder.build();
-                    Typeface typeface =
-                            new Typeface.CustomFallbackBuilder(fontFamily)
-                                    .setSystemFallback("sans-serif")
-                                    .build();
-                    mPaint.setTypeface(typeface);
-                }
-
-                private String getFontPath(String fontName) {
-                    File fontsDir = new File(SYSTEM_FONTS_PATH);
-                    if (!fontsDir.exists() || !fontsDir.isDirectory()) {
-                        System.err.println("System fonts directory not found");
-                        return null;
-                    }
-
-                    File[] fontFiles = fontsDir.listFiles();
-                    if (fontFiles == null) {
-                        System.err.println("Unable to list font files");
-                        return null;
-                    }
-                    fontName = fontName.toLowerCase(Locale.ROOT);
-                    for (File fontFile : fontFiles) {
-                        if (fontFile.getName().toLowerCase(Locale.ROOT).contains(fontName)) {
-                            return fontFile.getAbsolutePath();
-                        }
-                    }
-                    System.err.println("font \"" + fontName + "\" not found");
-                    return null;
-                }
-
-                /**
+                /*
                  * Set the font variation axes
                  *
                  * @param tags tags
                  * @param values values
                  */
+                @RequiresApi(api = Build.VERSION_CODES.Q)
                 @Override
                 public void setFontVariationAxes(@NonNull String[] tags, float @NonNull [] values) {
-                    FontVariationAxis[] axes = new FontVariationAxis[tags.length];
-                    for (int i = 0; i < tags.length; i++) {
-                        axes[i] = new FontVariationAxis(tags[i], values[i]);
+                    mPendingTags = tags;
+                    mPendingValues = values;
+                    if (mFontInstance != null) {
+                        mPaint.setTypeface(mFontInstance.applyVariationSettings(tags, values));
                     }
-                    setAxis(axes);
                 }
 
-                /**
+                /*
                  * Set the texture shader
                  *
                  * @param bitmapId the id of the bitmap to use
@@ -976,9 +1119,7 @@ public class AndroidPaintContext extends PaintContext {
                     }
                     shader =
                             new BitmapShader(
-                                    bitmap,
-                                    Shader.TileMode.values()[tileX],
-                                    Shader.TileMode.values()[tileY]);
+                                    bitmap, tileModeFromInt(tileX), tileModeFromInt(tileY));
 
                     if (Build.VERSION.SDK_INT // REMOVE IN PLATFORM
                             >= Build.VERSION_CODES.TIRAMISU) { // REMOVE IN PLATFORM
@@ -1020,33 +1161,37 @@ public class AndroidPaintContext extends PaintContext {
                             break;
                         case PaintPathEffects.DISCRETE_PATH:
                             PaintPathEffects.Discrete discrete = (PaintPathEffects.Discrete) pe;
-                            ret = new DiscretePathEffect(discrete.mSegmentLength,
-                                    discrete.mDeviation);
+                            ret =
+                                    new DiscretePathEffect(
+                                            discrete.mSegmentLength, discrete.mDeviation);
                             break;
                         case PaintPathEffects.PATH_DASH:
                             PaintPathEffects.PathDash pathDash = (PaintPathEffects.PathDash) pe;
-                            ret = new PathDashPathEffect(
-                                    getPath(pathDash.mShapeId, 0f, 1f),
-                                    pathDash.mAdvance,
-                                    pathDash.mPhase,
-                                    PathDashPathEffect.Style.values()[pathDash.mStyle]);
+                            ret =
+                                    new PathDashPathEffect(
+                                            getPath(pathDash.mShapeId, 0f, 1f),
+                                            pathDash.mAdvance,
+                                            pathDash.mPhase,
+                                            PathDashPathEffect.Style.values()[pathDash.mStyle]);
                             break;
                         case PaintPathEffects.SUM:
                             PaintPathEffects.Sum sum = (PaintPathEffects.Sum) pe;
-                            ret = new SumPathEffect(getPathEffect(sum.mFirst),
-                                    getPathEffect(sum.mSecond));
+                            ret =
+                                    new SumPathEffect(
+                                            getPathEffect(sum.mFirst), getPathEffect(sum.mSecond));
                             break;
                         case PaintPathEffects.COMPOSE:
                             PaintPathEffects.Compose compose = (PaintPathEffects.Compose) pe;
-                            ret = new ComposePathEffect(getPathEffect(compose.mOuterPE),
-                                    getPathEffect(compose.mInnerPE));
+                            ret =
+                                    new ComposePathEffect(
+                                            getPathEffect(compose.mOuterPE),
+                                            getPathEffect(compose.mInnerPE));
                             break;
                         default:
                             ret = null;
                     }
                     return ret;
                 }
-
 
                 @Override
                 public void setStrokeWidth(float width) {
@@ -1085,13 +1230,31 @@ public class AndroidPaintContext extends PaintContext {
                     for (int i = 0; i < names.length; i++) {
                         String name = names[i];
                         float[] val = data.getUniformFloats(name);
-                        if (val.length == 1 && Float.isNaN(val[0])) {
-                            // check if dynamic array
-                            float[] values = mContext.getCollectionsAccess().getDynamicFloats(
-                                    Utils.idFromNan(val[0]));
-                            shader.setFloatUniform(name, values);
+                        if (val.length == 1) {
+                            if (Float.isNaN(val[0])) {
+                                int varId = Utils.idFromNan(val[0]);
+                                float[] values =
+                                        mContext.getCollectionsAccess() != null
+                                                ? mContext.getCollectionsAccess()
+                                                .getDynamicFloats(varId)
+                                                : null;
+                                if (values != null) {
+                                    shader.setFloatUniform(name, values);
+                                } else {
+                                    shader.setFloatUniform(name, mContext.getFloat(varId));
+                                }
+                            } else {
+                                shader.setFloatUniform(name, val[0]);
+                            }
                         } else {
-                            shader.setFloatUniform(name, val);
+                            float[] evaluated = new float[val.length];
+                            for (int k = 0; k < val.length; k++) {
+                                evaluated[k] =
+                                        Float.isNaN(val[k])
+                                                ? mContext.getFloat(Utils.idFromNan(val[k]))
+                                                : val[k];
+                            }
+                            shader.setFloatUniform(name, evaluated);
                         }
                     }
                     names = data.getUniformIntegerNames();
@@ -1104,8 +1267,7 @@ public class AndroidPaintContext extends PaintContext {
                     for (int i = 0; i < names.length; i++) {
                         String name = names[i];
                         int val = data.getUniformBitmapId(name);
-                        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-                        Bitmap bitmap = (Bitmap) androidContext.mRemoteComposeState.getFromId(val);
+                        Bitmap bitmap = (Bitmap) mContext.mRemoteComposeState.getFromId(val);
                         BitmapShader bitmapShader =
                                 new BitmapShader(
                                         bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
@@ -1119,9 +1281,16 @@ public class AndroidPaintContext extends PaintContext {
                     mPaint.setFilterBitmap(quality == 1);
                 }
 
+                @SuppressLint("ObsoleteSdkInt")
                 @Override
                 public void setBlendMode(int mode) {
-                    mPaint.setBlendMode(remoteToAndroidBlendMode(mode));
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) { // REMOVE IN PLATFORM
+                        Api29Impl.setBlendMode(mPaint, mode);
+                    } else { // REMOVE IN PLATFORM
+                        mPaint.setXfermode(// REMOVE IN PLATFORM
+                                new android.graphics.PorterDuffXfermode(// REMOVE IN PLATFORM
+                                        remoteToAndroidPorterDuffMode(mode))); // REMOVE IN PLATFORM
+                    } // REMOVE IN PLATFORM
                 }
 
                 @Override
@@ -1158,15 +1327,14 @@ public class AndroidPaintContext extends PaintContext {
 
                 Shader.TileMode[] mTileModes =
                         new Shader.TileMode[]{
-                                Shader.TileMode.CLAMP,
-                                Shader.TileMode.REPEAT,
+                                Shader.TileMode.CLAMP, Shader.TileMode.REPEAT,
                                 Shader.TileMode.MIRROR
                         };
 
                 @Override
                 public void setLinearGradient(
                         int @NonNull [] colors,
-                        float @NonNull [] stops,
+                        float @Nullable [] stops,
                         float startX,
                         float startY,
                         float endX,
@@ -1186,7 +1354,7 @@ public class AndroidPaintContext extends PaintContext {
                 @Override
                 public void setRadialGradient(
                         int @NonNull [] colors,
-                        float @NonNull [] stops,
+                        float @Nullable [] stops,
                         float centerX,
                         float centerY,
                         float radius,
@@ -1197,9 +1365,42 @@ public class AndroidPaintContext extends PaintContext {
                 }
 
                 @Override
+                public void setRadialGradient(
+                        int @NonNull [] colors,
+                        float @Nullable [] stops,
+                        float startX,
+                        float startY,
+                        float startRadius,
+                        float endX,
+                        float endY,
+                        float endRadius,
+                        int tileMode) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) { // REMOVE IN PLATFORM
+                        // unavoidable short term allocation for now but little used API.
+                        // Long term could cache the data
+                        long[] colorLong = new long[colors.length];
+                        for (int i = 0; i < colorLong.length; i++) {
+                            colorLong[i] = Color.pack(colors[i]);
+                        }
+                        mPaint.setShader(
+                                new RadialGradient(
+                                        startX, startY, startRadius,
+                                        endX, endY, endRadius,
+                                        colorLong, stops, mTileModes[tileMode]));
+                    } else { // REMOVE IN PLATFORM
+                        // The two-circle (focal) form needs API 31. Degrade to the end circle
+                        // so the document still renders something sensible.
+                        mPaint.setShader(// REMOVE IN PLATFORM
+                                new RadialGradient(// REMOVE IN PLATFORM
+                                        endX, endY, endRadius, // REMOVE IN PLATFORM
+                                        colors, stops, mTileModes[tileMode])); // REMOVE IN PLATFORM
+                    } // REMOVE IN PLATFORM
+                }
+
+                @Override
                 public void setSweepGradient(
                         int @NonNull [] colors,
-                        float @NonNull [] stops,
+                        float @Nullable [] stops,
                         float centerX,
                         float centerY) {
                     mPaint.setShader(new SweepGradient(centerX, centerY, colors, stops));
@@ -1305,8 +1506,7 @@ public class AndroidPaintContext extends PaintContext {
     @Override
     public void tweenPath(int out, int path1, int path2, float tween) {
         float[] p = getPathArray(path1, path2, tween);
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-        androidContext.mRemoteComposeState.putPathData(out, p);
+        mContext.mRemoteComposeState.putPathData(out, p);
     }
 
     @Override
@@ -1323,8 +1523,7 @@ public class AndroidPaintContext extends PaintContext {
         Path p = new Path(p1);
         p.op(p2, op[operation]);
 
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-        androidContext.mRemoteComposeState.putPath(out, p);
+        mContext.mRemoteComposeState.putPath(out, p);
     }
 
     @Override
@@ -1334,6 +1533,7 @@ public class AndroidPaintContext extends PaintContext {
         // segmentation violation
         mPaint.setTypeface(Typeface.DEFAULT);
         mPaint.reset();
+        releaseOffscreenBitmaps();
     }
 
     private Path getPath(int path1Id, int path2Id, float tween, float start, float end) {
@@ -1341,16 +1541,15 @@ public class AndroidPaintContext extends PaintContext {
     }
 
     private float[] getPathArray(int path1Id, int path2Id, float tween) {
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
         if (tween == 0.0f) {
-            return androidContext.mRemoteComposeState.getPathData(path1Id);
+            return mContext.mRemoteComposeState.getPathData(path1Id);
         }
         if (tween == 1.0f) {
-            return androidContext.mRemoteComposeState.getPathData(path2Id);
+            return mContext.mRemoteComposeState.getPathData(path2Id);
         }
 
-        float[] data1 = androidContext.mRemoteComposeState.getPathData(path1Id);
-        float[] data2 = androidContext.mRemoteComposeState.getPathData(path2Id);
+        float[] data1 = mContext.mRemoteComposeState.getPathData(path1Id);
+        float[] data2 = mContext.mRemoteComposeState.getPathData(path2Id);
         float[] tmp = new float[data2.length];
         for (int i = 0; i < tmp.length; i++) {
             if (Float.isNaN(data1[i]) || Float.isNaN(data2[i])) {
@@ -1369,14 +1568,13 @@ public class AndroidPaintContext extends PaintContext {
     }
 
     private Path getPath(int id, float start, float end) {
-        AndroidRemoteContext androidContext = (AndroidRemoteContext) mContext;
-        Path p = (Path) androidContext.mRemoteComposeState.getPath(id);
-        int w = androidContext.mRemoteComposeState.getPathWinding(id);
+        Path p = (Path) mContext.mRemoteComposeState.getPath(id);
+        int w = mContext.mRemoteComposeState.getPathWinding(id);
         if (p != null) {
             return p;
         }
         Path path = new Path();
-        float[] pathData = androidContext.mRemoteComposeState.getPathData(id);
+        float[] pathData = mContext.mRemoteComposeState.getPathData(id);
         if (pathData != null) {
             FloatsToPath.genPath(path, pathData, start, end);
             switch (w) {
@@ -1390,7 +1588,7 @@ public class AndroidPaintContext extends PaintContext {
                     path.setFillType(Path.FillType.INVERSE_WINDING);
                     break;
             }
-            androidContext.mRemoteComposeState.putPath(id, path);
+            mContext.mRemoteComposeState.putPath(id, path);
         }
 
         return path;
@@ -1415,7 +1613,156 @@ public class AndroidPaintContext extends PaintContext {
         mCanvas.concat(matrix);
     }
 
-    HashMap<Bitmap, Canvas> mCCache = new HashMap<>();
+    /** Geometry for one 2D mesh, already in the shape {@code Canvas.drawVertices} wants. */
+    private static final class Mesh2D {
+        final int mLayout;
+        final int mUCount;
+        final int mVCount;
+        final float[] mVerts;
+        final float[] mUv;
+        final int[] mColors;
+        final short[] mIndices;
+
+        Mesh2D(
+                int layout,
+                int uCount,
+                int vCount,
+                float[] verts,
+                float[] uv,
+                int[] colors,
+                short[] indices) {
+            mLayout = layout;
+            mUCount = uCount;
+            mVCount = vCount;
+            mVerts = verts;
+            mUv = uv;
+            mColors = colors;
+            mIndices = indices;
+        }
+    }
+
+    private final HashMap<Integer, Mesh2D> mMeshCache = new HashMap<>();
+    private final HashMap<Integer, BitmapShader> mMeshShaderCache = new HashMap<>();
+
+    @Override
+    public void setMesh(
+            int meshId,
+            int layout,
+            int uCount,
+            int vCount,
+            float @NonNull [] verts,
+            float @NonNull [] uv,
+            int @NonNull [] colors,
+            int @NonNull [] indices) {
+        // Android's drawVertices takes short[] indices, so narrow once here rather than per frame.
+        short[] shortIndices = new short[indices.length];
+        for (int i = 0; i < indices.length; i++) {
+            shortIndices[i] = (short) indices[i];
+        }
+        float[] vertsCopy = verts.length > 0 ? verts.clone() : new float[0];
+        float[] uvCopy = uv.length > 0 ? uv.clone() : new float[0];
+        int[] colorsCopy = colors.length > 0 ? colors.clone() : new int[0];
+        mMeshCache.put(
+                meshId,
+                new Mesh2D(layout, uCount, vCount, vertsCopy, uvCopy, colorsCopy, shortIndices));
+    }
+
+    @Override
+    public void drawMesh(int meshId, int blend, int imageId) {
+        Mesh2D mesh = mMeshCache.get(meshId);
+        if (mesh == null || mesh.mVerts.length == 0 || mesh.mIndices.length == 0) {
+            return;
+        }
+
+        int vertexCount = mesh.mVerts.length;
+        int[] colors = mesh.mColors.length > 0 ? mesh.mColors : null;
+
+        // drawVertices takes no bitmap: the texture comes from the paint's shader, and texs are
+        // coordinates in shader space. Passing texs with no shader is meaningless, so an
+        // untextured mesh must pass null.
+        Shader previousShader = mPaint.getShader();
+        boolean shaderInstalled = false;
+        float[] texs = null;
+
+        try {
+            if (imageId != DrawMesh2D.NO_IMAGE && mesh.mUv.length == mesh.mVerts.length) {
+                Bitmap bitmap = (Bitmap) mContext.mRemoteComposeState.getFromId(imageId);
+                if (bitmap != null) {
+                    BitmapShader shader = mMeshShaderCache.get(imageId);
+                    if (shader == null) {
+                        shader =
+                                new BitmapShader(
+                                        bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                        mMeshShaderCache.put(imageId, shader);
+                    }
+                    mPaint.setShader(shader);
+                    shaderInstalled = true;
+
+                    // uv is normalised 0..1 with (0,0) at the top left, and both Android and Skia
+                    // want image pixels, so the conversion is a plain multiply with no flip. The
+                    // 3D path next door flips v for the GL convention; 2D deliberately does not.
+                    int width = bitmap.getWidth();
+                    int height = bitmap.getHeight();
+                    texs = new float[mesh.mUv.length];
+                    for (int i = 0; i < mesh.mUv.length; i += 2) {
+                        texs[i] = mesh.mUv[i] * width;
+                        texs[i + 1] = mesh.mUv[i + 1] * height;
+                    }
+                }
+            }
+
+            if (blend == DrawMesh2D.BLEND_COLORS_ONLY) {
+                // colours only: ignore any texture and let the vertex colours through
+                texs = null;
+                if (shaderInstalled) {
+                    mPaint.setShader(previousShader);
+                    shaderInstalled = false;
+                }
+            }
+
+            mCanvas.drawVertices(
+                    Canvas.VertexMode.TRIANGLES,
+                    vertexCount,
+                    mesh.mVerts,
+                    0,
+                    texs,
+                    0,
+                    colors,
+                    0,
+                    mesh.mIndices,
+                    0,
+                    mesh.mIndices.length,
+                    mPaint);
+        } finally {
+            // Paint is canvas state; a backend that borrows it must give it back, including when
+            // the draw throws.
+            if (shaderInstalled) {
+                mPaint.setShader(previousShader);
+            }
+        }
+    }
+
+    @Override
+    public void matrixFromMesh(int meshId, float u, float v, int flags) {
+        Mesh2D mesh = mMeshCache.get(meshId);
+        if (mesh == null) {
+            return;
+        }
+        float[] affine = new float[6];
+        if (!Mesh2DGenerator.computeMatrixFromMesh(
+                mesh.mLayout, mesh.mUCount, mesh.mVCount, mesh.mVerts, u, v, flags, affine)) {
+            return;
+        }
+        Matrix m = new Matrix();
+        // [duX, duY, dvX, dvY, originX, originY] -> the 3x3 Android wants, row major
+        m.setValues(
+                new float[]{
+                        affine[0], affine[2], affine[4], affine[1], affine[3], affine[5], 0f, 0f, 1f
+                });
+        mCanvas.concat(m);
+    }
+
+    java.util.WeakHashMap<Bitmap, Canvas> mCCache = new java.util.WeakHashMap<>();
 
     @Override
     public void drawToBitmap(int bitmapId, int mode, int color) {
@@ -1426,6 +1773,7 @@ public class AndroidPaintContext extends PaintContext {
             mCanvas = mMainCanvas;
             return;
         }
+        mPaint.setAlpha(255);
         Bitmap bitmap = (Bitmap) mContext.mRemoteComposeState.getFromId(bitmapId);
         Objects.requireNonNull(bitmap);
         if (mCCache.containsKey(bitmap)) {

@@ -30,12 +30,10 @@ import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MultiMeasureLayout
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,13 +42,13 @@ import org.junit.runners.Parameterized
 @MediumTest
 @RunWith(Parameterized::class)
 class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComposableParam) {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     val testLayout: @Composable (modifier: Modifier) -> Unit = layoutComposableParam.layout
 
     companion object {
-        private val staticLocalInt = staticCompositionLocalOf { 0 }
-        private val localInt = compositionLocalOf { 0 }
+        private val LocalStaticInt = staticCompositionLocalOf { 0 }
+        private val LocalInt = compositionLocalOf { 0 }
         private val EmptyBoxMeasurePolicy = MeasurePolicy { _, constraints ->
             layout(constraints.maxWidth, constraints.maxHeight) {}
         }
@@ -90,7 +88,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(localInt)
+                    readValue = currentValueOf(LocalInt)
                     drawContent()
                 }
             }
@@ -105,12 +103,12 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(localInt)
+                    readValue = currentValueOf(LocalInt)
                     drawContent()
                 }
             }
         rule.setContent {
-            CompositionLocalProvider(localInt provides 2) { testLayout(elementOf { node }) }
+            CompositionLocalProvider(LocalInt provides 2) { testLayout(elementOf { node }) }
         }
 
         rule.runOnIdle { assertThat(readValue).isEqualTo(2) }
@@ -122,7 +120,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         var providedValue by mutableStateOf(2)
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
-                fun getValue(): Int = currentValueOf(localInt)
+                fun getValue(): Int = currentValueOf(LocalInt)
 
                 override fun ContentDrawScope.draw() {
                     readValue = getValue()
@@ -130,7 +128,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
                 }
             }
         rule.setContent {
-            CompositionLocalProvider(localInt provides providedValue) {
+            CompositionLocalProvider(LocalInt provides providedValue) {
                 testLayout(elementOf { node })
             }
         }
@@ -153,7 +151,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(staticLocalInt)
+                    readValue = currentValueOf(LocalStaticInt)
                     drawContent()
                 }
             }
@@ -168,12 +166,12 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(staticLocalInt)
+                    readValue = currentValueOf(LocalStaticInt)
                     drawContent()
                 }
             }
         rule.setContent {
-            CompositionLocalProvider(staticLocalInt provides 2) { testLayout(elementOf { node }) }
+            CompositionLocalProvider(LocalStaticInt provides 2) { testLayout(elementOf { node }) }
         }
 
         rule.runOnIdle { assertThat(readValue).isEqualTo(2) }
@@ -185,7 +183,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         var providedValue by mutableStateOf(2)
         val node =
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
-                fun getValue(): Int = currentValueOf(staticLocalInt)
+                fun getValue(): Int = currentValueOf(LocalStaticInt)
 
                 override fun ContentDrawScope.draw() {
                     readValue = getValue()
@@ -193,7 +191,7 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
                 }
             }
         rule.setContent {
-            CompositionLocalProvider(staticLocalInt provides providedValue) {
+            CompositionLocalProvider(LocalStaticInt provides providedValue) {
                 testLayout(elementOf { node })
             }
         }
@@ -211,7 +209,6 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
     }
 
     // Regression test for b/271875799
-    @Ignore("b/275919849")
     @Test
     fun compositionLocalsUpdateWhenContentMoves() {
         var readValue = -1
@@ -221,14 +218,14 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val modifier = elementOf {
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(localInt)
+                    readValue = currentValueOf(LocalInt)
                     drawContent()
                 }
             }
         }
 
         rule.setContent {
-            CompositionLocalProvider(localInt provides providedValue) {
+            CompositionLocalProvider(LocalInt provides providedValue) {
                 ReusableContent(contentKey) { testLayout(modifier) }
             }
         }
@@ -242,7 +239,6 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
     }
 
     // Regression test for b/271875799
-    @Ignore("b/275919849")
     @Test
     fun staticCompositionLocalsUpdateWhenContentMoves() {
         var readValue = -1
@@ -252,14 +248,14 @@ class CompositionLocalConsumerModifierNodeTest(layoutComposableParam: LayoutComp
         val modifier = elementOf {
             object : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
                 override fun ContentDrawScope.draw() {
-                    readValue = currentValueOf(staticLocalInt)
+                    readValue = currentValueOf(LocalStaticInt)
                     drawContent()
                 }
             }
         }
 
         rule.setContent {
-            CompositionLocalProvider(staticLocalInt provides providedValue) {
+            CompositionLocalProvider(LocalStaticInt provides providedValue) {
                 ReusableContent(contentKey) { testLayout(modifier) }
             }
         }

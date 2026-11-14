@@ -16,75 +16,70 @@
 
 package androidx.xr.projected
 
-import android.app.Activity
-import android.app.Application
-import android.companion.virtual.VirtualDeviceManager
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.ActivityInfo
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageInfo
-import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Bundle
-import androidx.test.core.app.ActivityScenario
-import androidx.test.core.app.ApplicationProvider
+import android.os.DeadObjectException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
-import androidx.xr.projected.ProjectedContext.PROJECTED_DEVICE_NAME
 import androidx.xr.projected.ProjectedDeviceController.Capability.Companion.CAPABILITY_VISUAL_UI
 import androidx.xr.projected.experimental.ExperimentalProjectedApi
+import androidx.xr.projected.platform.BatteryState as AidlBatteryState
+import androidx.xr.projected.platform.IBatteryStateListener
 import androidx.xr.projected.platform.IProjectedService
+import androidx.xr.projected.testing.ProjectedTestRule
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
-import org.mockito.kotlin.mock
+import org.mockito.kotlin.atLeastOnce
+import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
-import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 @Config(sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-@OptIn(ExperimentalProjectedApi::class)
+@OptIn(ExperimentalProjectedApi::class, ExperimentalCoroutinesApi::class)
 class ProjectedDeviceControllerTest {
 
-    private val mockProjectedService = mock<IProjectedService>()
-    private val mockProjectedServiceStub =
-        mock<IProjectedService.Stub> {
-            on { queryLocalInterface(any()) }.thenReturn(mockProjectedService)
-        }
-    private val context: Application = ApplicationProvider.getApplicationContext()
+    @get:Rule() val projectedTestRule = ProjectedTestRule()
+
+    private lateinit var testScope: TestScope
+
+    private val mockProjectedService: IProjectedService
+        get() = ReflectionHelpers.getField(projectedTestRule, "mockProjectedService")
 
     private lateinit var projectedDeviceController: ProjectedDeviceController
 
     @Before
     fun setUp() {
-        shadowOf(context.packageManager).apply {
-            addServiceIfNotPresent(COMPONENT_NAME)
-            addOrUpdateService(SERVICE_INFO)
-            addIntentFilterForService(COMPONENT_NAME, IntentFilter(ACTION_BIND))
-            installPackage(PACKAGE_INFO)
-        }
+        testScope = TestScope()
+    }
 
-        shadowOf(context).apply {
-            setComponentNameAndServiceForBindService(COMPONENT_NAME, mockProjectedServiceStub)
-            setBindServiceCallsOnServiceConnectedDirectly(true)
-        }
+    @After
+    fun tearDown() {
+        testScope.cancel()
     }
 
     @Test
-    fun create_bindingToServiceNotPermitted_throwsException() =
-        launchTestProjectedDeviceActivity { projectedDeviceActivity ->
-            shadowOf(context).declareComponentUnbindable(COMPONENT_NAME)
+    fun create_throwsIllegalStateException() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            projectedTestRule.shouldThrowIllegalStateExceptionWhenCreatingControllers = true
 
             assertFailsWith<IllegalStateException> {
                 runBlocking {
@@ -95,9 +90,8 @@ class ProjectedDeviceControllerTest {
         }
 
     @Test
-    fun capabilities_serviceReturnsTrue_returnsCapabilityVisualUi() =
-        launchTestProjectedDeviceActivity { projectedDeviceActivity ->
-            whenever(mockProjectedService.isDisplayCapable()).thenReturn(true)
+    fun capabilities_capabilitiesIncludeVisualUi_returnsCapabilityVisualUi() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
             runBlocking {
                 projectedDeviceController =
                     ProjectedDeviceController.create(projectedDeviceActivity)
@@ -107,9 +101,9 @@ class ProjectedDeviceControllerTest {
         }
 
     @Test
-    fun capabilities_serviceReturnsFalse_doesNotReturnCapabilityVisualUi() =
-        launchTestProjectedDeviceActivity { projectedDeviceActivity ->
-            whenever(mockProjectedService.isDisplayCapable()).thenReturn(false)
+    fun capabilities_emptyCapabilities_doesNotReturnCapabilityVisualUi() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            projectedTestRule.capabilities = setOf()
             runBlocking {
                 projectedDeviceController =
                     ProjectedDeviceController.create(projectedDeviceActivity)
@@ -118,74 +112,379 @@ class ProjectedDeviceControllerTest {
             assertThat(projectedDeviceController.capabilities).doesNotContain(CAPABILITY_VISUAL_UI)
         }
 
-    private fun launchTestProjectedDeviceActivity(block: (Activity) -> Unit) {
-        shadowOf(context.packageManager)
-            .addOrUpdateActivity(
-                ActivityInfo().apply {
-                    name = TestProjectedDeviceActivity::class.java.name
-                    packageName = context.packageName
+    @Test
+    fun audioDevices_twoDevicesSetByDefault_returnsTwoAudioDevices() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                projectedDeviceController =
+                    ProjectedDeviceController.create(projectedDeviceActivity)
+            }
+
+            assertThat(projectedDeviceController.audioDevices).hasSize(2)
+        }
+
+    @Test
+    fun audioDevices_emptyProjectedAudioDevices_returnsEmptyList() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            projectedTestRule.audioDevices = listOf()
+            runBlocking {
+                projectedDeviceController =
+                    ProjectedDeviceController.create(projectedDeviceActivity)
+            }
+
+            assertThat(projectedDeviceController.audioDevices).isEmpty()
+        }
+
+    @Suppress("DEPRECATION") // Tests the deprecated CoroutineContext-based listener APIs.
+    @Test
+    fun addBatteryStateChangedListener_receivesUpdates() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var receivedState: BatteryState? = null
+                    controller.addBatteryStateChangedListener(testScope.coroutineContext) { state ->
+                        receivedState = state
+                    }
+
+                    val testState1 = BatteryState(isCharging = true, batteryLevel = 80)
+                    projectedTestRule.setBatteryState(testState1)
+                    testScope.advanceUntilIdle()
+                    assertThat(receivedState).isEqualTo(testState1)
+
+                    val testState2 = BatteryState(isCharging = false, batteryLevel = 20)
+                    projectedTestRule.setBatteryState(testState2)
+                    testScope.advanceUntilIdle()
+                    assertThat(receivedState).isEqualTo(testState2)
                 }
-            )
-        val activityScenario: ActivityScenario<TestProjectedDeviceActivity> =
-            ActivityScenario.launch(Intent(context, TestProjectedDeviceActivity::class.java))
-        activityScenario.onActivity { activity -> block(activity) }
-    }
-
-    companion object {
-        private const val ACTION_BIND = "androidx.xr.projected.ACTION_BIND"
-        private const val SYSTEM_PACKAGE_NAME = "com.system.service"
-        private const val SYSTEM_CLASS_NAME = "com.system.service.ProjectedService"
-        private val COMPONENT_NAME = ComponentName(SYSTEM_PACKAGE_NAME, SYSTEM_CLASS_NAME)
-        private val SERVICE_INFO =
-            ServiceInfo().apply {
-                packageName = SYSTEM_PACKAGE_NAME
-                name = SYSTEM_CLASS_NAME
             }
-        private val PACKAGE_INFO =
-            PackageInfo().apply {
-                packageName = SYSTEM_PACKAGE_NAME
-                services = arrayOf(SERVICE_INFO)
-                applicationInfo = ApplicationInfo().apply { flags = ApplicationInfo.FLAG_SYSTEM }
+        }
+
+    @Suppress("DEPRECATION") // Tests the deprecated CoroutineContext-based listener APIs.
+    @Test
+    fun removeBatteryStateChangedListener_stopsUpdates() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var callCount = 0
+                    val listener: (BatteryState) -> Unit = { _ -> callCount++ }
+
+                    controller.addBatteryStateChangedListener(testScope.coroutineContext, listener)
+
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = true, batteryLevel = 90)
+                    )
+                    testScope.advanceUntilIdle()
+                    assertThat(callCount).isEqualTo(1)
+
+                    controller.removeBatteryStateChangedListener(listener)
+
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = false, batteryLevel = 70)
+                    )
+                    testScope.advanceUntilIdle()
+                    assertThat(callCount).isEqualTo(1)
+                }
             }
-    }
-
-    private class TestProjectedDeviceActivity : Activity() {
-
-        private lateinit var virtualDeviceManager: VirtualDeviceManager
-
-        override fun onCreate(savedInstanceState: Bundle?) {
-            super.onCreate(savedInstanceState)
-            virtualDeviceManager =
-                getSystemService(Context.VIRTUAL_DEVICE_SERVICE) as VirtualDeviceManager
-            createVirtualDevice()
         }
 
-        override fun getDeviceId(): Int {
-            return virtualDeviceManager.virtualDevices.first().deviceId
+    @Suppress("DEPRECATION") // Tests the deprecated CoroutineContext-based listener APIs.
+    @Test
+    fun batteryStateListener_scopeCancelled_stopsUpdates() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var callCount = 0
+                    val listener: (BatteryState) -> Unit = { _ -> callCount++ }
+
+                    controller.addBatteryStateChangedListener(testScope.coroutineContext, listener)
+
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = true, batteryLevel = 90)
+                    )
+                    testScope.advanceUntilIdle()
+                    assertThat(callCount).isEqualTo(1)
+
+                    testScope.cancel()
+
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = false, batteryLevel = 70)
+                    )
+                    assertThat(callCount).isEqualTo(1)
+                }
+            }
         }
 
-        private fun createVirtualDevice() {
-            val virtualDeviceParamsBuilderClass =
-                Class.forName("android.companion.virtual.VirtualDeviceParams\$Builder")
-            val virtualDeviceParamsClass =
-                Class.forName("android.companion.virtual.VirtualDeviceParams")
-            var virtualDeviceParamsBuilder =
-                ReflectionHelpers.callConstructor(virtualDeviceParamsBuilderClass)
-            virtualDeviceParamsBuilder =
-                ReflectionHelpers.callInstanceMethod(
-                    virtualDeviceParamsBuilder,
-                    "setName",
-                    ClassParameter(String::class.java, PROJECTED_DEVICE_NAME),
-                )
-            virtualDeviceParamsBuilder =
-                ReflectionHelpers.callInstanceMethod(virtualDeviceParamsBuilder, "build")
+    @Suppress("DEPRECATION") // Tests the deprecated CoroutineContext-based listener APIs.
+    @Test
+    fun close_unregistersListeners() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                val controller = ProjectedDeviceController.create(projectedDeviceActivity)
+                var stateChanges = 0
 
-            ReflectionHelpers.callInstanceMethod<Any?>(
-                virtualDeviceManager,
-                "createVirtualDevice",
-                ClassParameter(Int::class.javaPrimitiveType, 1),
-                ClassParameter(virtualDeviceParamsClass, virtualDeviceParamsBuilder),
-            )
+                controller.addBatteryStateChangedListener(testScope.coroutineContext) { _ ->
+                    stateChanges++
+                }
+
+                projectedTestRule.setBatteryState(BatteryState(true, 50))
+                testScope.advanceUntilIdle()
+                assertThat(stateChanges).isEqualTo(1)
+
+                controller.close()
+
+                projectedTestRule.setBatteryState(BatteryState(false, 40))
+                testScope.advanceUntilIdle()
+
+                assertThat(stateChanges).isEqualTo(1)
+            }
         }
-    }
+
+    @Test
+    fun addBatteryStateChangedListener_invokesListenerOnCoroutineContextDispatcher() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(
+                        projectedDeviceActivity,
+                        testScope.coroutineContext,
+                    )
+                    .use { controller ->
+                        var receivedState: BatteryState? = null
+
+                        controller.addBatteryStateChangedListener { state -> receivedState = state }
+                        val testState = BatteryState(isCharging = true, batteryLevel = 80)
+                        projectedTestRule.setBatteryState(testState)
+                        check(receivedState == null)
+                        testScope.advanceUntilIdle()
+
+                        assertThat(receivedState).isEqualTo(testState)
+                    }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_noDispatcher_invokesListenerDirectly() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var receivedState: BatteryState? = null
+
+                    controller.addBatteryStateChangedListener { state -> receivedState = state }
+                    val testState = BatteryState(isCharging = true, batteryLevel = 80)
+                    projectedTestRule.setBatteryState(testState)
+
+                    assertThat(receivedState).isEqualTo(testState)
+                }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_contextJobCancelled_stillInvokesListener() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                val cancelledJob = Job().apply { cancel() }
+                ProjectedDeviceController.create(projectedDeviceActivity, cancelledJob).use {
+                    controller ->
+                    var receivedState: BatteryState? = null
+
+                    controller.addBatteryStateChangedListener { state -> receivedState = state }
+                    val testState = BatteryState(isCharging = true, batteryLevel = 80)
+                    projectedTestRule.setBatteryState(testState)
+
+                    assertThat(receivedState).isEqualTo(testState)
+                }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_listenerThrows_stillReceivesUpdates() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                val exceptions = mutableListOf<Throwable>()
+                val exceptionHandler = CoroutineExceptionHandler { _, e -> exceptions.add(e) }
+                ProjectedDeviceController.create(projectedDeviceActivity, exceptionHandler).use {
+                    controller ->
+                    var callCount = 0
+                    controller.addBatteryStateChangedListener {
+                        callCount++
+                        throw IllegalStateException("Listener failed")
+                    }
+
+                    projectedTestRule.setBatteryState(BatteryState(true, 90))
+                    projectedTestRule.setBatteryState(BatteryState(false, 70))
+
+                    assertThat(callCount).isEqualTo(2)
+                    assertThat(exceptions).hasSize(2)
+                }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_sameListenerAddedTwice_receivesUpdatesOnce() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var callCount = 0
+                    val listener: (BatteryState) -> Unit = { callCount++ }
+
+                    controller.addBatteryStateChangedListener(listener)
+                    controller.addBatteryStateChangedListener(listener)
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = true, batteryLevel = 90)
+                    )
+
+                    assertThat(callCount).isEqualTo(1)
+                }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_serviceNotRunning_throwsIllegalStateException() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    val listener: (BatteryState) -> Unit = {}
+                    doThrow(DeadObjectException())
+                        .whenever(mockProjectedService)
+                        .registerBatteryStateListener(any())
+
+                    assertFailsWith<IllegalStateException> {
+                        controller.addBatteryStateChangedListener(listener)
+                    }
+
+                    // The listener wasn't added, so removing it doesn't unregister anything.
+                    controller.removeBatteryStateChangedListener(listener)
+                    verify(mockProjectedService, never()).unregisterBatteryStateListener(any())
+                }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_registrationThrows_canBeAddedAgain() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    val listener: (BatteryState) -> Unit = {}
+                    doThrow(SecurityException())
+                        .doNothing()
+                        .whenever(mockProjectedService)
+                        .registerBatteryStateListener(any())
+                    assertFailsWith<SecurityException> {
+                        controller.addBatteryStateChangedListener(listener)
+                    }
+
+                    controller.addBatteryStateChangedListener(listener)
+
+                    verify(mockProjectedService, times(2)).registerBatteryStateListener(any())
+                }
+            }
+        }
+
+    @Test
+    fun removeBatteryStateChangedListener_addedWithoutContext_stopsUpdates() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    var callCount = 0
+                    val listener: (BatteryState) -> Unit = { callCount++ }
+                    controller.addBatteryStateChangedListener(listener)
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = true, batteryLevel = 90)
+                    )
+                    check(callCount == 1)
+
+                    controller.removeBatteryStateChangedListener(listener)
+                    projectedTestRule.setBatteryState(
+                        BatteryState(isCharging = false, batteryLevel = 70)
+                    )
+
+                    assertThat(callCount).isEqualTo(1)
+                }
+            }
+        }
+
+    @Test
+    fun removeBatteryStateChangedListener_updateAlreadyQueued_doesNotInvokeListener() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(
+                        projectedDeviceActivity,
+                        testScope.coroutineContext,
+                    )
+                    .use { controller ->
+                        var callCount = 0
+                        val listener: (BatteryState) -> Unit = { callCount++ }
+                        controller.addBatteryStateChangedListener(listener)
+                        projectedTestRule.setBatteryState(
+                            BatteryState(isCharging = true, batteryLevel = 90)
+                        )
+
+                        controller.removeBatteryStateChangedListener(listener)
+                        testScope.advanceUntilIdle()
+
+                        assertThat(callCount).isEqualTo(0)
+                    }
+            }
+        }
+
+    @Test
+    fun addBatteryStateChangedListener_listenerRemovesItselfOnCurrentState_staysRemoved() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                ProjectedDeviceController.create(projectedDeviceActivity).use { controller ->
+                    // Like the real service, send the current state during registration.
+                    val registeredListeners = mutableListOf<IBatteryStateListener>()
+                    doAnswer { invocation ->
+                            val aidlListener = invocation.getArgument<IBatteryStateListener>(0)
+                            registeredListeners.add(aidlListener)
+                            aidlListener.onBatteryStateChanged(
+                                AidlBatteryState().apply {
+                                    isCharging = true
+                                    batteryLevel = 50
+                                }
+                            )
+                            null
+                        }
+                        .whenever(mockProjectedService)
+                        .registerBatteryStateListener(any())
+                    var callCount = 0
+                    lateinit var listener: (BatteryState) -> Unit
+                    listener = {
+                        callCount++
+                        controller.removeBatteryStateChangedListener(listener)
+                    }
+
+                    controller.addBatteryStateChangedListener(listener)
+                    // A later update from the service doesn't reach the removed listener.
+                    registeredListeners
+                        .single()
+                        .onBatteryStateChanged(
+                            AidlBatteryState().apply {
+                                isCharging = false
+                                batteryLevel = 40
+                            }
+                        )
+
+                    assertThat(callCount).isEqualTo(1)
+                    verify(mockProjectedService, atLeastOnce())
+                        .unregisterBatteryStateListener(registeredListeners.single())
+                }
+            }
+        }
+
+    @Test
+    fun close_unregistersListenersAddedWithoutContext() =
+        projectedTestRule.launchTestProjectedDeviceActivity { projectedDeviceActivity ->
+            runBlocking {
+                val controller = ProjectedDeviceController.create(projectedDeviceActivity)
+                var stateChanges = 0
+                controller.addBatteryStateChangedListener { stateChanges++ }
+                projectedTestRule.setBatteryState(BatteryState(true, 50))
+                check(stateChanges == 1)
+
+                controller.close()
+                projectedTestRule.setBatteryState(BatteryState(false, 40))
+
+                assertThat(stateChanges).isEqualTo(1)
+            }
+        }
 }

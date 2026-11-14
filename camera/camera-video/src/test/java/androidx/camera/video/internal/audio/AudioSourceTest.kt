@@ -16,21 +16,25 @@
 
 package androidx.camera.video.internal.audio
 
-import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.MediaRecorder
 import androidx.camera.core.impl.utils.executor.CameraXExecutors.ioExecutor
 import androidx.camera.core.impl.utils.futures.Futures.immediateFailedFuture
 import androidx.camera.core.impl.utils.futures.Futures.immediateFuture
+import androidx.camera.testing.impl.fakes.FakeBufferProvider
+import androidx.camera.testing.impl.fakes.FakeInputBuffer
 import androidx.camera.testing.impl.mocks.helpers.CallTimes
 import androidx.camera.testing.impl.mocks.helpers.CallTimesAtLeast
+import androidx.camera.video.AudioProcessor
+import androidx.camera.video.PassthroughAudioProcessor
 import androidx.camera.video.internal.BufferProvider
-import androidx.camera.video.internal.FakeBufferProvider
-import androidx.camera.video.internal.encoder.FakeInputBuffer
 import com.google.common.truth.Truth.assertThat
 import com.google.common.util.concurrent.ListenableFuture
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeUnit.NANOSECONDS
 import org.junit.After
 import org.junit.Test
@@ -51,6 +55,15 @@ class AudioSourceTest {
         private const val CHANNEL_COUNT = 1
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val BYTE_BUFFER_CAPACITY = 16
+        private const val TIMING_SAMPLE_RATE = 48000
+        // Timing tests use 1 ms input packets whose capture timestamps start at a non-zero base and
+        // advance slightly faster than the audio duration, so a timestamp only matches when each
+        // output frame is anchored to the input packet it came from.
+        private const val TIMING_FRAMES_PER_PACKET = TIMING_SAMPLE_RATE / 1000
+        private const val TIMING_PACKET_DURATION_US = 1000L
+        private const val TIMING_BASE_TIMESTAMP_US = 10_000L
+        private const val TIMING_PACKET_INTERVAL_US = TIMING_PACKET_DURATION_US + 13L
+        private const val TIMING_VERIFY_COUNT = 24
     }
 
     private val audioSourcesToRelease = mutableListOf<AudioSource>()
@@ -65,8 +78,7 @@ class AudioSourceTest {
     @Test
     fun canStartAndStopAudioSource() {
         // Arrange.
-        val audioDataProvider = createAudioDataProvider(audioRecordingDelayMillis = 1)
-        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val audioStream = createAudioStream()
         val bufferProvider = createBufferProvider()
         val audioSource =
             createAudioSource(
@@ -278,6 +290,40 @@ class AudioSourceTest {
     }
 
     @Test
+    fun failedToStartAudioStream_stopWillStopSilentAudioStream() {
+        // Arrange.
+        val error = AudioStream.AudioStreamException()
+        val audioStream = createAudioStream(exceptionOnStart = error)
+        val audioSourceCallback = createAudioSourceCallback()
+        val audioSource =
+            createAudioSource(
+                audioStreamFactory = { _, _ -> audioStream },
+                audioSourceCallback = audioSourceCallback,
+            )
+
+        // Act: Start AudioSource (which fails to start mAudioStream and falls back to
+        // mSilentAudioStream).
+        audioSource.start()
+
+        // Assert: Silence state is triggered (indicating SilentAudioStream was started).
+        audioSourceCallback.verifyOnSilenceStateChanged(CallTimes(1), COMMON_TIMEOUT_MS) {
+            assertThat(it.single()).isTrue()
+        }
+        assertThat(audioSource.mSilentAudioStream.isStarted).isTrue()
+
+        // Act: Stop AudioSource.
+        audioSource.stop()
+
+        // Wait for stop() to complete on AudioSource's sequential executor.
+        val latch = CountDownLatch(1)
+        audioSource.mExecutor.execute { latch.countDown() }
+        assertThat(latch.await(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+
+        // Assert: SilentAudioStream is stopped.
+        assertThat(audioSource.mSilentAudioStream.isStarted).isFalse()
+    }
+
+    @Test
     fun canMuteAudioSource_beforeStart() {
         // Arrange.
         val bufferProvider = createBufferProvider()
@@ -371,29 +417,737 @@ class AudioSourceTest {
         }
     }
 
+    @Test
+    fun audioSource_amplitudeCallback_throttledBy200Milliseconds() {
+        val totalValidPackets = 9
+        val audioDataProvider: (Int) -> FakeAudioStream.AudioData = { index ->
+            val buf = ByteBuffer.allocate(BYTE_BUFFER_CAPACITY).order(ByteOrder.nativeOrder())
+            // 50ms interval between packets up to index 8 (400ms).
+            // Cap timestamp at 400ms for subsequent packets so exactly 2 callbacks fire.
+            val effectiveIndex = minOf(index, totalValidPackets - 1)
+            val timestampNs = TimeUnit.MILLISECONDS.toNanos(50L * effectiveIndex)
+            FakeAudioStream.AudioData(buf, timestampNs)
+        }
+
+        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val audioSourceCallback = createAudioSourceCallback()
+        val audioSource =
+            createAudioSource(
+                audioStreamFactory = { _, _ -> audioStream },
+                audioSourceCallback = audioSourceCallback,
+            )
+
+        audioSource.start()
+
+        // Wait until all valid packets have been read
+        audioStream.verifyReadCall(CallTimesAtLeast(totalValidPackets), COMMON_TIMEOUT_MS)
+
+        // Only 2 callbacks should be triggered (at 200ms and 400ms) due to 200ms throttling
+        audioSourceCallback.verifyOnAmplitudeValue(CallTimes(2), COMMON_TIMEOUT_MS)
+
+        audioSource.stop()
+    }
+
+    @Test
+    fun audioSource_amplitudeCallback_calculatesCorrectMaxAmplitude() {
+        val testAmplitudeValue = (Short.MAX_VALUE / 2).toShort()
+        val audioDataProvider: (Int) -> FakeAudioStream.AudioData = { index ->
+            val buf = ByteBuffer.allocate(BYTE_BUFFER_CAPACITY).order(ByteOrder.nativeOrder())
+            val shortBuf = buf.asShortBuffer()
+            while (shortBuf.hasRemaining()) {
+                shortBuf.put(testAmplitudeValue)
+            }
+            // timestamp >= 200ms to trigger amplitude callback on first packet
+            FakeAudioStream.AudioData(buf, TimeUnit.MILLISECONDS.toNanos(200L * (index + 1)))
+        }
+
+        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val audioSourceCallback = createAudioSourceCallback()
+        val audioSource =
+            createAudioSource(
+                audioStreamFactory = { _, _ -> audioStream },
+                audioSourceCallback = audioSourceCallback,
+            )
+
+        audioSource.start()
+
+        audioStream.verifyReadCall(CallTimesAtLeast(1), COMMON_TIMEOUT_MS)
+        audioSourceCallback.verifyOnAmplitudeValue(CallTimesAtLeast(1), COMMON_TIMEOUT_MS) {
+            amplitudes ->
+            assertThat(amplitudes.first()).isWithin(0.01).of(0.5)
+        }
+
+        audioSource.stop()
+    }
+
+    @Test
+    fun audioSource_amplitudeCallback_clampsMaxAmplitudeToOne() {
+        // Math.abs(Short.MIN_VALUE) is 32768, which is larger than Short.MAX_VALUE (32767).
+        val testAmplitudeValue = Short.MIN_VALUE
+        val audioDataProvider: (Int) -> FakeAudioStream.AudioData = { index ->
+            val buf = ByteBuffer.allocate(BYTE_BUFFER_CAPACITY).order(ByteOrder.nativeOrder())
+            val shortBuf = buf.asShortBuffer()
+            while (shortBuf.hasRemaining()) {
+                shortBuf.put(testAmplitudeValue)
+            }
+            // timestamp >= 200ms to trigger amplitude callback on first packet
+            FakeAudioStream.AudioData(buf, TimeUnit.MILLISECONDS.toNanos(200L * (index + 1)))
+        }
+
+        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val audioSourceCallback = createAudioSourceCallback()
+        val audioSource =
+            createAudioSource(
+                audioStreamFactory = { _, _ -> audioStream },
+                audioSourceCallback = audioSourceCallback,
+            )
+
+        audioSource.start()
+
+        audioStream.verifyReadCall(CallTimesAtLeast(1), COMMON_TIMEOUT_MS)
+        audioSourceCallback.verifyOnAmplitudeValue(CallTimesAtLeast(1), COMMON_TIMEOUT_MS) {
+            amplitudes ->
+            assertThat(amplitudes.first()).isEqualTo(1.0)
+        }
+
+        audioSource.stop()
+    }
+
+    @Test
+    fun audioProcessor_withAudioProcessors_modifiesAudioData() {
+        val gainProcessor = createAudioProcessor { inputBuffer ->
+            val remaining = inputBuffer.remaining()
+            val outputBuffer = ByteBuffer.allocateDirect(remaining).order(ByteOrder.nativeOrder())
+            val shortIn = inputBuffer.asShortBuffer()
+            val shortOut = outputBuffer.asShortBuffer()
+            while (shortIn.hasRemaining()) {
+                shortOut.put((shortIn.get() * 2).toShort())
+            }
+            outputBuffer.position(0)
+            outputBuffer.limit(remaining)
+            outputBuffer
+        }
+
+        val audioDataProvider: (Int) -> FakeAudioStream.AudioData = { index ->
+            val buf = ByteBuffer.allocate(BYTE_BUFFER_CAPACITY).order(ByteOrder.nativeOrder())
+            val shortBuf = buf.asShortBuffer()
+            repeat(BYTE_BUFFER_CAPACITY / 2) {
+                shortBuf.put((index + 1).toShort())
+            }
+            FakeAudioStream.AudioData(buf, index.toLong())
+        }
+
+        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createAudioSource(
+                audioProcessors = listOf(gainProcessor),
+                audioStreamFactory = { _, _ -> audioStream },
+                bufferProvider = bufferProvider,
+            )
+
+        audioSource.start()
+
+        val verifyCount = 3
+        audioStream.verifyReadCall(CallTimesAtLeast(verifyCount + 1), COMMON_TIMEOUT_MS)
+
+        bufferProvider.verifySubmittedBufferCall(
+            CallTimesAtLeast(verifyCount),
+            COMMON_TIMEOUT_MS,
+        ) { submittedBuffers ->
+            for (i in 0 until verifyCount) {
+                val inputBuf = submittedBuffers[i]
+                assertThat(inputBuf.isSubmitted).isTrue()
+                val shortOut = inputBuf.byteBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
+                val expectedValue = ((i + 1) * 2).toShort()
+                while (shortOut.hasRemaining()) {
+                    assertThat(shortOut.get()).isEqualTo(expectedValue)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun audioProcessor_withPassthroughAudioProcessor_observesAudioData() {
+        val observedBuffers = mutableListOf<ByteArray>()
+        val passthroughProcessor =
+            object : PassthroughAudioProcessor() {
+                override fun onAudioBuffer(audioBuffer: ByteBuffer) {
+                    val bytes = ByteArray(audioBuffer.remaining())
+                    audioBuffer.get(bytes)
+                    observedBuffers.add(bytes)
+                }
+            }
+
+        val audioDataProvider = createAudioDataProvider()
+        val audioStream = createAudioStream(audioDataProvider = audioDataProvider)
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createAudioSource(
+                audioProcessors = listOf(passthroughProcessor),
+                audioStreamFactory = { _, _ -> audioStream },
+                bufferProvider = bufferProvider,
+            )
+
+        audioSource.start()
+
+        val verifyCount = 3
+        audioStream.verifyReadCall(CallTimesAtLeast(verifyCount + 1), COMMON_TIMEOUT_MS)
+
+        bufferProvider.verifySubmittedBufferCall(
+            CallTimesAtLeast(verifyCount),
+            COMMON_TIMEOUT_MS,
+        ) { submittedBuffers ->
+            assertThat(observedBuffers.size).isAtLeast(verifyCount)
+            for (i in 0 until verifyCount) {
+                val inputBuf = submittedBuffers[i]
+                assertThat(inputBuf.isSubmitted).isTrue()
+                assertThat(inputBuf.byteBuffer.get(0)).isEqualTo(observedBuffers[i][0])
+                assertThat(observedBuffers[i].size).isEqualTo(BYTE_BUFFER_CAPACITY)
+            }
+        }
+    }
+
+    @Test
+    fun audioProcessor_unsupportedAudioFormatException_throwsAudioSourceAccessException() {
+        val failingProcessor =
+            createAudioProcessor(
+                onConfigure = { audioFormat ->
+                    throw AudioProcessor.UnsupportedAudioFormatException(
+                        "Unsupported configuration",
+                        audioFormat,
+                    )
+                }
+            )
+
+        org.junit.Assert.assertThrows(AudioSourceAccessException::class.java) {
+            AudioSource(
+                createAudioSettings(),
+                ioExecutor(),
+                /*attributionContext=*/ null,
+                listOf(failingProcessor),
+                { _, _ -> createAudioStream() },
+                AudioSource.DEFAULT_START_RETRY_INTERVAL_MS,
+            )
+        }
+    }
+
+    @Test
+    fun audioProcessor_terminalProcessorNon16BitPcm_throwsAudioSourceAccessException() {
+        val floatProcessor =
+            createAudioProcessor(
+                onConfigure = { inputFormat ->
+                    AudioProcessor.AudioFormat(
+                        inputFormat.sampleRate,
+                        inputFormat.channelCount,
+                        AudioFormat.ENCODING_PCM_FLOAT,
+                    )
+                }
+            )
+
+        val exception =
+            org.junit.Assert.assertThrows(AudioSourceAccessException::class.java) {
+                AudioSource(
+                    createAudioSettings(),
+                    ioExecutor(),
+                    /*attributionContext=*/ null,
+                    listOf(floatProcessor),
+                    { _, _ -> createAudioStream() },
+                    AudioSource.DEFAULT_START_RETRY_INTERVAL_MS,
+                )
+            }
+        assertThat(exception.message).contains("ENCODING_PCM_16BIT")
+    }
+
+    @Test
+    fun audioProcessor_processorModifiesSampleRateAndChannelCount_updatesOutputAudioSettings() {
+        val resampleProcessor =
+            createAudioProcessor(
+                onConfigure = {
+                    AudioProcessor.AudioFormat(
+                        sampleRate = 44100,
+                        channelCount = 1,
+                        encoding = AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                }
+            )
+
+        val audioSource =
+            createAudioSource(
+                audioSettings = createAudioSettings(), // 48000 Hz, 2 channels
+                audioProcessors = listOf(resampleProcessor),
+            )
+        assertThat(audioSource.outputAudioSettings.captureSampleRate).isEqualTo(44100)
+        assertThat(audioSource.outputAudioSettings.encodeSampleRate).isEqualTo(44100)
+        assertThat(audioSource.outputAudioSettings.channelCount).isEqualTo(1)
+        assertThat(audioSource.outputAudioSettings.audioFormat)
+            .isEqualTo(AudioFormat.ENCODING_PCM_16BIT)
+    }
+
+    @Test
+    fun audioProcessor_slowMotion_processorModifiesSampleRate_scalesEncodeSampleRate() {
+        val resampleProcessor =
+            createAudioProcessor(
+                onConfigure = {
+                    AudioProcessor.AudioFormat(
+                        sampleRate = 48000,
+                        channelCount = 1,
+                        encoding = AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                }
+            )
+
+        // Slow-motion 2x: capture 96000, encode 48000 (ratio 0.5)
+        val slowMotionSettings =
+            AudioSettings.builder()
+                .setAudioSource(AUDIO_SOURCE)
+                .setCaptureSampleRate(96000)
+                .setEncodeSampleRate(48000)
+                .setChannelCount(2)
+                .setAudioFormat(AUDIO_FORMAT)
+                .build()
+
+        val audioSource =
+            createAudioSource(
+                audioSettings = slowMotionSettings,
+                audioProcessors = listOf(resampleProcessor),
+            )
+        // With new capture 48000, encode should be scaled to 24000
+        assertThat(audioSource.outputAudioSettings.captureSampleRate).isEqualTo(48000)
+        assertThat(audioSource.outputAudioSettings.encodeSampleRate).isEqualTo(24000)
+    }
+
+    @Test
+    fun audioProcessor_stopAndRelease_flushesAndResetsAudioProcessors() {
+        val flushLatch = CountDownLatch(1)
+        val resetLatch = CountDownLatch(1)
+
+        val testProcessor =
+            createAudioProcessor(
+                onFlush = { flushLatch.countDown() },
+                onReset = { resetLatch.countDown() },
+            )
+
+        val audioSource = createAudioSource(audioProcessors = listOf(testProcessor))
+
+        audioSource.start()
+        audioSource.stop()
+        assertThat(flushLatch.await(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+
+        audioSource.release().get(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        assertThat(resetLatch.await(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+    }
+
+    @Test
+    fun audioProcessor_outputsUnalignedBuffer_dispatchesFrameAlignedBuffers() {
+        val audioSettings =
+            AudioSettings.builder()
+                .setAudioSource(AUDIO_SOURCE)
+                .setCaptureSampleRate(SAMPLE_RATE)
+                .setEncodeSampleRate(SAMPLE_RATE)
+                .setChannelCount(2)
+                .setAudioFormat(AUDIO_FORMAT)
+                .build()
+        val bytesPerFrame = audioSettings.bytesPerFrame
+        assertThat(bytesPerFrame).isEqualTo(4)
+
+        // Custom processor that produces an unaligned buffer (15 bytes = 3 frames (12 bytes) + 3
+        // unaligned bytes)
+        val unalignedProcessor = createAudioProcessor { inputBuffer ->
+            val size = 15
+            val outputBuffer = ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder())
+            for (i in 0 until size) {
+                outputBuffer.put((i % 128).toByte())
+            }
+            outputBuffer.flip()
+            inputBuffer.position(inputBuffer.limit())
+            outputBuffer
+        }
+
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createAudioSource(
+                audioSettings = audioSettings,
+                audioProcessors = listOf(unalignedProcessor),
+                bufferProvider = bufferProvider,
+            )
+
+        audioSource.start()
+
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(1), COMMON_TIMEOUT_MS) {
+            submittedBuffers ->
+            val firstBuffer = submittedBuffers[0]
+            assertThat(firstBuffer.isSubmitted).isTrue()
+            val submittedBytes = firstBuffer.byteBuffer.remaining()
+            assertThat(submittedBytes % bytesPerFrame).isEqualTo(0)
+            assertThat(submittedBytes).isEqualTo(12)
+        }
+    }
+
+    @Test
+    fun audioProcessor_outputsUnalignedBuffer_doesNotLivelock() {
+        val audioSettings =
+            AudioSettings.builder()
+                .setAudioSource(AUDIO_SOURCE)
+                .setCaptureSampleRate(SAMPLE_RATE)
+                .setEncodeSampleRate(SAMPLE_RATE)
+                .setChannelCount(2)
+                .setAudioFormat(AUDIO_FORMAT)
+                .build()
+        val bytesPerFrame = audioSettings.bytesPerFrame
+        assertThat(bytesPerFrame).isEqualTo(4)
+
+        // Custom processor that produces an unaligned remainder (< bytesPerFrame)
+        // on the first packet, then aligned buffers on subsequent packets.
+        var callCount = 0
+        val unalignedProcessor = createAudioProcessor { inputBuffer ->
+            callCount++
+            val size = if (callCount == 1) 2 else 16
+            val outputBuffer = ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder())
+            outputBuffer.limit(size)
+            inputBuffer.position(inputBuffer.limit())
+            outputBuffer
+        }
+
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createAudioSource(
+                audioSettings = audioSettings,
+                audioProcessors = listOf(unalignedProcessor),
+                bufferProvider = bufferProvider,
+            )
+
+        audioSource.start()
+
+        // Verify pipeline does not freeze/livelock and successfully submits subsequent buffers
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(1), COMMON_TIMEOUT_MS) {
+            submittedBuffers ->
+            val submittedBuffer = submittedBuffers[0]
+            assertThat(submittedBuffer.isSubmitted).isTrue()
+            assertThat(submittedBuffer.byteBuffer.remaining()).isEqualTo(16)
+        }
+    }
+
+    @Test
+    fun audioProcessor_throwsRuntimeException_notifiesError() {
+        val testException = RuntimeException("Custom DSP failure")
+        val throwingProcessor = createAudioProcessor { throw testException }
+
+        val audioSourceCallback = createAudioSourceCallback()
+        val audioSource =
+            createAudioSource(
+                audioProcessors = listOf(throwingProcessor),
+                audioSourceCallback = audioSourceCallback,
+            )
+
+        audioSource.start()
+
+        audioSourceCallback.verifyOnError(CallTimesAtLeast(1), COMMON_TIMEOUT_MS) { errors ->
+            assertThat(errors[0]).isInstanceOf(AudioSourceAccessException::class.java)
+            assertThat(errors[0].cause).isEqualTo(testException)
+        }
+    }
+
+    @Test
+    fun audioProcessor_slowMotion_computesDurationUsingCaptureSampleRate() {
+        // Slow-motion 4x: captureSampleRate = 48000, encodeSampleRate = 12000
+        val audioSettings =
+            AudioSettings.builder()
+                .setAudioSource(AUDIO_SOURCE)
+                .setCaptureSampleRate(48000)
+                .setEncodeSampleRate(12000)
+                .setChannelCount(2)
+                .setAudioFormat(AUDIO_FORMAT)
+                .build()
+
+        // Processor outputs 24 bytes (6 frames at 4 bytes/frame).
+        // FakeBufferProvider capacity is 16 bytes (4 frames).
+        // Buffer 1 takes 16 bytes (4 frames).
+        // Buffer 2 takes remaining 8 bytes (2 frames).
+        val multiBufferProcessor = createAudioProcessor { inputBuffer ->
+            val size = 24
+            val outputBuffer = ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder())
+            for (i in 0 until size) {
+                outputBuffer.put(i.toByte())
+            }
+            outputBuffer.flip()
+            inputBuffer.position(inputBuffer.limit())
+            outputBuffer
+        }
+
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createAudioSource(
+                audioSettings = audioSettings,
+                audioProcessors = listOf(multiBufferProcessor),
+                bufferProvider = bufferProvider,
+            )
+
+        audioSource.start()
+
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(2), COMMON_TIMEOUT_MS) {
+            submittedBuffers ->
+            val buf1 = submittedBuffers[0]
+            val buf2 = submittedBuffers[1]
+            // Expected duration offset for 4 frames at 48000 Hz capture rate = 4 * 1_000_000 /
+            // 48000 = 83 us
+            // (If encodeSampleRate 12000 Hz were used, it would incorrectly be 333 us)
+            val expectedOffsetUs = 4 * 1_000_000L / 48000L
+            val actualOffsetUs = buf2.getPresentationTimeUs() - buf1.getPresentationTimeUs()
+            assertThat(actualOffsetUs).isEqualTo(expectedOffsetUs)
+        }
+    }
+
+    @Test
+    fun audioProcessor_readBufferSizeIsMultipleOfBytesPerFrame() {
+        val convertingProcessor =
+            createAudioProcessor(
+                onConfigure = { inputFormat ->
+                    AudioProcessor.AudioFormat(
+                        inputFormat.sampleRate,
+                        inputFormat.channelCount,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                }
+            )
+
+        val testConfigs =
+            listOf(
+                // 16-bit PCM Mono: bytesPerFrame = 2
+                Pair(AudioFormat.ENCODING_PCM_16BIT, 1),
+                // 16-bit PCM Stereo: bytesPerFrame = 4
+                Pair(AudioFormat.ENCODING_PCM_16BIT, 2),
+                // 16-bit PCM Tri-mic (3 channels): bytesPerFrame = 6
+                Pair(AudioFormat.ENCODING_PCM_16BIT, 3),
+                // 24-bit PCM Mono: bytesPerFrame = 3 (4096 / 3 = 1365 * 3 = 4095)
+                Pair(AudioFormat.ENCODING_PCM_24BIT_PACKED, 1),
+                // 24-bit PCM Stereo: bytesPerFrame = 6 (1024 * 6 = 6144)
+                Pair(AudioFormat.ENCODING_PCM_24BIT_PACKED, 2),
+                // 32-bit Float Stereo: bytesPerFrame = 8 (1024 * 8 = 8192)
+                Pair(AudioFormat.ENCODING_PCM_FLOAT, 2),
+            )
+
+        for ((encoding, channelCount) in testConfigs) {
+            val audioSettings =
+                AudioSettings.builder()
+                    .setAudioSource(AUDIO_SOURCE)
+                    .setCaptureSampleRate(SAMPLE_RATE)
+                    .setEncodeSampleRate(SAMPLE_RATE)
+                    .setChannelCount(channelCount)
+                    .setAudioFormat(encoding)
+                    .build()
+            val bytesPerFrame = audioSettings.bytesPerFrame
+
+            val audioSource =
+                createAudioSource(
+                    audioSettings = audioSettings,
+                    audioProcessors =
+                        if (encoding != AudioFormat.ENCODING_PCM_16BIT) {
+                            listOf(convertingProcessor)
+                        } else {
+                            emptyList()
+                        },
+                )
+
+            assertThat(audioSource.mReadBufferSize % bytesPerFrame).isEqualTo(0)
+            assertThat(audioSource.mReadBufferSize).isAtLeast(1024 * bytesPerFrame)
+        }
+    }
+
+    @Test
+    fun audioProcessor_withLookahead_presentationTimeMatchesCaptureTimeOfOutputFrames() {
+        // Holds back the latest 72 frames (1.5 ms) as lookahead context, so the output produced
+        // after each input packet belongs to earlier input packets.
+        val bufferProvider = createBufferProvider()
+        val audioSource = createTimingAudioSource(createLookaheadAudioProcessor(), bufferProvider)
+
+        audioSource.start()
+
+        verifyPresentationTimesMatchCaptureTimes(bufferProvider)
+    }
+
+    @Test
+    fun audioProcessor_restartAfterStop_presentationTimeMatchesCaptureTime() {
+        val flushLatch = CountDownLatch(1)
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createTimingAudioSource(
+                createLookaheadAudioProcessor(onFlush = { flushLatch.countDown() }),
+                bufferProvider,
+            )
+        audioSource.start()
+        verifyPresentationTimesMatchCaptureTimes(bufferProvider)
+
+        // Act: stop, which flushes the processor and drops its buffered lookahead, then restart.
+        audioSource.stop()
+        assertThat(flushLatch.await(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+        var firstSessionBufferCount = 0
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(1)) { submittedBuffers ->
+            firstSessionBufferCount = submittedBuffers.size
+        }
+        audioSource.start()
+
+        // Assert: buffers of the second session are still anchored to their capture time.
+        verifyPresentationTimesMatchCaptureTimes(
+            bufferProvider,
+            fromIndex = firstSessionBufferCount,
+        )
+    }
+
+    @Test
+    fun audioProcessor_bufferProviderInactiveThenActive_discardsAudioBufferedBeforePause() {
+        val flushLatch = CountDownLatch(1)
+        val bufferProvider = createBufferProvider()
+        val audioSource =
+            createTimingAudioSource(
+                createLookaheadAudioProcessor(onFlush = { flushLatch.countDown() }),
+                bufferProvider,
+            )
+        audioSource.start()
+        verifyPresentationTimesMatchCaptureTimes(bufferProvider)
+
+        // Act: pause by making the buffer provider inactive, which should flush the processor.
+        bufferProvider.setState(BufferProvider.State.INACTIVE)
+        assertThat(flushLatch.await(COMMON_TIMEOUT_MS, TimeUnit.MILLISECONDS)).isTrue()
+        var prePauseBufferCount = 0
+        var lastPrePauseFrameIndex = 0
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(1)) { submittedBuffers ->
+            prePauseBufferCount = submittedBuffers.size
+            val lastBuffer = submittedBuffers.last()
+            lastPrePauseFrameIndex =
+                firstFrameIndex(lastBuffer) + lastBuffer.byteBuffer.remaining() / 2 - 1
+        }
+        // Resume.
+        bufferProvider.setState(BufferProvider.State.ACTIVE)
+
+        // Assert: audio held by the processor before pausing is not sent after resuming, and
+        // resumed audio is still anchored to its capture time.
+        verifyPresentationTimesMatchCaptureTimes(bufferProvider, fromIndex = prePauseBufferCount)
+        bufferProvider.verifySubmittedBufferCall(CallTimesAtLeast(prePauseBufferCount + 1)) {
+            submittedBuffers ->
+            assertThat(firstFrameIndex(submittedBuffers[prePauseBufferCount]))
+                .isGreaterThan(lastPrePauseFrameIndex + 1)
+        }
+    }
+
+    private fun createTimingAudioSource(
+        audioProcessor: AudioProcessor,
+        bufferProvider: FakeBufferProvider,
+    ): AudioSource =
+        createAudioSource(
+            audioSettings =
+                AudioSettings.builder()
+                    .setAudioSource(AUDIO_SOURCE)
+                    .setCaptureSampleRate(TIMING_SAMPLE_RATE)
+                    .setEncodeSampleRate(TIMING_SAMPLE_RATE)
+                    .setChannelCount(1)
+                    .setAudioFormat(AUDIO_FORMAT)
+                    .build(),
+            audioProcessors = listOf(audioProcessor),
+            audioStreamFactory = { _, _ ->
+                createAudioStream(audioDataProvider = createFrameIndexAudioDataProvider())
+            },
+            bufferProvider = bufferProvider,
+        )
+
+    /**
+     * Verifies that submitted buffers starting at [fromIndex] are stamped with the capture time of
+     * their first frame, derived from its sample value, and are strictly increasing.
+     */
+    private fun verifyPresentationTimesMatchCaptureTimes(
+        bufferProvider: FakeBufferProvider,
+        fromIndex: Int = 0,
+    ) {
+        bufferProvider.verifySubmittedBufferCall(
+            CallTimesAtLeast(fromIndex + TIMING_VERIFY_COUNT),
+            COMMON_TIMEOUT_MS,
+        ) { submittedBuffers ->
+            var previousPresentationTimeUs = Long.MIN_VALUE
+            for (i in fromIndex until fromIndex + TIMING_VERIFY_COUNT) {
+                val buffer = submittedBuffers[i]
+                val frameIndex = firstFrameIndex(buffer)
+                assertThat(buffer.getPresentationTimeUs()).isEqualTo(captureTimeUs(frameIndex))
+                assertThat(buffer.getPresentationTimeUs()).isGreaterThan(previousPresentationTimeUs)
+                previousPresentationTimeUs = buffer.getPresentationTimeUs()
+            }
+        }
+    }
+
+    /** Returns the frame index of the first frame in [buffer] from the timing audio stream. */
+    private fun firstFrameIndex(buffer: FakeInputBuffer): Int {
+        // Samples are 16-bit; read them unsigned to decode more frame indices.
+        val byteBuffer = buffer.byteBuffer.duplicate().order(ByteOrder.nativeOrder())
+        return byteBuffer.getShort(byteBuffer.position()).toInt() and 0xFFFF
+    }
+
+    /** Returns the capture time of the frame at [frameIndex] in the timing audio stream. */
+    private fun captureTimeUs(frameIndex: Int): Long =
+        packetTimestampUs(frameIndex / TIMING_FRAMES_PER_PACKET) +
+            frameIndex % TIMING_FRAMES_PER_PACKET * 1_000_000L / TIMING_SAMPLE_RATE
+
+    private fun packetTimestampUs(packetIndex: Int): Long =
+        TIMING_BASE_TIMESTAMP_US + packetIndex * TIMING_PACKET_INTERVAL_US
+
+    /**
+     * Creates 1 ms packets of mono 16-bit audio whose sample values are the frame index in the
+     * stream, with capture timestamps from [packetTimestampUs].
+     */
+    private fun createFrameIndexAudioDataProvider(): (Int) -> FakeAudioStream.AudioData = { index ->
+        val byteBuffer =
+            ByteBuffer.allocate(TIMING_FRAMES_PER_PACKET * 2).order(ByteOrder.nativeOrder())
+        for (frame in 0 until TIMING_FRAMES_PER_PACKET) {
+            byteBuffer.putShort((index * TIMING_FRAMES_PER_PACKET + frame).toShort())
+        }
+        byteBuffer.flip()
+        val timestampNs = TimeUnit.MICROSECONDS.toNanos(packetTimestampUs(index))
+        FakeAudioStream.AudioData(byteBuffer, timestampNs)
+    }
+
+    /**
+     * Creates a processor that buffers all input and holds back the latest 72 frames (1.5 ms) as
+     * lookahead context, emitting the rest.
+     */
+    private fun createLookaheadAudioProcessor(onFlush: () -> Unit = {}): AudioProcessor {
+        val lookaheadBytes = 72 * 2
+        var pendingBytes = ByteArray(0)
+        return createAudioProcessor(
+            onFlush = {
+                pendingBytes = ByteArray(0)
+                onFlush()
+            },
+            onReset = { pendingBytes = ByteArray(0) },
+        ) { inputBuffer ->
+            if (!inputBuffer.hasRemaining()) {
+                return@createAudioProcessor EMPTY_AUDIO_BUFFER
+            }
+            val incomingBytes = ByteArray(inputBuffer.remaining())
+            inputBuffer.get(incomingBytes)
+            pendingBytes += incomingBytes
+            val emitSize = (pendingBytes.size - lookaheadBytes).coerceAtLeast(0)
+            val outputBuffer = ByteBuffer.allocateDirect(emitSize).order(ByteOrder.nativeOrder())
+            outputBuffer.put(pendingBytes, 0, emitSize)
+            outputBuffer.flip()
+            pendingBytes = pendingBytes.copyOfRange(emitSize, pendingBytes.size)
+            outputBuffer
+        }
+    }
+
     private fun createAudioStream(
         audioDataProvider: (Int) -> FakeAudioStream.AudioData = createAudioDataProvider(),
         exceptionOnStart: AudioStream.AudioStreamException? = null,
         exceptionOnStartMaxTimes: Int = Int.MAX_VALUE,
+        readDelayMs: Long = 1,
     ) =
         FakeAudioStream(
             audioDataProvider,
             exceptionOnStart = exceptionOnStart,
             exceptionOnStartMaxTimes = exceptionOnStartMaxTimes,
+            readDelayMs = readDelayMs,
         )
 
-    @SuppressLint("BanThreadSleep") // Needed to simulate the audio recording delays.
-    private fun createAudioDataProvider(
-        audioRecordingDelayMillis: Long = 0
-    ): (Int) -> FakeAudioStream.AudioData = { index ->
+    private fun createAudioDataProvider(): (Int) -> FakeAudioStream.AudioData = { index ->
         val byteBuffer = ByteBuffer.allocate(BYTE_BUFFER_CAPACITY).put(0, index.toByte())
         val timestampNs = index.toLong()
-
-        // Simulate the audio recording delays.
-        if (audioRecordingDelayMillis > 0) {
-            Thread.sleep(audioRecordingDelayMillis)
-        }
-
         FakeAudioStream.AudioData(byteBuffer, timestampNs)
     }
 
@@ -401,6 +1155,7 @@ class AudioSourceTest {
         initState: BufferProvider.State = BufferProvider.State.ACTIVE,
         bufferFactory: (Int) -> ListenableFuture<FakeInputBuffer> = { _ ->
             val inputBuffer = FakeInputBuffer(BYTE_BUFFER_CAPACITY)
+            inputBuffer.byteBuffer.order(ByteOrder.nativeOrder())
             immediateFuture(inputBuffer)
         },
     ): FakeBufferProvider = FakeBufferProvider(state = initState, bufferFactory = bufferFactory)
@@ -408,6 +1163,7 @@ class AudioSourceTest {
     private fun createAudioSource(
         audioSettings: AudioSettings = createAudioSettings(),
         executor: Executor = ioExecutor(),
+        audioProcessors: List<AudioProcessor> = emptyList(),
         audioStreamFactory: AudioStreamFactory = AudioStreamFactory { _, _ -> createAudioStream() },
         bufferProvider: FakeBufferProvider = createBufferProvider(),
         audioSourceCallback: FakeAudioSourceCallback = createAudioSourceCallback(),
@@ -418,6 +1174,7 @@ class AudioSourceTest {
                 audioSettings,
                 executor,
                 /*attributionContext=*/ null,
+                audioProcessors,
                 audioStreamFactory,
                 retryStartIntervalMs,
             )
@@ -426,6 +1183,40 @@ class AudioSourceTest {
                 setBufferProvider(bufferProvider)
                 audioSourcesToRelease.add(this)
             }
+
+    private fun createAudioProcessor(
+        onConfigure: (AudioProcessor.AudioFormat) -> AudioProcessor.AudioFormat = { it },
+        onFlush: () -> Unit = {},
+        onReset: () -> Unit = {},
+        processBlock: (inputBuffer: ByteBuffer) -> ByteBuffer = { EMPTY_AUDIO_BUFFER },
+    ): AudioProcessor =
+        object : AudioProcessor {
+            private var outputBuffer: ByteBuffer = EMPTY_AUDIO_BUFFER
+
+            override fun configure(
+                inputAudioFormat: AudioProcessor.AudioFormat
+            ): AudioProcessor.AudioFormat = onConfigure(inputAudioFormat)
+
+            override fun queueInput(inputBuffer: ByteBuffer) {
+                outputBuffer = processBlock(inputBuffer)
+            }
+
+            override fun getOutput(): ByteBuffer {
+                val out = outputBuffer
+                outputBuffer = EMPTY_AUDIO_BUFFER
+                return out
+            }
+
+            override fun flush() {
+                outputBuffer = EMPTY_AUDIO_BUFFER
+                onFlush()
+            }
+
+            override fun reset() {
+                outputBuffer = EMPTY_AUDIO_BUFFER
+                onReset()
+            }
+        }
 
     private fun createAudioSettings() =
         AudioSettings.builder()

@@ -42,23 +42,35 @@ constructor(workerExecutor: WorkerExecutor) : SourceMetalavaTask(workerExecutor)
 
     @TaskAction
     fun updateBaseline() {
-        check(bootClasspath.files.isNotEmpty()) { "Android boot classpath not set." }
         val baselineFile = baselines.get().apiLintFile
-        val checkArgs =
-            getGenerateApiArgs(
-                createProjectXmlFile(),
-                sourcePaths.files.filter { it.exists() },
+        val filteredSourcePaths = filteredSourcePaths()
+        // If there are no sources, there are no APIs, so there are no API lint issues.
+        if (filteredSourcePaths.isEmpty()) {
+            baselineFile.delete()
+            return
+        }
+        // Only require android jar if there is a main jvm/android target.
+        if (hasJvmOrAndroidTarget.get()) {
+            check(bootClasspath.files.isNotEmpty()) { "Android boot classpath not set." }
+        }
+        val multiSurfaceArgs =
+            getMultiSurfaceArgs(
+                createProjectXmlFile(sourceSets.get()),
+                filteredSourcePaths,
                 // API lint is not run on bytecode-only APIs, so don't bother processing the jar
                 // when generating a baseline.
-                compiledSources = null,
-                null,
+                includeCompiledSources = false,
+            )
+        val singleSurfaceArgs =
+            getSingleSurfaceArgs(
+                outputLocation = null,
                 GenerateApiMode.PublicApi,
                 ApiLintMode.CheckBaseline(baselineFile, targetsJavaConsumers.get()),
                 // API version history doesn't need to be generated
-                emptyList(),
-                manifestPath.orNull?.asFile?.absolutePath,
+                apiLevelsArgs = emptyList(),
+                multiplatform = multiplatform.get(),
             )
-        val args = checkArgs + getCommonBaselineUpdateArgs(baselineFile)
+        val args = multiSurfaceArgs + singleSurfaceArgs + getCommonBaselineUpdateArgs(baselineFile)
 
         runWithArgs(args)
     }
@@ -82,8 +94,6 @@ internal abstract class IgnoreApiChangesTask @Inject constructor(workerExecutor:
 
     @TaskAction
     fun exec() {
-        check(bootClasspath.files.isNotEmpty()) { "Android boot classpath not set." }
-
         val freezeApis = shouldFreezeApis(referenceApi.get().version(), version.get())
         updateBaseline(restricted = false, freezeApis)
         if (restrictedApisExist()) {
@@ -119,6 +129,6 @@ private fun getCommonBaselineUpdateArgs(baselineFile: File): List<String> {
         baselineFile.toString(),
         "--pass-baseline-updates",
         "--delete-empty-baselines",
-        "--format=v4",
+        "--format=4.0",
     )
 }

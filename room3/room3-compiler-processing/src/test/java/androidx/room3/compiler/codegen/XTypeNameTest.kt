@@ -24,6 +24,7 @@ import androidx.room3.compiler.processing.util.Source
 import androidx.room3.compiler.processing.util.getDeclaredField
 import androidx.room3.compiler.processing.util.getField
 import androidx.room3.compiler.processing.util.getMethodByJvmName
+import androidx.room3.compiler.processing.util.getProperty
 import androidx.room3.compiler.processing.util.runProcessorTest
 import com.squareup.kotlinpoet.ARRAY
 import com.squareup.kotlinpoet.INT
@@ -165,43 +166,43 @@ class XTypeNameTest {
             Source.kotlin(
                 "Foo.kt",
                 """
-            class Foo {
-                var accessorField: Unit = Unit
-                    get() = Unit
-                    set(value) {
-                        field = value
-                    }
-                fun f1(): Unit = TODO()
-                fun f2(): (Unit) -> Unit = TODO()
-                fun f3(): List<Unit> = TODO()
-                fun f4(u: Unit) {}
-                fun f5(l: (Unit) -> Unit) {}
-                fun f6(l: List<Unit>) {}
-                fun f7(): Unit? = TODO()
-            }
-            open class Parent<T> {
-                val field: T = TODO()
-                val listField: List<T> = TODO()
-                val lambdaField: (T) -> T = TODO()
-                var accessorField: T = TODO()
-                    get() = TODO()
-                    set(value) {
-                        field = value
-                    }
-                fun f(t: T): T = t
-                fun <T> fWithTypeVar(): T = TODO()
-            }
-            class Child: Parent<Unit>()
-            """
+                class Foo {
+                    var accessorField: Unit = Unit
+                        get() = Unit
+                        set(value) {
+                            field = value
+                        }
+                    fun f1(): Unit = TODO()
+                    fun f2(): (Unit) -> Unit = TODO()
+                    fun f3(): List<Unit> = TODO()
+                    fun f4(u: Unit) {}
+                    fun f5(l: (Unit) -> Unit) {}
+                    fun f6(l: List<Unit>) {}
+                    fun f7(): Unit? = TODO()
+                }
+                open class Parent<T> {
+                    val field: T = TODO()
+                    val listField: List<T> = TODO()
+                    val lambdaField: (T) -> T = TODO()
+                    var accessorField: T = TODO()
+                        get() = TODO()
+                        set(value) {
+                            field = value
+                        }
+                    fun f(t: T): T = t
+                    fun <T> fWithTypeVar(): T = TODO()
+                }
+                class Child: Parent<Unit>()
+                """
                     .trimIndent(),
             )
         runProcessorTest(sources = listOf(src)) { invocation ->
             invocation.processingEnv.requireTypeElement("Foo").let { cls ->
-                cls.getField("accessorField").getter!!.let { getter ->
+                cls.getProperty("accessorField").getter!!.let { getter ->
                     assertThat(getter.returnType.asTypeName()).isEqualTo(unit)
                     assertThat(getter.asMemberOf(cls.type).returnType.asTypeName()).isEqualTo(unit)
                 }
-                cls.getField("accessorField").setter!!.let { setter ->
+                cls.getProperty("accessorField").setter!!.let { setter ->
                     assertThat(setter.returnType.asTypeName()).isEqualTo(voidUnit)
                     assertThat(setter.parameters.single().type.asTypeName()).isEqualTo(unit)
                     setter.asMemberOf(cls.type).let { setterType ->
@@ -226,14 +227,8 @@ class XTypeNameTest {
                 assertThat(cls.getMethodByJvmName("f4").parameters.single().type.asTypeName())
                     .isEqualTo(unit)
                 cls.getMethodByJvmName("f5").parameters.single().let { funParam ->
-                    funParam.type.typeArguments[0].asTypeName().let { paramTypeName ->
-                        if (invocation.isKsp) {
-                            assertThat(paramTypeName).isEqualTo(unit)
-                        } else {
-                            // TODO: Somehow KAPT keeps the variance for param type.
-                            assertThat(paramTypeName.java).isEqualTo(inUnit.java)
-                        }
-                    }
+                    assertThat(funParam.type.typeArguments[0].asTypeName())
+                        .isEqualTo(XTypeName(inUnit.java, unit.kotlin))
                     assertThat(funParam.type.typeArguments[1].asTypeName()).isEqualTo(unit)
                 }
                 assertThat(
@@ -255,14 +250,14 @@ class XTypeNameTest {
                     assertThat(fieldType).isEqualTo(List::class.asClassName().parametrizedBy(unit))
                 }
                 assertThat(
-                        cls.getField("accessorField")
+                        cls.getProperty("accessorField")
                             .getter!!
                             .asMemberOf(cls.type)
                             .returnType
                             .asTypeName()
                     )
                     .isEqualTo(unit)
-                cls.getField("accessorField").setter!!.asMemberOf(cls.type).let { setterType ->
+                cls.getProperty("accessorField").setter!!.asMemberOf(cls.type).let { setterType ->
                     assertThat(setterType.returnType.asTypeName()).isEqualTo(voidUnit)
                     assertThat(setterType.parameterTypes.single().asTypeName()).isEqualTo(unit)
                 }
@@ -282,14 +277,14 @@ class XTypeNameTest {
             Source.java(
                 "Foo",
                 """
-            import kotlin.Unit;
-            class Foo {
-                Unit f() {
-                    return Unit.INSTANCE;
+                import kotlin.Unit;
+                class Foo {
+                    Unit f() {
+                        return Unit.INSTANCE;
+                    }
+                    void g() {}
                 }
-                void g() {}
-            }
-        """
+                """
                     .trimIndent(),
             )
         runProcessorTest(listOf(javaSrc)) { invocation ->

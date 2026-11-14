@@ -17,21 +17,25 @@
 package androidx.ink.authoring.internal
 
 import android.graphics.Matrix
+import android.view.InputDevice
 import android.view.MotionEvent
-import androidx.ink.authoring.testing.MultiTouchInputBuilder
+import androidx.ink.authoring.testing.MultiTouchInputCreator
+import androidx.ink.brush.ExperimentalInkBarrelTwistApi
 import androidx.ink.brush.InputToolType
-import androidx.ink.strokes.MutableStrokeInputBatch
+import androidx.ink.nativeloader.InkInternalOnlyApi
 import androidx.ink.strokes.StrokeInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Correspondence
 import com.google.common.truth.Truth.assertThat
-import kotlin.math.PI
 import org.junit.Test
 import org.junit.runner.RunWith
 
+private const val PI: Float = kotlin.math.PI.toFloat()
+
 @RunWith(AndroidJUnit4::class)
 @SmallTest
+@OptIn(InkInternalOnlyApi::class, ExperimentalInkBarrelTwistApi::class)
 class StrokeInputPoolTest {
 
     @Test
@@ -47,6 +51,7 @@ class StrokeInputPoolTest {
         assertThat(input.pressure).isEqualTo(StrokeInput.NO_PRESSURE)
         assertThat(input.tiltRadians).isEqualTo(StrokeInput.NO_TILT)
         assertThat(input.orientationRadians).isEqualTo(StrokeInput.NO_ORIENTATION)
+        assertThat(input.getBarrelTwistRadians()).isEqualTo(StrokeInput.NO_BARREL_TWIST)
     }
 
     @Test
@@ -62,6 +67,7 @@ class StrokeInputPoolTest {
                 pressure = 4F,
                 orientationRadians = 5F,
                 tiltRadians = 6F,
+                barrelTwistRadians = 7F,
             )
 
         assertThat(input.x).isEqualTo(1F)
@@ -71,6 +77,7 @@ class StrokeInputPoolTest {
         assertThat(input.pressure).isEqualTo(4F)
         assertThat(input.orientationRadians).isEqualTo(5F)
         assertThat(input.tiltRadians).isEqualTo(6F)
+        assertThat(input.getBarrelTwistRadians()).isEqualTo(7F)
     }
 
     @Test
@@ -115,14 +122,9 @@ class StrokeInputPoolTest {
         val gestureStartTime = 3000L
 
         val pointerIdsToStrokeInputs = mutableMapOf<Int, MutableList<StrokeInput>>()
-        MultiTouchInputBuilder(
+        MultiTouchInputCreator(
                 pointerCount = 2,
-                toolTypes = intArrayOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_FINGER),
-                startOrientation = arrayOf(-PI.toFloat() / 2, null),
-                // Tilt is not supported in Robolectric today, so omit it even for the stylus
-                // pointer. It
-                // will return as a value of 0.0F.
-                startTilt = arrayOf(null, null),
+                toolType = MotionEvent.TOOL_TYPE_FINGER,
                 historyIncrements = 3,
                 downtime = gestureStartTime,
             )
@@ -151,73 +153,49 @@ class StrokeInputPoolTest {
                     x = 10F,
                     y = 50F,
                     elapsedTimeMillis = 0,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.05F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 10F,
                     y = 50F,
                     elapsedTimeMillis = 0,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.05F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 310F,
                     y = 350F,
                     elapsedTimeMillis = 30,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.15F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.2F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 610F,
                     y = 650F,
                     elapsedTimeMillis = 60,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.25F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.4F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 910F,
                     y = 950F,
                     elapsedTimeMillis = 90,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.35F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.6F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 1210F,
                     y = 1250F,
                     elapsedTimeMillis = 120,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 1210F,
                     y = 1250F,
                     elapsedTimeMillis = 150,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
+                    toolType = InputToolType.TOUCH,
                 ),
                 StrokeInput.create(
                     x = 1210F,
                     y = 1250F,
                     elapsedTimeMillis = 150,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
+                    toolType = InputToolType.TOUCH,
                 ),
             )
 
@@ -264,230 +242,160 @@ class StrokeInputPoolTest {
     }
 
     @Test
-    fun obtainAllHistoryForMotionEvent() {
+    fun obtainSingleValueForMotionEvent_withZeroBarrelTwist() {
         val pool = StrokeInputPool()
-        val motionEventToStrokeCoordinatesTransform =
-            Matrix().apply {
-                setScale(3F, 3F)
-                postTranslate(10F, 50F)
-            }
-        val gestureStartTime = 3000L
-
-        val pointerIdsToStrokeInputs = mutableMapOf<Int, MutableList<StrokeInput>>()
-        MultiTouchInputBuilder(
-                pointerCount = 2,
-                toolTypes = intArrayOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_FINGER),
-                // Tilt is not supported in Robolectric today, so omit it even for the stylus
-                // pointer. It
-                // will return as a value of 0.0F.
-                startTilt = arrayOf(null, null),
-                startOrientation = arrayOf(-PI.toFloat() / 2, null),
-                historyIncrements = 2,
-                downtime = gestureStartTime,
+        val zeroTwistEvent =
+            obtainStylusMotionEventWithAxisRz(
+                downTime = 1000L,
+                eventTime = 1000L,
+                action = MotionEvent.ACTION_DOWN,
+                x = 10f,
+                y = 20f,
+                axisRz = 0f,
             )
-            .runGestureWith {
-                for (pointerIndex in 0 until it.pointerCount) {
-                    val outBatchBuilder = MutableStrokeInputBatch()
-                    pool.obtainAllHistoryForMotionEvent(
-                        it,
-                        pointerIndex,
-                        motionEventToStrokeCoordinatesTransform,
-                        gestureStartTime,
-                        outBatch = outBatchBuilder,
+
+        assertThat(
+                pool
+                    .obtainSingleValueForMotionEvent(
+                        zeroTwistEvent,
+                        pointerIndex = 0,
+                        motionEventToStrokeTransform = Matrix(),
+                        strokeStartTimeMillis = 1000L,
+                        forceHasBarrelTwist = null,
                     )
-                    val outBatch = outBatchBuilder.toImmutable()
-                    val pointerId = it.getPointerId(pointerIndex)
-                    val pointerInputList =
-                        pointerIdsToStrokeInputs.calculateIfAbsent(pointerId) { mutableListOf() }
-                    for (i in 0 until outBatch.size) {
-                        pointerInputList.add(outBatch.get(i))
-                    }
-                }
-            }
+                    .getBarrelTwistRadians()
+            )
+            .isEqualTo(StrokeInput.NO_BARREL_TWIST)
 
-        assertThat(pointerIdsToStrokeInputs).hasSize(2)
-        assertThat(pointerIdsToStrokeInputs.keys).isEqualTo(setOf(9000, 9001))
-        assertThat(pointerIdsToStrokeInputs[9000]!!)
-            .comparingElementsUsing(strokeInputNearEqual())
-            .containsExactly(
-                StrokeInput.create(
-                    x = 10F,
-                    y = 50F,
-                    elapsedTimeMillis = 0,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.05F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0F,
-                ),
-                StrokeInput.create(
-                    x = 10F,
-                    y = 50F,
-                    elapsedTimeMillis = 0,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.05F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0F,
-                ),
-                StrokeInput.create(
-                    x = 160F,
-                    y = 200F,
-                    elapsedTimeMillis = 10,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.1F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.1F,
-                ),
-                StrokeInput.create(
-                    x = 310F,
-                    y = 350F,
-                    elapsedTimeMillis = 20,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.15F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.2F,
-                ),
-                StrokeInput.create(
-                    x = 460F,
-                    y = 500F,
-                    elapsedTimeMillis = 30,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.2F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.3F,
-                ),
-                StrokeInput.create(
-                    x = 610F,
-                    y = 650F,
-                    elapsedTimeMillis = 40,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.25F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.4F,
-                ),
-                StrokeInput.create(
-                    x = 760F,
-                    y = 800F,
-                    elapsedTimeMillis = 50,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.3F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.5F,
-                ),
-                StrokeInput.create(
-                    x = 910F,
-                    y = 950F,
-                    elapsedTimeMillis = 60,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.35F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.6F,
-                ),
-                StrokeInput.create(
-                    x = 1060F,
-                    y = 1100F,
-                    elapsedTimeMillis = 70,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.4F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.7F,
-                ),
-                StrokeInput.create(
-                    x = 1210F,
-                    y = 1250F,
-                    elapsedTimeMillis = 80,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
-                ),
-                StrokeInput.create(
-                    x = 1210F,
-                    y = 1250F,
-                    elapsedTimeMillis = 100,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
-                ),
-                StrokeInput.create(
-                    x = 1210F,
-                    y = 1250F,
-                    elapsedTimeMillis = 100,
-                    toolType = InputToolType.STYLUS,
-                    pressure = 0.45F,
-                    tiltRadians = 0F,
-                    orientationRadians = 0.8F,
-                ),
+        assertThat(
+                pool
+                    .obtainSingleValueForMotionEvent(
+                        zeroTwistEvent,
+                        pointerIndex = 0,
+                        motionEventToStrokeTransform = Matrix(),
+                        strokeStartTimeMillis = 1000L,
+                        forceHasBarrelTwist = true,
+                    )
+                    .getBarrelTwistRadians()
+            )
+            .isWithin(0.001f)
+            .of(0f)
+    }
+
+    @Test
+    fun obtainSingleValueForMotionEvent_withNonZeroBarrelTwist() {
+        val pool = StrokeInputPool()
+        val nonZeroTwistEvent =
+            obtainStylusMotionEventWithAxisRz(
+                downTime = 1000L,
+                eventTime = 1000L,
+                action = MotionEvent.ACTION_DOWN,
+                x = 10f,
+                y = 20f,
+                axisRz = -0.5f,
             )
 
-        assertThat(pointerIdsToStrokeInputs[9001]!!)
-            .comparingElementsUsing(strokeInputNearEqual())
-            .containsExactly(
-                StrokeInput.create(
-                    x = 310F,
-                    y = 50F,
-                    elapsedTimeMillis = 0,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 460F,
-                    y = 200F,
-                    elapsedTimeMillis = 10,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 610F,
-                    y = 350F,
-                    elapsedTimeMillis = 20,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 760F,
-                    y = 500F,
-                    elapsedTimeMillis = 30,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 910F,
-                    y = 650F,
-                    elapsedTimeMillis = 40,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 1060F,
-                    y = 800F,
-                    elapsedTimeMillis = 50,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 1210F,
-                    y = 950F,
-                    elapsedTimeMillis = 60,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 1360F,
-                    y = 1100F,
-                    elapsedTimeMillis = 70,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 1510F,
-                    y = 1250F,
-                    elapsedTimeMillis = 80,
-                    toolType = InputToolType.TOUCH,
-                ),
-                StrokeInput.create(
-                    x = 1510F,
-                    y = 1250F,
-                    elapsedTimeMillis = 100,
-                    toolType = InputToolType.TOUCH,
-                ),
+        assertThat(
+                pool
+                    .obtainSingleValueForMotionEvent(
+                        nonZeroTwistEvent,
+                        pointerIndex = 0,
+                        motionEventToStrokeTransform = Matrix(),
+                        strokeStartTimeMillis = 1000L,
+                        forceHasBarrelTwist = null,
+                    )
+                    .getBarrelTwistRadians()
             )
+            .isWithin(0.001f)
+            .of(0.5f * PI)
+
+        assertThat(
+                pool
+                    .obtainSingleValueForMotionEvent(
+                        nonZeroTwistEvent,
+                        pointerIndex = 0,
+                        motionEventToStrokeTransform = Matrix(),
+                        strokeStartTimeMillis = 1000L,
+                        forceHasBarrelTwist = false,
+                    )
+                    .getBarrelTwistRadians()
+            )
+            .isEqualTo(StrokeInput.NO_BARREL_TWIST)
+    }
+
+    @Test
+    fun convertAxisOrientationToOrientationRadians_convertsAngles() {
+        assertThat(convertAxisOrientationToOrientationRadians(-0.5f * PI)).isWithin(0.001f).of(0f)
+        assertThat(convertAxisOrientationToOrientationRadians(-0.25f * PI))
+            .isWithin(0.001f)
+            .of(0.25f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(0f)).isWithin(0.001f).of(0.5f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(0.25f * PI))
+            .isWithin(0.001f)
+            .of(0.75f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(0.5f * PI)).isWithin(0.001f).of(PI)
+        assertThat(convertAxisOrientationToOrientationRadians(0.75f * PI))
+            .isWithin(0.001f)
+            .of(1.25f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(PI)).isWithin(0.001f).of(1.5f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(-PI)).isWithin(0.001f).of(1.5f * PI)
+        assertThat(convertAxisOrientationToOrientationRadians(-0.75f * PI))
+            .isWithin(0.001f)
+            .of(1.75f * PI)
+    }
+
+    @Test
+    fun convertAxisRzToBarrelTwistRadians_convertsAngles() {
+        assertThat(convertAxisRzToBarrelTwistRadians(0f)).isWithin(0.001f).of(0f)
+        assertThat(convertAxisRzToBarrelTwistRadians(-0.25f)).isWithin(0.001f).of(0.25f * PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(-0.5f)).isWithin(0.001f).of(0.5f * PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(-0.75f)).isWithin(0.001f).of(0.75f * PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(-1f)).isWithin(0.001f).of(PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(1f)).isWithin(0.001f).of(PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(0.75f)).isWithin(0.001f).of(1.25f * PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(0.5f)).isWithin(0.001f).of(1.5f * PI)
+        assertThat(convertAxisRzToBarrelTwistRadians(0.25f)).isWithin(0.001f).of(1.75f * PI)
     }
 }
 
+private fun obtainStylusMotionEventWithAxisRz(
+    downTime: Long,
+    eventTime: Long,
+    action: Int,
+    x: Float,
+    y: Float,
+    axisRz: Float,
+): MotionEvent =
+    MotionEvent.obtain(
+        /* downTime = */ downTime,
+        /* eventTime = */ eventTime,
+        /* action = */ action,
+        /* pointerCount = */ 1,
+        /* pointerProperties = */ arrayOf(
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_STYLUS
+            }
+        ),
+        /* pointerCoords = */ arrayOf(
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                setAxisValue(MotionEvent.AXIS_RZ, axisRz)
+            }
+        ),
+        /* metaState = */ 0,
+        /* buttonState = */ 0,
+        /* xPrecision = */ 1f,
+        /* yPrecision = */ 1f,
+        /* deviceId = */ 0,
+        /* edgeFlags = */ 0,
+        /* source = */ InputDevice.SOURCE_STYLUS,
+        /* flags = */ 0,
+    )
+
 /** A [Correspondence] for fuzzy matching of a [StrokeInput]. */
+@OptIn(ExperimentalInkBarrelTwistApi::class)
 private fun strokeInputNearEqual(
     tolerance: Double = 0.001
 ): Correspondence<StrokeInput, StrokeInput> =
@@ -501,7 +409,11 @@ private fun strokeInputNearEqual(
                 actual.toolType == expected.toolType &&
                 floatTolerance.compare(actual.pressure, expected.pressure) &&
                 floatTolerance.compare(actual.tiltRadians, expected.tiltRadians) &&
-                floatTolerance.compare(actual.orientationRadians, expected.orientationRadians)
+                floatTolerance.compare(actual.orientationRadians, expected.orientationRadians) &&
+                floatTolerance.compare(
+                    actual.getBarrelTwistRadians(),
+                    expected.getBarrelTwistRadians(),
+                )
         },
         "is approximately equal to",
     )

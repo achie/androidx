@@ -16,6 +16,7 @@
 
 package androidx.wear.compose.material3
 
+import androidx.annotation.IntRange
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -69,6 +71,67 @@ import androidx.wear.compose.materialcore.directedValue
 import kotlin.math.roundToInt
 
 /**
+ * [Slider] allows users to make a selection from a range of integer values from 1 to [steps].
+ *
+ * This overload always shows at least one segment when enabled, representing the minimum value (1),
+ * up to and including [steps] segments for the maximum value.
+ *
+ * For finer-grained control over the value range or where the minimum segments shown is zero, see
+ * other overloads.
+ *
+ * A segmented slider sample with discrete integer steps:
+ *
+ * @sample androidx.wear.compose.material3.samples.SliderShowMinimumSegmentSample
+ * @param value Current value of the Slider. If outside of 1..[steps], value will be coerced to this
+ *   range.
+ * @param onValueChange Lambda in which value should be updated.
+ * @param steps Specifies the number of discrete values evenly distributed across 1..[steps]. Must
+ *   be >= 2.
+ * @param modifier Modifiers for the Slider layout.
+ * @param decreaseIcon A slot for an icon which is placed on the decrease (start) button such as
+ *   [SliderDefaults.DecreaseIcon].
+ * @param increaseIcon A slot for an icon which is placed on the increase (end) button such as
+ *   [SliderDefaults.IncreaseIcon].
+ * @param enabled Controls the enabled state of the slider. When `false`, this slider will not be
+ *   clickable.
+ * @param segmented A boolean value which specifies whether a bar will be split into segments or
+ *   not. By default true if [steps] is <= [MaxSegmentSteps].
+ * @param shape Defines slider's shape. It is strongly recommended to use the default as this shape
+ *   is a key characteristic of the Wear Material3 Theme.
+ * @param colors [SliderColors] that will be used to resolve the background and content color for
+ *   this slider in different states.
+ */
+@Composable
+public fun Slider(
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    @IntRange(from = 2) steps: Int,
+    modifier: Modifier = Modifier,
+    decreaseIcon: @Composable () -> Unit = { SliderDefaults.DecreaseIcon() },
+    increaseIcon: @Composable () -> Unit = { SliderDefaults.IncreaseIcon() },
+    enabled: Boolean = true,
+    segmented: Boolean = steps <= MaxSegmentSteps,
+    shape: Shape = SliderDefaults.shape,
+    colors: SliderColors = SliderDefaults.sliderColors(),
+) {
+    require(steps >= 2) { "steps should be >= 2" }
+    Slider(
+        value = value.toFloat(),
+        onValueChange = { onValueChange(it.roundToInt()) },
+        steps = (steps - 2),
+        modifier = modifier,
+        enabled = enabled,
+        valueRange = 1f..steps.toFloat(),
+        segmented = segmented,
+        decreaseIcon = decreaseIcon,
+        increaseIcon = increaseIcon,
+        shape = shape,
+        colors = colors,
+        showMinimumSegment = true,
+    )
+}
+
+/**
  * [Slider] allows users to make a selection from a range of values. The range of selections is
  * shown as a bar between the minimum and maximum values of the range, from which users may select a
  * single value. Slider is ideal for adjusting settings such as volume or brightness.
@@ -85,9 +148,16 @@ import kotlin.math.roundToInt
  *
  * @sample androidx.wear.compose.material3.samples.SliderSample
  *
+ * ![SliderSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SliderSample_CompositeImage.png)
+ *
  * A segmented slider sample:
  *
  * @sample androidx.wear.compose.material3.samples.SliderSegmentedSample
+ *
+ * ![SliderSegmentedSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SliderSegmentedSample_CompositeImage.png)
+ *
  * @param value Current value of the Slider. If outside of [valueRange] provided, value will be
  *   coerced to this range.
  * @param onValueChange Lambda in which value should be updated.
@@ -110,12 +180,13 @@ import kotlin.math.roundToInt
  *   is a key characteristic of the Wear Material3 Theme.
  * @param colors [SliderColors] that will be used to resolve the background and content color for
  *   this slider in different states.
+ * @param showMinimumSegment When `true`, shows at least one segment even when on the lowest value.
  */
 @Composable
 public fun Slider(
     value: Float,
     onValueChange: (Float) -> Unit,
-    steps: Int,
+    @IntRange(from = 0) steps: Int,
     modifier: Modifier = Modifier,
     decreaseIcon: @Composable () -> Unit = { SliderDefaults.DecreaseIcon() },
     increaseIcon: @Composable () -> Unit = { SliderDefaults.IncreaseIcon() },
@@ -124,6 +195,7 @@ public fun Slider(
     segmented: Boolean = steps <= MaxSegmentSteps,
     shape: Shape = SliderDefaults.shape,
     colors: SliderColors = SliderDefaults.sliderColors(),
+    showMinimumSegment: Boolean = false,
 ) {
     require(steps >= 0) { "steps should be >= 0" }
     val currentStep =
@@ -136,7 +208,10 @@ public fun Slider(
                 .height(SLIDER_HEIGHT)
                 .clip(shape)
     ) {
-        val visibleSegments = if (segmented) steps + 1 else 1
+        val visibleSegments =
+            if (segmented) {
+                if (showMinimumSegment) steps + 2 else steps + 1
+            } else 1
         val hapticFeedback = LocalHapticFeedback.current
 
         val updateValue: (Int) -> Unit = { stepDiff ->
@@ -155,10 +230,10 @@ public fun Slider(
         val containerColor = colors.containerColor(enabled)
         val selectedBarSeparatorColor = colors.barSeparatorColor(enabled, true)
         val unselectedBarSeparatorColor = colors.barSeparatorColor(enabled, false)
+        val buttonIconColor = colors.buttonIconColor(enabled).value
+        val maxWidth = this.maxWidth
 
-        CompositionLocalProvider(
-            LocalIndication provides ripple(bounded = false, radius = this.maxWidth / 2)
-        ) {
+        CompositionLocalProvider(LocalContentColor provides buttonIconColor) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Start,
@@ -166,9 +241,15 @@ public fun Slider(
             ) {
                 val increaseButtonEnabled = enabled && currentStep < steps + 1
                 val decreaseButtonEnabled = enabled && currentStep > 0
+                val targetRatio =
+                    if (showMinimumSegment) {
+                        (currentStep + 1).toFloat() / (steps + 2).toFloat()
+                    } else {
+                        currentStep.toFloat() / (steps + 1).toFloat()
+                    }
                 val valueRatio by
                     animateFloatAsState(
-                        targetValue = currentStep.toFloat() / (steps + 1).toFloat(),
+                        targetValue = targetRatio,
                         animationSpec =
                             tween(
                                 durationMillis = MotionTokens.DurationShort3,
@@ -178,23 +259,35 @@ public fun Slider(
                         label = "sliderProgressBarAnimation",
                     )
 
-                InlineSliderButton(
-                    enabled = decreaseButtonEnabled,
-                    onClick = { updateValue(-1) },
-                    contentAlignment = Alignment.Center,
-                    buttonControlSize = CONTROL_SIZE,
-                    modifier =
-                        Modifier.semantics(mergeDescendants = true) {
-                            progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
-                        },
-                    content = {
-                        SliderButtonContent(
-                            decreaseButtonEnabled,
-                            { enabled -> colors.buttonIconColor(enabled) },
-                            decreaseIcon,
+                CompositionLocalProvider(
+                    LocalIndication provides
+                        ripple(
+                            bounded = false,
+                            radius = maxWidth,
+                            focusRingShape =
+                                rememberDelegatingShape(
+                                    shape.startSection(innerShape = SLIDER_BUTTON_INNER_SHAPE)
+                                ),
                         )
-                    },
-                )
+                ) {
+                    InlineSliderButton(
+                        enabled = decreaseButtonEnabled,
+                        onClick = { updateValue(-1) },
+                        contentAlignment = Alignment.Center,
+                        buttonControlSize = CONTROL_SIZE,
+                        modifier =
+                            Modifier.semantics(mergeDescendants = true) {
+                                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
+                            },
+                        content = {
+                            SliderButtonContent(
+                                decreaseButtonEnabled,
+                                { enabled -> colors.buttonIconColor(enabled) },
+                                decreaseIcon,
+                            )
+                        },
+                    )
+                }
 
                 Box(
                     modifier =
@@ -213,23 +306,35 @@ public fun Slider(
                             )
                 )
 
-                InlineSliderButton(
-                    enabled = increaseButtonEnabled,
-                    onClick = { updateValue(1) },
-                    contentAlignment = Alignment.Center,
-                    buttonControlSize = CONTROL_SIZE,
-                    modifier =
-                        Modifier.semantics(mergeDescendants = true) {
-                            progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
-                        },
-                    content = {
-                        SliderButtonContent(
-                            increaseButtonEnabled,
-                            { enabled -> colors.buttonIconColor(enabled) },
-                            increaseIcon,
+                CompositionLocalProvider(
+                    LocalIndication provides
+                        ripple(
+                            bounded = false,
+                            radius = maxWidth,
+                            focusRingShape =
+                                rememberDelegatingShape(
+                                    shape.endSection(innerShape = SLIDER_BUTTON_INNER_SHAPE)
+                                ),
                         )
-                    },
-                )
+                ) {
+                    InlineSliderButton(
+                        enabled = increaseButtonEnabled,
+                        onClick = { updateValue(1) },
+                        contentAlignment = Alignment.Center,
+                        buttonControlSize = CONTROL_SIZE,
+                        modifier =
+                            Modifier.semantics(mergeDescendants = true) {
+                                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
+                            },
+                        content = {
+                            SliderButtonContent(
+                                increaseButtonEnabled,
+                                { enabled -> colors.buttonIconColor(enabled) },
+                                increaseIcon,
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -244,11 +349,175 @@ public fun Slider(
  * accordingly to the start and end of the control. Buttons can have custom icons - [decreaseIcon]
  * and [increaseIcon].
  *
+ * The bar in the middle of control can have separators if [segmented] flag is set to true. A single
+ * step value is calculated as the difference between min and max values of [valueRange] divided by
+ * [steps] + 1 value.
+ *
+ * A continuous non-segmented slider sample:
+ *
+ * @sample androidx.wear.compose.material3.samples.SliderSample
+ *
+ * A segmented slider sample:
+ *
+ * @sample androidx.wear.compose.material3.samples.SliderSegmentedSample
+ *
+ * ![SliderSegmentedSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SliderSegmentedSample_CompositeImage.png)
+ *
+ * @param value Current value of the Slider. If outside of [valueRange] provided, value will be
+ *   coerced to this range.
+ * @param onValueChange Lambda in which value should be updated.
+ * @param steps Specifies the number of discrete values, excluding min and max values, evenly
+ *   distributed across the whole value range. Must not be negative. If 0, slider will have only min
+ *   and max values and no steps in between.
+ * @param modifier Modifiers for the Slider layout.
+ * @param decreaseIcon A slot for an icon which is placed on the decrease (start) button such as
+ *   [SliderDefaults.DecreaseIcon].
+ * @param increaseIcon A slot for an icon which is placed on the increase (end) button such as
+ *   [SliderDefaults.IncreaseIcon].
+ * @param enabled Controls the enabled state of the slider. When `false`, this slider will not be
+ *   clickable.
+ * @param valueRange Range of values that Slider value can take. Passed [value] will be coerced to
+ *   this range.
+ * @param segmented A boolean value which specifies whether a bar will be split into segments or
+ *   not. Recommendation is while using this flag do not have more than [MaxSegmentSteps] steps as
+ *   it might affect user experience. By default true if number of [steps] is <= [MaxSegmentSteps].
+ * @param shape Defines slider's shape. It is strongly recommended to use the default as this shape
+ *   is a key characteristic of the Wear Material3 Theme.
+ * @param colors [SliderColors] that will be used to resolve the background and content color for
+ *   this slider in different states.
+ */
+@Deprecated(
+    "This overload is provided for backwards compatibility with Compose for Wear OS 1.6. " +
+        "A newer overload is available with an additional showMinimumSegment parameter.",
+    level = DeprecationLevel.HIDDEN,
+)
+@Composable
+public fun Slider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    steps: Int,
+    modifier: Modifier = Modifier,
+    decreaseIcon: @Composable () -> Unit = { SliderDefaults.DecreaseIcon() },
+    increaseIcon: @Composable () -> Unit = { SliderDefaults.IncreaseIcon() },
+    enabled: Boolean = true,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..(steps + 1).toFloat(),
+    segmented: Boolean = steps <= MaxSegmentSteps,
+    shape: Shape = SliderDefaults.shape,
+    colors: SliderColors = SliderDefaults.sliderColors(),
+) {
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        steps = steps,
+        modifier = modifier,
+        decreaseIcon = decreaseIcon,
+        increaseIcon = increaseIcon,
+        enabled = enabled,
+        valueRange = valueRange,
+        segmented = segmented,
+        shape = shape,
+        colors = colors,
+        showMinimumSegment = false,
+    )
+}
+
+/**
+ * [Slider] allows users to make a selection from a range of values. The range of selections is
+ * shown as a bar between the minimum and maximum values of the range, from which users may select a
+ * single value. Slider is ideal for adjusting settings such as volume or brightness.
+ *
+ * Value can be increased and decreased by clicking on the increase and decrease buttons, located
+ * accordingly to the start and end of the control. Buttons can have custom icons - [decreaseIcon]
+ * and [increaseIcon].
+ *
+ * The bar in the middle of control can have separators if [segmented] flag is set to true. The
+ * number of steps is calculated as the difference between max and min values of [valueProgression]
+ * divided by [valueProgression].step - 1. For example, with a range of 100..120 and a step of 5,
+ * the number of steps will be (120-100)/ 5 - 1 = 3. Steps are 100(first), 105, 110, 115, 120(last)
+ *
+ * If [valueProgression] range is not equally divisible by [valueProgression].step, then
+ * [valueProgression].last will be adjusted to the closest divisible value in the range. For
+ * example, 1..13 range and a step = 5, steps will be 1(first) , 6 , 11(last)
+ *
+ * A continuous non-segmented slider sample:
+ *
+ * @sample androidx.wear.compose.material3.samples.SliderWithIntegerSample
+ *
+ * ![SliderWithIntegerSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SliderWithIntegerSample_CompositeImage.png)
+ *
+ * A segmented slider sample:
+ *
+ * @sample androidx.wear.compose.material3.samples.SliderSegmentedSample
+ *
+ * ![SliderSegmentedSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SliderSegmentedSample_CompositeImage.png)
+ *
+ * @param value Current value of the Slider. If outside of [valueProgression] provided, value will
+ *   be coerced to this range.
+ * @param onValueChange Lambda in which value should be updated.
+ * @param valueProgression Progression of values that Slider value can take. Consists of rangeStart,
+ *   rangeEnd and step. Range will be equally divided by step size.
+ * @param decreaseIcon A slot for an icon which is placed on the decrease (start) button such as
+ *   [SliderDefaults.DecreaseIcon].
+ * @param increaseIcon A slot for an icon which is placed on the increase (end) button such as
+ *   [SliderDefaults.IncreaseIcon].
+ * @param modifier Modifiers for the Slider layout.
+ * @param enabled Controls the enabled state of the slider. When `false`, this slider will not be
+ *   clickable.
+ * @param segmented A boolean value which specifies whether a bar will be split into segments or
+ *   not. Recommendation is while using this flag do not have more than [MaxSegmentSteps] steps as
+ *   it might affect user experience. By default true if number of steps is <= [MaxSegmentSteps].
+ * @param shape Defines slider's shape. It is strongly recommended to use the default as this shape
+ *   is a key characteristic of the Wear Material3 Theme.
+ * @param colors [SliderColors] that will be used to resolve the background and content color for
+ *   this slider in different states.
+ * @param showMinimumSegment When `true`, shows at least one segment even when on the lowest value.
+ */
+@Composable
+public fun Slider(
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    valueProgression: IntProgression,
+    modifier: Modifier = Modifier,
+    decreaseIcon: @Composable () -> Unit = { SliderDefaults.DecreaseIcon() },
+    increaseIcon: @Composable () -> Unit = { SliderDefaults.IncreaseIcon() },
+    enabled: Boolean = true,
+    segmented: Boolean = valueProgression.stepsNumber() <= MaxSegmentSteps,
+    shape: Shape = SliderDefaults.shape,
+    colors: SliderColors = SliderDefaults.sliderColors(),
+    showMinimumSegment: Boolean = false,
+) {
+    Slider(
+        value = value.toFloat(),
+        onValueChange = { onValueChange(it.roundToInt()) },
+        steps = valueProgression.stepsNumber(),
+        modifier = modifier,
+        enabled = enabled,
+        valueRange = valueProgression.first.toFloat()..valueProgression.last.toFloat(),
+        segmented = segmented,
+        decreaseIcon = decreaseIcon,
+        increaseIcon = increaseIcon,
+        shape = shape,
+        colors = colors,
+        showMinimumSegment = showMinimumSegment,
+    )
+}
+
+/**
+ * [Slider] allows users to make a selection from a range of values. The range of selections is
+ * shown as a bar between the minimum and maximum values of the range, from which users may select a
+ * single value. Slider is ideal for adjusting settings such as volume or brightness.
+ *
+ * Value can be increased and decreased by clicking on the increase and decrease buttons, located
+ * accordingly to the start and end of the control. Buttons can have custom icons - [decreaseIcon]
+ * and [increaseIcon].
+ *
  * The bar in the middle of control can have separators if [segmented] flag is set to true. A number
  * of steps is calculated as the difference between max and min values of [valueProgression] divided
- * by [valueProgression].step - 1. For example, with a range of 100..120 and a step 5, number of by
- * [valueProgression].step - 1. For example, with a range of 100..120 and a step 5, number of steps
- * will be (120-100)/ 5 - 1 = 3. Steps are 100(first), 105, 110, 115, 120(last)
+ * by [valueProgression].step - 1. For example, with a range of 100..120 and a step 5, number of
+ * steps will be (120-100)/ 5 - 1 = 3. Steps are 100(first), 105, 110, 115, 120(last)
  *
  * If [valueProgression] range is not equally divisible by [valueProgression].step, then
  * [valueProgression].last will be adjusted to the closest divisible value in the range. For
@@ -281,6 +550,11 @@ public fun Slider(
  * @param colors [SliderColors] that will be used to resolve the background and content color for
  *   this slider in different states.
  */
+@Deprecated(
+    "This overload is provided for backwards compatibility with Compose for Wear OS 1.6. " +
+        "A newer overload is available with an additional showMinimumSegment parameter.",
+    level = DeprecationLevel.HIDDEN,
+)
 @Composable
 public fun Slider(
     value: Int,
@@ -295,17 +569,17 @@ public fun Slider(
     colors: SliderColors = SliderDefaults.sliderColors(),
 ) {
     Slider(
-        value = value.toFloat(),
-        onValueChange = { onValueChange(it.roundToInt()) },
-        steps = valueProgression.stepsNumber(),
+        value = value,
+        onValueChange = onValueChange,
+        valueProgression = valueProgression,
         modifier = modifier,
-        enabled = enabled,
-        valueRange = valueProgression.first.toFloat()..valueProgression.last.toFloat(),
-        segmented = segmented,
         decreaseIcon = decreaseIcon,
         increaseIcon = increaseIcon,
+        enabled = enabled,
+        segmented = segmented,
         shape = shape,
         colors = colors,
+        showMinimumSegment = false,
     )
 }
 
@@ -419,6 +693,9 @@ public object SliderDefaults {
      * value:
      *
      * @sample androidx.wear.compose.material3.samples.ChangedSliderSample
+     *
+     * ![ChangedSliderSample Composite
+     * Image](https://developer.android.com/wear/images/design/WearComposeM3_ChangedSliderSample_CompositeImage.png)
      */
     @Composable
     public fun variantSliderColors(): SliderColors =
@@ -432,6 +709,10 @@ public object SliderDefaults {
      * value:
      *
      * @sample androidx.wear.compose.material3.samples.ChangedSliderSample
+     *
+     * ![ChangedSliderSample Composite
+     * Image](https://developer.android.com/wear/images/design/WearComposeM3_ChangedSliderSample_CompositeImage.png)
+     *
      * @param containerColor The background color of this [Slider] when enabled
      * @param buttonIconColor The color of the icon of buttons when enabled
      * @param selectedBarColor The color of the progress bar when enabled
@@ -833,3 +1114,4 @@ private val SELECTED_BAR_HEIGHT = 12.dp
 private val UNSELECTED_BAR_HEIGHT = 4.dp
 private val BAR_SEPARATOR_RADIUS = 2.dp
 private val SEGMENT_BAR_PADDING = 4.dp
+private val SLIDER_BUTTON_INNER_SHAPE = RoundedCornerShape(BAR_SEPARATOR_RADIUS)

@@ -16,14 +16,22 @@
 
 package androidx.compose.foundation.text.input
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.text.ParagraphStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,7 +40,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RememberTextFieldStateTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val restorationTester = StateRestorationTester(rule)
 
@@ -107,5 +115,146 @@ class RememberTextFieldStateTest {
             assertThat(restoredState.text.toString()).isEqualTo("hello, world")
             assertThat(restoredState.selection).isEqualTo(TextRange(0, 12))
         }
+    }
+
+    @Test
+    fun rememberTextFieldState_restoresStyles() {
+        lateinit var originalState: TextFieldState
+        lateinit var restoredState: TextFieldState
+        var rememberCount = 0
+        restorationTester.setContent {
+            val state = rememberTextFieldState()
+            if (remember { rememberCount++ } == 0) {
+                originalState = state
+            } else {
+                restoredState = state
+            }
+        }
+        rule.runOnIdle {
+            originalState.edit {
+                replace(length, length, "hello, world")
+                addStyle(SpanStyle(color = Color.Red), TextRange(0, 5), ExpandPolicy.InsideOnly)
+                addStyle(
+                    SpanStyle(textDecoration = TextDecoration.Underline),
+                    TextRange(7, 12),
+                    ExpandPolicy.AtBoth,
+                )
+                addStyle(
+                    ParagraphStyle(textAlign = TextAlign.Center),
+                    TextRange(0, 5),
+                    ExpandPolicy.InsideOnly,
+                )
+                addStyle(
+                    ParagraphStyle(textAlign = TextAlign.Right),
+                    TextRange(7, 12),
+                    ExpandPolicy.AtBoth,
+                )
+            }
+        }
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        rule.runOnIdle {
+            assertThat(restoredState.text.toString()).isEqualTo("hello, world")
+
+            restoredState.edit {
+                val spanStyles = getSpanStyles(TextRange(0, 12))
+                assertThat(spanStyles).hasSize(2)
+                assertThat(spanStyles[0].spanStyle).isEqualTo(SpanStyle(color = Color.Red))
+                assertThat(spanStyles[0].textRange).isEqualTo(TextRange(0, 5))
+                assertThat(spanStyles[0].expandPolicy).isEqualTo(ExpandPolicy.InsideOnly)
+
+                assertThat(spanStyles[1].spanStyle)
+                    .isEqualTo(SpanStyle(textDecoration = TextDecoration.Underline))
+                assertThat(spanStyles[1].textRange).isEqualTo(TextRange(7, 12))
+                assertThat(spanStyles[1].expandPolicy).isEqualTo(ExpandPolicy.AtBoth)
+
+                val paragraphStyles = getParagraphStyles(TextRange(0, 12))
+                assertThat(paragraphStyles).hasSize(2)
+                assertThat(paragraphStyles[0].paragraphStyle)
+                    .isEqualTo(ParagraphStyle(textAlign = TextAlign.Center))
+                assertThat(paragraphStyles[0].textRange).isEqualTo(TextRange(0, 5))
+                assertThat(paragraphStyles[0].expandPolicy).isEqualTo(ExpandPolicy.InsideOnly)
+
+                assertThat(paragraphStyles[1].paragraphStyle)
+                    .isEqualTo(ParagraphStyle(textAlign = TextAlign.Right))
+                assertThat(paragraphStyles[1].textRange).isEqualTo(TextRange(7, 12))
+                assertThat(paragraphStyles[1].expandPolicy).isEqualTo(ExpandPolicy.AtBoth)
+            }
+        }
+    }
+
+    @Test
+    fun rememberTextFieldState_onTextChanged_isCalledWithNewText() {
+        lateinit var state: TextFieldState
+        val calls = mutableListOf<String>()
+        rule.setContent {
+            state = rememberTextFieldState(onTextChanged = { calls += it.toString() })
+        }
+
+        rule.runOnIdle { state.edit { replace(length, length, "hello") } }
+
+        rule.runOnIdle { assertThat(calls).containsExactly("hello") }
+    }
+
+    @Test
+    fun rememberTextFieldState_onTextChanged_usesLatestLambda() {
+        lateinit var state: TextFieldState
+        var target by mutableStateOf("first")
+        val calls = mutableListOf<String>()
+        rule.setContent {
+            val currentTarget = target
+            state = rememberTextFieldState(onTextChanged = { calls += "$currentTarget:$it" })
+        }
+
+        rule.runOnIdle { state.edit { replace(length, length, "a") } }
+        rule.runOnIdle { target = "second" }
+        rule.runOnIdle { state.edit { replace(length, length, "b") } }
+
+        rule.runOnIdle { assertThat(calls).containsExactly("first:a", "second:ab").inOrder() }
+    }
+
+    @Test
+    fun rememberTextFieldState_onTextChanged_usesLatestLambdaInDisposableEffect() {
+        var key by mutableStateOf("first")
+        val calls = mutableListOf<String>()
+        rule.setContent {
+            val currentKey = key
+            val state = rememberTextFieldState(onTextChanged = { calls += "$currentKey:$it" })
+            DisposableEffect(currentKey) {
+                state.edit { replace(length, length, "!") }
+                onDispose {}
+            }
+        }
+
+        rule.runOnIdle { assertThat(calls).containsExactly("first:!") }
+        rule.runOnIdle { key = "second" }
+        rule.runOnIdle { assertThat(calls).containsExactly("first:!", "second:!!").inOrder() }
+    }
+
+    @Test
+    fun rememberTextFieldState_onTextChanged_isAttachedAfterRestoration() {
+        lateinit var originalState: TextFieldState
+        lateinit var restoredState: TextFieldState
+        var rememberCount = 0
+        val calls = mutableListOf<String>()
+        restorationTester.setContent {
+            val state = rememberTextFieldState(onTextChanged = { calls += it.toString() })
+            if (remember { rememberCount++ } == 0) {
+                originalState = state
+            } else {
+                restoredState = state
+            }
+        }
+        rule.runOnIdle { originalState.edit { replace(length, length, "hello") } }
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        rule.runOnIdle {
+            assertThat(restoredState).isNotSameInstanceAs(originalState)
+            assertThat(restoredState.text.toString()).isEqualTo("hello")
+            restoredState.edit { replace(length, length, " world") }
+        }
+        rule.runOnIdle { assertThat(calls).containsExactly("hello", "hello world").inOrder() }
     }
 }

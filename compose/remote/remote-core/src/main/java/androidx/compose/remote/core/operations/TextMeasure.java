@@ -119,8 +119,8 @@ public class TextMeasure extends PaintOperation implements VariableSupport {
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int id = buffer.readInt();
-        int textId = buffer.readInt();
+        int id = buffer.declareId();
+        int textId = buffer.readId();
         int type = buffer.readInt();
         operations.add(new TextMeasure(id, textId, type));
     }
@@ -131,11 +131,18 @@ public class TextMeasure extends PaintOperation implements VariableSupport {
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Expressions Operations", OP_CODE, CLASS_NAME)
-                .description("Measure text")
-                .field(INT, "id", "id of float result of the measure")
-                .field(INT, "textId", "id of text")
-                .field(INT, "type", "type: measure 0=width,1=height");
+        doc.operation("Text Operations", OP_CODE, CLASS_NAME)
+                .additionalDocumentation("text_measure")
+                .description("Measure text dimensions and store the result in a float variable")
+                .field(INT, "id", "The ID of the float variable to store the result")
+                .field(INT, "textId", "The ID of the text to measure")
+                .field(INT, "type", "The type of measurement (WIDTH, HEIGHT, etc.)")
+                .possibleValues("MEASURE_WIDTH", MEASURE_WIDTH)
+                .possibleValues("MEASURE_HEIGHT", MEASURE_HEIGHT)
+                .possibleValues("MEASURE_LEFT", MEASURE_LEFT)
+                .possibleValues("MEASURE_RIGHT", MEASURE_RIGHT)
+                .possibleValues("MEASURE_TOP", MEASURE_TOP)
+                .possibleValues("MEASURE_BOTTOM", MEASURE_BOTTOM);
     }
 
     @NonNull

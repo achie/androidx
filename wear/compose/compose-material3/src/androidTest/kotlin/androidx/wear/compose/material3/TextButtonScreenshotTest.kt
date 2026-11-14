@@ -17,23 +17,31 @@
 package androidx.wear.compose.material3.test
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
 import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.LocalRippleThemeConfiguration
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.RippleDefaults
 import androidx.wear.compose.material3.SCREENSHOT_GOLDEN_PATH
 import androidx.wear.compose.material3.TEST_TAG
 import androidx.wear.compose.material3.Text
@@ -42,7 +50,6 @@ import androidx.wear.compose.material3.TextButtonDefaults
 import androidx.wear.compose.material3.TextButtonShapes
 import androidx.wear.compose.material3.setContentWithTheme
 import androidx.wear.compose.material3.verifyScreenshot
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -53,7 +60,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class TextButtonScreenshotTest {
 
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -108,6 +115,131 @@ class TextButtonScreenshotTest {
                     pressedShape = RoundedCornerShape(15.dp),
                 )
         )
+    }
+
+    @Test
+    fun text_button_inset_focus_ring() {
+        val filledInteractionSource = MutableInteractionSource()
+        val filledTonalInteractionSource = MutableInteractionSource()
+        val outlinedInteractionSource = MutableInteractionSource()
+        val defaultInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Row(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        TextButton(
+                            onClick = {},
+                            colors = TextButtonDefaults.filledTextButtonColors(),
+                            interactionSource = filledInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(
+                            onClick = {},
+                            colors = TextButtonDefaults.filledTonalTextButtonColors(),
+                            interactionSource = filledTonalInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(
+                            onClick = {},
+                            colors = TextButtonDefaults.outlinedTextButtonColors(),
+                            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                            interactionSource = outlinedInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(onClick = {}, interactionSource = defaultInteractionSource) {
+                            Text(text = "ABC")
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            filledInteractionSource.tryEmit(FocusInteraction.Focus())
+            filledTonalInteractionSource.tryEmit(FocusInteraction.Focus())
+            outlinedInteractionSource.tryEmit(FocusInteraction.Focus())
+            defaultInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
+
+    @Test
+    fun text_button_animated_shapes_inset_focus_ring() {
+        val filledInteractionSource = MutableInteractionSource()
+        val filledTonalInteractionSource = MutableInteractionSource()
+        val outlinedInteractionSource = MutableInteractionSource()
+        val defaultInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Row(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        TextButton(
+                            onClick = {},
+                            shapes = TextButtonDefaults.animatedShapes(),
+                            colors = TextButtonDefaults.filledTextButtonColors(),
+                            interactionSource = filledInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(
+                            onClick = {},
+                            shapes = TextButtonDefaults.animatedShapes(),
+                            colors = TextButtonDefaults.filledTonalTextButtonColors(),
+                            interactionSource = filledTonalInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(
+                            onClick = {},
+                            shapes = TextButtonDefaults.animatedShapes(),
+                            colors = TextButtonDefaults.outlinedTextButtonColors(),
+                            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                            interactionSource = outlinedInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                        TextButton(
+                            onClick = {},
+                            shapes = TextButtonDefaults.animatedShapes(),
+                            interactionSource = defaultInteractionSource,
+                        ) {
+                            Text(text = "ABC")
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            filledInteractionSource.tryEmit(FocusInteraction.Focus())
+            filledInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            filledTonalInteractionSource.tryEmit(FocusInteraction.Focus())
+            filledTonalInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            outlinedInteractionSource.tryEmit(FocusInteraction.Focus())
+            outlinedInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+            defaultInteractionSource.tryEmit(FocusInteraction.Focus())
+            defaultInteractionSource.tryEmit(PressInteraction.Press(Offset.Zero))
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
     }
 
     @Composable

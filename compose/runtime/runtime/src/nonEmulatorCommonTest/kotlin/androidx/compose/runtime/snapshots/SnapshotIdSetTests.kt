@@ -22,6 +22,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class SnapshotIdSetTests {
@@ -5642,6 +5643,83 @@ class SnapshotIdSetTests {
                 if (op) prev.set(value.toSnapshotId()) else prev.clear(value.toSnapshotId())
             result
         }
+    }
+
+    @Test
+    fun clearLastBitReturnsEmpty() {
+        // Clearing the only bit in lowerSet returns EMPTY
+        assertSame(
+            SnapshotIdSet.EMPTY,
+            SnapshotIdSet.EMPTY.set(10L.toSnapshotId()).clear(10L.toSnapshotId()),
+        )
+        // Clearing the only bit in upperSet returns EMPTY
+        assertSame(
+            SnapshotIdSet.EMPTY,
+            SnapshotIdSet.EMPTY.set(70L.toSnapshotId()).clear(70L.toSnapshotId()),
+        )
+        // Clearing the only bit above initial 128-bit window returns EMPTY
+        assertSame(
+            SnapshotIdSet.EMPTY,
+            SnapshotIdSet.EMPTY.set(500L.toSnapshotId()).clear(500L.toSnapshotId()),
+        )
+        // Clearing the only bit at (id + 1) % 64 == 0 boundary returns EMPTY
+        assertSame(
+            SnapshotIdSet.EMPTY,
+            SnapshotIdSet.EMPTY.set(191L.toSnapshotId()).clear(191L.toSnapshotId()),
+        )
+        // Clearing the last bit from belowBound returns EMPTY
+        assertSame(
+            SnapshotIdSet.EMPTY,
+            SnapshotIdSet.EMPTY.set(500L.toSnapshotId())
+                .set(1L.toSnapshotId())
+                .clear(500L.toSnapshotId())
+                .clear(1L.toSnapshotId()),
+        )
+        // andNot clearing all bits returns EMPTY
+        val setA = SnapshotIdSet.EMPTY.set(200L.toSnapshotId()).set(201L.toSnapshotId())
+        assertSame(SnapshotIdSet.EMPTY, setA.andNot(setA))
+        // andNot with disjoint bits in the same window returns the same instance
+        val setB = SnapshotIdSet.EMPTY.set(202L.toSnapshotId())
+        assertSame(setA, setA.andNot(setB))
+        // or with subset in the same window returns the same superset instance
+        val subsetA = SnapshotIdSet.EMPTY.set(200L.toSnapshotId())
+        assertSame(setA, setA.or(subsetA))
+        assertSame(setA, subsetA.or(setA))
+    }
+
+    @Test
+    fun andNotWithSharedBelowBoundClearsBelowBound() {
+        // Construct a base set with an element in belowBound (1) and an element in the 128-bit
+        // window (200), so lowerBound == 136 and belowBound == [1].
+        val base = SnapshotIdSet.EMPTY.set(1L.toSnapshotId()).set(200L.toSnapshotId())
+        assertTrue(base.get(1L.toSnapshotId()))
+        assertTrue(base.get(200L.toSnapshotId()))
+
+        // Branch 1: self-difference (newUpper == 0L && newLower == 0L) must be EMPTY
+        val selfDiff = base.andNot(base)
+        assertSame(SnapshotIdSet.EMPTY, selfDiff)
+        assertFalse(selfDiff.get(1L.toSnapshotId()))
+        assertFalse(selfDiff.get(200L.toSnapshotId()))
+
+        // Derive two sets that share the exact same belowBound reference as `base`
+        val setA = base.set(201L.toSnapshotId())
+        val setB = base.set(202L.toSnapshotId())
+
+        // Branch 3: partial overlap in window + shared belowBound must clear 1 and 200, keeping 201
+        val diffAB = setA.andNot(setB)
+        assertFalse(diffAB.get(1L.toSnapshotId()))
+        assertFalse(diffAB.get(200L.toSnapshotId()))
+        assertTrue(diffAB.get(201L.toSnapshotId()))
+        assertFalse(diffAB.get(202L.toSnapshotId()))
+
+        // Branch 2: disjoint window bits + shared belowBound (newUpper == this.upperSet &&
+        // newLower == this.lowerSet, but this.belowBound != null) must still clear belowBound!
+        val onlyInBWindow = base.clear(200L.toSnapshotId()).set(202L.toSnapshotId())
+        val diffDisjointWindow = setA.andNot(onlyInBWindow)
+        assertFalse(diffDisjointWindow.get(1L.toSnapshotId()))
+        assertTrue(diffDisjointWindow.get(200L.toSnapshotId()))
+        assertTrue(diffDisjointWindow.get(201L.toSnapshotId()))
+        assertFalse(diffDisjointWindow.get(202L.toSnapshotId()))
     }
 }
 

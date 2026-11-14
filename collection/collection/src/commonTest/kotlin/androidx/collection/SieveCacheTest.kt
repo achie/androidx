@@ -237,6 +237,17 @@ class SieveCacheTest {
     }
 
     @Test
+    fun countReturnsNumberOfEntries() {
+        val cache = createCacheWithCustomSize()
+        cache["Hello"] = "World"
+        cache["Bonjour"] = "Monde"
+
+        assertEquals(10, cache.size)
+        assertEquals(2, cache.count)
+        assertEquals(2, cache.count())
+    }
+
+    @Test
     fun any() {
         val cache = createStandardCache()
         cache["Hello"] = "World"
@@ -430,7 +441,7 @@ class SieveCacheTest {
         assertEquals(2, cache.count)
         assertEquals("Monde", cache["Bonjour"])
         assertEquals("Mondo", cache["Ciao"])
-        assertContentEquals(listOf("Sekai", "Sesang", "World", "Welt"), removedEntries)
+        assertEquals(setOf("Sekai", "Sesang", "World", "Welt"), removedEntries.toSet())
     }
 
     @Test

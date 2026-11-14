@@ -19,10 +19,14 @@ package androidx.compose.material3
 import android.os.Build
 import android.os.Build.VERSION.SDK_INT
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.tokens.NavigationBarTokens
@@ -52,7 +56,7 @@ import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onParent
@@ -65,7 +69,6 @@ import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import com.google.common.truth.Truth
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -73,7 +76,7 @@ import org.junit.runner.RunWith
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class ShortNavigationBarTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun bar_selectableGroupSemantics() {
@@ -389,7 +392,8 @@ class ShortNavigationBarTest {
                 ShortNavigationBarItemDefaults.colors()
                     .copy(
                         selectedIconColor = Color.Red,
-                        selectedTextColor = Color.Blue,
+                        selectedTextColorTopIconPosition = Color.Blue,
+                        selectedTextColorStartIconPosition = Color.Blue,
                         unselectedIconColor = Color.Green,
                         unselectedTextColor = Color.White,
                         disabledIconColor = Color.Gray,
@@ -660,6 +664,29 @@ class ShortNavigationBarTest {
             .onNodeWithTag("icon", useUnmergedTree = true)
             .assertLeftPositionInRootIsEqualTo((itemBounds.width - iconBounds.width) / 2)
             .assertTopPositionInRootIsEqualTo((itemBounds.height - iconBounds.height) / 2)
+    }
+
+    @Test
+    fun itemContent_withoutLabel_respectsMaxIntrinsicWidth() {
+        val iconSize = 24.dp
+        rule.setMaterialContent(lightColorScheme()) {
+            Row(modifier = Modifier.testTag("ROW_TAG").width(IntrinsicSize.Max)) {
+                ShortNavigationBarItem(
+                    modifier = Modifier.testTag("item"),
+                    icon = {
+                        Icon(Icons.Filled.Favorite, null, modifier = Modifier.size(iconSize))
+                    },
+                    label = null,
+                    selected = true,
+                    onClick = {},
+                )
+            }
+        }
+
+        val expectedWidth = iconSize + TopIconIndicatorHorizontalPadding * 2
+
+        rule.onNodeWithTag("ROW_TAG").assertWidthIsEqualTo(expectedWidth)
+        rule.onNodeWithTag("item").assertWidthIsEqualTo(expectedWidth)
     }
 }
 

@@ -16,6 +16,7 @@
 
 package com.example.androidx.mediarouting.activities;
 
+import android.Manifest;
 import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
@@ -34,6 +35,7 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.core.app.ActivityCompat;
 import androidx.mediarouter.media.MediaRouter;
 import androidx.mediarouter.media.MediaRouterParams;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -124,6 +126,12 @@ public final class SettingsActivity extends AppCompatActivity {
                     startActivity(new Intent(this, RouteListingPreferenceActivity.class));
                 });
 
+        Button goToDeviceSuggestionsButton = findViewById(R.id.go_to_device_suggestions_button);
+        goToDeviceSuggestionsButton.setOnClickListener(
+                unusedView -> {
+                    startActivity(new Intent(this, DeviceSuggestionsActivity.class));
+                });
+
         RecyclerView routeList = findViewById(R.id.routes_recycler_view);
         routeList.setLayoutManager(new LinearLayoutManager(/* context= */ this));
         mRoutesAdapter = new RoutesAdapter(mRoutesManager.getRouteItems(), routeItemListener);
@@ -157,6 +165,7 @@ public final class SettingsActivity extends AppCompatActivity {
     private void setUpViews() {
         setUpDynamicGroupsEnabledSwitch();
         setUpTransferToLocalSwitch();
+        setUpMediaTransferEnabledSwitch();
         setUpDynamicProviderEnabledSwitch();
         setUpSimpleProviderEnabledSwitch();
         setUpWrapperProviderEnabledSwitch();
@@ -188,6 +197,26 @@ public final class SettingsActivity extends AppCompatActivity {
                             new MediaRouterParams.Builder(mMediaRouter.getRouterParams());
                     builder.setTransferToLocalEnabled(enabled);
                     mMediaRouter.setRouterParams(builder.build());
+                });
+    }
+
+    private void setUpMediaTransferEnabledSwitch() {
+        Switch mediaRouter2ModeSwitch = findViewById(R.id.enable_media_transfer_switch);
+        mediaRouter2ModeSwitch.setChecked(
+                mMediaRouter.getRouterParams().isMediaTransferReceiverEnabled());
+        mediaRouter2ModeSwitch.setOnCheckedChangeListener(
+                (compoundButton, enabled) -> {
+                    mRoutesManager.setIsMediaTransferEnabledAndStore(enabled);
+                    if (!enabled) {
+                        // The user has disabled the MR2 integration, so request the local network
+                        // access. If we already have the permission this does nothing. If we don't
+                        // hold it, it's a convenient way for the user to remember they need it for
+                        // Cast routes to work.
+                        ActivityCompat.requestPermissions(
+                                this,
+                                new String[] {Manifest.permission.ACCESS_LOCAL_NETWORK},
+                                /* requestCode= */ 0);
+                    }
                 });
     }
 

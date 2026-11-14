@@ -21,7 +21,6 @@ import androidx.camera.camera2.impl.Camera2Logger
 import androidx.camera.camera2.impl.CameraInteropStateCallbackRepository
 import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.core.Debug
-import androidx.camera.camera2.pipe.core.DurationNs
 import androidx.camera.camera2.pipe.core.SystemTimeSource
 import androidx.camera.camera2.pipe.core.Timestamps
 import androidx.camera.camera2.pipe.core.Timestamps.formatMs
@@ -33,6 +32,10 @@ import androidx.camera.core.impl.CameraThreadConfig
 import androidx.camera.core.impl.utils.ContextUtil
 import androidx.camera.core.impl.utils.executor.CameraXExecutors
 import androidx.camera.core.internal.StreamSpecsCalculator
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The [CameraFactoryProvider] is responsible for creating the root dagger component that is used to
@@ -41,10 +44,12 @@ import androidx.camera.core.internal.StreamSpecsCalculator
  */
 public class CameraFactoryProvider(
     private val sharedCameraPipe: CameraPipe? = null,
-    private val sharedAppContext: Context? = null,
+    sharedAppContext: Context? = null,
     private val sharedThreadConfig: CameraThreadConfig? = null,
 ) : CameraFactory.Provider {
-    private val sharedInteropCallbacks = CameraInteropStateCallbackRepository()
+    private val sharedAppContext: Context? = sharedAppContext?.let {
+        ContextUtil.getPersistentApplicationContext(it)
+    }
 
     override fun newInstance(
         context: Context,
@@ -57,32 +62,50 @@ public class CameraFactoryProvider(
 
         val openRetryMaxTimeout =
             if (cameraOpenRetryMaxTimeoutInMs == -1L) null
-            else DurationNs(cameraOpenRetryMaxTimeoutInMs)
+            else cameraOpenRetryMaxTimeoutInMs.milliseconds
+
+        val effectiveThreadConfig = sharedThreadConfig ?: threadConfig
+        // Detected here so CameraFactoryAdapter can safely shut down CameraPipe. The user's
+        // executor is still used everywhere, as requested via CameraXConfig.
+        val isDirectExecutor = isDirectExecutor(effectiveThreadConfig.cameraExecutor)
+        val sequentialCameraExecutor =
+            CameraXExecutors.newSequentialExecutor(effectiveThreadConfig.cameraExecutor)
+
+        val appContext = sharedAppContext ?: ContextUtil.getPersistentApplicationContext(context)
+        val interopCallbacks = CameraInteropStateCallbackRepository()
 
         val lazyCameraPipe = lazy {
             if (sharedCameraPipe != null) {
                 Camera2Logger.debug { "Using shared a $sharedCameraPipe instance." }
                 sharedCameraPipe
             } else {
-                createCameraPipe(context, threadConfig, openRetryMaxTimeout)
+                createCameraPipe(
+                    appContext,
+                    sequentialCameraExecutor,
+                    interopCallbacks,
+                    openRetryMaxTimeout,
+                )
             }
         }
 
         return CameraFactoryAdapter(
             lazyCameraPipe,
-            sharedAppContext ?: context,
-            sharedThreadConfig ?: threadConfig,
-            sharedInteropCallbacks,
+            appContext,
+            effectiveThreadConfig,
+            interopCallbacks,
             availableCamerasLimiter,
             streamSpecsCalculator,
             cameraXConfig ?: CameraXConfig.Builder().build(),
+            isDirectExecutor,
+            sequentialCameraExecutor,
         )
     }
 
     private fun createCameraPipe(
         context: Context,
-        threadConfig: CameraThreadConfig,
-        openRetryMaxTimeout: DurationNs?,
+        defaultCameraExecutor: Executor,
+        interopCallbacks: CameraInteropStateCallbackRepository,
+        openRetryMaxTimeout: Duration?,
     ): CameraPipe =
         Debug.trace("Create CameraPipe") {
             val timeSource = SystemTimeSource()
@@ -91,23 +114,21 @@ public class CameraFactoryProvider(
             val cameraPipe =
                 CameraPipe(
                     CameraPipe.Config(
-                        appContext = ContextUtil.getPersistentApplicationContext(context),
+                        appContext = context,
                         threadConfig =
                             CameraPipe.ThreadConfig(
                                 // This executor should be single-threaded or a sequential executor
                                 // to avoid bugs on various API levels (29 ~ 34). See b/446771606
-                                // fore more details.
-                                defaultCameraExecutor =
-                                    CameraXExecutors.newSequentialExecutor(
-                                        threadConfig.cameraExecutor
-                                    )
+                                // for more details.
+                                defaultCameraExecutor = defaultCameraExecutor
                             ),
                         cameraInteropConfig =
                             CameraPipe.CameraInteropConfig(
-                                sharedInteropCallbacks.deviceStateCallback,
-                                sharedInteropCallbacks.sessionStateCallback,
+                                interopCallbacks.deviceStateCallback,
+                                interopCallbacks.sessionStateCallback,
                                 openRetryMaxTimeout,
                             ),
+                        flags = CameraPipe.Flags(),
                     )
                 )
             Camera2Logger.debug {
@@ -115,4 +136,35 @@ public class CameraFactoryProvider(
             }
             cameraPipe
         }
+
+    /**
+     * Returns true if [executor] executes tasks synchronously on the calling thread (for example,
+     * [CameraXExecutors.directExecutor], Guava's `MoreExecutors.directExecutor()`, or a custom
+     * `Executor { it.run() }`).
+     *
+     * Checks both `Thread.currentThread() === callerThread` and `inExecute` so that a warm
+     * multi-threaded background pool cannot race with `execute()` and be misclassified as a direct
+     * executor. A false positive (e.g. a saturated pool using `CallerRunsPolicy`) is harmless: it
+     * only makes [CameraFactoryAdapter] shut down CameraPipe asynchronously.
+     */
+    private fun isDirectExecutor(executor: Executor): Boolean {
+        if (executor === CameraXExecutors.directExecutor()) {
+            return true
+        }
+        val callerThread = Thread.currentThread()
+        val inExecute = AtomicBoolean(true)
+        val ranInline = AtomicBoolean(false)
+        try {
+            executor.execute {
+                if (Thread.currentThread() === callerThread && inExecute.get()) {
+                    ranInline.set(true)
+                }
+            }
+        } catch (_: Exception) {
+            return false
+        } finally {
+            inExecute.set(false)
+        }
+        return ranInline.get()
+    }
 }

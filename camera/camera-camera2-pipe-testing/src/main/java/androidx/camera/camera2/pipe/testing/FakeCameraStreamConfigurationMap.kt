@@ -21,7 +21,7 @@ import android.util.Size
 import android.view.Surface
 import androidx.camera.camera2.pipe.CameraStreamConfigurationMap
 import androidx.camera.camera2.pipe.StreamFormat
-import kotlin.reflect.KClass
+import java.lang.Class
 
 /**
  * A fake implementation of [CameraStreamConfigurationMap] for testing.
@@ -54,8 +54,9 @@ public class FakeCameraStreamConfigurationMap(
     override fun getInputSizes(format: StreamFormat): List<Size> =
         inputTable.filter { it.format == format }.map { it.size }.distinct()
 
-    override fun isOutputSupportedFor(format: StreamFormat): Boolean =
-        outputTable.any { it.format == format }
+    override fun isOutputSupportedFor(format: StreamFormat): Boolean = outputTable.any {
+        it.format == format
+    }
 
     override fun <T> isOutputSupportedFor(klass: Class<T>): Boolean =
         outputClassTypes.contains(klass)
@@ -105,12 +106,11 @@ public class FakeCameraStreamConfigurationMap(
     }
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? {
-        return when (type) {
-            FakeCameraStreamConfigurationMap::class -> this as T
+    override fun <T : Any> unwrapAs(type: Class<T>): T? =
+        when (type) {
+            FakeCameraStreamConfigurationMap::class.java -> this as T
             else -> null
         }
-    }
 
     /**
      * Defines a single entry in the [FakeCameraStreamConfigurationMap] table for testing purposes.

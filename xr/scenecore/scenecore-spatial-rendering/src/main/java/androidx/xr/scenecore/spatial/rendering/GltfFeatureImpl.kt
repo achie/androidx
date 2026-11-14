@@ -16,31 +16,28 @@
 
 package androidx.xr.scenecore.spatial.rendering
 
-import android.util.Log
 import androidx.annotation.MainThread
-import androidx.annotation.RestrictTo
 import androidx.xr.runtime.math.BoundingBox
 import androidx.xr.runtime.math.FloatSize3d
-import androidx.xr.scenecore.impl.impress.GltfModel
-import androidx.xr.scenecore.impl.impress.ImpressApi
-import androidx.xr.scenecore.impl.impress.ImpressNode
-import androidx.xr.scenecore.impl.impress.Material
+import androidx.xr.scenecore.runtime.GeometryAffordanceState
+import androidx.xr.scenecore.runtime.GltfAnimationFeature
 import androidx.xr.scenecore.runtime.GltfEntity
 import androidx.xr.scenecore.runtime.GltfFeature
-import androidx.xr.scenecore.runtime.MaterialResource
+import androidx.xr.scenecore.runtime.GltfModelNodeFeature
+import androidx.xr.scenecore.runtime.ReformAffordanceFlag
+import androidx.xr.scenecore.spatial.core.AndroidXrEntity
+import androidx.xr.scenecore.spatial.rendering.impress.GltfModel
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressApi
+import androidx.xr.scenecore.spatial.rendering.impress.ImpressNode
 import com.android.extensions.xr.XrExtensions
 import com.google.androidxr.splitengine.SplitEngineSubspaceManager
+import com.google.ar.imp.view.splitengine.ImpSplitEngineRenderer
 import java.util.Collections
-import java.util.HashMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executor
 import java.util.function.Consumer
-import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.asExecutor
 
 /**
  * Implementation of a SceneCore GltfEntity.
@@ -53,120 +50,63 @@ internal class GltfFeatureImpl(
     impressApi: ImpressApi,
     splitEngineSubspaceManager: SplitEngineSubspaceManager,
     extensions: XrExtensions,
+    private val renderer: ImpSplitEngineRenderer,
 ) : BaseRenderingFeature(impressApi, splitEngineSubspaceManager, extensions), GltfFeature {
 
     private val modelImpressNode: ImpressNode = impressApi.instanceGltfModel(gltfModel.nativeHandle)
-    private var currentAnimationJob: Job? = null
 
-    private val meshOverrides = mutableMapOf<String, Int>()
+    private var animationFeatureList: List<GltfAnimationFeature>? = null
+
+    @MainThread
+    override fun getAnimations(executor: Executor): List<GltfAnimationFeature> {
+        if (animationFeatureList == null) {
+            val list = mutableListOf<GltfAnimationFeature>()
+            for (i in 0 until impressApi.getGltfModelAnimationCount(modelImpressNode)) {
+                list.add(
+                    GltfAnimationFeatureImpl(
+                        impressApi = impressApi,
+                        modelImpressNode = modelImpressNode,
+                        index = i,
+                        name = impressApi.getGltfModelAnimationName(modelImpressNode, i),
+                        duration =
+                            impressApi.getGltfModelAnimationDurationSeconds(modelImpressNode, i),
+                        executor = executor,
+                    )
+                )
+            }
+            animationFeatureList = Collections.unmodifiableList(list)
+        }
+        return animationFeatureList!!
+    }
 
     private val animationStateListeners: MutableMap<Consumer<Int>, Executor> =
         Collections.synchronizedMap(mutableMapOf())
+
+    private val boundsUpdateListeners: MutableSet<Consumer<BoundingBox>> = CopyOnWriteArraySet()
+    private var lastBoundingBox: BoundingBox? = null
+
+    private var reformAffordanceMask: Int = 0
 
     init {
         bindImpressNodeToSubspace("gltf_entity_subspace_", modelImpressNode)
     }
 
-    override val size: FloatSize3d = getGltfModelBoundingBox().halfExtents.times(2f)
-
-    @get:GltfEntity.AnimationStateValue
-    override var animationState: Int = GltfEntity.AnimationState.STOPPED
-        private set(value) {
-            if (field != value) {
-                field = value
-                synchronized(animationStateListeners) {
-                    animationStateListeners.forEach { (listener, executor) ->
-                        executor.execute { listener.accept(value) }
-                    }
-                }
-            }
+    override val nodes: List<GltfModelNodeFeature> by lazy {
+        val count = impressApi.getImpressNodeChildCount(modelImpressNode)
+        val nodeList = ArrayList<GltfModelNodeFeature>(count)
+        for (i in 0 until count) {
+            val childNode = impressApi.getImpressNodeChildAt(modelImpressNode, i)
+            val name = impressApi.getImpressNodeName(childNode)
+            nodeList.add(GltfModelNodeFeatureImpl(impressApi, childNode, modelImpressNode, name))
         }
+        nodeList.toList()
+    }
+
+    override val size: FloatSize3d = getGltfModelBoundingBox().halfExtents.times(2f)
 
     @MainThread
     override fun getGltfModelBoundingBox(): BoundingBox =
         impressApi.getGltfModelBoundingBox(modelImpressNode)
-
-    @MainThread
-    override fun startAnimation(loop: Boolean, animationName: String?, executor: Executor) {
-        // TODO: b/362826747 - Add a listener interface so that the application can be
-        // notified that the animation has stopped, been cancelled (by starting another animation)
-        // and / or shown an error state if something went wrong.
-
-        currentAnimationJob?.cancel()
-        val coroutineDispatcher = executor.asCoroutineDispatcher()
-        animationState = GltfEntity.AnimationState.PLAYING
-        CoroutineScope(coroutineDispatcher).launch {
-            try {
-                // The @MainThread annotation is a "Lint" check. As soon as you call launch, you are
-                // creating a new asynchronous task. The Dispatcher you pass to launch decides where
-                // that task runs. If you try to access that context from a background thread
-                // (which is where executor put you), the native code looks for the context, doesn't
-                // find it (or finds a mismatch), and fails or crashes
-                withContext(Dispatchers.Main) {
-                    impressApi.animateGltfModelTemp(modelImpressNode, animationName, loop)
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                // Some other error happened.  Log it and stop the animation.
-                Log.e("GltfFeatureImpl", "Could not start animation: $e")
-            } finally {
-                if (currentAnimationJob === coroutineContext[Job]) {
-                    animationState = GltfEntity.AnimationState.STOPPED
-                }
-            }
-        }
-    }
-
-    @MainThread
-    override fun stopAnimation() {
-        if (
-            animationState == GltfEntity.AnimationState.PLAYING ||
-                animationState == GltfEntity.AnimationState.PAUSED
-        ) {
-            impressApi.stopGltfModelAnimation(modelImpressNode)
-            animationState = GltfEntity.AnimationState.STOPPED
-        }
-    }
-
-    @MainThread
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
-    override fun pauseAnimation() {
-        if (animationState == GltfEntity.AnimationState.PLAYING) {
-            impressApi.toggleGltfModelAnimation(modelImpressNode, /* playing= */ false)
-            animationState = GltfEntity.AnimationState.PAUSED
-        }
-    }
-
-    @MainThread
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
-    override fun resumeAnimation() {
-        if (animationState == GltfEntity.AnimationState.PAUSED) {
-            impressApi.toggleGltfModelAnimation(modelImpressNode, /* playing= */ true)
-            animationState = GltfEntity.AnimationState.PLAYING
-        }
-    }
-
-    @MainThread
-    override fun setMaterialOverride(
-        material: MaterialResource,
-        nodeName: String,
-        primitiveIndex: Int,
-    ) {
-        require(material is Material) { "MaterialResource is not a Material" }
-        impressApi.setMaterialOverride(
-            modelImpressNode,
-            (material as Material).nativeHandle,
-            nodeName,
-            primitiveIndex,
-        )
-        meshOverrides[nodeName] = primitiveIndex
-    }
-
-    @MainThread
-    override fun clearMaterialOverride(nodeName: String, primitiveIndex: Int) {
-        impressApi.clearMaterialOverride(modelImpressNode, nodeName, primitiveIndex)
-        meshOverrides.remove(nodeName, primitiveIndex)
-    }
 
     @MainThread
     override fun setColliderEnabled(enableCollider: Boolean) {
@@ -175,22 +115,84 @@ internal class GltfFeatureImpl(
 
     @SuppressWarnings("ObjectToString")
     override fun dispose() {
-        for ((key, value) in HashMap(meshOverrides)) {
-            impressApi.clearMaterialOverride(modelImpressNode, key, value)
-        }
-        meshOverrides.clear()
+        nodes.forEach { it.clearMaterialOverrides() }
+        renderer.frameListener = null
+        boundsUpdateListeners.clear()
         super.dispose()
     }
 
     @MainThread
-    override fun addAnimationStateListener(executor: Executor, listener: Consumer<Int>): Unit {
+    override fun addAnimationStateListener(executor: Executor, listener: Consumer<Int>) {
         // Assigning the result to _ (or ignoring it) ensures the compiler sees Unit as the return.
-        val unused = animationStateListeners.putIfAbsent(listener, executor)
+        animationStateListeners.putIfAbsent(listener, executor)
     }
 
     @MainThread
-    override fun removeAnimationStateListener(listener: Consumer<Int>): Unit {
+    override fun removeAnimationStateListener(listener: Consumer<Int>) {
         // Assigning the result to _ (or ignoring it) ensures the compiler sees Unit as the return.
-        val unused = animationStateListeners.remove(listener)
+        animationStateListeners.remove(listener)
+    }
+
+    @MainThread
+    override fun addOnBoundsUpdateListener(listener: Consumer<BoundingBox>) {
+        if (boundsUpdateListeners.isEmpty()) {
+            val frameListener = ImpSplitEngineRenderer.FrameListener {
+                // Check if any animation is currently playing
+                val isAnimationPlaying =
+                    animationFeatureList?.any {
+                        it.animationState == GltfEntity.AnimationState.PLAYING
+                    } == true
+
+                if (isAnimationPlaying) {
+                    val boundingBox = getGltfModelBoundingBox()
+                    if (boundingBox != lastBoundingBox) {
+                        lastBoundingBox = boundingBox
+                        boundsUpdateListeners.forEach { it.accept(boundingBox) }
+                    }
+                }
+            }
+            renderer.frameListener = frameListener
+        }
+
+        boundsUpdateListeners.add(listener)
+    }
+
+    @MainThread
+    override fun removeOnBoundsUpdateListener(listener: Consumer<BoundingBox>) {
+        boundsUpdateListeners.remove(listener)
+
+        if (boundsUpdateListeners.isEmpty()) {
+            renderer.frameListener = null
+        }
+    }
+
+    @MainThread
+    override fun setReformAffordanceEnabled(
+        entity: GltfEntity,
+        enabled: Boolean,
+        reformFlag: ReformAffordanceFlag,
+    ) {
+        val wasAnyEnabled = ReformAffordanceFlag.anySet(reformAffordanceMask)
+        reformAffordanceMask = reformFlag.setEnabled(reformAffordanceMask, enabled)
+        val isAnyEnabled = ReformAffordanceFlag.anySet(reformAffordanceMask)
+        impressApi.setReformAffordanceEnabled(modelImpressNode, reformAffordanceMask)
+        if (isAnyEnabled && !wasAnyEnabled) {
+            subspace?.let { splitEngineSubspace ->
+                splitEngineSubspace.subspaceNode?.listenForInput(Dispatchers.Main.asExecutor()) {
+                    inputEvent ->
+                    splitEngineSubspaceManager.forwardInputEvent(
+                        inputEvent,
+                        splitEngineSubspace.subspaceId,
+                    )
+                    val state = impressApi.getReformAffordanceState(modelImpressNode)
+                    entity.affordanceState = GeometryAffordanceState.fromInt(state)
+                    val transform = impressApi.getRecommendedAffordanceTransform(modelImpressNode)
+                    entity.recommendedAffordanceScale = transform.scale
+                    (entity as AndroidXrEntity).handleInputEvent(inputEvent)
+                }
+            }
+        } else if (!isAnyEnabled && wasAnyEnabled) {
+            subspace?.subspaceNode?.stopListeningForInput()
+        }
     }
 }

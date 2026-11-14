@@ -16,13 +16,20 @@
 
 package androidx.wear.compose.material3
 
+import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
+import android.view.View
+import androidx.activity.BackEventCompat
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -35,8 +42,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.testutils.assertContainsColor
+import androidx.compose.testutils.assertPixelColor
 import androidx.compose.testutils.assertShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,9 +57,12 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -62,11 +74,14 @@ import androidx.compose.ui.test.assertTouchHeightIsEqualTo
 import androidx.compose.ui.test.assertTouchWidthIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
@@ -80,6 +95,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.math.abs
+import kotlin.math.min
+import kotlin.math.sqrt
 import org.junit.Assert
 import org.junit.rules.TestName
 
@@ -105,16 +122,18 @@ enum class ScreenShape(val isRound: Boolean) {
  * configurations within your UI tests. This is useful for testing how your composables behave on
  * different screen sizes and form factors (e.g. round or square screens).
  *
- * @param screenSizeDp The desired screen size in dp. The composable will be placed into a square
- *   box with this side length.
+ * @param desiredScreenSizeDp The desired screen size in dp. The composable will be placed into a
+ *   square box with this side length. The final screen size is limited to the actual size of the
+ *   test device.
  * @param isRound An optional boolean value to specify if the simulated screen should be round. If
  *   `true`, the screen is considered round. If `false`, it is considered rectangular. If `null`,
  *   the original device's roundness setting is used.
  * @param content The composable content to be tested within the modified screen configuration.
  */
+@SuppressLint("LocalContextConfigurationRead")
 @Composable
 fun ScreenConfiguration(
-    screenSizeDp: Int,
+    desiredScreenSizeDp: Int,
     isRound: Boolean? = null,
     content: @Composable () -> Unit,
 ) {
@@ -124,8 +143,8 @@ fun ScreenConfiguration(
     val fixedScreenSizeConfiguration =
         remember(originalConfiguration) {
             Configuration(originalConfiguration).apply {
-                screenWidthDp = screenSizeDp
-                screenHeightDp = screenSizeDp
+                screenWidthDp = min(desiredScreenSizeDp, originalConfiguration.screenWidthDp)
+                screenHeightDp = min(desiredScreenSizeDp, originalConfiguration.screenHeightDp)
                 if (isRound != null) {
                     screenLayout =
                         if (isRound) Configuration.SCREENLAYOUT_ROUND_YES
@@ -133,7 +152,11 @@ fun ScreenConfiguration(
                 }
             }
         }
+
     originalContext.resources.configuration.updateFrom(fixedScreenSizeConfiguration)
+    DisposableEffect(Unit) {
+        onDispose { originalContext.resources.configuration.updateFrom(originalConfiguration) }
+    }
 
     CompositionLocalProvider(
         LocalContext provides originalContext,
@@ -141,7 +164,8 @@ fun ScreenConfiguration(
     ) {
         Box(
             modifier =
-                Modifier.size(screenSizeDp.dp).background(MaterialTheme.colorScheme.background)
+                Modifier.size(desiredScreenSizeDp.dp)
+                    .background(MaterialTheme.colorScheme.background)
         ) {
             content()
         }
@@ -221,6 +245,30 @@ fun ComposeContentTestRule.setContentWithTheme(
     setContent { MaterialTheme { Box(modifier = modifier, content = composable) } }
 }
 
+internal fun ComposeContentTestRule.dialogOnBackPressedDispatcher(
+    tag: String = TEST_TAG
+): OnBackPressedDispatcher {
+    val view = onNodeWithTag(tag).fetchSemanticsNode().root as View
+    return view.findViewTreeOnBackPressedDispatcherOwner()!!.onBackPressedDispatcher
+}
+
+internal fun ComposeContentTestRule.swipeToDismiss(tag: String = TEST_TAG) {
+    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        val dispatcher = dialogOnBackPressedDispatcher(tag)
+        runOnIdle {
+            dispatcher.dispatchOnBackStarted(
+                BackEventCompat(0.1f, 0.1f, 0.1f, BackEventCompat.EDGE_LEFT)
+            )
+            dispatcher.dispatchOnBackProgressed(
+                BackEventCompat(0.1f, 0.1f, 0.8f, BackEventCompat.EDGE_LEFT)
+            )
+            dispatcher.onBackPressed()
+        }
+    } else {
+        onNodeWithTag(tag).performTouchInput { swipeRight() }
+    }
+}
+
 internal fun ComposeContentTestRule.verifyTapSize(
     expectedSize: Dp,
     content: @Composable (modifier: Modifier) -> Unit,
@@ -276,6 +324,218 @@ internal fun ComposeContentTestRule.verifyColors(
     Assert.assertEquals(finalExpectedContent, actualContentColor)
     onNodeWithTag(TEST_TAG).captureToImage().assertContainsColor(finalExpectedContainerColor)
 }
+
+@RequiresApi(Build.VERSION_CODES.O)
+internal fun ComposeContentTestRule.verifyFocusRingDrawnAfterFocusInteraction(
+    content: @Composable (modifier: Modifier, interactionSource: MutableInteractionSource) -> Unit
+) {
+    val interactionSource = MutableInteractionSource()
+    setContentWithFocusRing { content(Modifier.testTag(TEST_TAG), interactionSource) }
+
+    runOnIdle { interactionSource.tryEmit(FocusInteraction.Focus()) }
+
+    assertFocusRingDrawn(onNodeWithTag(TEST_TAG))
+}
+
+@RequiresApi(Build.VERSION_CODES.O)
+internal fun ComposeContentTestRule.verifyFocusRingDrawnAfterRequestFocus(
+    focusTarget: SemanticsMatcher,
+    content: @Composable (modifier: Modifier) -> Unit,
+) {
+    lateinit var inputModeManager: InputModeManager
+    setContentWithFocusRing {
+        inputModeManager = LocalInputModeManager.current
+        content(Modifier.testTag(TEST_TAG))
+    }
+
+    runOnIdle { inputModeManager.requestInputMode(InputMode.Keyboard) }
+    val nodes = onAllNodes(focusTarget)
+    val count = nodes.fetchSemanticsNodes().size
+    for (i in 0 until count) {
+        nodes[i].requestFocus()
+        assertFocusRingDrawn(onNode(isFocused()))
+    }
+}
+
+private fun ComposeContentTestRule.setContentWithFocusRing(content: @Composable () -> Unit) {
+    setContentWithTheme {
+        CompositionLocalProvider(
+            LocalRippleThemeConfiguration provides RippleDefaults.InsetFocusRingThemeConfiguration,
+            LocalRippleConfiguration provides
+                RippleConfiguration(
+                    focus =
+                        RippleConfiguration.Focus.InsetRing(
+                            outerStrokeColor = FocusRingOuterTestColor,
+                            innerStrokeColor = FocusRingInnerTestColor,
+                        )
+                ),
+            content = content,
+        )
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.O)
+private fun ComposeContentTestRule.assertFocusRingDrawn(node: SemanticsNodeInteraction) {
+    val pixelMap = node.captureToImage().toPixelMap()
+    val outerStrokeOffsetPx = with(density) { FocusRingOuterStrokeSampleOffset.roundToPx() }
+    val innerStrokeOffsetPx = with(density) { FocusRingInnerStrokeSampleOffset.roundToPx() }
+    val centerX = pixelMap.width / 2
+    val centerY = pixelMap.height / 2
+
+    fun Color.isCloseTo(expected: Color): Boolean =
+        abs(red - expected.red) < 0.02f &&
+            abs(green - expected.green) < 0.02f &&
+            abs(blue - expected.blue) < 0.02f &&
+            abs(alpha - expected.alpha) < 0.02f
+
+    // Find the outer edge on each side (left, right, top, bottom) along the center lines by
+    // walking inward from the bitmap boundary until the first solid FocusRingOuterTestColor pixel
+    // (skipping any anti-aliased outer fringe pixels on curved or sloped edges) and stepping back
+    // 1px when the preceding pixel is an anti-aliased fringe pixel so that outerStrokeOffsetPx and
+    // innerStrokeOffsetPx are measured from the outer boundary rather than inside the stroke.
+    fun findOuterBoundary(indices: IntProgression, pixelAt: (Int) -> Color): Int {
+        val outsideColor = pixelAt(indices.first)
+        val firstSolid = indices.first { pixelAt(it).isCloseTo(FocusRingOuterTestColor) }
+        val prev = firstSolid - indices.step
+        return if (firstSolid != indices.first && !pixelAt(prev).isCloseTo(outsideColor)) {
+            prev
+        } else {
+            firstSolid
+        }
+    }
+    val leftEdgePx = findOuterBoundary(0..centerX) { pixelMap[it, centerY] }
+    val rightEdgePx = findOuterBoundary(pixelMap.width - 1 downTo centerX) { pixelMap[it, centerY] }
+    val topEdgePx = findOuterBoundary(0..centerY) { pixelMap[centerX, it] }
+    val bottomEdgePx =
+        findOuterBoundary(pixelMap.height - 1 downTo centerY) { pixelMap[centerX, it] }
+
+    // For each edge (left, right, top, bottom), take a middle point and make sure that both the
+    // outer stroke and inner stroke have their expected focus ring colors.
+    pixelMap.assertPixelColor(FocusRingOuterTestColor, leftEdgePx + outerStrokeOffsetPx, centerY)
+    pixelMap.assertPixelColor(FocusRingOuterTestColor, rightEdgePx - outerStrokeOffsetPx, centerY)
+    pixelMap.assertPixelColor(FocusRingOuterTestColor, centerX, topEdgePx + outerStrokeOffsetPx)
+    pixelMap.assertPixelColor(FocusRingOuterTestColor, centerX, bottomEdgePx - outerStrokeOffsetPx)
+    pixelMap.assertPixelColor(FocusRingInnerTestColor, leftEdgePx + innerStrokeOffsetPx, centerY)
+    pixelMap.assertPixelColor(FocusRingInnerTestColor, rightEdgePx - innerStrokeOffsetPx, centerY)
+    pixelMap.assertPixelColor(FocusRingInnerTestColor, centerX, topEdgePx + innerStrokeOffsetPx)
+    pixelMap.assertPixelColor(FocusRingInnerTestColor, centerX, bottomEdgePx - innerStrokeOffsetPx)
+
+    // Find the component's tight visual bounding box [minX..maxX, topEdgePx..bottomEdgePx]
+    // (for tapered shapes like EdgeButton, the widest X near the top is wider than leftEdgePx at
+    // centerY). For rounded or curved components (including EdgeButton which hugs the curvature of
+    // the screen), the 4 corners of this bounding box lie outside the component: walk inward from
+    // each of the 4 bounding-box corners along the 45° diagonal until the first solid
+    // FocusRingOuterTestColor pixel and step back 1px to the outer boundary (or 0 for sharp 0.dp
+    // corners such as RectangleShape, where the corner pixel itself is already the outer stroke
+    // color).
+    // Sampling both the outer stroke and the inner stroke along the corner diagonal verifies two
+    // things:
+    // 1. The component's container color does not spill outside the focus ring at the corner
+    //    (which would happen if the focus ring's corner radius were larger than the component's).
+    // 2. Both the outer and inner focus ring strokes follow the component's corner curvature and
+    //    are drawn to their full thickness around the corner rather than being clipped thin or cut
+    //    off.
+    fun findHorizontalBound(indices: IntProgression): Int {
+        val firstSolidX = indices.first { x ->
+            (topEdgePx..bottomEdgePx).any { y ->
+                pixelMap[x, y].isCloseTo(FocusRingOuterTestColor)
+            }
+        }
+        val prevX = firstSolidX - indices.step
+        val hasAntiAliasedFringe =
+            firstSolidX != indices.first &&
+                (topEdgePx..bottomEdgePx).any { y ->
+                    pixelMap[firstSolidX, y].isCloseTo(FocusRingOuterTestColor) &&
+                        !pixelMap[prevX, y].isCloseTo(pixelMap[indices.first, y])
+                }
+        return if (hasAntiAliasedFringe) prevX else firstSolidX
+    }
+    val minX = findHorizontalBound(0..centerX)
+    val maxX = findHorizontalBound(pixelMap.width - 1 downTo centerX)
+    val diagonalLimit =
+        minOf(centerX - minX, maxX - centerX, centerY - topEdgePx, bottomEdgePx - centerY)
+    fun findCornerStartOffset(startX: Int, startY: Int, stepX: Int, stepY: Int): Int {
+        fun pixelAt(step: Int) = pixelMap[startX + step * stepX, startY + step * stepY]
+        val firstSolid = (0..diagonalLimit).first { pixelAt(it).isCloseTo(FocusRingOuterTestColor) }
+        if (firstSolid == 0) {
+            return 0
+        }
+        val outsideColor = pixelAt(0)
+        val firstNonOutside = (0..firstSolid).first { !pixelAt(it).isCloseTo(outsideColor) }
+        Assert.assertTrue(
+            "Unexpected non-background pixels before focus ring along corner diagonal from " +
+                "($startX, $startY): firstNonOutside=$firstNonOutside, firstOuterRing=$firstSolid",
+            firstSolid - firstNonOutside <= 3,
+        )
+        return firstSolid - 1
+    }
+    val topLeftCornerStartPx = findCornerStartOffset(minX, topEdgePx, 1, 1)
+    val bottomLeftCornerStartPx = findCornerStartOffset(minX, bottomEdgePx, 1, -1)
+    val topRightCornerStartPx = findCornerStartOffset(maxX, topEdgePx, -1, 1)
+    val bottomRightCornerStartPx = findCornerStartOffset(maxX, bottomEdgePx, -1, -1)
+    // Project the radial stroke sample offsets onto the 45° diagonal (dx = dy = r / sqrt(2)).
+    val cornerOuterOffsetPx =
+        with(density) { (FocusRingOuterStrokeSampleOffset / sqrt(2f)).roundToPx() }
+    val cornerInnerOffsetPx =
+        with(density) { (FocusRingInnerStrokeSampleOffset / sqrt(2f)).roundToPx() }
+    val topLeftOuterOffset = topLeftCornerStartPx + cornerOuterOffsetPx
+    val topLeftInnerOffset = topLeftCornerStartPx + cornerInnerOffsetPx
+    val bottomLeftOuterOffset = bottomLeftCornerStartPx + cornerOuterOffsetPx
+    val bottomLeftInnerOffset = bottomLeftCornerStartPx + cornerInnerOffsetPx
+    val topRightOuterOffset = topRightCornerStartPx + cornerOuterOffsetPx
+    val topRightInnerOffset = topRightCornerStartPx + cornerInnerOffsetPx
+    val bottomRightOuterOffset = bottomRightCornerStartPx + cornerOuterOffsetPx
+    val bottomRightInnerOffset = bottomRightCornerStartPx + cornerInnerOffsetPx
+    pixelMap.assertPixelColor(
+        FocusRingOuterTestColor,
+        minX + topLeftOuterOffset,
+        topEdgePx + topLeftOuterOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingOuterTestColor,
+        minX + bottomLeftOuterOffset,
+        bottomEdgePx - bottomLeftOuterOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingOuterTestColor,
+        maxX - topRightOuterOffset,
+        topEdgePx + topRightOuterOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingOuterTestColor,
+        maxX - bottomRightOuterOffset,
+        bottomEdgePx - bottomRightOuterOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingInnerTestColor,
+        minX + topLeftInnerOffset,
+        topEdgePx + topLeftInnerOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingInnerTestColor,
+        minX + bottomLeftInnerOffset,
+        bottomEdgePx - bottomLeftInnerOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingInnerTestColor,
+        maxX - topRightInnerOffset,
+        topEdgePx + topRightInnerOffset,
+    )
+    pixelMap.assertPixelColor(
+        FocusRingInnerTestColor,
+        maxX - bottomRightInnerOffset,
+        bottomEdgePx - bottomRightInnerOffset,
+    )
+}
+
+private val FocusRingOuterTestColor = Color.Magenta
+private val FocusRingInnerTestColor = Color.Green
+private val DefaultInsetRing =
+    RippleDefaults.InsetFocusRingThemeConfiguration.focus
+        as RippleThemeConfiguration.Focus.InsetRing
+private val FocusRingOuterStrokeSampleOffset = DefaultInsetRing.outerStrokeWidth / 2
+private val FocusRingInnerStrokeSampleOffset =
+    (DefaultInsetRing.outerStrokeWidth + DefaultInsetRing.innerStrokeWidth) / 2
 
 /** Checks that [expectedColor] is in the percentage [range] of an [ImageBitmap] color histogram */
 fun ImageBitmap.assertColorInPercentageRange(

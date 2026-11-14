@@ -18,13 +18,12 @@ package androidx.core.telecom.extensions
 
 import android.content.Context
 import android.media.AudioManager
+import android.os.RemoteException
 import android.util.Log
 import androidx.core.telecom.internal.CallStateEvent
 import androidx.core.telecom.internal.CapabilityExchangeRepository
 import androidx.core.telecom.internal.LocalCallSilenceCallbackRepository
 import androidx.core.telecom.internal.LocalCallSilenceStateListenerRemote
-import androidx.core.telecom.util.ExperimentalAppActions
-import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,40 +31,17 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalAppActions::class)
 internal class LocalCallSilenceExtensionImpl(
     context: Context,
-    coroutineContext: CoroutineContext,
     private val callStateFlow: MutableSharedFlow<CallStateEvent>,
     private val initialSilenceState: Boolean,
+    private val initialCanUserUpdateSilenceState: Boolean,
     private val onLocalSilenceUpdate: suspend (Boolean) -> Unit,
 ) : LocalCallSilenceExtension {
     private val mAudioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var mIsGloballyMuted: Boolean = false
     private var mCallState: CallStateEvent = CallStateEvent.NEW
     private val TAG = LocalCallSilenceExtensionImpl::class.java.simpleName
-
-    init {
-        var shouldRemute = false
-        CoroutineScope(coroutineContext).launch {
-            callStateFlow.collect {
-                maybeUpdateCallControlState(state = it)
-                maybeUpdateGlobalMuteState(state = it)
-                if (isFocus() && isGloballyMuted()) {
-                    Log.i(TAG, "UNMUTING the mic globally in favor of a local call silence")
-                    mAudioManager.setMicrophoneMute(false)
-                    shouldRemute = true
-                } else if (isInactive() && shouldRemute) {
-                    Log.i(
-                        TAG,
-                        "MUTING the mic globally to put the device back in its original state",
-                    )
-                    mAudioManager.setMicrophoneMute(true)
-                    shouldRemute = false
-                }
-            }
-        }
-    }
 
     private fun isFocus(): Boolean {
         return mCallState.isFocusState()
@@ -92,12 +68,14 @@ internal class LocalCallSilenceExtensionImpl(
     }
 
     companion object {
-        internal const val VERSION = 1
+        internal const val VERSION = 2
+        internal const val AUTHORITATIVE_MUTE_MIN_VERSION = 2
         val TAG: String = LocalCallSilenceExtensionImpl::class.java.simpleName
     }
 
     internal val isLocallySilenced: MutableStateFlow<Boolean> =
         MutableStateFlow(initialSilenceState)
+    private val canUserUpdateSilenceState = MutableStateFlow(initialCanUserUpdateSilenceState)
 
     /**
      * This method is called by the VoIP application whenever the VoIP application wants to update
@@ -106,6 +84,11 @@ internal class LocalCallSilenceExtensionImpl(
     override suspend fun updateIsLocallySilenced(isSilenced: Boolean) {
         Log.i(TAG, "updateIsLocallySilenced: isSilenced=[$isSilenced]")
         isLocallySilenced.emit(isSilenced)
+    }
+
+    override suspend fun updateCanUserUpdateSilence(canUserUpdateSilence: Boolean) {
+        Log.i(TAG, "updateCanUserUpdateSilence: canUserUpdateSilence=[$canUserUpdateSilence]")
+        canUserUpdateSilenceState.emit(canUserUpdateSilence)
     }
 
     internal fun onExchangeStarted(callbacks: CapabilityExchangeRepository): Capability {
@@ -119,10 +102,12 @@ internal class LocalCallSilenceExtensionImpl(
 
     private fun onCreateLocalSilenceExtension(
         coroutineScope: CoroutineScope,
+        version: Int,
         remoteActions: Set<Int>,
         binder: LocalCallSilenceStateListenerRemote,
     ) {
-        Log.d(TAG, "onCreateLocalSilenceExtension: actions=$remoteActions")
+        Log.d(TAG, "onCreateLocalSilenceExtension: version=[$version], actions=$remoteActions")
+        startGlobalMuteMonitoring(coroutineScope)
         // Setup listeners for changes to state
         isLocallySilenced
             .onEach {
@@ -131,10 +116,58 @@ internal class LocalCallSilenceExtensionImpl(
                 binder.updateIsLocallySilenced(it)
             }
             .launchIn(coroutineScope)
+        canUserUpdateSilenceState
+            .onEach { canUserUpdateSilenceState ->
+                try {
+                    Log.w(
+                        TAG,
+                        "onCreateLocalSilenceExtension: sending" +
+                            " canUserUpdateSilenceState=[$canUserUpdateSilenceState]",
+                    )
+                    if (version >= AUTHORITATIVE_MUTE_MIN_VERSION) {
+                        binder.updateCanUserUpdateSilence(canUserUpdateSilenceState)
+                    }
+                } catch (e: RemoteException) {
+                    // Remote (ICS) is likely on an older version, swallow exception
+                    Log.w(
+                        TAG,
+                        "onCreateLocalSilenceExtension: Failed to update " +
+                            "canUserUpdateSilenceState",
+                        e,
+                    )
+                }
+            }
+            .launchIn(coroutineScope)
         // hook up the callbacks so the remote ICS can update this impl
         val callbackRepository = LocalCallSilenceCallbackRepository(coroutineScope)
         callbackRepository.localCallSilenceCallback = ::localCallSilenceStateChanged
         binder.finishSync(callbackRepository.eventListener)
+    }
+
+    /**
+     * Helper function containing the logic previously found in the init block. Triggered only when
+     * the capability exchange happens.
+     */
+    private fun startGlobalMuteMonitoring(coroutineScope: CoroutineScope) {
+        var shouldRemute = false
+        coroutineScope.launch {
+            callStateFlow.collect {
+                maybeUpdateCallControlState(state = it)
+                maybeUpdateGlobalMuteState(state = it)
+                if (isFocus() && isGloballyMuted()) {
+                    Log.i(TAG, "UNMUTING the mic globally in favor of a local call silence")
+                    mAudioManager.isMicrophoneMute = false
+                    shouldRemute = true
+                } else if (isInactive() && shouldRemute) {
+                    Log.i(
+                        TAG,
+                        "MUTING the mic globally to put the device back in its original state",
+                    )
+                    mAudioManager.isMicrophoneMute = true
+                    shouldRemute = false
+                }
+            }
+        }
     }
 
     /**
@@ -145,8 +178,5 @@ internal class LocalCallSilenceExtensionImpl(
         Log.i(TAG, "localCallSilenceStateChanged: isSilenced=[$isSilenced]")
         // notify the voip application of the remote InCallService update
         onLocalSilenceUpdate(isSilenced)
-        // update all remote surfaces to be in sync with the new state
-        // and the isLocallySilenced state
-        updateIsLocallySilenced(isSilenced)
     }
 }

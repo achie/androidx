@@ -25,6 +25,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.ScrollingLayoutElement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.Orientation.Horizontal
 import androidx.compose.foundation.gestures.Orientation.Vertical
@@ -39,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -59,7 +61,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertPositionInRootIsEqualTo
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -73,7 +75,6 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -83,7 +84,7 @@ import org.junit.runners.Parameterized
 @RunWith(Parameterized::class)
 class BringIntoViewScrollableInteractionTest(private val orientation: Orientation) {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val parentBox = "parent box"
     private val childBox = "child box"
@@ -1086,7 +1087,6 @@ class BringIntoViewScrollableInteractionTest(private val orientation: Orientatio
         val customBringIntoViewSpec =
             object : BringIntoViewSpec {
                 @Deprecated("override")
-                @Suppress("OVERRIDE_DEPRECATION") // b/446706247
                 override val scrollAnimationSpec: AnimationSpec<Float>
                     get() = animationSpec
 
@@ -1184,7 +1184,6 @@ class BringIntoViewScrollableInteractionTest(private val orientation: Orientatio
                 var index = 0
 
                 @Deprecated("override")
-                @Suppress("OVERRIDE_DEPRECATION") // b/446706247
                 override val scrollAnimationSpec: AnimationSpec<Float>
                     get() = inspectSpringAnimationSpec
 
@@ -1225,6 +1224,55 @@ class BringIntoViewScrollableInteractionTest(private val orientation: Orientatio
         rule.waitForIdle()
 
         assertThat(inspectSpringAnimationSpec.invokeCount).isEqualTo(1)
+    }
+
+    @Test
+    fun nestedRequestsWithSubPixelTarget_complete() {
+        // Puts the leading edge at 30% of the container, like the TV pivot spec. 101 * 0.3 = 30.3,
+        // so whole-pixel scrolling can only get within 0.3px of the target.
+        val pivotBringIntoViewSpec =
+            object : BringIntoViewSpec {
+                override fun calculateScrollDistance(
+                    offset: Float,
+                    size: Float,
+                    containerSize: Float,
+                ): Float = offset - containerSize * 0.3f
+            }
+        val scrollState = ScrollState(0)
+        val requester = BringIntoViewRequester()
+        setContentAndInitialize {
+            CompositionLocalProvider(LocalBringIntoViewSpec provides pivotBringIntoViewSpec) {
+                RowOrColumn(
+                    Modifier.size(101.toDp())
+                        .then(
+                            when (orientation) {
+                                Horizontal -> Modifier.horizontalScroll(scrollState)
+                                Vertical -> Modifier.verticalScroll(scrollState)
+                            }
+                        )
+                ) {
+                    Box(Modifier.size(200.toDp()))
+                    Box(Modifier.size(50.toDp()).bringIntoViewRequester(requester))
+                    Box(Modifier.size(500.toDp()))
+                }
+            }
+        }
+
+        // A focused text field requests both itself and its inner text area. The pivot can't put
+        // both leading edges on the target, so scrolling never satisfies the inner request.
+        val outerRequest = testScope.launch { requester.bringIntoView() }
+        val innerRequest = testScope.launch { requester.bringIntoView(Rect(20f, 20f, 30f, 30f)) }
+
+        // The animation must end even though the target can't be reached exactly.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            outerRequest.isCompleted && innerRequest.isCompleted
+        }
+        // isCompleted is also true for a cancelled job, so check both requests resumed normally.
+        rule.runOnIdle {
+            assertThat(outerRequest.isCancelled).isFalse()
+            assertThat(innerRequest.isCancelled).isFalse()
+            assertThat(scrollState.value).isEqualTo(170)
+        }
     }
 
     // TODO(b/222093277) Once the test runtime supports layout calls between frames, write more

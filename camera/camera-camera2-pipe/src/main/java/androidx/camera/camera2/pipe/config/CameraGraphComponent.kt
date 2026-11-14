@@ -17,6 +17,7 @@
 package androidx.camera.camera2.pipe.config
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
 import androidx.camera.camera2.pipe.CameraBackend
 import androidx.camera.camera2.pipe.CameraBackends
 import androidx.camera.camera2.pipe.CameraContext
@@ -24,14 +25,17 @@ import androidx.camera.camera2.pipe.CameraController
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraphId
 import androidx.camera.camera2.pipe.CameraMetadata
+import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.CameraSurfaceManager
 import androidx.camera.camera2.pipe.Parameters
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestListeners
 import androidx.camera.camera2.pipe.StreamGraph
 import androidx.camera.camera2.pipe.SurfaceTracker
+import androidx.camera.camera2.pipe.core.SystemClockOffsets
 import androidx.camera.camera2.pipe.core.Threads
 import androidx.camera.camera2.pipe.graph.CameraGraphImpl
+import androidx.camera.camera2.pipe.graph.Controller3A
 import androidx.camera.camera2.pipe.graph.GraphListener
 import androidx.camera.camera2.pipe.graph.GraphProcessor
 import androidx.camera.camera2.pipe.graph.GraphProcessorImpl
@@ -42,7 +46,11 @@ import androidx.camera.camera2.pipe.internal.CameraGraphParametersImpl
 import androidx.camera.camera2.pipe.internal.CameraGraphRequestListenersImpl
 import androidx.camera.camera2.pipe.internal.FrameCaptureQueue
 import androidx.camera.camera2.pipe.internal.FrameDistributor
-import androidx.camera.camera2.pipe.internal.ImageSourceMap
+import androidx.camera.camera2.pipe.internal.FrameGraphResourceTrimmer
+import androidx.camera.camera2.pipe.internal.FrameGraphResourceTrimmerImpl
+import androidx.camera.camera2.pipe.internal.GraphSessionLock
+import androidx.camera.camera2.pipe.media.ImageReaderImageSources
+import androidx.camera.camera2.pipe.media.ImageSources
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -73,7 +81,17 @@ import kotlinx.coroutines.SupervisorJob
 internal interface CameraGraphComponent {
     fun cameraGraph(): CameraGraph
 
+    fun graphProcessor(): GraphProcessor
+
+    fun frameCaptureQueue(): FrameCaptureQueue
+
+    fun sessionLock(): GraphSessionLock
+
     fun frameDistributor(): FrameDistributor
+
+    fun controller3A(): Controller3A
+
+    fun resourceTrimmer(): FrameGraphResourceTrimmer
 
     @Subcomponent.Builder
     interface Builder {
@@ -118,6 +136,11 @@ internal abstract class SharedCameraGraphModules {
         listeners: CameraGraphRequestListenersImpl
     ): RequestListeners
 
+    @Binds
+    abstract fun bindResourceTrimmer(
+        graphResourceTrimmer: FrameGraphResourceTrimmerImpl
+    ): FrameGraphResourceTrimmer
+
     companion object {
         @CameraGraphScope
         @Provides
@@ -139,6 +162,7 @@ internal abstract class SharedCameraGraphModules {
             graphConfig: CameraGraph.Config,
             listener3A: Listener3A,
             frameDistributor: FrameDistributor,
+            frameGraphResourceTrimmer: FrameGraphResourceTrimmer,
         ): List<@JvmSuppressWildcards Request.Listener> {
             val listeners = mutableListOf<Request.Listener>(listener3A)
 
@@ -147,6 +171,11 @@ internal abstract class SharedCameraGraphModules {
 
             // FrameDistributor is responsible for all image grouping and distribution.
             listeners.add(frameDistributor)
+
+            // FrameGraphResourceTrimmer is a graph scoped resource trimmer that coordinates with
+            // a global trimmer to proactively trim Frame(s) and keep the memory and image slots
+            // budget in check.
+            listeners.add(frameGraphResourceTrimmer)
 
             // Listeners in CameraGraph.Config can de defined outside of the CameraPipe library,
             // and since we iterate thought the listeners in order and invoke them, it appears
@@ -161,23 +190,47 @@ internal abstract class SharedCameraGraphModules {
             streamGraphImpl: StreamGraphImpl,
             cameraController: Provider<CameraController>,
             cameraSurfaceManager: CameraSurfaceManager,
-            imageSourceMap: ImageSourceMap,
         ): SurfaceGraph {
             return SurfaceGraph(
                 streamGraphImpl,
                 cameraController,
                 cameraSurfaceManager,
-                imageSourceMap.imageSources,
+                streamGraphImpl.imageSourceMap,
             )
         }
 
         @CameraGraphScope
         @Provides
         fun provideFrameDistributor(
-            imageSourceMap: ImageSourceMap,
+            streamGraphImpl: StreamGraphImpl,
             frameCaptureQueue: FrameCaptureQueue,
+            cameraMetadata: CameraMetadata,
+            systemClockOffsets: SystemClockOffsets,
         ): FrameDistributor {
-            return FrameDistributor(imageSourceMap.imageSources, frameCaptureQueue)
+            val isCameraTimebaseRealtime =
+                (cameraMetadata[CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE] ==
+                    CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME)
+
+            return FrameDistributor(
+                streamGraphImpl,
+                frameCaptureQueue,
+                isCameraTimebaseRealtime,
+                systemClockOffsets.realtimeNsToMonotonicNs,
+            )
+        }
+
+        @CameraGraphScope @Provides fun provideSystemClockOffsets() = SystemClockOffsets.estimate()
+
+        @CameraGraphScope
+        @Provides
+        fun configureImageSources(
+            imageReaderImageSources: ImageReaderImageSources,
+            cameraPipeConfig: CameraPipe.Config,
+        ): ImageSources {
+            if (cameraPipeConfig.imageSources != null) {
+                return cameraPipeConfig.imageSources
+            }
+            return imageReaderImageSources
         }
     }
 }

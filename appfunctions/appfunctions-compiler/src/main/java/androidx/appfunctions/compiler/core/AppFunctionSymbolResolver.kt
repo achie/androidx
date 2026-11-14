@@ -22,15 +22,54 @@ import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionCompon
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSchemaDefinitionAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSerializableAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSerializableProxyAnnotation
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionServiceEntryPointAnnotation
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSignatureAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.SERIALIZABLE_PROXY_PACKAGE_NAME
 import com.google.devtools.ksp.KspExperimental
+import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.symbol.KSClassDeclaration
-import com.google.devtools.ksp.symbol.KSFunctionDeclaration
-import com.google.devtools.ksp.symbol.Modifier
 
 /** The helper class to resolve AppFunction related symbols. */
 class AppFunctionSymbolResolver(private val resolver: Resolver) {
+    /** Resolves symbols annotated with @AppFunctionServiceEntryPoint without validation. */
+    fun resolveUnvalidatedAnnotatedAppFunctionServiceEntryPoints():
+        List<AnnotatedAppFunctionServiceEntryPoint> {
+        return resolver
+            .getSymbolsWithAnnotation(
+                AppFunctionServiceEntryPointAnnotation.CLASS_NAME.canonicalName
+            )
+            .map { declaration ->
+                if (declaration !is KSClassDeclaration) {
+                    throw ProcessingException(
+                        "Only classes can be annotated with @AppFunctionServiceEntryPoint",
+                        declaration,
+                    )
+                }
+                declaration
+            }
+            .sortedBy { checkNotNull(it.qualifiedName).asString() }
+            .map { declaration ->
+                val appFunctionDeclarations =
+                    declaration
+                        .getDeclaredFunctions()
+                        .filter {
+                            it.annotations.findAnnotation(AppFunctionAnnotation.CLASS_NAME) != null
+                        }
+                        .toList()
+                val appFunctions = appFunctionDeclarations.map {
+                    AnnotatedAppFunction(it, it.docString)
+                }
+                AnnotatedAppFunctionServiceEntryPoint(declaration, appFunctions)
+            }
+            .toList()
+    }
+
+    /** Resolves symbols annotated with @AppFunctionServiceEntryPoint. */
+    fun resolveAnnotatedAppFunctionServiceEntryPoints():
+        List<AnnotatedAppFunctionServiceEntryPoint> {
+        return resolveUnvalidatedAnnotatedAppFunctionServiceEntryPoints().map { it.validate() }
+    }
 
     /** Resolves symbols annotated with @AppFunctionSchemaDefinition. */
     fun resolveAnnotatedAppFunctionSchemaDefinitions(): List<AnnotatedAppFunctionSchemaDefinition> {
@@ -41,7 +80,7 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
             .map { declaration ->
                 if (declaration !is KSClassDeclaration) {
                     throw ProcessingException(
-                        "Only classes can be annotated with @AppFunctionSerializableProxy",
+                        "Only class can be annotated with @AppFunctionSchemaDefinition",
                         declaration,
                     )
                 }
@@ -53,45 +92,28 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
             .toList()
     }
 
-    /**
-     * Resolves functions annotated with @AppFunction annotation ***that are not validated yet***.
-     *
-     * The caller should generally prefer using [resolveAnnotatedAppFunctions] to ensure that the
-     * processor is working on validated AppFunctions. This should only be used when the visibility
-     * to invalidated AppFunctions is required, such as for determining the symbols for next turn
-     * processing.
-     */
-    fun resolveUnvalidatedAnnotatedAppFunctions(): List<AnnotatedAppFunctions> {
+    /** Resolves unvalidated classes annotated with @AppFunctionSignature annotation. */
+    fun resolveUnvalidatedAnnotatedAppFunctionSignatures(): List<AnnotatedAppFunctionSignature> {
         return resolver
-            .getSymbolsWithAnnotation(AppFunctionAnnotation.CLASS_NAME.canonicalName)
+            .getSymbolsWithAnnotation(AppFunctionSignatureAnnotation.CLASS_NAME.canonicalName)
             .map { declaration ->
-                if (declaration !is KSFunctionDeclaration) {
+                if (declaration !is KSClassDeclaration) {
                     throw ProcessingException(
-                        "Only functions can be annotated with @AppFunction",
+                        "Only fun interfaces can be annotated with @AppFunctionSignature",
                         declaration,
                     )
                 }
                 declaration
             }
             .sortedBy { checkNotNull(it.qualifiedName).asString() }
-            .groupBy { declaration ->
-                declaration.parentDeclaration as? KSClassDeclaration
-                    ?: throw ProcessingException(
-                        "Top level functions cannot be annotated with @AppFunction ",
-                        declaration,
-                    )
-            }
-            .entries
-            .sortedBy { it.key.qualifiedName?.asString() }
-            .map { (classDeclaration, appFunctionsDeclarations) ->
-                AnnotatedAppFunctions(classDeclaration, appFunctionsDeclarations)
-            }
+            .map { declaration -> AnnotatedAppFunctionSignature(declaration) }
+            .toList()
     }
 
-    /** Resolves valid functions annotated with @AppFunction annotation. */
-    fun resolveAnnotatedAppFunctions(): List<AnnotatedAppFunctions> {
-        return resolveUnvalidatedAnnotatedAppFunctions().map { annotatedAppFunction ->
-            annotatedAppFunction.validate()
+    /** Resolves valid classes annotated with @AppFunctionSignature annotation. */
+    fun resolveAnnotatedAppFunctionSignatures(): List<AnnotatedAppFunctionSignature> {
+        return resolveUnvalidatedAnnotatedAppFunctionSignatures().map { signature ->
+            signature.validate()
         }
     }
 
@@ -113,13 +135,7 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
                 declaration
             }
             .sortedBy { checkNotNull(it.qualifiedName).asString() }
-            .map { declaration ->
-                if (declaration.modifiers.contains(Modifier.SEALED)) {
-                    AnnotatedOneOfAppFunctionSerializable(declaration).validate()
-                } else {
-                    AnnotatedAppFunctionSerializable(declaration).validate()
-                }
-            }
+            .map { declaration -> AppFunctionSerializableType.create(declaration).validate() }
             .toList()
     }
 
@@ -179,54 +195,6 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
     }
 
     /**
-     * Gets all [AnnotatedAppFunctions] from all processed modules.
-     *
-     * Unlike [resolveAnnotatedAppFunctions] that resolves symbols from annotation within the same
-     * compilation unit. [getAnnotatedAppFunctionsFromAllModules] looks up all AppFunction symbols,
-     * including those are already processed.
-     */
-    fun getAnnotatedAppFunctionsFromAllModules(): List<AnnotatedAppFunctions> {
-        val filteredAppFunctionComponents =
-            filterAppFunctionComponent(AppFunctionComponentRegistryAnnotation.Category.FUNCTION)
-
-        return filteredAppFunctionComponents
-            .map { component ->
-                val ksName = resolver.getKSNameFromString(component.qualifiedName)
-                val functionDeclarations = resolver.getFunctionDeclarationsByName(ksName).toList()
-                if (functionDeclarations.isEmpty()) {
-                    throw ProcessingException(
-                        "Unable to find KSFunctionDeclaration for ${ksName.asString()}",
-                        null,
-                    )
-                }
-                if (functionDeclarations.size > 1) {
-                    throw ProcessingException(
-                        "Conflicts KSFunctionDeclaration for ${ksName.asString()}",
-                        null,
-                    )
-                }
-                functionDeclarations.single()
-            }
-            .groupBy { declaration ->
-                declaration.parentDeclaration as? KSClassDeclaration
-                    ?: throw ProcessingException(
-                        "Top level functions cannot be annotated with @AppFunction ",
-                        declaration,
-                    )
-            }
-            .entries
-            .sortedBy { it.key.qualifiedName?.asString() }
-            .map { (classDeclaration, appFunctionsDeclarations) ->
-                AnnotatedAppFunctions(
-                        classDeclaration,
-                        appFunctionsDeclarations,
-                        filteredAppFunctionComponents.associate { it.qualifiedName to it.docString },
-                    )
-                    .validate()
-            }
-    }
-
-    /**
      * Gets a map of qualified name to docstring for [AnnotatedAppFunctionSerializable] from all
      * processed modules.
      */
@@ -235,32 +203,6 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
                 AppFunctionComponentRegistryAnnotation.Category.SERIALIZABLE
             )
             .associate { it -> it.qualifiedName to it.docString }
-    }
-
-    /** Gets generated AppFunctionInventory implementations. */
-    fun getGeneratedAppFunctionInventories(): List<KSClassDeclaration> {
-        return filterAppFunctionComponent(AppFunctionComponentRegistryAnnotation.Category.INVENTORY)
-            .map { component ->
-                val ksName = resolver.getKSNameFromString(component.qualifiedName)
-                resolver.getClassDeclarationByName(ksName)
-                    ?: throw ProcessingException(
-                        "Unable to find KSClassDeclaration for ${ksName.asString()}",
-                        null,
-                    )
-            }
-    }
-
-    /** Gets generated AppFunctionInvoker implementations. */
-    fun getGeneratedAppFunctionInvokers(): List<KSClassDeclaration> {
-        return filterAppFunctionComponent(AppFunctionComponentRegistryAnnotation.Category.INVOKER)
-            .map { component ->
-                val ksName = resolver.getKSNameFromString(component.qualifiedName)
-                resolver.getClassDeclarationByName(ksName)
-                    ?: throw ProcessingException(
-                        "Unable to find KSClassDeclaration for ${ksName.asString()}",
-                        null,
-                    )
-            }
     }
 
     /** Gets all @AppFunctionSchemaDefinition from all modules. */
@@ -309,12 +251,10 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
                         )
                         .filterIsInstance<String>()
 
-                // Only functions and serializables require component docstrings.
+                // Only serializables require component docstrings.
                 if (
                     filterComponentCategory !=
-                        AppFunctionComponentRegistryAnnotation.Category.FUNCTION &&
-                        filterComponentCategory !=
-                            AppFunctionComponentRegistryAnnotation.Category.SERIALIZABLE
+                        AppFunctionComponentRegistryAnnotation.Category.SERIALIZABLE
                 ) {
                     return@flatMap componentNames
                         .map { qualifiedName ->
@@ -334,7 +274,7 @@ class AppFunctionSymbolResolver(private val resolver: Resolver) {
                         .filterIsInstance<String>()
 
                 check(componentDocStrings.size == componentNames.size) {
-                    "Function's componentDocStrings must have the same size as componentNames."
+                    "componentDocStrings must have the same size as componentNames."
                 }
                 return@flatMap componentNames.indices.map { index ->
                     AppFunctionComponentRegistryGenerator.AppFunctionComponent(

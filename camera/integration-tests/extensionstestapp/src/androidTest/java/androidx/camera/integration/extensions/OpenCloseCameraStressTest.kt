@@ -17,6 +17,7 @@
 package androidx.camera.integration.extensions
 
 import android.content.Context
+import androidx.camera.camera2.Camera2Config
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
@@ -24,13 +25,11 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
+import androidx.camera.extensions.ExtensionSessionConfig
 import androidx.camera.extensions.ExtensionsManager
-import androidx.camera.integration.extensions.CameraExtensionsActivity.CAMERA_PIPE_IMPLEMENTATION_OPTION
 import androidx.camera.integration.extensions.util.CameraXExtensionsTestUtil
-import androidx.camera.integration.extensions.util.CameraXExtensionsTestUtil.CameraXExtensionTestParams
 import androidx.camera.integration.extensions.utils.CameraSelectorUtil
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.PreTestCameraIdList
 import androidx.camera.testing.impl.StressTestRule
@@ -39,9 +38,10 @@ import androidx.camera.testing.impl.fakes.FakeLifecycleOwner
 import androidx.lifecycle.Observer
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.LargeTest
-import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -56,22 +56,17 @@ import org.junit.runners.Parameterized
 
 @LargeTest
 @RunWith(Parameterized::class)
-class OpenCloseCameraStressTest(private val config: CameraXExtensionTestParams) {
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = config.implName == CAMERA_PIPE_IMPLEMENTATION_OPTION)
-
+class OpenCloseCameraStressTest(private val cameraId: String, private val extensionMode: Int) {
     @get:Rule
     val useCamera =
         CameraUtil.grantCameraPermissionAndPreTestAndPostTest(
-            PreTestCameraIdList(config.cameraXConfig)
+            PreTestCameraIdList(Camera2Config.defaultConfig())
         )
 
     private lateinit var cameraProvider: ProcessCameraProvider
     private lateinit var extensionsManager: ExtensionsManager
     private lateinit var camera: Camera
     private lateinit var baseCameraSelector: CameraSelector
-    private lateinit var extensionCameraSelector: CameraSelector
     private lateinit var preview: Preview
     private lateinit var imageCapture: ImageCapture
     private lateinit var lifecycleOwner: FakeLifecycleOwner
@@ -79,22 +74,23 @@ class OpenCloseCameraStressTest(private val config: CameraXExtensionTestParams) 
     @Before
     fun setUp(): Unit = runBlocking {
         assumeTrue(CameraXExtensionsTestUtil.isTargetDeviceAvailableForExtensions())
-        val (_, cameraXConfig, cameraId, extensionMode) = config
-        ProcessCameraProvider.configureInstance(cameraXConfig)
         cameraProvider = ProcessCameraProvider.getInstance(context)[10000, TimeUnit.MILLISECONDS]
         extensionsManager = ExtensionsManager.getInstance(context, cameraProvider)
 
         baseCameraSelector = CameraSelectorUtil.createCameraSelectorById(cameraId)
         assumeTrue(extensionsManager.isExtensionAvailable(baseCameraSelector, extensionMode))
 
-        extensionCameraSelector =
-            extensionsManager.getExtensionEnabledCameraSelector(baseCameraSelector, extensionMode)
-
         camera =
             withContext(Dispatchers.Main) {
                 lifecycleOwner = FakeLifecycleOwner()
                 lifecycleOwner.startAndResume()
-                cameraProvider.bindToLifecycle(lifecycleOwner, extensionCameraSelector)
+                val extensionSessionConfig =
+                    ExtensionSessionConfig(extensionMode, extensionsManager)
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    baseCameraSelector,
+                    extensionSessionConfig,
+                )
             }
 
         preview = Preview.Builder().build()
@@ -106,14 +102,14 @@ class OpenCloseCameraStressTest(private val config: CameraXExtensionTestParams) 
 
     @After
     fun cleanUp(): Unit = runBlocking {
-        if (::cameraProvider.isInitialized) {
-            withContext(Dispatchers.Main) {
+        try {
+            if (::cameraProvider.isInitialized) {
                 cameraProvider.shutdownAsync()[10000, TimeUnit.MILLISECONDS]
             }
-        }
-
-        if (::extensionsManager.isInitialized) {
-            extensionsManager.shutdown()[10000, TimeUnit.MILLISECONDS]
+        } finally {
+            if (::extensionsManager.isInitialized) {
+                extensionsManager.shutdown()[10000, TimeUnit.MILLISECONDS]
+            }
         }
     }
 
@@ -122,8 +118,8 @@ class OpenCloseCameraStressTest(private val config: CameraXExtensionTestParams) 
         val context = ApplicationProvider.getApplicationContext<Context>()
 
         @JvmStatic
-        @get:Parameterized.Parameters(name = "config = {0}")
-        val parameters: Collection<CameraXExtensionTestParams>
+        @get:Parameterized.Parameters(name = "cameraId = {0}, extensionMode = {1}")
+        val parameters: Collection<Array<Any>>
             get() = CameraXExtensionsTestUtil.getAllCameraIdExtensionModeCombinations()
     }
 
@@ -147,37 +143,67 @@ class OpenCloseCameraStressTest(private val config: CameraXExtensionTestParams) 
         vararg useCases: UseCase,
         repeatCount: Int = CameraXExtensionsTestUtil.getStressTestRepeatingCount(),
     ): Unit = runBlocking {
-        repeat(repeatCount) {
+        repeat(repeatCount) { iteration ->
             val openCameraLatch = CountDownLatch(1)
             val closeCameraLatch = CountDownLatch(1)
+            // Only accessed on the main thread, where the CameraState observer is invoked.
+            var isCameraOpened = false
+            val lastError = AtomicReference<CameraState.StateError?>(null)
             val observer =
                 Observer<CameraState> { state ->
+                    state.error?.let { lastError.set(it) }
                     if (state.type == CameraState.Type.OPEN) {
+                        isCameraOpened = true
                         openCameraLatch.countDown()
-                    } else if (state.type == CameraState.Type.CLOSED) {
+                    } else if (state.type == CameraState.Type.CLOSED && isCameraOpened) {
+                        // The current (sticky) CLOSED state is delivered as soon as the observer
+                        // is registered, so only count CLOSED once the camera has been opened.
                         closeCameraLatch.countDown()
                     }
                 }
 
-            withContext(Dispatchers.Main) {
-                // Arrange: sets up CameraState observer
-                camera.cameraInfo.cameraState.observe(lifecycleOwner, observer)
+            try {
+                withContext<Unit>(Dispatchers.Main) {
+                    // Arrange: sets up CameraState observer
+                    camera.cameraInfo.cameraState.observe(lifecycleOwner, observer)
 
-                // Act: binds use cases
-                cameraProvider.bindToLifecycle(lifecycleOwner, extensionCameraSelector, *useCases)
+                    // Act: binds use cases
+                    val extensionSessionConfig =
+                        ExtensionSessionConfig(extensionMode, extensionsManager, *useCases)
+
+                    cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        baseCameraSelector,
+                        extensionSessionConfig,
+                    )
+                }
+
+                // Assert: checks the CameraState.Type.OPEN can be received
+                val isOpened = openCameraLatch.await(3000, TimeUnit.MILLISECONDS)
+                assertWithMessage(
+                        "Camera $cameraId did not open in iteration $iteration with extension " +
+                            "mode $extensionMode. Last error: ${lastError.get()}"
+                    )
+                    .that(isOpened)
+                    .isTrue()
+
+                // Act: unbinds all use cases
+                withContext(Dispatchers.Main) { cameraProvider.unbindAll() }
+
+                // Assert: checks the CameraState.Type.CLOSED can be received
+                val isClosed = closeCameraLatch.await(3000, TimeUnit.MILLISECONDS)
+                assertWithMessage(
+                        "Camera $cameraId did not close in iteration $iteration with extension " +
+                            "mode $extensionMode. Last error: ${lastError.get()}"
+                    )
+                    .that(isClosed)
+                    .isTrue()
+            } finally {
+                // Clean it up.
+                withContext(Dispatchers.Main) {
+                    camera.cameraInfo.cameraState.removeObserver(observer)
+                }
             }
-
-            // Assert: checks the CameraState.Type.OPEN can be received
-            assertThat(openCameraLatch.await(3000, TimeUnit.MILLISECONDS)).isTrue()
-
-            // Act: unbinds all use cases
-            withContext(Dispatchers.Main) { cameraProvider.unbindAll() }
-
-            // Assert: checks the CameraState.Type.CLOSED can be received
-            assertThat(closeCameraLatch.await(3000, TimeUnit.MILLISECONDS)).isTrue()
-
-            // Clean it up.
-            withContext(Dispatchers.Main) { camera.cameraInfo.cameraState.removeObserver(observer) }
         }
     }
 }

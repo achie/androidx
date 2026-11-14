@@ -22,10 +22,13 @@ import static androidx.appsearch.localstorage.visibilitystore.VisibilityToDocume
 import android.util.Log;
 
 import androidx.annotation.RestrictTo;
+import androidx.appsearch.annotation.HideInPlatform;
+import androidx.appsearch.app.AppSearchBatchResult;
 import androidx.appsearch.app.AppSearchResult;
 import androidx.appsearch.app.AppSearchSchema;
 import androidx.appsearch.app.GenericDocument;
 import androidx.appsearch.app.GetSchemaResponse;
+import androidx.appsearch.app.InternalPutDocumentResponse;
 import androidx.appsearch.app.InternalSetSchemaResponse;
 import androidx.appsearch.app.InternalVisibilityConfig;
 import androidx.appsearch.app.SearchResult;
@@ -68,9 +71,8 @@ import java.util.Set;
  *
  * <p>These visibility settings won't be used in AppSearch Jetpack, we only store them for clients
  * to look up.
- *
- * @exportToFramework:hide
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class VisibilityStore {
     private static final String TAG = "AppSearchVisibilityStor";
@@ -248,14 +250,20 @@ public class VisibilityStore {
         }
 
         if (Flags.enableBatchPutVisibilityDocuments() && !visibilityDocuments.isEmpty()) {
+            AppSearchBatchResult.Builder<String, InternalPutDocumentResponse> batchResultBuilder =
+                    new AppSearchBatchResult.Builder<>();
+            // Pass INVALID_UID for internal VisibilityStore writes so that AppSearchImpl skips PCC
+            // encapsulation checks.
+            int callingUid = InternalVisibilityConfig.INVALID_UID;
             if (!overlayDocuments.isEmpty()) {
                 mAppSearchImpl.batchPutDocuments(
                         VISIBILITY_PACKAGE_NAME,
                         mAndroidVOverlayDatabaseName,
                         overlayDocuments,
-                        /*batchResultBuilder=*/null,
-                        /*sendChangeNotifications=*/ false,
-                        /*logger=*/null,
+                        callingUid,
+                        batchResultBuilder,
+                        /* sendChangeNotifications= */ false,
+                        /* logger= */ null,
                         PersistType.Code.UNKNOWN,
                         callStatsBuilder);
             }
@@ -265,11 +273,23 @@ public class VisibilityStore {
                     VISIBILITY_PACKAGE_NAME,
                     mDatabaseName,
                     visibilityDocuments,
-                    /*batchResultBuilder=*/null,
-                    /*sendChangeNotifications=*/ false,
-                    /*logger=*/null,
+                    callingUid,
+                    batchResultBuilder,
+                    /* sendChangeNotifications= */ false,
+                    /* logger= */ null,
                     PersistType.Code.LITE,
                     callStatsBuilder);
+
+            if (Flags.enableDeletePropagationRw()) {
+                // Note: visibility documents never expire, so we don't have to reset handle expired
+                //   documents task alarm.
+                AppSearchBatchResult<String, InternalPutDocumentResponse> batchResult =
+                        batchResultBuilder.build();
+                if (!batchResult.getFailures().isEmpty()) {
+                    throw new AppSearchException(
+                            AppSearchResult.RESULT_INTERNAL_ERROR, batchResult.toString());
+                }
+            }
         }
     }
 
@@ -374,7 +394,8 @@ public class VisibilityStore {
                 databaseName,
                 /*queryExpression=*/ "",
                 searchSpec,
-                /*logger=*/null,
+                /*callerAccess=*/ null,
+                /*queryStatsBuilder=*/null,
                 callStatsBuilder);
         List<GenericDocument> visibilityDocuments = new ArrayList<>();
         List<SearchResult> searchResults = searchResultPage.getResults();
@@ -385,6 +406,7 @@ public class VisibilityStore {
             searchResultPage = mAppSearchImpl.getNextPage(
                     VISIBILITY_PACKAGE_NAME,
                     searchResultPage.getNextPageToken(),
+                    /*maxResults=*/Integer.MAX_VALUE,
                     /*queryStatsBuilder=*/null,
                     callStatsBuilder);
             searchResults = searchResultPage.getResults();
@@ -402,6 +424,9 @@ public class VisibilityStore {
             @NonNull List<InternalVisibilityConfig> migratedDocuments,
             CallStats.@Nullable Builder callStatsBuilder)
             throws AppSearchException {
+        // Pass INVALID_UID for internal VisibilityStore writes so that AppSearchImpl
+        // skips PCC encapsulation checks.
+        int callingUid = InternalVisibilityConfig.INVALID_UID;
         // The latest schema type doesn't exist yet. Add it. Set forceOverride true to
         // delete old schema.
         InternalSetSchemaResponse internalSetSchemaResponse = mAppSearchImpl.setSchema(
@@ -413,6 +438,7 @@ public class VisibilityStore {
                 /*accountPropertyPaths=*/ Collections.emptyMap(),
                 /*forceOverride=*/ true,
                 /*version=*/ VisibilityToDocumentConverter.SCHEMA_VERSION_LATEST,
+                callingUid,
                 /*setSchemaStatsBuilder=*/ null,
                 callStatsBuilder);
         if (!internalSetSchemaResponse.isSuccess()) {
@@ -432,6 +458,7 @@ public class VisibilityStore {
                         /*forceOverride=*/ true,
                         /*version=*/ VisibilityToDocumentConverter
                                 .ANDROID_V_OVERLAY_SCHEMA_VERSION_LATEST,
+                        callingUid,
                         /*setSchemaStatsBuilder=*/ null,
                         callStatsBuilder);
         if (!internalSetAndroidVOverlaySchemaResponse.isSuccess()) {
@@ -458,16 +485,31 @@ public class VisibilityStore {
                     callStatsBuilder);
             }
         }
+
         if (Flags.enableBatchPutVisibilityDocuments() && !migratedVisibilityDocuments.isEmpty()) {
+            AppSearchBatchResult.Builder<String, InternalPutDocumentResponse> batchResultBuilder =
+                    new AppSearchBatchResult.Builder<>();
             mAppSearchImpl.batchPutDocuments(
                     VISIBILITY_PACKAGE_NAME,
                     mDatabaseName,
                     migratedVisibilityDocuments,
-                    /*batchResultBuilder=*/null,
-                    /*sendChangeNotifications=*/ false,
-                    /*logger=*/null,
+                    /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
+                    batchResultBuilder,
+                    /* sendChangeNotifications= */ false,
+                    /* logger= */ null,
                     PersistType.Code.UNKNOWN,
                     callStatsBuilder);
+
+            if (Flags.enableDeletePropagationRw()) {
+                // Note: visibility documents never expire, so we don't have to reset handle expired
+                //   documents task alarm.
+                AppSearchBatchResult<String, InternalPutDocumentResponse> batchResult =
+                        batchResultBuilder.build();
+                if (!batchResult.getFailures().isEmpty()) {
+                    throw new AppSearchException(
+                            AppSearchResult.RESULT_INTERNAL_ERROR, batchResult.toString());
+                }
+            }
         }
     }
 
@@ -495,6 +537,9 @@ public class VisibilityStore {
                         /*accountPropertyPaths=*/ Collections.emptyMap(),
                         /*forceOverride=*/ true,  // force update to nest version.
                         VisibilityToDocumentConverter.ANDROID_V_OVERLAY_SCHEMA_VERSION_LATEST,
+                        // Pass INVALID_UID for internal VisibilityStore writes so that
+                        // AppSearchImpl skips PCC encapsulation checks.
+                        /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                         /*setSchemaStatsBuilder=*/ null,
                         callStatsBuilder);
                 if (!internalSetSchemaResponse.isSuccess()) {
@@ -529,6 +574,9 @@ public class VisibilityStore {
 
         // Check Visibility schema first.
         Set<AppSearchSchema> existingVisibilitySchema = getSchemaResponse.getSchemas();
+        // Pass INVALID_UID for internal VisibilityStore writes so that AppSearchImpl
+        // skips PCC encapsulation checks.
+        int callingUid = InternalVisibilityConfig.INVALID_UID;
         // Force to override visibility schema if it contains DEPRECATED_PUBLIC_ACL_OVERLAY_SCHEMA.
         // The DEPRECATED_PUBLIC_ACL_OVERLAY_SCHEMA was added to VISIBILITY_DATABASE_NAME and
         // removed to ANDROID_V_OVERLAY_DATABASE_NAME. We need to force update the schema to
@@ -548,6 +596,7 @@ public class VisibilityStore {
                     /*accountPropertyPaths=*/ Collections.emptyMap(),
                     /*forceOverride=*/ true,
                     /*version=*/ VisibilityToDocumentConverter.SCHEMA_VERSION_LATEST,
+                    callingUid,
                     /*setSchemaStatsBuilder=*/ null,
                     callStatsBuilder);
             if (!internalSetSchemaResponse.isSuccess()) {
@@ -568,6 +617,7 @@ public class VisibilityStore {
                     /*accountPropertyPaths=*/ Collections.emptyMap(),
                     /*forceOverride=*/ false,
                     /*version=*/ VisibilityToDocumentConverter.SCHEMA_VERSION_LATEST,
+                    callingUid,
                     /*setSchemaStatsBuilder=*/ null,
                     callStatsBuilder);
             if (!internalSetSchemaResponse.isSuccess()) {
@@ -609,6 +659,9 @@ public class VisibilityStore {
                     /*accountPropertyPaths=*/ Collections.emptyMap(),
                     /*forceOverride=*/ false,
                     VisibilityToDocumentConverter.ANDROID_V_OVERLAY_SCHEMA_VERSION_LATEST,
+                    // Pass INVALID_UID for internal VisibilityStore writes so that AppSearchImpl
+                    // skips PCC encapsulation checks.
+                    /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                     /*setSchemaStatsBuilder=*/ null,
                     callStatsBuilder);
             if (!internalSetSchemaResponse.isSuccess()) {
@@ -625,7 +678,7 @@ public class VisibilityStore {
     private void maybeRemoveOverlayDocument(@NonNull String prefixedSchemaType,
             @Nullable InternalVisibilityConfig oldVisibilityConfig,
             CallStats.@Nullable Builder callStatsBuilder) throws AppSearchException {
-        if (isConfigContainsAndroidVOverlay(oldVisibilityConfig)) {
+        if (VisibilityToDocumentConverter.doesConfigContainAndroidVOverlay(oldVisibilityConfig)) {
             try {
                 mAppSearchImpl.remove(VISIBILITY_PACKAGE_NAME,
                         mAndroidVOverlayDatabaseName,
@@ -659,18 +712,5 @@ public class VisibilityStore {
                     callStatsBuilder);
         }
         return getSchemaResponse;
-    }
-
-    /**
-     * Whether the given {@link InternalVisibilityConfig} contains Android V overlay settings.
-     *
-     * <p> Android V overlay {@link VisibilityToDocumentConverter#ANDROID_V_OVERLAY_SCHEMA}
-     * contains public acl and visible to config.
-     */
-    private static boolean isConfigContainsAndroidVOverlay(
-            @Nullable InternalVisibilityConfig config) {
-        return config != null
-                && (config.getVisibilityConfig().getPubliclyVisibleTargetPackage() != null
-                || !config.getVisibleToConfigs().isEmpty());
     }
 }

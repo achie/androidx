@@ -21,6 +21,7 @@ import android.annotation.SuppressLint;
 import androidx.annotation.IntDef;
 import androidx.annotation.RestrictTo;
 import androidx.appsearch.annotation.CanIgnoreReturnValue;
+import androidx.appsearch.annotation.HideInPlatform;
 import androidx.core.util.Preconditions;
 
 import org.jspecify.annotations.NonNull;
@@ -28,14 +29,15 @@ import org.jspecify.annotations.NonNull;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Encapsulates base statistics information for AppSearch results.
  *
  * This class provides a convenient way to store and retrieve key statistics,
  * such as the result code and a bitmask of enabled features.
- * @exportToFramework:hide
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class BaseStats {
 
@@ -89,6 +91,14 @@ public class BaseStats {
             INTERNAL_CALL_TYPE_SCHEDULED_FLUSH,
             CALL_TYPE_MANUALLY_SCHEDULE_FLUSH,
             INTERNAL_CALL_TYPE_APPS_INDEXER,
+            INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_HOST_TO_AISEAL,
+            INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_AEGIS_TO_AISEAL,
+            INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_AISEAL_TO_AEGIS,
+            INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_VM_TO_HOST,
+            INTERNAL_CALL_TYPE_MAINTAIN_ANN_INDEX_JOB,
+            CALL_TYPE_INITIALIZE_TRIVIAL,
+            CALL_TYPE_INITIALIZE_PENDING,
+            INTERNAL_CALL_TYPE_HANDLE_EXPIRED_DOCUMENTS_JOB,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface CallType {
@@ -152,6 +162,17 @@ public class BaseStats {
     public static final int INTERNAL_CALL_TYPE_SCHEDULED_FLUSH = 45;
     public static final int CALL_TYPE_MANUALLY_SCHEDULE_FLUSH = 46;
     public static final int INTERNAL_CALL_TYPE_APPS_INDEXER = 47;
+    public static final int INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_HOST_TO_AISEAL = 48;
+    public static final int INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_AEGIS_TO_AISEAL = 49;
+    public static final int INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_AISEAL_TO_AEGIS = 50;
+    public static final int INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION_VM_TO_HOST = 51;
+    public static final int INTERNAL_CALL_TYPE_MAINTAIN_ANN_INDEX_JOB = 52;
+    // Represents INITIALIZE tasks that retrieve an already-completed user instance.
+    public static final int CALL_TYPE_INITIALIZE_TRIVIAL = 53;
+    // Represents INITIALIZE tasks that retrieve a user instance whose creation was on-going.
+    public static final int CALL_TYPE_INITIALIZE_PENDING = 54;
+    // Represents internal background task to handle expired documents.
+    public static final int INTERNAL_CALL_TYPE_HANDLE_EXPIRED_DOCUMENTS_JOB = 55;
 
     // These strings are for the subset of call types that correspond to an AppSearchManager API
     public static final String CALL_TYPE_STRING_INITIALIZE = "initialize";
@@ -204,11 +225,21 @@ public class BaseStats {
     public static final String INTERNAL_CALL_TYPE_STRING_MANUALLY_SCHEDULE_FLUSH =
             "manuallyScheduleFlush";
     public static final String INTERNAL_CALL_TYPE_STRING_APPS_INDEXER = "appsIndexer";
+    public static final String INTERNAL_CALL_TYPE_STRING_MAINTAIN_ANN_INDEX_JOB =
+            "maintainAnnIndexJob";
+    public static final String CALL_TYPE_STRING_INITIALIZE_TRIVIAL = "initializeTrivial";
+    public static final String CALL_TYPE_STRING_INITIALIZE_PENDING = "initializePending";
+    public static final String INTERNAL_CALL_TYPE_STRING_HANDLE_EXPIRED_DOCUMENTS_JOB =
+            "handleExpiredDocumentsJob";
 
     // Enabled features bitmask with all features disabled.
     public static final long NO_FEATURES_ENABLED_BITMASK = 0;
-    // Bit representing whether icing is running in a VM or not within the enabled features bitmask.
+    // Bit representing whether icing is running in a VM or not within the enabled features'
+    // bitmask.
     public static final int LAUNCH_VM = 0;
+    // Bit representing whether the Ai seal is enabled or not within the enabled features'
+    // bitmask.
+    public static final int LAUNCH_AI_SEAL = 1;
     private final long mEnabledFeatures;
     /** Time passed while waiting to acquire the lock during Java function calls. */
     protected final int mJavaLockAcquisitionLatencyMillis;
@@ -310,14 +341,12 @@ public class BaseStats {
         private final BuilderType mBuilderTypeInstance;
         long mEnabledFeatures;
         /**
-         * The latency in ms to get the lock.
+         * The total latency in ms to get the lock.
          *
-         * <p> For multi-level call like checkForOptimize -> optimize. We only need to set the java
-         * lock latency in the first level call. Since the write lock won't be released, the latency
-         * in the second and deeper level will include the actually work in top level and won't be
-         * accurate.
+         * <p>For multi-level calls like checkForOptimize -> optimize, the deeper levels re-enter
+         * the lock that is already held, which adds (almost) nothing.
          */
-        int mJavaLockAcquisitionLatencyMillis = -1;
+        int mJavaLockAcquisitionLatencyMillis;
 
         // The call type of the last mutation call that hold the write lock.
         @CallType
@@ -337,22 +366,49 @@ public class BaseStats {
             mBuilderTypeInstance = (BuilderType) this;
         }
 
-        /** Sets bitmask for all enabled features . */
+        /**
+         * Copy constructor for {@link BaseStats.Builder}.
+         *
+         * @param baseStats The {@link BaseStats} to copy from.
+         */
+        @SuppressWarnings("unchecked")
+        public Builder(@NonNull BaseStats baseStats) {
+            Objects.requireNonNull(baseStats);
+            mBuilderTypeInstance = (BuilderType) this;
+            mEnabledFeatures = baseStats.getEnabledFeatures();
+            mJavaLockAcquisitionLatencyMillis = baseStats.getJavaLockAcquisitionLatencyMillis();
+            mLastBlockingOperation = baseStats.getLastBlockingOperation();
+            mLastBlockingOperationLatencyMillis = baseStats.getLastBlockingOperationLatencyMillis();
+            mGetVmLatencyMillis = baseStats.getGetVmLatencyMillis();
+            mUnblockedAppSearchLatencyMillis = baseStats.getUnblockedAppSearchLatencyMillis();
+            mNumIcingCalls = baseStats.getNumIcingCalls();
+        }
+
+        /** Sets bitmask for enable the vm features . */
         @CanIgnoreReturnValue
-        public @NonNull BuilderType setLaunchVMEnabled(boolean enabled) {
+        public @NonNull BuilderType setLaunchVmEnabled(boolean enabled) {
             modifyEnabledFeature(LAUNCH_VM, enabled);
             return mBuilderTypeInstance;
         }
 
+        /** Sets bitmask for enable the Ai seal features . */
+        @CanIgnoreReturnValue
+        public @NonNull BuilderType setLaunchAiSealEnabled(boolean enabled) {
+            modifyEnabledFeature(LAUNCH_AI_SEAL, enabled);
+            return mBuilderTypeInstance;
+        }
+
         /**
-         * Sets latency for waiting to acquire the lock during Java function calls in milliseconds.
+         * Adds latency for waiting to acquire the lock during Java function calls in milliseconds.
+         *
+         * <p>The latency of each lock acquisition is added up, so that an operation that acquires
+         * the lock more than once records its total waiting time. Re-entering a lock that is
+         * already held adds (almost) nothing.
          */
         @CanIgnoreReturnValue
-        public @NonNull BuilderType setJavaLockAcquisitionLatencyMillis(
+        public @NonNull BuilderType addJavaLockAcquisitionLatencyMillis(
                 int javaLockAcquisitionLatencyMillis) {
-            if (mJavaLockAcquisitionLatencyMillis < 0) {
-                mJavaLockAcquisitionLatencyMillis = javaLockAcquisitionLatencyMillis;
-            }
+            mJavaLockAcquisitionLatencyMillis += javaLockAcquisitionLatencyMillis;
             return mBuilderTypeInstance;
         }
 

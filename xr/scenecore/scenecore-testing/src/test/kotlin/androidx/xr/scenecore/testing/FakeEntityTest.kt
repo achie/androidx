@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.xr.scenecore.testing
 
 import androidx.xr.runtime.math.Pose
@@ -44,6 +46,12 @@ class FakeEntityTest {
     @Test
     fun initial_State() {
         assertThat(underTest.contentDescription).isEqualTo("")
+        assertThat(underTest.name).isEqualTo("")
+    }
+
+    @Test
+    fun name_isSet() {
+        assertThat(FakeEntity("test").name).isEqualTo("test")
     }
 
     @Test
@@ -133,8 +141,8 @@ class FakeEntityTest {
 
     @Test
     fun setPose_withDifferentSpaces() {
-        check(underTest.getPose(Space.PARENT) == Pose.Identity)
-        check(underTest.getPose(Space.REAL_WORLD) == Pose.Identity)
+        assertThat(underTest.getPose(Space.PARENT)).isEqualTo(Pose.Identity)
+        assertThat(underTest.getPose(Space.REAL_WORLD)).isEqualTo(Pose.Identity)
 
         val poseParent = Pose(Vector3.One, Quaternion.Identity)
         underTest.setPose(poseParent, Space.PARENT)
@@ -143,13 +151,6 @@ class FakeEntityTest {
         val poseWorld = Pose(Vector3.Right, Quaternion.Identity)
         underTest.setPose(poseWorld, Space.REAL_WORLD)
         assertPose(poseWorld, underTest.getPose(Space.REAL_WORLD))
-    }
-
-    @Test
-    fun getGravityAlignedPose_getsPoseCorrectly() {
-        val pose = Pose(Vector3.One, Quaternion.Identity)
-
-        assertThat(underTest.getGravityAlignedPose(pose)).isEqualTo(pose)
     }
 
     @Test
@@ -185,29 +186,19 @@ class FakeEntityTest {
     }
 
     @Test
-    fun setAlpha_withDifferentSpaces() {
+    fun setAlpha_getsAlphaCorrectly() {
         assertThat(underTest.getAlpha(Space.PARENT)).isEqualTo(1.0f)
-        assertThat(underTest.getAlpha(Space.ACTIVITY)).isEqualTo(1.0f)
-        assertThat(underTest.getAlpha(Space.REAL_WORLD)).isEqualTo(1.0f)
 
         val alphaParent = 0.1f
-        underTest.setAlpha(alphaParent, Space.PARENT)
+        underTest.setAlpha(alphaParent)
         assertThat(underTest.getAlpha(Space.PARENT)).isEqualTo(alphaParent)
-
-        val alphaActivity = 0.2f
-        underTest.setAlpha(alphaActivity, Space.ACTIVITY)
-        assertThat(underTest.getAlpha(Space.ACTIVITY)).isEqualTo(alphaActivity)
-
-        val alphaWorld = 0.3f
-        underTest.setAlpha(alphaWorld, Space.REAL_WORLD)
-        assertThat(underTest.getAlpha(Space.REAL_WORLD)).isEqualTo(alphaWorld)
 
         // Alpha value range = coerceIn(0f, 1f)
         val invalidAlphaNegative = -0.1f
         val invalidAlphaMoreThanOne = 1.1f
-        underTest.setAlpha(invalidAlphaNegative, Space.REAL_WORLD)
+        underTest.setAlpha(invalidAlphaNegative)
         assertThat(underTest.getAlpha(Space.REAL_WORLD)).isEqualTo(0f)
-        underTest.setAlpha(invalidAlphaMoreThanOne, Space.REAL_WORLD)
+        underTest.setAlpha(invalidAlphaMoreThanOne)
         assertThat(underTest.getAlpha(Space.REAL_WORLD)).isEqualTo(1f)
     }
 

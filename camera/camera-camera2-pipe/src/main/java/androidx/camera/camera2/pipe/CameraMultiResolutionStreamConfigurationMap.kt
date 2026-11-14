@@ -18,6 +18,7 @@ package androidx.camera.camera2.pipe
 
 import android.hardware.camera2.params.MultiResolutionStreamInfo
 import androidx.annotation.RestrictTo
+import androidx.camera.common.UnsafeWrapper
 
 /**
  * A compatibility wrapper for
@@ -40,4 +41,7 @@ public interface CameraMultiResolutionStreamConfigurationMap : UnsafeWrapper {
 
     /** @see android.hardware.camera2.params.MultiResolutionStreamConfigurationMap.getInputInfo */
     public fun getInputInfo(format: StreamFormat): List<MultiResolutionStreamInfo>
+
+    /** Returns true if concurrent image reader output is supported */
+    public fun isConcurrentReadersSupported(format: StreamFormat): Boolean
 }

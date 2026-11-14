@@ -16,62 +16,46 @@
 
 package androidx.biometric.internal
 
-import android.content.Context
-import android.content.Intent
 import androidx.biometric.BiometricPrompt
-import androidx.biometric.BiometricPrompt.AuthenticationCallback
-import androidx.biometric.internal.ui.FingerprintDialogActivity
-import androidx.biometric.internal.viewmodel.AuthenticationViewModel
+import androidx.biometric.internal.data.CanceledFrom
+import androidx.biometric.internal.ui.FingerprintDialogController
 import androidx.biometric.utils.ErrorUtils
-import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import java.util.concurrent.Executor
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.launch
 
 /**
  * An authentication handler that uses the legacy `FingerprintManager` API to display a fingerprint
  * prompt.
  *
- * This handler is responsible for launching [FingerprintDialogActivity] to show the UI, and for
- * handling the results of the authentication.
- *
- * @param context The application context.
- * @param lifecycleOwner The lifecycle owner for observing lifecycle events.
- * @param viewModel The [AuthenticationViewModel] that holds the state for the ongoing
- *   authentication.
- * @param confirmCredentialActivityLauncher A [Runnable] to launch the confirm credential activity
- *   as a fallback.
- * @param clientExecutor The executor for posting results to the client callback.
- * @param clientAuthenticationCallback The client-provided callback for receiving authentication
- *   events.
+ * This handler is responsible for using [FingerprintDialogController] to show the UI in the host
+ * window, and for handling the results of the authentication.
  */
 internal class AuthenticationHandlerFingerprintManager(
-    val context: Context,
-    val lifecycleOwner: LifecycleOwner,
-    val viewModel: AuthenticationViewModel,
-    val confirmCredentialActivityLauncher: Runnable,
-    val clientExecutor: Executor,
-    clientAuthenticationCallback: AuthenticationCallback,
+    private val authenticationManager: AuthenticationManager
 ) : AuthenticationHandler {
-    private val authenticationManager =
-        AuthenticationManager(
-            context,
-            lifecycleOwner,
-            viewModel,
-            confirmCredentialActivityLauncher,
-            clientExecutor,
-            clientAuthenticationCallback,
-        )
+    val context
+        get() = authenticationManager.context
+
+    val lifecycleOwner
+        get() = authenticationManager.lifecycleOwner
+
+    val viewModel
+        get() = authenticationManager.viewModel
+
+    val confirmCredentialActivityLauncher
+        get() = authenticationManager.confirmCredentialActivityLauncher
+
+    private val fingerprintDialogController =
+        FingerprintDialogController(context, lifecycleOwner, viewModel)
 
     private val resultDispatcher =
         object :
             AuthenticationResultDispatcher(
                 context,
                 viewModel,
-                clientExecutor,
-                clientAuthenticationCallback,
+                authenticationManager.clientExecutor,
+                authenticationManager.clientAuthenticationCallback,
                 confirmCredentialActivityLauncher,
                 { dismiss() },
             ) {
@@ -91,6 +75,9 @@ internal class AuthenticationHandlerFingerprintManager(
         object : AuthenticationUiStateObserver() {
             override fun createObserverJob(): Job =
                 lifecycleOwner.lifecycleScope.launch {
+                    if (viewModel.isPromptShowing && !viewModel.isConfirmingDeviceCredential) {
+                        fingerprintDialogController.showDialogForReconnect()
+                    }
                     viewModel.isNegativeButtonPressPending.collect {
                         authenticationManager.isNegativeButtonPressPendingObserver()
                     }
@@ -110,13 +97,17 @@ internal class AuthenticationHandlerFingerprintManager(
 
     override fun cancelAuthentication(canceledFrom: CanceledFrom) {
         authenticationManager.cancelAuthentication(canceledFrom)
+        fingerprintDialogController.dismiss()
+    }
+
+    override fun destroy() {
+        authenticationManager.destroy()
+        fingerprintDialogController.dismiss()
     }
 
     /** Shows the fingerprint dialog UI to the user and begins authentication. */
     private fun showAuthentication() {
-        val intent = Intent(context, FingerprintDialogActivity::class.java)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        fingerprintDialogController.showAuthentication()
     }
 
     /** Dismisses any visible authentication UI. */
@@ -126,16 +117,19 @@ internal class AuthenticationHandlerFingerprintManager(
 
     /** Shows the keyguard manager as a fallback for authentication. */
     private fun showKMAsFallback() {
+        fingerprintDialogController.dismiss()
+        // Launch the confirm credential screen before canceling the fingerprint sensor. Launching
+        // sets viewModel.isConfirmingDeviceCredential, which is what suppresses the ERROR_CANCELED
+        // that the framework delivers in response to the cancellation below. Doing it in this
+        // order keeps that suppression independent of callback timing.
         confirmCredentialActivityLauncher.run()
+        viewModel.cancellationSignalProvider.cancel()
     }
 
     private fun onAuthenticationError(errorCode: Int, errorMessage: CharSequence?) {
         // Ensure we're only sending publicly defined errors.
         val knownErrorCode = ErrorUtils.toKnownErrorCodeForAuthenticate(errorCode)
-        if (
-            ErrorUtils.isLockoutError(knownErrorCode) &&
-                context.isManagingDeviceCredentialButton(viewModel.allowedAuthenticators)
-        ) {
+        if (ErrorUtils.isLockoutError(knownErrorCode) && viewModel.isOverriddenDeviceCredential) {
             showKMAsFallback()
             return
         }
@@ -146,8 +140,7 @@ internal class AuthenticationHandlerFingerprintManager(
 
         if (knownErrorCode == BiometricPrompt.ERROR_CANCELED) {
             // User-initiated cancellation errors should already be handled.
-            val canceledFrom: CanceledFrom = viewModel.canceledFrom
-            if (canceledFrom == CanceledFrom.INTERNAL || canceledFrom == CanceledFrom.CLIENT) {
+            if (viewModel.canceledFrom.isNotUserInitiated()) {
                 resultDispatcher.sendErrorToClient(knownErrorCode, errorString)
             }
 

@@ -40,7 +40,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.computedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,6 +67,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalLocaleList
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.tooling.preview.Preview
@@ -144,7 +145,7 @@ private class SplineKeyframesPlaygroundModel(private val scope: CoroutineScope) 
     private val pointCount = 6
     private val animatedOffset = Animatable(Offset.Zero, Offset.VectorConverter)
     private val anchors = mutableStateListOf<Offset>()
-    private val anchorCount by derivedStateOf { anchors.size }
+    private val anchorCount by computedStateOf { anchors.size }
 
     // Note that this is not the duration per keyframe, just an arbitrary number so that the total
     // duration scales with number of anchors
@@ -154,7 +155,7 @@ private class SplineKeyframesPlaygroundModel(private val scope: CoroutineScope) 
     private val samplePoints = mutableListOf<Offset>()
     private val sampleCount = 100
 
-    val totalDuration by derivedStateOf { anchors.size * durationPerAnchor.floatValue }
+    val totalDuration by computedStateOf { anchors.size * durationPerAnchor.floatValue }
 
     private var isInit = false
 
@@ -181,7 +182,10 @@ private class SplineKeyframesPlaygroundModel(private val scope: CoroutineScope) 
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         val fontFamilyResolver = LocalFontFamilyResolver.current
-        val textMeasurer = remember { TextMeasurer(fontFamilyResolver, density, layoutDirection) }
+        val localeList = LocalLocaleList.current
+        val textMeasurer = remember {
+            TextMeasurer(fontFamilyResolver, localeList, density, layoutDirection)
+        }
         val textColor = MaterialTheme.colors.onSurface
 
         remember(density.density) {

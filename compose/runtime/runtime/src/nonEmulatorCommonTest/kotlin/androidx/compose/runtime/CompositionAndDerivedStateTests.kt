@@ -631,6 +631,151 @@ class CompositionAndDerivedStateTests {
 
         revalidate()
     }
+
+    @Test // b/481750019
+    fun nestedDerivedStateWithChangingState() = compositionTest {
+        var item by mutableStateOf(NestedItem(10))
+
+        val evenActiveItem: NestedItem? by
+            derivedStateOf(structuralEqualityPolicy()) {
+                item.takeIf { it.active && (it.number % 2 == 0) }
+            }
+
+        val evenActiveNumber: Int? by
+            derivedStateOf(structuralEqualityPolicy()) { evenActiveItem?.number }
+
+        compose { Text("evenActiveNumber = $evenActiveNumber") }
+
+        validate { Text("evenActiveNumber = 10") }
+
+        item.active = false
+        expectChanges()
+        validate { Text("evenActiveNumber = null") }
+
+        item = item.copyWith(9)
+        expectNoChanges()
+        revalidate()
+
+        item = item.copyWith(8)
+        expectNoChanges()
+        revalidate()
+
+        item.active = true
+        expectChanges()
+        validate { Text("evenActiveNumber = 8") }
+    }
+
+    @Test
+    fun derivedStateChangesDependencies() = compositionTest {
+        var a by mutableIntStateOf(10)
+        var b by mutableIntStateOf(20)
+        var c by mutableIntStateOf(30)
+        var cond by mutableStateOf(true)
+        val derived by derivedStateOf { if (cond) a + b else c }
+        var compositionCount = 0
+
+        compose {
+            compositionCount++
+            Text("Value is $derived")
+        }
+
+        validate { Text("Value is 30") }
+        assertEquals(1, compositionCount)
+
+        cond = false
+        expectNoChanges()
+        revalidate()
+        assertEquals(1, compositionCount)
+
+        a = 30
+        expectNoChanges()
+        revalidate()
+        assertEquals(1, compositionCount)
+
+        c = 0
+        expectChanges()
+        validate { Text("Value is 0") }
+        assertEquals(2, compositionCount)
+
+        Snapshot.withMutableSnapshot {
+            cond = true
+            a = -20
+        }
+        expectNoChanges()
+        revalidate()
+        assertEquals(2, compositionCount)
+
+        a = 0
+        expectChanges()
+        validate { Text("Value is 20") }
+        assertEquals(3, compositionCount)
+    }
+
+    @Test
+    fun onlyInvalidatesIfResultIsDifferentInMovableContent() = compositionTest {
+        var a by mutableIntStateOf(32)
+        var b by mutableIntStateOf(10)
+        val answer by derivedStateOf { a + b }
+        var compositionCount = 0
+        val content = movableContentOf {
+            compositionCount++
+            Text("The answer is $answer")
+        }
+
+        compose { content() }
+
+        validate { Text("The answer is ${a + b}") }
+        assertEquals(1, compositionCount)
+
+        Snapshot.withMutableSnapshot {
+            a += 1
+            b -= 1
+        }
+
+        expectNoChanges()
+        revalidate()
+        assertEquals(1, compositionCount)
+
+        a += 1
+
+        expectChanges()
+        revalidate()
+        assertEquals(2, compositionCount)
+    }
+
+    @Test // b/565042559
+    fun derivedStateSkippedScopeInvalidationsAreCleared() = compositionTest {
+        var a by mutableIntStateOf(1)
+        var b by mutableIntStateOf(1)
+        val derived by derivedStateOf { a + b }
+
+        compose { Wrap { Text("Derived: $derived") } }
+
+        validate { Text("Derived: 2") }
+
+        val composer = (composition as CompositionImpl).composer
+        assertEquals(0, composer.stacksSize())
+
+        // derivedStateOf dependency changes, but derived result is unchanged.
+        // The scope invalidation is skipped in recomposeToGroupEnd and must be removed.
+        Snapshot.withMutableSnapshot {
+            a += 1
+            b -= 1
+        }
+        expectNoChanges()
+        revalidate()
+        assertEquals(0, composer.stacksSize())
+    }
+}
+
+private class NestedItem(val number: Int) {
+    var active by mutableStateOf(true)
+
+    fun copyWith(number: Int): NestedItem = NestedItem(number).also { it.active = active }
+
+    override fun toString(): String {
+        return "Item(number=$number, active=$active)"
+    }
 }
 
 @Composable

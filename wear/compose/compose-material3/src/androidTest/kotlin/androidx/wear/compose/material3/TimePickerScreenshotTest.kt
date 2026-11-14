@@ -26,7 +26,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.filters.MediumTest
@@ -36,7 +36,6 @@ import com.google.testing.junit.testparameterinjector.TestParameter
 import com.google.testing.junit.testparameterinjector.TestParameterInjector
 import java.time.LocalTime
 import java.util.Locale
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -46,7 +45,7 @@ import org.junit.runner.RunWith
 @RunWith(TestParameterInjector::class)
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class TimePickerScreenshotTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -85,6 +84,7 @@ class TimePickerScreenshotTest {
         )
 
     @Test
+    @Suppress("DEPRECATION")
     fun timePicker_minutesSeconds(@TestParameter screenSize: ScreenSize) =
         rule.verifyTimePickerScreenshot(
             testName = testName,
@@ -174,7 +174,9 @@ class TimePickerScreenshotTest {
             content = {
                 // Set locale to Arabic for correct pattern and AM/PM strings.
                 val arabicConfig =
-                    Configuration(LocalConfiguration.current).apply { setLocale(Locale("ar")) }
+                    Configuration(LocalConfiguration.current).apply {
+                        setLocale(Locale.forLanguageTag("ar"))
+                    }
                 CompositionLocalProvider(LocalConfiguration provides arabicConfig) {
                     TimePicker(
                         onTimePicked = {},

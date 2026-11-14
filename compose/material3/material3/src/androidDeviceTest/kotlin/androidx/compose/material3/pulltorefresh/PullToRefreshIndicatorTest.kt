@@ -16,28 +16,33 @@
 
 package androidx.compose.material3.pulltorefresh
 
+import android.os.Build
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
+import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +51,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PullToRefreshIndicatorTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun indicatorDisplayed_refreshing() {
@@ -79,7 +84,7 @@ class PullToRefreshIndicatorTest {
     @Test
     fun indicatorRespects_changingOffset() {
         val containerSize = 30.dp
-        var verticalOffsetDp = 200.dp
+        val verticalOffsetDp = 200.dp
         val state = PullToRefreshState()
         rule.setContent {
             Box(Modifier.fillMaxSize()) {
@@ -137,6 +142,37 @@ class PullToRefreshIndicatorTest {
             // The indicator should not have blocked its sibling (placed first, so below) from
             // seeing touch events.
             Truth.assertThat(downEvent).isNotNull()
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
+    @Test
+    fun loadingIndicator_pulledWithoutRecomposition_drawsIndicator() {
+        val state = PullToRefreshState()
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            Box(Modifier.fillMaxSize()) {
+                PullToRefreshDefaults.LoadingIndicator(
+                    modifier = Modifier.testTag(INDICATOR_TAG),
+                    state = state,
+                    isRefreshing = false,
+                    containerColor = Color.White,
+                    color = Color.Black,
+                    elevation = 0.dp,
+                    // Places the fully pulled indicator at its layout position.
+                    maxDistance = LoaderIndicatorHeight,
+                )
+            }
+        }
+        rule.waitForIdle()
+
+        // Pull the indicator while the clock is paused, so no recomposition happens before the
+        // indicator is drawn.
+        runBlocking { state.snapTo(1f) }
+
+        rule.onNodeWithTag(INDICATOR_TAG).captureToImage().toPixelMap().let {
+            Truth.assertThat(it[it.width / 2, it.height / 2]).isEqualTo(Color.Black)
         }
     }
 

@@ -19,7 +19,11 @@ package androidx.wear.compose.material3
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,7 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.filters.MediumTest
@@ -50,7 +54,6 @@ import androidx.test.screenshot.AndroidXScreenshotTestRule
 import androidx.wear.compose.material3.samples.R
 import com.google.testing.junit.testparameterinjector.TestParameter
 import com.google.testing.junit.testparameterinjector.TestParameterInjector
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -61,7 +64,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class CardScreenshotTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -172,6 +175,72 @@ class CardScreenshotTest {
                 ),
             sizeToIntrinsics = false,
         )
+    }
+
+    @Test
+    fun card_inset_focus_ring() {
+        val cardInteractionSource = MutableInteractionSource()
+        val outlinedCardInteractionSource = MutableInteractionSource()
+        val appCardInteractionSource = MutableInteractionSource()
+        val titleCardInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Card(
+                            onClick = {},
+                            interactionSource = cardInteractionSource,
+                            modifier = Modifier.width(IntrinsicSize.Max),
+                        ) {
+                            Text("Card: Some body content")
+                        }
+                        OutlinedCard(
+                            onClick = {},
+                            interactionSource = outlinedCardInteractionSource,
+                            modifier = Modifier.width(IntrinsicSize.Max),
+                        ) {
+                            Text("Outlined Card: Some body content")
+                        }
+                        AppCard(
+                            onClick = {},
+                            appName = { Text("AppName") },
+                            title = { Text("AppCard") },
+                            time = { Text("now") },
+                            interactionSource = appCardInteractionSource,
+                            modifier = Modifier.width(IntrinsicSize.Max),
+                        ) {
+                            Text("Some body content")
+                        }
+                        TitleCard(
+                            onClick = {},
+                            title = { Text("TitleCard") },
+                            subtitle = { Text("Subtitle") },
+                            time = { Text("now") },
+                            interactionSource = titleCardInteractionSource,
+                            modifier = Modifier.width(IntrinsicSize.Max),
+                        ) {
+                            Text("Some body content")
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            cardInteractionSource.tryEmit(FocusInteraction.Focus())
+            outlinedCardInteractionSource.tryEmit(FocusInteraction.Focus())
+            appCardInteractionSource.tryEmit(FocusInteraction.Focus())
+            titleCardInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
     }
 
     @Composable

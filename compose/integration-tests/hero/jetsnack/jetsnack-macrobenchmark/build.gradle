@@ -28,13 +28,14 @@ android {
 // Create a release build type and make sure it's the only one enabled.
 // This is needed because we benchmark the release build type only.
 android.buildTypes { release {} }
-androidComponents { beforeVariants(selector().all()) { enabled = buildType == 'release' } }
+androidComponents { beforeVariants(selector().all()) { enabled = buildType == "release" } }
 
 dependencies {
     implementation(project(":benchmark:benchmark-junit4"))
     implementation(project(":benchmark:benchmark-macro-junit4"))
     implementation(project(":internal-testutils-benchmark-macro"))
     implementation(project(":compose:integration-tests:hero:hero-common:hero-common-macrobenchmark"))
+    implementation(project(":tracing:tracing-ktx"))
     implementation(libs.testRules)
     implementation(libs.testExtJunit)
     implementation(libs.testCore)

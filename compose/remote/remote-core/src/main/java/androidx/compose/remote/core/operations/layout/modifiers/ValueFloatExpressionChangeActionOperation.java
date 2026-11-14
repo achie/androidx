@@ -25,7 +25,6 @@ import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.documentation.DocumentationBuilder;
 import androidx.compose.remote.core.operations.layout.ActionOperation;
-import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.utilities.StringSerializer;
 import androidx.compose.remote.core.serialize.MapSerializer;
 import androidx.compose.remote.core.serialize.SerializeTags;
@@ -80,15 +79,12 @@ public class ValueFloatExpressionChangeActionOperation extends Operation
     }
 
     @Override
-    public void write(@NonNull WireBuffer buffer) {}
+    public void write(@NonNull WireBuffer buffer) {
+        apply(buffer, mTargetValueId, mValueExpressionId);
+    }
 
     @Override
-    public void runAction(
-            @NonNull RemoteContext context,
-            @NonNull CoreDocument document,
-            @NonNull Component component,
-            float x,
-            float y) {
+    public void runAction(@NonNull RemoteContext context, @NonNull CoreDocument document) {
         document.evaluateFloatExpression(mValueExpressionId, mTargetValueId, context);
     }
 
@@ -112,8 +108,8 @@ public class ValueFloatExpressionChangeActionOperation extends Operation
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int valueId = buffer.readInt();
-        int value = buffer.readInt();
+        int valueId = buffer.readId();
+        int value = buffer.readId();
         operations.add(new ValueFloatExpressionChangeActionOperation(valueId, value));
     }
 
@@ -123,12 +119,13 @@ public class ValueFloatExpressionChangeActionOperation extends Operation
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Layout Operations", OP_CODE, "ValueIntegerExpressionChangeActionOperation")
-                .description(
-                        "ValueIntegerExpressionChange action. "
-                                + " This operation represents a value change for the given id")
-                .field(INT, "TARGET_VALUE_ID", "Value ID")
-                .field(INT, "VALUE_ID", "id of the value to be assigned to the target");
+        doc.operation(
+                        "Actions & Events Operations",
+                        OP_CODE,
+                        "ValueFloatExpressionChangeActionOperation")
+                .description("Action that updates a float variable via a dynamic expression")
+                .field(INT, "targetValueId", "The ID of the float variable to update")
+                .field(INT, "valueExpressionId", "The ID of the expression to evaluate");
     }
 
     @Override
@@ -138,5 +135,15 @@ public class ValueFloatExpressionChangeActionOperation extends Operation
                 .addType("ValueFloatExpressionChangeActionOperation")
                 .add("targetValueId", mTargetValueId)
                 .add("valueExpressionId", mValueExpressionId);
+    }
+
+    /** Returns {@code mTargetValueId}. */
+    public int getTargetValueId() {
+        return mTargetValueId;
+    }
+
+    /** Returns {@code mValueExpressionId}. */
+    public int getValueExpressionId() {
+        return mValueExpressionId;
     }
 }

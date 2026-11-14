@@ -24,6 +24,7 @@ import androidx.compose.lint.Package
 import androidx.compose.lint.PackageName
 import androidx.compose.lint.inheritsFrom
 import androidx.compose.lint.isInPackageName
+import androidx.compose.lint.isInvokedWithinComposable
 import com.android.tools.lint.client.api.UElementHandler
 import com.android.tools.lint.detector.api.Category
 import com.android.tools.lint.detector.api.Context
@@ -79,7 +80,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                         LocalContextConfigurationRead,
                         node,
                         context.getNameLocation(node),
-                        "Reading Configuration using $LocalContextCurrentResourcesConfiguration",
+                        "Reading Configuration using $LocalContextCurrentResourcesConfiguration is not configuration-aware and may return stale values if the Configuration changes",
                         fix()
                             .replace()
                             .name("Replace with $LocalConfigurationCurrent")
@@ -181,7 +182,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                             LocalContextConfigurationRead,
                             node,
                             context.getNameLocation(node),
-                            "Reading Configuration using $LocalContextCurrentResourcesConfiguration",
+                            "Reading Configuration using $LocalContextCurrentResourcesConfiguration is not configuration-aware and may return stale values if the Configuration changes",
                         )
                     } else {
                         if (resourcesCall) {
@@ -199,8 +200,13 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                                 if (valueArgumentText != null && nodeText != null) {
                                     nodeText.substringBefore(valueArgumentText)
                                 } else null
-                            val replaceWith =
-                                textToReplace?.let {
+                            // If this call is not inside a composable scope, don't provide a fix
+                            // that suggests calling a composable function. The refactor required
+                            // can't be easily provided here.
+                            val fix =
+                                if (!node.isInvokedWithinComposable() || textToReplace == null) {
+                                    null
+                                } else {
                                     when (contextGetResourceValueCallName) {
                                         ContextGetString -> {
                                             fix()
@@ -270,8 +276,8 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                                 LocalContextGetResourceValueCall,
                                 node,
                                 context.getNameLocation(node),
-                                "Querying resource values using $LocalContextCurrent",
-                                replaceWith,
+                                "Querying resource values using $LocalContextCurrent is not configuration-aware and may return stale values if the Configuration changes",
+                                fix,
                             )
                         }
                     }
@@ -323,7 +329,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                         LocalContextResourcesRead,
                         resourcesCall,
                         context.getNameLocation(resourcesCall),
-                        "Reading Resources using $LocalContextCurrentResources",
+                        "Reading Resources using $LocalContextCurrentResources is not configuration-aware and may return stale values if the Configuration changes",
                         fix()
                             .replace()
                             .name("Replace with $LocalResourcesCurrent")
@@ -347,7 +353,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
                         LocalContextResourcesRead,
                         resourcesCall,
                         context.getNameLocation(resourcesCall),
-                        "Reading Resources using $LocalContextCurrentResources",
+                        "Reading Resources using $LocalContextCurrentResources is not configuration-aware and may return stale values if the Configuration changes",
                     )
                 }
             }
@@ -467,7 +473,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
         val LocalContextConfigurationRead =
             Issue.create(
                 "LocalContextConfigurationRead",
-                "Reading Configuration using $LocalContextCurrentResourcesConfiguration",
+                "Reading Configuration using $LocalContextCurrentResourcesConfiguration is not configuration-aware and may return stale values if the Configuration changes",
                 "Changes to the Configuration object will not cause LocalContext reads to be " +
                     "invalidated, so you may end up with stale values when the Configuration " +
                     "changes. Instead, use $LocalConfigurationCurrent to retrieve the " +
@@ -485,7 +491,7 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
         val LocalContextGetResourceValueCall =
             Issue.create(
                 "LocalContextGetResourceValueCall",
-                "Querying resource properties using $LocalContextCurrent",
+                "Querying resource values using $LocalContextCurrent is not configuration-aware and may return stale values if the Configuration changes",
                 "Changes to the Configuration object will not cause " +
                     "$LocalContextCurrent reads to be invalidated, so calls to APIs such as " +
                     "Context.getString() will not be updated when the Configuration changes, " +
@@ -506,10 +512,10 @@ class LocalContextResourcesConfigurationReadDetector : Detector(), SourceCodeSca
         val LocalContextResourcesRead =
             Issue.create(
                 "LocalContextResourcesRead",
-                "Reading Resources using $LocalContextCurrentResources",
+                "Reading Resources using $LocalContextCurrentResources is not configuration-aware and may return stale values if the Configuration changes",
                 "Changes to the Configuration object will not cause " +
                     "$LocalContextCurrentResources reads to be invalidated, so calls to APIs such" +
-                    "as Resources.getString() will not be updated when the Configuration " +
+                    " as Resources.getString() will not be updated when the Configuration " +
                     "changes. Instead, use $LocalResourcesCurrent to retrieve the Resources - " +
                     "this will invalidate callers when the Configuration changes, to ensure that " +
                     "these calls reflect the latest values.",

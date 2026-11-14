@@ -63,6 +63,7 @@ import androidx.camera.video.OutputOptions;
 import androidx.camera.video.PendingRecording;
 import androidx.camera.video.Recorder;
 import androidx.camera.video.Recording;
+import androidx.camera.video.RecordingStats;
 import androidx.camera.video.VideoCapture;
 import androidx.camera.video.VideoRecordEvent;
 import androidx.core.app.NotificationCompat;
@@ -90,6 +91,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -100,6 +102,7 @@ public class CameraXService extends LifecycleService {
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID_SERVICE_INFO = "channel_service_info";
     private static final int FRAME_COUNT_TO_UPDATE_ANALYSIS_INFO = 60;
+    private static final long RECORD_VIDEO_MIN_DURATION_NANOS = TimeUnit.SECONDS.toNanos(1);
 
     // Actions
     public static final String ACTION_BIND_USE_CASES =
@@ -121,23 +124,25 @@ public class CameraXService extends LifecycleService {
     private final IBinder mBinder = new CameraXServiceBinder();
     private final AtomicInteger mAnalysisFrameCount = new AtomicInteger(0);
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // ------------------------------------------------------------------------------------------ //
     //                          Members only accessed on main thread                              //
-    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // ------------------------------------------------------------------------------------------ //
     private final Map<Class<?>, UseCase> mBoundUseCases = new HashMap<>();
     private @Nullable Recording mActiveRecording;
     private NotificationCompat.@Nullable Builder mNotificationBuilder;
     //--------------------------------------------------------------------------------------------//
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //--------------------------------------------------------------------------------------------//
     //                                   Members for testing                                      //
-    ////////////////////////////////////////////////////////////////////////////////////////////////
+    //--------------------------------------------------------------------------------------------//
     private final Set<Uri> mSavedMediaUri = new HashSet<>();
 
     private @Nullable Consumer<Collection<UseCase>> mOnUseCaseBoundCallback;
     private @Nullable CountDownLatch mAnalysisFrameLatch;
     private @Nullable CountDownLatch mTakePictureLatch;
-    private @Nullable CountDownLatch mRecordVideoLatch;
+    private volatile @Nullable CountDownLatch mRecordVideoLatch;
+    private volatile @Nullable CountDownLatch mRecordVideoStatusLatch;
+    private volatile int mRecordVideoError = ERROR_NONE;
     //--------------------------------------------------------------------------------------------//
 
     @Override
@@ -462,7 +467,16 @@ public class CameraXService extends LifecycleService {
     };
 
     private final Consumer<VideoRecordEvent> mRecordingListener = event -> {
-        if (event instanceof VideoRecordEvent.Finalize) {
+        if (event instanceof VideoRecordEvent.Status) {
+            RecordingStats stats = event.getRecordingStats();
+            if (stats.getNumBytesRecorded() > 0
+                    && stats.getRecordedDurationNanos() >= RECORD_VIDEO_MIN_DURATION_NANOS) {
+                CountDownLatch statusLatch = mRecordVideoStatusLatch;
+                if (statusLatch != null) {
+                    statusLatch.countDown();
+                }
+            }
+        } else if (event instanceof VideoRecordEvent.Finalize) {
             VideoRecordEvent.Finalize finalize = (VideoRecordEvent.Finalize) event;
 
             switch (finalize.getError()) {
@@ -501,15 +515,23 @@ public class CameraXService extends LifecycleService {
                     Toast.makeText(CameraXService.this, msg, Toast.LENGTH_LONG).show();
 
                     mSavedMediaUri.add(uri);
-                    if (mRecordVideoLatch != null) {
-                        mRecordVideoLatch.countDown();
-                    }
                     break;
                 default:
                     String errMsg = "Video capture failed by (" + finalize.getError() + "): "
                             + finalize.getCause();
                     Log.e(TAG, errMsg, finalize.getCause());
                     Toast.makeText(CameraXService.this, errMsg, Toast.LENGTH_LONG).show();
+            }
+            // Always release the latches so tests fail fast with the actual error instead of
+            // timing out.
+            mRecordVideoError = finalize.getError();
+            CountDownLatch statusLatch = mRecordVideoStatusLatch;
+            if (statusLatch != null) {
+                statusLatch.countDown();
+            }
+            CountDownLatch recordLatch = mRecordVideoLatch;
+            if (recordLatch != null) {
+                recordLatch.countDown();
             }
             mActiveRecording = null;
             updateNotification();
@@ -553,8 +575,28 @@ public class CameraXService extends LifecycleService {
 
     @VisibleForTesting
     @NonNull CountDownLatch acquireRecordVideoCountDownLatch() {
-        mRecordVideoLatch = new CountDownLatch(1);
-        return mRecordVideoLatch;
+        mRecordVideoError = ERROR_NONE;
+        CountDownLatch latch = new CountDownLatch(1);
+        mRecordVideoLatch = latch;
+        return latch;
+    }
+
+    @VisibleForTesting
+    @NonNull CountDownLatch acquireRecordVideoStatusCountDownLatch() {
+        CountDownLatch latch = new CountDownLatch(1);
+        mRecordVideoStatusLatch = latch;
+        return latch;
+    }
+
+    /**
+     * Returns the {@link VideoRecordEvent.Finalize} error code of the last finalized recording.
+     *
+     * <p>Only valid after the latch returned by {@link #acquireRecordVideoCountDownLatch()} has
+     * been released.
+     */
+    @VisibleForTesting
+    int getRecordVideoError() {
+        return mRecordVideoError;
     }
 
     @VisibleForTesting

@@ -12,10 +12,8 @@ ANDROIDX_DIR="$(pwd)"
 
 # Resolve JDK folders for host OS
 STUDIO_JDK="linux"
-PREBUILT_JDK="linux-x86"
 if [[ $OSTYPE == darwin* ]]; then
   STUDIO_JDK="mac/Contents/Home"
-  PREBUILT_JDK="darwin-x86"
 fi
 
 # resolve dirs
@@ -50,7 +48,7 @@ export ANDROID_HOME="$ANDROIDX_DIR/prebuilts/fullsdk-$plat"
 
 function buildStudio() {
   STUDIO_BUILD_LOG="$OUT_DIR/studio.log"
-  if JAVA_HOME="$STUDIO_DIR/prebuilts/studio/jdk/jdk17/$STUDIO_JDK" $gw -p $TOOLS_DIR publishLocal --stacktrace --no-daemon > "$STUDIO_BUILD_LOG" 2>&1; then
+  if JAVA_HOME="$STUDIO_DIR/prebuilts/studio/jdk/jdk17/$STUDIO_JDK" $gw -p $TOOLS_DIR -PadditionalBazelArgs='--config=dl-ci --credential_helper=*.pkg.dev=%workspace%/build/bazel/tools/ci_credhelper.py --credential_helper=*.googleapis.com=%workspace%/build/bazel/tools/ci_credhelper.py' publishLocal --stacktrace --no-daemon > "$STUDIO_BUILD_LOG" 2>&1; then
     echo built studio successfully
   else
     cat "$STUDIO_BUILD_LOG" >&2

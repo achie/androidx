@@ -17,6 +17,8 @@
 package androidx.build
 
 import androidx.build.dependencyTracker.AffectedModuleDetector
+import java.io.StringReader
+import java.util.Properties
 import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.provider.Provider
@@ -49,7 +51,10 @@ const val SUMMARIZE_STANDARD_ERROR = "androidx.summarizeStderr"
  */
 const val USE_MAX_DEP_VERSIONS = "androidx.useMaxDepVersions"
 
-/** Setting this property enables writing versioned API files */
+/**
+ * Key in `androidx-branch.properties` that turns on writing versioned API files. See
+ * [branchProperty].
+ */
 const val WRITE_VERSIONED_API_FILES = "androidx.writeVersionedApiFiles"
 
 /**
@@ -87,12 +92,6 @@ const val VERIFY_UP_TO_DATE = "androidx.verifyUpToDate"
  */
 const val KMP_GITHUB_BUILD = "androidx.github.build"
 
-/** Specifies to give as much memory to Gradle as in a typical CI run */
-const val HIGH_MEMORY = "androidx.highMemory"
-
-/** Negates the HIGH_MEMORY flag */
-const val LOW_MEMORY = "androidx.lowMemory"
-
 /**
  * If true, don't require lint-checks project to exist. This should only be set in integration
  * tests, to allow them to save time by not configuring extra projects.
@@ -105,14 +104,13 @@ const val ALLOW_MISSING_LINT_CHECKS_PROJECT = "androidx.allow.missing.lint"
  */
 const val XCODEGEN_DOWNLOAD_URI = "androidx.benchmark.darwin.xcodeGenDownloadUri"
 
-/** If true, don't restrict usage of compileSdk property. */
-const val ALLOW_CUSTOM_COMPILE_SDK = "androidx.allowCustomCompileSdk"
-
 /** If true, yarn dependencies are fetched from an offline mirror */
 const val YARN_OFFLINE_MODE = "androidx.yarnOfflineMode"
 
 /** Defined by AndroidX Benchmark Plugin, may be used for local experiments with compilation */
 const val FORCE_BENCHMARK_AOT_COMPILATION = "androidx.benchmark.forceaotcompilation"
+
+const val ALLOW_LOCKFILE_MISMATCH = "androidx.allowLockfileMismatch"
 
 val ALL_ANDROIDX_PROPERTIES =
     setOf(
@@ -121,14 +119,11 @@ val ALL_ANDROIDX_PROPERTIES =
         VALIDATE_PROJECT_STRUCTURE,
         DISPLAY_TEST_OUTPUT,
         ENABLE_DOCUMENTATION,
-        HIGH_MEMORY,
-        LOW_MEMORY,
         STUDIO_TYPE,
         SUMMARIZE_STANDARD_ERROR,
         USE_MAX_DEP_VERSIONS,
         VALIDATE_NO_UNRECOGNIZED_MESSAGES,
         VERIFY_UP_TO_DATE,
-        WRITE_VERSIONED_API_FILES,
         AffectedModuleDetector.ENABLE_ARG,
         AffectedModuleDetector.BASE_COMMIT_ARG,
         PLAYGROUND_SNAPSHOT_BUILD_ID,
@@ -139,11 +134,11 @@ val ALL_ANDROIDX_PROPERTIES =
         ENABLED_KMP_TARGET_PLATFORMS,
         ALLOW_MISSING_LINT_CHECKS_PROJECT,
         XCODEGEN_DOWNLOAD_URI,
-        ALLOW_CUSTOM_COMPILE_SDK,
         FilteredAnchorTask.PROP_TASK_NAME,
         FilteredAnchorTask.PROP_PATH_PREFIX,
         YARN_OFFLINE_MODE,
         FORCE_BENCHMARK_AOT_COMPILATION,
+        ALLOW_LOCKFILE_MISMATCH,
     ) + AndroidConfigImpl.GRADLE_PROPERTIES
 
 /**
@@ -170,20 +165,18 @@ fun Project.isValidateProjectStructureEnabled(): Boolean =
  * Validates that all properties passed by the user of the form "-Pandroidx.*" are not misspelled
  */
 fun Project.validateAllAndroidxArgumentsAreRecognized() {
-    for (propertyName in project.properties.keys) {
-        if (propertyName.startsWith("androidx")) {
-            if (!ALL_ANDROIDX_PROPERTIES.contains(propertyName)) {
-                val message =
-                    "Unrecognized Androidx property '$propertyName'.\n" +
-                        "\n" +
-                        "Is this a misspelling? All recognized Androidx properties:\n" +
-                        ALL_ANDROIDX_PROPERTIES.joinToString("\n") +
-                        "\n" +
-                        "\n" +
-                        "See AndroidXGradleProperties.kt if you need to add this property to " +
-                        "the list of known properties."
-                throw GradleException(message)
-            }
+    for (propertyName in providers.gradlePropertiesPrefixedBy("androidx.").get().keys) {
+        if (!ALL_ANDROIDX_PROPERTIES.contains(propertyName)) {
+            val message =
+                "Unrecognized Androidx property '$propertyName'.\n" +
+                    "\n" +
+                    "Is this a misspelling? All recognized Androidx properties:\n" +
+                    ALL_ANDROIDX_PROPERTIES.joinToString("\n") +
+                    "\n" +
+                    "\n" +
+                    "See AndroidXGradleProperties.kt if you need to add this property to " +
+                    "the list of known properties."
+            throw GradleException(message)
         }
     }
 }
@@ -200,16 +193,59 @@ fun Project.isDisplayTestOutput(): Boolean = findBooleanProperty(DISPLAY_TEST_OU
  * Returns whether the project should write versioned API files, e.g. `1.1.0-alpha01.txt`.
  *
  * <p>
- * When set to `true`, the `updateApi` task will write the current API surface to both `current.txt`
- * and `<version>.txt`. When set to `false`, only `current.txt` will be written. The default value
- * is `true`.
+ * When `true`, the `updateApi` task will write the current API surface to both `current.txt` and
+ * `<version>.txt`. When `false`, only `current.txt` will be written. The value comes from
+ * [branchProperty], or is `true`.
  */
 fun Project.isWriteVersionedApiFilesEnabled(): Boolean =
-    findBooleanProperty(WRITE_VERSIONED_API_FILES) ?: true
+    branchProperty(WRITE_VERSIONED_API_FILES, "true").toBoolean()
+
+/**
+ * Returns [name] from `androidx-branch.properties`, or [default] if the file or the key is missing.
+ *
+ * Each branch's repo manifest links that file in the checkout root to a file in
+ * `development/branch-config`. settings.gradle reads it and gives every project its settings as
+ * extra properties. This lets build settings differ per branch while every branch has the same
+ * text.
+ */
+internal fun Project.branchProperty(name: String, default: String): String {
+    val extra = extensions.extraProperties
+    return if (extra.has(name)) extra.get(name) as String else default
+}
 
 /** Returns whether the build is for checking forward compatibility across projects */
 fun Project.usingMaxDepVersions(): Provider<Boolean> {
     return project.providers.gradleProperty(USE_MAX_DEP_VERSIONS).map { true }.orElse(false)
+}
+
+/** Gradle property controlling whether Kotlin/Native KLIBs are cross-compiled on non-Mac hosts. */
+private const val KLIB_CROSS_COMPILATION_ENABLED = "kotlin.native.enableKlibsCrossCompilation"
+
+/**
+ * Returns whether Kotlin/Native KLIB cross-compilation is enabled for this project.
+ *
+ * When disabled (via `kotlin.native.enableKlibsCrossCompilation=false` in the project's
+ * `gradle.properties`), the project's Apple targets cannot be built on a non-Mac host because it,
+ * or one of its dependencies, uses C-interop.
+ *
+ * Gradle does not surface per-project `gradle.properties` values through the standard property
+ * APIs, so the project's own `gradle.properties` file is read directly, falling back to the global
+ * value which defaults to `true`.
+ */
+fun Project.isKlibCrossCompilationEnabled(): Provider<Boolean> {
+    val globalValue =
+        providers.gradleProperty(KLIB_CROSS_COMPILATION_ENABLED).map { it.toBoolean() }.orElse(true)
+    return providers
+        .fileContents(layout.projectDirectory.file("gradle.properties"))
+        .asText
+        .map { text -> Properties().apply { load(StringReader(text)) } }
+        .flatMap { props ->
+            when (val value = props.getProperty(KLIB_CROSS_COMPILATION_ENABLED)) {
+                null -> globalValue
+                else -> providers.provider { value.toBoolean() }
+            }
+        }
+        .orElse(globalValue)
 }
 
 /** Returns whether we should use the offline mirror for dependencies */
@@ -222,9 +258,7 @@ fun Project.useYarnOffline() = findBooleanProperty(YARN_OFFLINE_MODE) ?: false
 fun Project.allowMissingLintProject() =
     findBooleanProperty(ALLOW_MISSING_LINT_CHECKS_PROJECT) ?: false
 
-/** Whether libraries are allowed to customize the value of the compileSdk property. */
-fun Project.isCustomCompileSdkAllowed(): Boolean =
-    findBooleanProperty(ALLOW_CUSTOM_COMPILE_SDK) ?: true
+fun Project.allowLockfileMismatch() = findBooleanProperty(ALLOW_LOCKFILE_MISMATCH) ?: true
 
 fun Project.findBooleanProperty(propName: String): Boolean? =
     project.providers.gradleProperty(propName).map { it.toBoolean() }.getOrNull()

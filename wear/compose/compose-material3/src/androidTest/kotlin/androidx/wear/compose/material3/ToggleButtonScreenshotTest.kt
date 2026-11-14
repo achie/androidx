@@ -17,22 +17,26 @@
 package androidx.wear.compose.material3
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -42,7 +46,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class ToggleButtonScreenshotTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -240,6 +244,186 @@ class ToggleButtonScreenshotTest {
     @Test
     fun split_switch_button_customized_horizontal_padding_24dp() = verifyScreenshot {
         sampleSplitSwitchButton(contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp))
+    }
+
+    @Test
+    fun toggle_button_checkbox_inset_focus_ring() {
+        val checkedInteractionSource = MutableInteractionSource()
+        val uncheckedInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        CheckboxButton(
+                            icon = { TestIcon() },
+                            label = { Text("ToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = true,
+                            onCheckedChange = {},
+                            interactionSource = checkedInteractionSource,
+                        )
+                        CheckboxButton(
+                            icon = { TestIcon() },
+                            label = { Text("ToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = false,
+                            onCheckedChange = {},
+                            interactionSource = uncheckedInteractionSource,
+                        )
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            checkedInteractionSource.tryEmit(FocusInteraction.Focus())
+            uncheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
+
+    @Test
+    fun split_toggle_button_checkbox_inset_focus_ring() {
+        val containerInteractionSource = MutableInteractionSource()
+        val toggleInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        SplitCheckboxButton(
+                            label = { Text("SplitToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = true,
+                            onCheckedChange = {},
+                            onContainerClick = {},
+                            toggleContentDescription = "",
+                            containerInteractionSource = containerInteractionSource,
+                        )
+                        SplitCheckboxButton(
+                            label = { Text("SplitToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = false,
+                            onCheckedChange = {},
+                            onContainerClick = {},
+                            toggleContentDescription = "",
+                            toggleInteractionSource = toggleInteractionSource,
+                        )
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            containerInteractionSource.tryEmit(FocusInteraction.Focus())
+            toggleInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
+
+    @Test
+    fun toggle_button_switch_inset_focus_ring() {
+        val checkedInteractionSource = MutableInteractionSource()
+        val uncheckedInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        SwitchButton(
+                            icon = { TestIcon() },
+                            label = { Text("ToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = true,
+                            onCheckedChange = {},
+                            interactionSource = checkedInteractionSource,
+                        )
+                        SwitchButton(
+                            icon = { TestIcon() },
+                            label = { Text("ToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = false,
+                            onCheckedChange = {},
+                            interactionSource = uncheckedInteractionSource,
+                        )
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            checkedInteractionSource.tryEmit(FocusInteraction.Focus())
+            uncheckedInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
+    }
+
+    @Test
+    fun split_toggle_button_switch_inset_focus_ring() {
+        val containerInteractionSource = MutableInteractionSource()
+        val toggleInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        SplitSwitchButton(
+                            label = { Text("SplitToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = true,
+                            onCheckedChange = {},
+                            onContainerClick = {},
+                            toggleContentDescription = "",
+                            containerInteractionSource = containerInteractionSource,
+                        )
+                        SplitSwitchButton(
+                            label = { Text("SplitToggleButton") },
+                            secondaryLabel = { Text("Secondary label") },
+                            checked = false,
+                            onCheckedChange = {},
+                            onContainerClick = {},
+                            toggleContentDescription = "",
+                            toggleInteractionSource = toggleInteractionSource,
+                        )
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            containerInteractionSource.tryEmit(FocusInteraction.Focus())
+            toggleInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
     }
 
     @Composable

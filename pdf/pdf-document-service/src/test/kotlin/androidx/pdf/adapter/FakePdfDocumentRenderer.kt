@@ -17,29 +17,58 @@
 package androidx.pdf.adapter
 
 import android.os.ParcelFileDescriptor
+import androidx.pdf.PdfDocument.Companion.LINEARIZATION_STATUS_NOT_LINEARIZED
 
 class FakePdfDocumentRenderer(
-    override val isLinearized: Boolean,
-    override val pageCount: Int,
-    override val formType: Int,
+    override val linearizationStatus: Int = LINEARIZATION_STATUS_NOT_LINEARIZED,
+    override val pageCount: Int = 10,
+    override val formType: Int = 0,
 ) : PdfDocumentRenderer {
-    private val fakePagesMap = mutableMapOf<Int, PdfPage>()
+    val fakePagesMap = mutableMapOf<Int, FakePdfPage>()
+    private val pageCache = PdfPageCache()
+    private val lock = Any()
+
+    var isClosed = false
 
     init {
-        for (pageNum in 0 until pageCount) fakePagesMap[pageNum] = FakePdfPage(pageNum, 100, 100)
+        for (pageNum in 0 until pageCount) {
+            fakePagesMap[pageNum] = FakePdfPage(pageNum, 100, 100)
+        }
     }
 
     override fun openPage(pageNum: Int, useCache: Boolean): PdfPage {
-        return fakePagesMap[pageNum] ?: throw IndexOutOfBoundsException()
+        synchronized(lock) {
+            if (isClosed) throw RendererClosedException()
+            return pageCache.getOrUpdate(pageNum, useCache) {
+                fakePagesMap[pageNum] ?: throw IndexOutOfBoundsException()
+            }
+        }
     }
 
-    override fun releasePage(page: PdfPage?, pageNum: Int) {}
+    override fun releasePage(page: PdfPage?, pageNum: Int) {
+        synchronized(lock) {
+            if (isClosed) return
+            val removedPage = pageCache.remove(pageNum)
+            if (removedPage == null) {
+                page?.close()
+            } else {
+                removedPage.close()
+                if (page != removedPage) {
+                    page?.close()
+                }
+            }
+        }
+    }
 
     override fun write(destination: ParcelFileDescriptor, removePasswordProtection: Boolean) {
         TODO("Not yet implemented")
     }
 
     override fun close() {
-        TODO("Not yet implemented")
+        synchronized(lock) {
+            if (isClosed) return
+            isClosed = true
+            pageCache.clearAll()
+        }
     }
 }

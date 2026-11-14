@@ -20,8 +20,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
@@ -38,9 +38,9 @@ import androidx.camera.core.impl.utils.executor.CameraXExecutors
 import androidx.camera.core.processing.DefaultSurfaceProcessor
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.media3.effect.Media3Effect
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.PreTestCameraIdList
+import androidx.camera.testing.impl.IgnoreVideoRecordingProblematicDeviceRule.Companion.skipVideoRecordingTestIfNotSupportedByEmulator
 import androidx.camera.testing.impl.LabTestRule
 import androidx.camera.testing.impl.SurfaceTextureProvider
 import androidx.camera.testing.impl.fakes.FakeLifecycleOwner
@@ -63,6 +63,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.After
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -75,10 +76,6 @@ import org.junit.runners.Parameterized
 class ConcurrentCameraTest(private val implName: String, private val cameraConfig: CameraXConfig) {
 
     @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
-
-    @get:Rule
     val cameraRule =
         CameraUtil.grantCameraPermissionAndPreTestAndPostTest(PreTestCameraIdList(cameraConfig))
 
@@ -86,14 +83,15 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
 
     companion object {
         const val PREVIEW_FRAMES = 5
+        const val VIDEO_DURATION_LIMIT_MS = 1_500L
+        // The recording finalizes after the duration limit is reached by the encoded data, which
+        // also includes the first key frame latency and the encoder stop timeouts. These can take
+        // several seconds on slow devices such as emulators.
+        const val VIDEO_FINALIZE_TIMEOUT_MS = 15_000L
 
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                arrayOf(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()))
     }
 
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -104,6 +102,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
 
     @Before
     fun setUp(): Unit = runBlocking {
+        assumeFalse(
+            "Test fails on cuttlefish b/467708340",
+            Build.MODEL.contains("Cuttlefish", ignoreCase = true),
+        )
         assumeTrue(packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_CONCURRENT))
 
         ProcessCameraProvider.configureInstance(cameraConfig)
@@ -435,7 +437,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                 cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA,
                 enableVideoCapture = true,
                 compositionSettings =
-                    CompositionSettings.Builder().setOffset(0.0f, 0.0f).setScale(1.0f, 1.0f).build(),
+                    CompositionSettings.Builder()
+                        .setOffset(0.0f, 0.0f)
+                        .setScale(1.0f, 1.0f)
+                        .build(),
             )
 
         val secondary =
@@ -478,7 +483,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                 cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA,
                 enableVideoCapture = true,
                 compositionSettings =
-                    CompositionSettings.Builder().setOffset(0.0f, 0.0f).setScale(1.0f, 1.0f).build(),
+                    CompositionSettings.Builder()
+                        .setOffset(0.0f, 0.0f)
+                        .setScale(1.0f, 1.0f)
+                        .build(),
             )
 
         val secondary =
@@ -620,7 +628,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                 cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA,
                 enableVideoCapture = true,
                 compositionSettings =
-                    CompositionSettings.Builder().setOffset(0.0f, 0.0f).setScale(1.0f, 1.0f).build(),
+                    CompositionSettings.Builder()
+                        .setOffset(0.0f, 0.0f)
+                        .setScale(1.0f, 1.0f)
+                        .build(),
             )
 
         val secondary =
@@ -628,7 +639,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                 cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA,
                 useCaseGroup = primary.useCaseGroup,
                 compositionSettings =
-                    CompositionSettings.Builder().setOffset(0.0f, 0.0f).setScale(1.0f, 1.0f).build(),
+                    CompositionSettings.Builder()
+                        .setOffset(0.0f, 0.0f)
+                        .setScale(1.0f, 1.0f)
+                        .build(),
             )
 
         val tertiary =
@@ -664,7 +678,10 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                 cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA,
                 enableVideoCapture = true,
                 compositionSettings =
-                    CompositionSettings.Builder().setOffset(0.0f, 0.0f).setScale(1.0f, 1.0f).build(),
+                    CompositionSettings.Builder()
+                        .setOffset(0.0f, 0.0f)
+                        .setScale(1.0f, 1.0f)
+                        .build(),
             )
 
         // Act & Assert.
@@ -804,17 +821,25 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
             assertThat(activeRecording).isNotNull()
 
             // Wait for finalize event to saved file.
-            assertThat(semaphoresForVideoSaved.tryAcquire(5, TimeUnit.SECONDS)).isTrue()
+            assertThat(
+                    semaphoresForVideoSaved.tryAcquire(
+                        VIDEO_FINALIZE_TIMEOUT_MS,
+                        TimeUnit.MILLISECONDS,
+                    )
+                )
+                .isTrue()
             // Verify.
             val uri = Uri.fromFile(recordingFile)
             checkFileHasVideo(uri)
             assertThat(finalize!!.outputResults.outputUri).isEqualTo(uri)
 
             // Cleanup.
+            activeRecording?.close()
             recordingFile!!.delete()
         }
 
         fun startRecordingVideos() {
+            skipVideoRecordingTestIfNotSupportedByEmulator()
             recordingFile = File.createTempFile("CameraX", ".tmp").apply { deleteOnExit() }
             activeRecording =
                 videoCapture!!
@@ -822,7 +847,7 @@ class ConcurrentCameraTest(private val implName: String, private val cameraConfi
                     .prepareRecording(
                         context,
                         FileOutputOptions.Builder(recordingFile!!)
-                            .setDurationLimitMillis(1_500)
+                            .setDurationLimitMillis(VIDEO_DURATION_LIMIT_MS)
                             .build(),
                     )
                     .start(

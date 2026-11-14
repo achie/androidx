@@ -72,7 +72,7 @@ class AlteredTableColumnOrderTest {
                 .setDriver(AndroidSQLiteDriver())
                 .addMigrations(
                     object : Migration(1, 2) {
-                        override fun migrate(connection: SQLiteConnection) {
+                        override suspend fun migrate(connection: SQLiteConnection) {
                             connection.execSQL(
                                 "ALTER TABLE Foo ADD COLUMN X TEXT NOT NULL DEFAULT 'X';"
                             )
@@ -99,14 +99,12 @@ class AlteredTableColumnOrderTest {
 
     @Test
     fun verifyDifferentColumnOrder() = runTest {
-        val columnNames1 =
-            cleanDb.useReaderConnection { connection ->
-                connection.usePrepared("SELECT * FROM Foo") { it.getColumnNames() }
-            }
-        val columnNames2 =
-            migratedDb.useReaderConnection { connection ->
-                connection.usePrepared("SELECT * FROM Foo") { it.getColumnNames() }
-            }
+        val columnNames1 = cleanDb.useReaderConnection { connection ->
+            connection.usePrepared("SELECT * FROM Foo") { it.getColumnNames() }
+        }
+        val columnNames2 = migratedDb.useReaderConnection { connection ->
+            connection.usePrepared("SELECT * FROM Foo") { it.getColumnNames() }
+        }
         // Result order matches field order
         assertThat(columnNames1).containsExactly("id", "A", "B", "X", "C").inOrder()
         // Result order is field order in v1 plus new column appended

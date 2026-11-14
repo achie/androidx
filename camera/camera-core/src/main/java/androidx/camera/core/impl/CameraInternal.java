@@ -24,6 +24,7 @@ import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.UseCase;
+import androidx.camera.core.impl.utils.futures.Futures;
 import androidx.camera.core.streamsharing.StreamSharing;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -175,6 +176,27 @@ public interface CameraInternal extends Camera, UseCase.StateChangeCallback {
     void detachUseCases(@NonNull Collection<UseCase> useCases);
 
     /**
+     * Updates the subset of attached {@link UseCase}s enabled for streaming, or {@code null} to
+     * enable all attached {@link UseCase}s.
+     *
+     * <p>When all enabled {@link UseCase}s are subsequently detached via
+     * {@link #detachUseCases(Collection)}, the camera resets the enabled subset to {@code null}.
+     */
+    default @NonNull ListenableFuture<Void> setEnabledUseCases(
+            @Nullable Collection<UseCase> useCases) {
+        return Futures.immediateFailedFuture(
+                new CameraControl.OperationCanceledException(
+                        "Dynamic UseCase switching is not supported"));
+    }
+
+    /**
+     * Sets the session-level interop configuration for the bound
+     * {@link androidx.camera.core.SessionConfig}, or {@code null} to clear it.
+     */
+    default void setSessionInteropConfig(@Nullable Config sessionInteropConfig) {
+    }
+
+    /**
      * Signals that the camera has been physically removed and is no longer available.
      *
      * <p>This method is invoked by core CameraX components, such as the {@link CameraRepository},
@@ -210,9 +232,7 @@ public interface CameraInternal extends Camera, UseCase.StateChangeCallback {
     /** Returns an interface to retrieve characteristics of the camera. */
     @NonNull CameraInfoInternal getCameraInfoInternal();
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////
     // Camera interface
-    ////////////////////////////////////////////////////////////////////////////////////////////////
     @Override
     default @NonNull CameraControl getCameraControl() {
         return getCameraControlInternal();

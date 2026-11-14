@@ -16,13 +16,12 @@
 
 package androidx.wear.compose.foundation
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import kotlinx.coroutines.test.StandardTestDispatcher
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import org.junit.Rule
 import org.junit.Test
 
 class CurvedWeightTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun base_weight_size_test() {
@@ -70,7 +69,7 @@ class CurvedWeightTest {
         rule.setContent {
             CurvedLayout {
                 // The parent row has no specified size, so it will size according to the children.
-                // The weighted children has no intrinsic width, and the second takes 30 degrees,
+                // The weighted child has no intrinsic width, and the second takes 30 degrees,
                 // so the row will take 30 degrees.
                 // There is no space left in the row, so the weighted child will take 0 degrees.
                 curvedRow {
@@ -89,7 +88,7 @@ class CurvedWeightTest {
         rule.setContent {
             CurvedLayout {
                 // The parent row has no specified size, so it will size according to the children.
-                // The weighted children requires 10 degrees, and the second takes 30 degrees,
+                // The weighted child requires 10 degrees, and the second takes 30 degrees,
                 // so the row will take 40 degrees.
                 // There is 10 degrees left in the row, so the weighted child will take 10 degrees.
                 curvedRow {

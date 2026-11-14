@@ -18,7 +18,11 @@ package androidx.wear.compose.material3.test
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.FocusInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -41,10 +45,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
@@ -54,17 +59,19 @@ import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.CenteredText
 import androidx.wear.compose.material3.ChildButton
 import androidx.wear.compose.material3.CompactButton
+import androidx.wear.compose.material3.CompactButtonDefaults
 import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.LocalRippleThemeConfiguration
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.OutlinedButton
+import androidx.wear.compose.material3.RippleDefaults
 import androidx.wear.compose.material3.SCREENSHOT_GOLDEN_PATH
 import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.TEST_TAG
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.setContentWithTheme
 import androidx.wear.compose.material3.verifyScreenshot
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -74,7 +81,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class ButtonScreenshotTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -303,7 +310,7 @@ class ButtonScreenshotTest {
             onClick = {},
             modifier = Modifier.fillMaxWidth().testTag(TEST_TAG),
             label = { Text("Icon & label", modifier = Modifier.fillMaxWidth()) },
-            icon = { ButtonIcon(size = ButtonDefaults.ExtraSmallIconSize) },
+            icon = { ButtonIcon(size = CompactButtonDefaults.ExtraSmallIconSize) },
         )
     }
 
@@ -335,8 +342,87 @@ class ButtonScreenshotTest {
             onClick = {},
             modifier = Modifier.fillMaxWidth().testTag(TEST_TAG),
             label = { Text("Label only", modifier = Modifier.fillMaxWidth()) },
-            transformation = morphingSurfaceTransformation(heightProportion = 1f, contentAlpha = 0f),
+            transformation =
+                morphingSurfaceTransformation(heightProportion = 1f, contentAlpha = 0f),
         )
+    }
+
+    @Test
+    fun button_inset_focus_ring() {
+        val filledInteractionSource = MutableInteractionSource()
+        val filledVariantInteractionSource = MutableInteractionSource()
+        val filledTonalInteractionSource = MutableInteractionSource()
+        val outlinedInteractionSource = MutableInteractionSource()
+        val childInteractionSource = MutableInteractionSource()
+        val compactInteractionSource = MutableInteractionSource()
+        rule.setContentWithTheme {
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Column(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Button(
+                            onClick = {},
+                            interactionSource = filledInteractionSource,
+                            label = { Text("Filled Button") },
+                            secondaryLabel = { Text("Secondary Label") },
+                            icon = { ButtonIcon(size = ButtonDefaults.IconSize) },
+                        )
+                        Button(
+                            onClick = {},
+                            colors = ButtonDefaults.filledVariantButtonColors(),
+                            interactionSource = filledVariantInteractionSource,
+                            label = { Text("Filled Variant Button") },
+                            secondaryLabel = { Text("Secondary Label") },
+                            icon = { ButtonIcon(size = ButtonDefaults.IconSize) },
+                        )
+                        FilledTonalButton(
+                            onClick = {},
+                            interactionSource = filledTonalInteractionSource,
+                            label = { Text("Filled Tonal Button") },
+                            secondaryLabel = { Text("Secondary Label") },
+                            icon = { ButtonIcon(size = ButtonDefaults.IconSize) },
+                        )
+                        OutlinedButton(
+                            onClick = {},
+                            interactionSource = outlinedInteractionSource,
+                            label = { Text("Outlined Button") },
+                            secondaryLabel = { Text("Secondary Label") },
+                            icon = { ButtonIcon(size = ButtonDefaults.IconSize) },
+                        )
+                        ChildButton(
+                            onClick = {},
+                            interactionSource = childInteractionSource,
+                            label = { Text("Child Button") },
+                            secondaryLabel = { Text("Secondary Label") },
+                            icon = { ButtonIcon(size = ButtonDefaults.IconSize) },
+                        )
+                        CompactButton(
+                            onClick = {},
+                            interactionSource = compactInteractionSource,
+                            label = { Text("Compact Button") },
+                            icon = { ButtonIcon(size = CompactButtonDefaults.ExtraSmallIconSize) },
+                        )
+                    }
+                }
+            }
+        }
+        rule.runOnIdle {
+            filledInteractionSource.tryEmit(FocusInteraction.Focus())
+            filledVariantInteractionSource.tryEmit(FocusInteraction.Focus())
+            filledTonalInteractionSource.tryEmit(FocusInteraction.Focus())
+            outlinedInteractionSource.tryEmit(FocusInteraction.Focus())
+            childInteractionSource.tryEmit(FocusInteraction.Focus())
+            compactInteractionSource.tryEmit(FocusInteraction.Focus())
+        }
+        rule.verifyScreenshot(testName, screenshotRule)
     }
 
     @Composable
@@ -421,7 +507,7 @@ class ButtonScreenshotTest {
         CompactButton(
             onClick = {},
             label = { Text("Compact Button") },
-            icon = { ButtonIcon(size = ButtonDefaults.ExtraSmallIconSize) },
+            icon = { ButtonIcon(size = CompactButtonDefaults.ExtraSmallIconSize) },
             enabled = enabled,
             modifier = Modifier.testTag(TEST_TAG),
         )

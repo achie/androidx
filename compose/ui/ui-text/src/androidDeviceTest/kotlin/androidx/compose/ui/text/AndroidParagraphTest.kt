@@ -58,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.testutils.AsyncTestTypefaceLoader
 import androidx.compose.ui.text.font.testutils.BlockingFauxFont
 import androidx.compose.ui.text.font.toFontFamily
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.matchers.assertThat
 import androidx.compose.ui.text.platform.bitmap
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.platform.style.ShaderBrushSpan
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextGeometricTransform
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextMotion
@@ -707,6 +709,81 @@ class AndroidParagraphTest {
         assertThat(paragraph.charSequence).hasSpan(BaselineShiftSpan::class, 0, text.length)
         assertThat(paragraph.charSequence).hasSpan(BaselineShiftSpan::class, 0, "abc".length)
         assertThat(paragraph.charSequence).hasSpanOnTop(BaselineShiftSpan::class, 0, "abc".length)
+    }
+
+    @Test
+    fun testAnnotatedString_setBaselineShiftNone_doesNotAddSpan() {
+        val text = "abcde"
+        val spanStyle = SpanStyle(baselineShift = BaselineShift.None)
+
+        val paragraph =
+            simpleParagraph(
+                text = text,
+                spanStyles = listOf(AnnotatedString.Range(spanStyle, 0, text.length)),
+                width = 100.0f,
+            )
+
+        assertThat(paragraph.charSequence).doesNotHaveSpan(BaselineShiftSpan::class)
+    }
+
+    @Test
+    fun testAnnotatedString_setBaselineShiftUnspecified_doesNotAddSpan() {
+        val text = "abcde"
+        val spanStyle = SpanStyle(baselineShift = BaselineShift.Unspecified)
+
+        val paragraph =
+            simpleParagraph(
+                text = text,
+                spanStyles = listOf(AnnotatedString.Range(spanStyle, 0, text.length)),
+                width = 100.0f,
+            )
+
+        assertThat(paragraph.charSequence).doesNotHaveSpan(BaselineShiftSpan::class)
+    }
+
+    @Test
+    fun testAnnotatedString_setBaselineShiftPositiveInfinity_doesNotAddSpan() {
+        val text = "abcde"
+        val spanStyle = SpanStyle(baselineShift = BaselineShift(Float.POSITIVE_INFINITY))
+
+        val paragraph =
+            simpleParagraph(
+                text = text,
+                spanStyles = listOf(AnnotatedString.Range(spanStyle, 0, text.length)),
+                width = 100.0f,
+            )
+
+        assertThat(paragraph.charSequence).doesNotHaveSpan(BaselineShiftSpan::class)
+    }
+
+    @Test
+    fun testAnnotatedString_setBaselineShiftNegativeInfinity_doesNotAddSpan() {
+        val text = "abcde"
+        val spanStyle = SpanStyle(baselineShift = BaselineShift(Float.NEGATIVE_INFINITY))
+
+        val paragraph =
+            simpleParagraph(
+                text = text,
+                spanStyles = listOf(AnnotatedString.Range(spanStyle, 0, text.length)),
+                width = 100.0f,
+            )
+
+        assertThat(paragraph.charSequence).doesNotHaveSpan(BaselineShiftSpan::class)
+    }
+
+    @Test
+    fun testAnnotatedString_setBaselineShiftCustomZeroMultiplier_doesNotAddSpan() {
+        val text = "abcde"
+        val spanStyle = SpanStyle(baselineShift = BaselineShift(multiplier = 0.0f))
+
+        val paragraph =
+            simpleParagraph(
+                text = text,
+                spanStyles = listOf(AnnotatedString.Range(spanStyle, 0, text.length)),
+                width = 100.0f,
+            )
+
+        assertThat(paragraph.charSequence).doesNotHaveSpan(BaselineShiftSpan::class)
     }
 
     @Test
@@ -1874,8 +1951,7 @@ class AndroidParagraphTest {
         val text = "abc"
         val paragraph = simpleParagraph(text = text, width = Float.MAX_VALUE)
 
-        assertThat(paragraph.textLocale.toLanguageTag())
-            .isEqualTo(java.util.Locale.getDefault().toLanguageTag())
+        assertThat(paragraph.textLocale.toLanguageTag()).isEqualTo("en")
     }
 
     @Test
@@ -1957,6 +2033,7 @@ class AndroidParagraphTest {
             overflow = TextOverflow.Ellipsis,
             constraints = minWidthConstraints,
             fontFamilyResolver = UncachedFontFamilyResolver(context),
+            defaultLocaleList = TEST_LOCALE_LIST,
             density = defaultDensity,
         )
     }
@@ -1973,6 +2050,7 @@ class AndroidParagraphTest {
             overflow = TextOverflow.Ellipsis,
             constraints = minHeightConstraints,
             fontFamilyResolver = UncachedFontFamilyResolver(context),
+            defaultLocaleList = TEST_LOCALE_LIST,
             density = defaultDensity,
         )
     }
@@ -2101,6 +2179,7 @@ class AndroidParagraphTest {
                     overflow = TextOverflow.Ellipsis,
                     constraints = Constraints(maxWidth = (20 * fontSize.toPx()).roundToInt()),
                     fontFamilyResolver = UncachedFontFamilyResolver(context),
+                    defaultLocaleList = TEST_LOCALE_LIST,
                     density = defaultDensity,
                 )
 
@@ -2135,6 +2214,7 @@ class AndroidParagraphTest {
                     overflow = TextOverflow.Ellipsis,
                     constraints = Constraints(maxWidth = (15 * fontSize.toPx()).roundToInt()),
                     fontFamilyResolver = UncachedFontFamilyResolver(context),
+                    defaultLocaleList = TEST_LOCALE_LIST,
                     density = defaultDensity,
                 )
 
@@ -2169,6 +2249,7 @@ class AndroidParagraphTest {
                     overflow = TextOverflow.Clip,
                     constraints = Constraints(maxWidth = (20 * fontSize.toPx()).roundToInt()),
                     fontFamilyResolver = UncachedFontFamilyResolver(context),
+                    defaultLocaleList = TEST_LOCALE_LIST,
                     density = defaultDensity,
                 )
 
@@ -2209,11 +2290,138 @@ class AndroidParagraphTest {
                     overflow = TextOverflow.Ellipsis,
                     constraints = Constraints(maxWidth = (15 * fontSize.toPx()).roundToInt()),
                     fontFamilyResolver = UncachedFontFamilyResolver(context),
+                    defaultLocaleList = TEST_LOCALE_LIST,
                     density = defaultDensity,
                 )
 
             assertThat(paragraph.placeholderRects).hasSize(1)
             assertThat(paragraph.placeholderRects[0]).isNotNull()
+        }
+    }
+
+    // Regression test for 441829208
+    @Test
+    fun placeholder_correctPosition_rtlLayout() {
+        with(defaultDensity) {
+            val fontSize = 10.sp
+            val textBefore = "Hello "
+            val textAfter = " World Hello World Hello World"
+            val inlineContentId = "inline"
+            val annotatedString = buildAnnotatedString {
+                append(textBefore)
+                appendInlineContent(inlineContentId)
+                append(textAfter)
+            }
+            val placeholder =
+                Placeholder(fontSize, fontSize, PlaceholderVerticalAlign.AboveBaseline)
+
+            val placeholderRange =
+                AnnotatedString.Range(
+                    placeholder,
+                    start = textBefore.length,
+                    end = textBefore.length + 1,
+                )
+
+            val paragraph =
+                AndroidParagraph(
+                    text = annotatedString.text,
+                    style =
+                        TextStyle(
+                            fontSize = fontSize,
+                            fontFamily = basicFontFamily,
+                            textDirection = TextDirection.Rtl,
+                        ),
+                    annotations = annotatedString.spanStyles,
+                    placeholders = listOf(placeholderRange),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    constraints = Constraints(maxWidth = (6 * fontSize.toPx()).roundToInt()),
+                    fontFamilyResolver = UncachedFontFamilyResolver(context),
+                    defaultLocaleList = TEST_LOCALE_LIST,
+                    density = defaultDensity,
+                )
+
+            // assert that the placeholder appears on the second line
+            assertThat(paragraph.placeholderRects).hasSize(1)
+            assertThat(paragraph.placeholderRects[0]).isNotNull()
+            assertThat(paragraph.placeholderRects[0]?.left).isEqualTo(0f)
+            assertThat(paragraph.placeholderRects[0]?.top).isEqualTo(10f)
+            assertThat(paragraph.placeholderRects[0]?.right).isEqualTo(10f)
+            assertThat(paragraph.placeholderRects[0]?.bottom).isEqualTo(20)
+        }
+    }
+
+    @Test
+    fun getLineForOffset_singleLine_longText() {
+        with(defaultDensity) {
+            val text = "A".repeat(100_000)
+            val fontSize = 10.sp
+            val paragraph =
+                simpleParagraph(
+                    text = text,
+                    style = TextStyle(fontFamily = basicFontFamily, fontSize = fontSize),
+                    width = 100 * fontSize.toPx(),
+                    maxLines = 1,
+                )
+
+            assertThat(paragraph.lineCount).isEqualTo(1)
+            assertThat(paragraph.getLineForOffset(100_000)).isEqualTo(0)
+        }
+    }
+
+    @Test
+    fun getLineForVerticalPosition_singleLine_longText() {
+        with(defaultDensity) {
+            val text = "A".repeat(100_000)
+            val fontSize = 10.sp
+            val paragraph =
+                simpleParagraph(
+                    text = text,
+                    style = TextStyle(fontFamily = basicFontFamily, fontSize = fontSize),
+                    width = 100 * fontSize.toPx(),
+                    maxLines = 1,
+                )
+
+            assertThat(paragraph.lineCount).isEqualTo(1)
+            assertThat(paragraph.getLineForVerticalPosition(100f)).isEqualTo(0)
+        }
+    }
+
+    @SdkSuppress(minSdkVersion = 26)
+    @Test
+    fun getOffsetForPosition_singleLine_longText() {
+        with(defaultDensity) {
+            val text = "A".repeat(100_000)
+            val fontSize = 10.sp
+            val paragraph =
+                simpleParagraph(
+                    text = text,
+                    style = TextStyle(fontFamily = basicFontFamily, fontSize = fontSize),
+                    width = 100 * fontSize.toPx(),
+                    maxLines = 1,
+                )
+
+            assertThat(paragraph.lineCount).isEqualTo(1)
+            assertThat(paragraph.getOffsetForPosition(Offset(10f, 100f))).isEqualTo(100_000)
+        }
+    }
+
+    @SdkSuppress(maxSdkVersion = 25)
+    @Test
+    fun getOffsetForPosition_singleLine_longText_beforeAPI26() {
+        with(defaultDensity) {
+            val text = "A".repeat(100_000)
+            val fontSize = 10.sp
+            val paragraph =
+                simpleParagraph(
+                    text = text,
+                    style = TextStyle(fontFamily = basicFontFamily, fontSize = fontSize),
+                    width = 100 * fontSize.toPx(),
+                    maxLines = 1,
+                )
+
+            assertThat(paragraph.lineCount).isEqualTo(1)
+            assertThat(paragraph.getOffsetForPosition(Offset(10f, 100f))).isEqualTo(1)
         }
     }
 
@@ -2228,6 +2436,7 @@ class AndroidParagraphTest {
         height: Float = Float.POSITIVE_INFINITY,
         style: TextStyle? = null,
         fontFamilyResolver: FontFamily.Resolver = UncachedFontFamilyResolver(context),
+        defaultLocaleList: LocaleList = LocaleList("en"),
     ): AndroidParagraph {
         return AndroidParagraph(
             text = text,
@@ -2239,6 +2448,7 @@ class AndroidParagraphTest {
             constraints = Constraints(maxWidth = width.ceilToInt(), maxHeight = height.ceilToInt()),
             density = Density(density = 1f),
             fontFamilyResolver = fontFamilyResolver,
+            defaultLocaleList = defaultLocaleList,
         )
     }
 }

@@ -26,7 +26,6 @@ import android.net.Uri
 import android.os.Build
 import android.view.Surface
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ImageAnalysis
@@ -40,10 +39,10 @@ import androidx.camera.integration.view.util.takePictureOnDisk
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.testing.impl.AndroidUtil.isEmulator
 import androidx.camera.testing.impl.CameraAvailabilityUtil.assumeDeviceHasFrontCamera
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CoreAppTestUtil
 import androidx.camera.testing.impl.IgnoreVideoRecordingProblematicDeviceRule.Companion.skipVideoRecordingTestIfNotSupportedByEmulator
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.CameraController.TAP_TO_FOCUS_FAILED
 import androidx.camera.view.CameraController.TAP_TO_FOCUS_FOCUSED
@@ -57,6 +56,7 @@ import androidx.test.annotation.UiThreadTest
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.ViewActions.scrollTo
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -91,8 +91,7 @@ class CameraControllerFragmentTest(
     private val cameraConfig: CameraXConfig,
 ) {
     @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
+    val requireForegroundRule = RequireForegroundRule { CoreAppTestUtil.assumeCompatibleDevice() }
 
     @get:Rule
     val useCameraRule =
@@ -116,14 +115,15 @@ class CameraControllerFragmentTest(
 
     @Before
     fun setup() {
-        CoreAppTestUtil.assumeCompatibleDevice()
-        // Clear the device UI and check if there is no dialog or lock screen on the top of the
-        // window before start the test.
-        CoreAppTestUtil.prepareDeviceUI(instrumentation)
         ProcessCameraProvider.configureInstance(cameraConfig)
         cameraProvider =
             ProcessCameraProvider.getInstance(ApplicationProvider.getApplicationContext())[
                     10000, TimeUnit.MILLISECONDS]
+        requireForegroundRule.deferCleanup {
+            if (::cameraProvider.isInitialized) {
+                cameraProvider.shutdownAsync()[10000, TimeUnit.MILLISECONDS]
+            }
+        }
         fragmentScenario = createFragmentScenario()
         fragment = fragmentScenario.getFragment()
         uiDevice = UiDevice.getInstance(instrumentation)
@@ -133,10 +133,6 @@ class CameraControllerFragmentTest(
     fun tearDown() {
         if (::fragmentScenario.isInitialized) {
             fragmentScenario.moveToState(Lifecycle.State.DESTROYED)
-        }
-
-        if (::cameraProvider.isInitialized) {
-            cameraProvider.shutdownAsync()[10000, TimeUnit.MILLISECONDS]
         }
     }
 
@@ -243,7 +239,7 @@ class CameraControllerFragmentTest(
     fun imageAnalysisDisabled_isNotStreaming() {
         fragment.assertAnalysisStreaming(true)
 
-        onView(withId(R.id.analysis_enabled)).perform(click())
+        onView(withId(R.id.analysis_enabled)).perform(scrollTo(), click())
 
         fragment.assertAnalysisStreaming(false)
     }
@@ -252,8 +248,8 @@ class CameraControllerFragmentTest(
     fun imageAnalysisDisabledAndEnabled_isStreaming() {
         fragment.assertAnalysisStreaming(true)
 
-        onView(withId(R.id.analysis_enabled)).perform(click())
-        onView(withId(R.id.analysis_enabled)).perform(click())
+        onView(withId(R.id.analysis_enabled)).perform(scrollTo(), click())
+        onView(withId(R.id.analysis_enabled)).perform(scrollTo(), click())
 
         fragment.assertAnalysisStreaming(true)
     }
@@ -390,7 +386,7 @@ class CameraControllerFragmentTest(
     @Test
     fun captureDisabled_cannotTakePicture() {
         // Arrange.
-        onView(withId(R.id.capture_enabled)).perform(click())
+        onView(withId(R.id.capture_enabled)).perform(scrollTo(), click())
 
         // Act and assert.
         val exception =
@@ -406,8 +402,8 @@ class CameraControllerFragmentTest(
         fragment.assertPreviewIsStreaming()
 
         // Act.
-        onView(withId(R.id.capture_enabled)).perform(click())
-        onView(withId(R.id.capture_enabled)).perform(click())
+        onView(withId(R.id.capture_enabled)).perform(scrollTo(), click())
+        onView(withId(R.id.capture_enabled)).perform(scrollTo(), click())
         fragment.assertPreviewIsStreaming()
 
         // Assert.
@@ -416,14 +412,14 @@ class CameraControllerFragmentTest(
 
     @Test
     fun previewViewRemoved_previewIsIdle() {
-        onView(withId(R.id.remove_or_add)).perform(click())
+        onView(withId(R.id.remove_or_add)).perform(scrollTo(), click())
         fragment.assertPreviewIsIdle()
     }
 
     @Test
     fun previewViewRemovedAndAdded_previewIsStreaming() {
-        onView(withId(R.id.remove_or_add)).perform(click())
-        onView(withId(R.id.remove_or_add)).perform(click())
+        onView(withId(R.id.remove_or_add)).perform(scrollTo(), click())
+        onView(withId(R.id.remove_or_add)).perform(scrollTo(), click())
         fragment.assertPreviewIsStreaming()
     }
 
@@ -431,7 +427,7 @@ class CameraControllerFragmentTest(
     fun cameraToggled_previewIsStreaming() {
         assumeDeviceHasFrontCamera()
 
-        onView(withId(R.id.camera_toggle)).perform(click())
+        onView(withId(R.id.camera_toggle)).perform(scrollTo(), click())
         fragment.assertPreviewIsStreaming()
     }
 
@@ -439,7 +435,7 @@ class CameraControllerFragmentTest(
     fun cameraToggled_canTakePicture() {
         assumeDeviceHasFrontCamera()
 
-        onView(withId(R.id.camera_toggle)).perform(click())
+        onView(withId(R.id.camera_toggle)).perform(scrollTo(), click())
         fragment.assertPreviewIsStreaming()
         fragment.assertCanTakePicture()
     }
@@ -489,7 +485,7 @@ class CameraControllerFragmentTest(
         // Act.
         invertAllUseCaseEnableStatusExceptPreview()
         fragment.assertPreviewIsStreaming()
-        onView(withId(R.id.camera_toggle)).perform(click())
+        onView(withId(R.id.camera_toggle)).perform(scrollTo(), click())
         fragment.assertPreviewIsStreaming()
 
         // Assert.
@@ -508,8 +504,8 @@ class CameraControllerFragmentTest(
         // Act.
         invertAllUseCaseEnableStatusExceptPreview()
         repeat(times) {
-            onView(withId(R.id.video_enabled)).perform(click())
-            onView(withId(R.id.video_enabled)).perform(click())
+            onView(withId(R.id.video_enabled)).perform(scrollTo(), click())
+            onView(withId(R.id.video_enabled)).perform(scrollTo(), click())
         }
         fragment.assertPreviewIsStreaming()
 
@@ -540,10 +536,10 @@ class CameraControllerFragmentTest(
         instrumentation.runOnMainSync { fragment.toggleCamera() }
 
         // Disables VideoCapture
-        onView(withId(R.id.video_enabled)).perform(click())
+        onView(withId(R.id.video_enabled)).perform(scrollTo(), click())
 
         // Enables ImageCapture
-        onView(withId(R.id.capture_enabled)).perform(click())
+        onView(withId(R.id.capture_enabled)).perform(scrollTo(), click())
 
         // Assert.
         // Both Preview and ImageCapture can work normally. Ensures that the ImageCapture can be
@@ -553,9 +549,9 @@ class CameraControllerFragmentTest(
     }
 
     private fun invertAllUseCaseEnableStatusExceptPreview() {
-        onView(withId(R.id.capture_enabled)).perform(click())
-        onView(withId(R.id.analysis_enabled)).perform(click())
-        onView(withId(R.id.video_enabled)).perform(click())
+        onView(withId(R.id.capture_enabled)).perform(scrollTo(), click())
+        onView(withId(R.id.analysis_enabled)).perform(scrollTo(), click())
+        onView(withId(R.id.video_enabled)).perform(scrollTo(), click())
     }
 
     private fun skipTestWithSurfaceProcessingOnCuttlefishApi30() {
@@ -834,15 +830,16 @@ class CameraControllerFragmentTest(
 
         @JvmField val testCameraRule = CameraUtil.PreTestCamera()
 
-        const val TIMEOUT_SECONDS = 10L
+        // In fragment tests, waiting for preview streaming involves the entire end-to-end flow:
+        // fragment launch, window transition, view layout traversal, auto-attachment of
+        // PreviewView to CameraController, Camera HAL opening, and first frame streaming.
+        // On low-end devices (e.g. Redmi 8), this composite flow requires additional headroom
+        // beyond camera open alone.
+        const val TIMEOUT_SECONDS = 15L
         const val RECORDING_COUNT = 5
 
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                arrayOf(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()))
     }
 }

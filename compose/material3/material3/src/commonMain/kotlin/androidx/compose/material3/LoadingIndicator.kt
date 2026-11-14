@@ -16,6 +16,7 @@
 
 package androidx.compose.material3
 
+import androidx.collection.LruCache
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationEndReason
 import androidx.compose.animation.core.LinearEasing
@@ -90,15 +91,17 @@ import kotlinx.coroutines.launch
  *   will morph between as it progresses from 0.0 to 1.0. The loading indicator expects at least two
  *   items in that list.
  * @throws IllegalArgumentException if the [polygons] list holds less than two items
+ *
+ * @material3expressive
  */
 @ExperimentalMaterial3ExpressiveApi
 @Composable
-fun LoadingIndicator(
+public fun LoadingIndicator(
     progress: () -> Float,
     modifier: Modifier = Modifier,
     color: Color = LoadingIndicatorDefaults.indicatorColor,
     polygons: List<RoundedPolygon> = LoadingIndicatorDefaults.DeterminateIndicatorPolygons,
-) =
+): Unit =
     LoadingIndicatorImpl(
         progress = progress,
         modifier = modifier,
@@ -126,14 +129,16 @@ fun LoadingIndicator(
  * @param polygons a list of [RoundedPolygon]s for the sequence of shapes this loading indicator
  *   will morph between. The loading indicator expects at least two items in that list.
  * @throws IllegalArgumentException if the [polygons] list holds less than two items
+ *
+ * @material3expressive
  */
 @ExperimentalMaterial3ExpressiveApi
 @Composable
-fun LoadingIndicator(
+public fun LoadingIndicator(
     modifier: Modifier = Modifier,
     color: Color = LoadingIndicatorDefaults.indicatorColor,
     polygons: List<RoundedPolygon> = LoadingIndicatorDefaults.IndeterminateIndicatorPolygons,
-) =
+): Unit =
     LoadingIndicatorImpl(
         modifier = modifier,
         containerColor = Color.Unspecified,
@@ -156,7 +161,8 @@ fun LoadingIndicator(
  *
  * @sample androidx.compose.material3.samples.DeterminateContainedLoadingIndicatorSample
  *
- * It can also be used as an indicator for a [PullToRefreshBox] like this:
+ * It can also be used as an indicator for a
+ * [androidx.compose.material3.pulltorefresh.PullToRefreshBox] like this:
  *
  * @sample androidx.compose.material3.samples.LoadingIndicatorPullToRefreshSample
  * @param progress the progress of this loading indicator, where 0.0 represents no progress and 1.0
@@ -171,17 +177,19 @@ fun LoadingIndicator(
  *   will morph between as it progresses from 0.0 to 1.0. The loading indicator expects at least two
  *   items in that list.
  * @throws IllegalArgumentException if the [polygons] list holds less than two items
+ *
+ * @material3expressive
  */
 @ExperimentalMaterial3ExpressiveApi
 @Composable
-fun ContainedLoadingIndicator(
+public fun ContainedLoadingIndicator(
     progress: () -> Float,
     modifier: Modifier = Modifier,
     containerColor: Color = LoadingIndicatorDefaults.containedContainerColor,
     indicatorColor: Color = LoadingIndicatorDefaults.containedIndicatorColor,
     containerShape: Shape = LoadingIndicatorDefaults.containerShape,
     polygons: List<RoundedPolygon> = LoadingIndicatorDefaults.DeterminateIndicatorPolygons,
-) =
+): Unit =
     LoadingIndicatorImpl(
         progress = progress,
         modifier = modifier,
@@ -212,16 +220,18 @@ fun ContainedLoadingIndicator(
  * @param polygons a list of [RoundedPolygon]s for the sequence of shapes this loading indicator
  *   will morph between. The loading indicator expects at least two items in that list.
  * @throws IllegalArgumentException if the [polygons] list holds less than two items
+ *
+ * @material3expressive
  */
 @ExperimentalMaterial3ExpressiveApi
 @Composable
-fun ContainedLoadingIndicator(
+public fun ContainedLoadingIndicator(
     modifier: Modifier = Modifier,
     containerColor: Color = LoadingIndicatorDefaults.containedContainerColor,
     indicatorColor: Color = LoadingIndicatorDefaults.containedIndicatorColor,
     containerShape: Shape = LoadingIndicatorDefaults.containerShape,
     polygons: List<RoundedPolygon> = LoadingIndicatorDefaults.IndeterminateIndicatorPolygons,
-) =
+): Unit =
     LoadingIndicatorImpl(
         modifier = modifier,
         containerColor = containerColor,
@@ -264,7 +274,10 @@ private fun LoadingIndicatorImpl(
     val scaleMatrix = remember { Matrix() }
     val morphSequence =
         remember(indicatorPolygons) {
-            morphSequence(polygons = indicatorPolygons, circularSequence = false)
+            LoadingIndicatorDefaults.morphSequence(
+                polygons = indicatorPolygons,
+                circularSequence = false,
+            )
         }
     val morphScaleFactor =
         remember(morphSequence) {
@@ -354,7 +367,7 @@ private fun LoadingIndicatorImpl(
  *   indicator will morph between. The loading indicator expects at least two items in that list.
  * @throws IllegalArgumentException if the [indicatorPolygons] list holds less than two items
  */
-@ExperimentalMaterial3ExpressiveApi
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LoadingIndicatorImpl(
     modifier: Modifier,
@@ -368,7 +381,10 @@ private fun LoadingIndicatorImpl(
     }
     val morphSequence =
         remember(indicatorPolygons) {
-            morphSequence(polygons = indicatorPolygons, circularSequence = true)
+            LoadingIndicatorDefaults.morphSequence(
+                polygons = indicatorPolygons,
+                circularSequence = true,
+            )
         }
     val shapesScaleFactor =
         remember(indicatorPolygons) {
@@ -489,37 +505,37 @@ private fun LoadingIndicatorImpl(
 
 /** Contains default values by the [LoadingIndicator]. */
 @ExperimentalMaterial3ExpressiveApi
-object LoadingIndicatorDefaults {
+public object LoadingIndicatorDefaults {
 
     /** A [LoadingIndicator] default container width. */
-    val ContainerWidth: Dp = LoadingIndicatorTokens.ContainerWidth
+    public val ContainerWidth: Dp = LoadingIndicatorTokens.ContainerWidth
 
     /** A [LoadingIndicator] default container height. */
-    val ContainerHeight: Dp = LoadingIndicatorTokens.ContainerHeight
+    public val ContainerHeight: Dp = LoadingIndicatorTokens.ContainerHeight
 
     /** A [LoadingIndicator] default active indicator size. */
-    val IndicatorSize = LoadingIndicatorTokens.ActiveSize
+    public val IndicatorSize: Dp = LoadingIndicatorTokens.ActiveSize
 
     /** A [LoadingIndicator] default container [Shape]. */
-    val containerShape: Shape
+    public val containerShape: Shape
         @Composable get() = LoadingIndicatorTokens.ContainerShape.value
 
     /**
      * A [LoadingIndicator] default active indicator [Color] when using an uncontained
      * [LoadingIndicator].
      */
-    val indicatorColor: Color
+    public val indicatorColor: Color
         @Composable get() = LoadingIndicatorTokens.ActiveIndicatorColor.value
 
     /**
      * A [LoadingIndicator] default active indicator [Color] when using a
      * [ContainedLoadingIndicator].
      */
-    val containedIndicatorColor: Color
+    public val containedIndicatorColor: Color
         @Composable get() = LoadingIndicatorTokens.ContainedActiveColor.value
 
     /** A [LoadingIndicator] default container [Color] when using a [ContainedLoadingIndicator]. */
-    val containedContainerColor: Color
+    public val containedContainerColor: Color
         @Composable get() = LoadingIndicatorTokens.ContainedContainerColor.value
 
     /**
@@ -529,7 +545,7 @@ object LoadingIndicatorDefaults {
      * By default, an indeterminate loading indicator will morph between seven shapes, but you may
      * provide your own shapes sequence when calling the API.
      */
-    val IndeterminateIndicatorPolygons =
+    public val IndeterminateIndicatorPolygons: List<RoundedPolygon> =
         listOf(
             MaterialShapes.SoftBurst,
             MaterialShapes.Cookie9Sided,
@@ -548,7 +564,7 @@ object LoadingIndicatorDefaults {
      * By default, a determinate loading indicator will will morph between two shapes, but you may
      * provide your own shapes sequence when calling the API.
      */
-    val DeterminateIndicatorPolygons =
+    public val DeterminateIndicatorPolygons: List<RoundedPolygon> =
         listOf(
             // Rotating the circle gets us a smoother morphing to the soft-burst shapes, which is
             // also being rotated at the same angle.
@@ -562,11 +578,27 @@ object LoadingIndicatorDefaults {
      */
     internal val ActiveIndicatorScale =
         IndicatorSize.value / min(ContainerWidth.value, ContainerHeight.value)
+
+    // Building Morphs is expensive, so sequences are cached and shared by all indicators that use
+    // equal polygons.
+    private val morphSequenceCache =
+        LruCache<Pair<List<RoundedPolygon>, Boolean>, List<Morph>>(MorphSequenceCacheSize)
+
+    internal fun morphSequence(
+        polygons: List<RoundedPolygon>,
+        circularSequence: Boolean,
+    ): List<Morph> {
+        val key = polygons to circularSequence
+        return morphSequenceCache[key]
+            ?: buildMorphSequence(polygons, circularSequence).also {
+                morphSequenceCache.put(key, it)
+            }
+    }
 }
 
 /**
- * Returns a list of [Morph]s that describe the sequence of shapes that the [LoadingIndicator]
- * should animate in a loop.
+ * Builds a list of [Morph]s that describe the sequence of shapes that the [LoadingIndicator] should
+ * animate in a loop.
  *
  * This function will create a morph between each consecutive [RoundedPolygon] shaped in the
  * provided array, and will create a final morph from the last shape to the first shape.
@@ -578,7 +610,10 @@ object LoadingIndicatorDefaults {
  *   the first item of the list in order to create a circular sequence of morphs
  * @see RoundedPolygon.normalized
  */
-private fun morphSequence(polygons: List<RoundedPolygon>, circularSequence: Boolean): List<Morph> {
+private fun buildMorphSequence(
+    polygons: List<RoundedPolygon>,
+    circularSequence: Boolean,
+): List<Morph> {
     return buildList {
         for (i in polygons.indices) {
             if (i + 1 < polygons.size) {
@@ -670,6 +705,7 @@ private fun processPath(
 
 private const val GlobalRotationDurationMillis = 4666
 private const val MorphIntervalMillis = 650L
+private const val MorphSequenceCacheSize = 8
 
 private const val FullRotation = 360f
 private const val QuarterRotation = FullRotation / 4f

@@ -20,7 +20,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.KeyInjectionScope
 import androidx.compose.ui.test.injectionscope.key.Common.assertTyped
 import androidx.compose.ui.test.injectionscope.key.Common.performKeyInput
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.pressKey
@@ -29,7 +29,6 @@ import androidx.compose.ui.test.util.TestTextField.Tag
 import androidx.compose.ui.test.withKeyToggled
 import androidx.compose.ui.test.withKeysToggled
 import androidx.test.filters.MediumTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -42,7 +41,7 @@ import org.junit.Test
 @MediumTest
 class LockKeysTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Before
     fun setUp() {

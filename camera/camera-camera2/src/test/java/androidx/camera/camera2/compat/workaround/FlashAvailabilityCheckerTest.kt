@@ -23,13 +23,13 @@ import android.os.Build
 import androidx.camera.camera2.compat.workaround.FlashAvailabilityCheckerTest.TestCameraMetadata.Mode
 import androidx.camera.camera2.impl.CameraProperties
 import androidx.camera.camera2.pipe.CameraExtensionMetadata
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
-import androidx.camera.camera2.pipe.Metadata
 import androidx.camera.camera2.testing.FakeCameraProperties
+import androidx.camera.common.CameraId
+import androidx.camera.common.Metadata
 import com.google.common.truth.Truth
+import java.lang.Class
 import java.nio.BufferUnderflowException
-import kotlin.reflect.KClass
 import org.junit.Assert
 import org.junit.Assume
 import org.junit.Before
@@ -77,12 +77,11 @@ class FlashAvailabilityCheckerTest(
     private class TestCameraMetadata(
         private val mode: Mode = Mode.DEFAULT,
         private val characteristics: Map<CameraCharacteristics.Key<*>, Any?> = emptyMap(),
-        val metadata: Map<Metadata.Key<*>, Any?> = emptyMap(),
         cameraId: CameraId = CameraId("0"),
         override val keys: Set<CameraCharacteristics.Key<*>> = emptySet(),
         override val requestKeys: Set<CaptureRequest.Key<*>> = emptySet(),
         override val resultKeys: Set<CaptureResult.Key<*>> = emptySet(),
-        override val sessionKeys: Set<CaptureRequest.Key<*>> = emptySet(),
+        override val sessionCaptureRequestKeys: Set<CaptureRequest.Key<*>> = emptySet(),
         override val sessionCharacteristicsKeys: Set<CameraCharacteristics.Key<*>> = emptySet(),
         val physicalMetadata: Map<CameraId, CameraMetadata> = emptyMap(),
         override val physicalRequestKeys: Set<CaptureRequest.Key<*>> = emptySet(),
@@ -93,7 +92,7 @@ class FlashAvailabilityCheckerTest(
             DEFAULT,
         }
 
-        override fun <T> get(key: CameraCharacteristics.Key<T>): T? {
+        override fun <T : Any> get(key: CameraCharacteristics.Key<T>): T? {
             @Suppress("UNCHECKED_CAST")
             return when (mode) {
                 Mode.ALWAYS_NULL -> null
@@ -101,14 +100,6 @@ class FlashAvailabilityCheckerTest(
                 else -> characteristics[key] as T?
             }
         }
-
-        @Suppress("UNCHECKED_CAST")
-        override fun <T> get(key: Metadata.Key<T>): T? = metadata[key] as T?
-
-        override fun <T> getOrDefault(key: CameraCharacteristics.Key<T>, default: T): T =
-            get(key) ?: default
-
-        override fun <T> getOrDefault(key: Metadata.Key<T>, default: T): T = get(key) ?: default
 
         override val camera: CameraId = cameraId
         override val isRedacted: Boolean = false
@@ -131,7 +122,14 @@ class FlashAvailabilityCheckerTest(
             TODO("b/299356087 - Add support for fake extension metadata")
         }
 
-        override fun <T : Any> unwrapAs(type: KClass<T>): T? {
+        override fun <T : Any> get(key: Metadata.Key<T>): T? = null
+
+        override val metadataKeys: Set<Metadata.Key<*>>
+            get() = emptySet()
+
+        override fun isExtensionSupported(extension: Int): Boolean = false
+
+        override fun <T : Any> unwrapAs(type: Class<T>): T? {
             TODO("Not yet implemented")
         }
     }

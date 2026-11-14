@@ -30,14 +30,13 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -159,7 +158,7 @@ class DrawPhaseAttributesToggleTest(private val config: Config) {
             )
     }
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun basicText() {
@@ -227,6 +226,7 @@ class DrawPhaseAttributesToggleTest(private val config: Config) {
     }
 
     @Test
+    @Suppress("DEPRECATION") // b/552879150
     fun basicTextField() {
         var style by mutableStateOf(config.initializeStyle(TextStyle(color = Color.Black)))
 

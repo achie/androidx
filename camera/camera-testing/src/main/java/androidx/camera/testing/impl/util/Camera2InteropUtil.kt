@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.camera.testing.impl.util
 
 import android.hardware.camera2.CameraCaptureSession
@@ -39,6 +41,7 @@ import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(markerClass = [ExperimentalCamera2Interop::class])
 public object Camera2InteropUtil {
@@ -228,6 +231,9 @@ public object Camera2InteropUtil {
          *
          * @param timeout the timeout for waiting for the captures.
          * @param numOfCaptures the number of captures to wait.
+         * @param breakWhenSuccess whether verification is completed when `verifyBlock` returns
+         *   true.
+         * @param throwAtTimeout whether to throw exception when timeout is reached.
          * @param verifyBlock the block for verifying the capture requests and results. It should
          *   return `true` if the requests and results is expected, otherwise `false`.
          */
@@ -235,9 +241,11 @@ public object Camera2InteropUtil {
             timeout: Long = _timeout,
             numOfCaptures: Int = _numOfCaptures,
             breakWhenSuccess: Boolean = true,
+            throwAtTimeout: Boolean = true,
             verifyBlock:
                 (
-                    captureRequests: List<CaptureRequest>, captureResults: List<TotalCaptureResult>,
+                    captureRequests: List<CaptureRequest>,
+                    captureResults: List<TotalCaptureResult>,
                 ) -> Boolean =
                 { _, _ ->
                     true
@@ -250,8 +258,41 @@ public object Camera2InteropUtil {
                     verifyBlock = verifyBlock,
                 )
             waitingList.add(resultContainer)
-            withTimeout(timeout) { resultContainer.signal.await() }
+            if (throwAtTimeout) {
+                withTimeout(timeout) { resultContainer.signal.await() }
+            } else {
+                withTimeoutOrNull(timeout) { resultContainer.signal.await() }
+            }
             waitingList.remove(resultContainer)
+        }
+
+        public suspend fun verifyAlwaysSuccess(
+            timeout: Long = _timeout,
+            numOfCaptures: Int = _numOfCaptures,
+            verifyBlock:
+                (
+                    captureRequests: List<CaptureRequest>,
+                    captureResults: List<TotalCaptureResult>,
+                ) -> Boolean =
+                { _, _ ->
+                    true
+                },
+        ) {
+            var alwaysSuccess = true
+
+            verifyFor(
+                timeout = timeout,
+                numOfCaptures = numOfCaptures,
+                breakWhenSuccess = false,
+                throwAtTimeout = false,
+            ) { captureRequests, captureResults ->
+                alwaysSuccess = alwaysSuccess and verifyBlock(captureRequests, captureResults)
+                true
+            }
+
+            if (!alwaysSuccess) {
+                throw AssertionError("verifyBlock wasn't always successful.")
+            }
         }
 
         public fun <T> verifyLastCaptureRequest(
@@ -299,7 +340,7 @@ public object Camera2InteropUtil {
                         } else {
                             signal.completeExceptionally(
                                 TimeoutException(
-                                    "Test doesn't complete after waiting for $_numOfCaptures frames."
+                                    "Test doesn't complete after waiting for $initialCount frames."
                                 )
                             )
                         }
@@ -317,10 +358,13 @@ public object Camera2InteropUtil {
         val captureResults: MutableList<TotalCaptureResult> = mutableListOf(),
         val verifyBlock:
             (
-                captureRequests: List<CaptureRequest>, captureResults: List<TotalCaptureResult>,
+                captureRequests: List<CaptureRequest>,
+                captureResults: List<TotalCaptureResult>,
             ) -> Boolean =
             { _, _ ->
                 true
             },
-    )
+    ) {
+        internal val initialCount = count
+    }
 }

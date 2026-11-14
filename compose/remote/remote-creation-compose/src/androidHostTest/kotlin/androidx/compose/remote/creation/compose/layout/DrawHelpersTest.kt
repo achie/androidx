@@ -1,0 +1,129 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.compose.remote.creation.compose.layout
+
+import android.graphics.BlendMode as AndroidBlendMode
+import androidx.compose.remote.core.operations.layout.managers.CoreText
+import androidx.compose.remote.core.operations.layout.managers.TextLayout
+import androidx.compose.remote.core.operations.paint.PaintBundle
+import androidx.compose.remote.creation.compose.state.RemoteBlendMode
+import androidx.compose.remote.creation.compose.state.RemotePaintingStyle
+import androidx.compose.remote.creation.compose.state.RemotePathFillType
+import androidx.compose.remote.creation.compose.state.RemoteStrokeCap
+import androidx.compose.remote.creation.compose.state.RemoteStrokeJoin
+import androidx.compose.remote.creation.compose.state.RemoteTileMode
+import androidx.compose.remote.creation.compose.text.RemoteFontStyle
+import androidx.compose.remote.creation.compose.text.RemoteFontWeight
+import androidx.compose.remote.creation.compose.text.RemoteHyphens
+import androidx.compose.remote.creation.compose.text.RemoteLineBreak
+import androidx.compose.remote.creation.compose.text.RemoteTextAlign
+import androidx.compose.remote.creation.compose.text.RemoteTextDecoration
+import androidx.compose.remote.creation.compose.text.RemoteTextOverflow
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class DrawHelpersTest {
+
+    @Test
+    fun remoteGraphicsConversions_toInt() {
+        assertEquals(PaintBundle.BLEND_MODE_SRC_OVER, RemoteBlendMode.SrcOver.value)
+        assertEquals(0, RemoteTileMode.Clamp.value)
+        assertEquals(1, RemoteTileMode.Repeated.value)
+        assertEquals(2, RemoteTileMode.Mirror.value)
+        assertEquals(3, RemoteTileMode.Decal.value)
+        assertEquals(0, RemotePathFillType.NonZero.value)
+        assertEquals(1, RemotePathFillType.EvenOdd.value)
+        assertEquals(0, RemoteStrokeCap.Butt.value)
+        assertEquals(1, RemoteStrokeCap.Round.value)
+        assertEquals(2, RemoteStrokeCap.Square.value)
+        assertEquals(0, RemoteStrokeJoin.Miter.value)
+        assertEquals(1, RemoteStrokeJoin.Round.value)
+        assertEquals(2, RemoteStrokeJoin.Bevel.value)
+        assertEquals(PaintBundle.STYLE_FILL, RemotePaintingStyle.Fill.value)
+        assertEquals(PaintBundle.STYLE_STROKE, RemotePaintingStyle.Stroke.value)
+        assertEquals(TextLayout.OVERFLOW_CLIP, RemoteTextOverflow.Clip.value)
+        assertEquals(TextLayout.OVERFLOW_ELLIPSIS, RemoteTextOverflow.Ellipsis.value)
+    }
+
+    @Test
+    fun composeToRemote() {
+        assertEquals(RemoteBlendMode.SrcOver, BlendMode.SrcOver.toRemoteBlendMode())
+        assertEquals(RemoteBlendMode.Clear, BlendMode.Clear.toRemoteBlendMode())
+
+        assertEquals(RemotePathFillType.NonZero, PathFillType.NonZero.toRemotePathFillType())
+        assertEquals(RemotePathFillType.EvenOdd, PathFillType.EvenOdd.toRemotePathFillType())
+        assertEquals(RemoteStrokeCap.Butt, StrokeCap.Butt.toRemoteStrokeCap())
+        assertEquals(RemoteStrokeCap.Round, StrokeCap.Round.toRemoteStrokeCap())
+        assertEquals(RemoteStrokeCap.Square, StrokeCap.Square.toRemoteStrokeCap())
+        assertEquals(RemoteStrokeJoin.Miter, StrokeJoin.Miter.toRemoteStrokeJoin())
+        assertEquals(RemoteStrokeJoin.Round, StrokeJoin.Round.toRemoteStrokeJoin())
+        assertEquals(RemoteStrokeJoin.Bevel, StrokeJoin.Bevel.toRemoteStrokeJoin())
+
+        assertEquals(RemoteFontStyle.Italic, FontStyle.Italic.toRemoteFontStyle())
+        assertEquals(RemoteFontWeight.Bold, FontWeight.Bold.toRemoteFontWeight())
+    }
+
+    @Test
+    fun remoteToAndroidBlendMode_roundTrip() {
+        assertEquals(AndroidBlendMode.SRC_OVER, RemoteBlendMode.SrcOver.toAndroidBlendMode())
+        assertEquals(RemoteBlendMode.SrcOver, AndroidBlendMode.SRC_OVER.toRemoteBlendMode())
+        assertEquals(AndroidBlendMode.CLEAR, RemoteBlendMode.Clear.toAndroidBlendMode())
+        assertEquals(RemoteBlendMode.Clear, AndroidBlendMode.CLEAR.toRemoteBlendMode())
+        assertEquals(AndroidBlendMode.COLOR_DODGE, RemoteBlendMode.ColorDodge.toAndroidBlendMode())
+        assertEquals(RemoteBlendMode.ColorDodge, AndroidBlendMode.COLOR_DODGE.toRemoteBlendMode())
+    }
+
+    @Test
+    fun composeGraphicsConversions_toInt() {
+        assertEquals(PaintBundle.BLEND_MODE_SRC_OVER, BlendMode.SrcOver.toRemoteBlendMode().value)
+        assertEquals(TextLayout.TEXT_ALIGN_CENTER, TextAlign.Center.toRemoteTextAlign().value)
+        assertEquals(RemoteTextAlign.Unspecified, TextAlign.Unspecified.toRemoteTextAlign())
+        assertEquals(1, FontStyle.Italic.toRemoteFontStyle().value)
+        assertEquals(CoreText.BREAK_STRATEGY_BALANCED, LineBreak.Heading.toRemoteLineBreak().value)
+        assertEquals(RemoteLineBreak.Simple, LineBreak.Unspecified.toRemoteLineBreak())
+        assertEquals(CoreText.HYPHENATION_FREQUENCY_FULL, Hyphens.Auto.toRemoteHyphens().value)
+        assertEquals(RemoteHyphens.None, Hyphens.Unspecified.toRemoteHyphens())
+        assertEquals(RemoteTextDecoration.None, TextDecoration.None.toRemoteTextDecoration())
+        assertEquals(
+            RemoteTextDecoration.Underline,
+            TextDecoration.Underline.toRemoteTextDecoration(),
+        )
+        assertEquals(
+            RemoteTextDecoration.LineThrough,
+            TextDecoration.LineThrough.toRemoteTextDecoration(),
+        )
+        assertEquals(
+            RemoteTextDecoration.Underline + RemoteTextDecoration.LineThrough,
+            (TextDecoration.Underline + TextDecoration.LineThrough).toRemoteTextDecoration(),
+        )
+    }
+}

@@ -16,10 +16,13 @@
 
 package androidx.appfunctions
 
+import android.app.appsearch.GenericDocument
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.appfunctions.internal.AppFunctionUriGrantTestInventory.Companion.URI_GRANT_COMPONENTS_METADATA
 import androidx.appfunctions.internal.AppFunctionUriGrantTestInventory.Companion.URI_GRANT_OBJECT_TYPE_METADATA
+import androidx.appfunctions.internal.AppFunctionUriGrantTestInventory.Companion.URI_OBJECT_TYPE_METADATA
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.assertFailsWith
 import org.junit.Test
@@ -46,10 +49,17 @@ class AppFunctionUriGrantTest {
             AppFunctionUriGrant(
                 uri = Uri.parse("content://com.example/1"),
                 modeFlags =
-                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
 
-        val data = AppFunctionData.serialize(uriGrant, AppFunctionUriGrant::class.java)
+        val data =
+            AppFunctionData.serialize(
+                URI_GRANT_OBJECT_TYPE_METADATA,
+                URI_GRANT_COMPONENTS_METADATA,
+                uriGrant,
+                AppFunctionUriGrant::class.java,
+            )
 
         assertThat(data.getAppFunctionData("uri")?.deserialize(Uri::class.java))
             .isEqualTo(Uri.parse("content://com.example/1"))
@@ -65,7 +75,12 @@ class AppFunctionUriGrantTest {
             AppFunctionData.Builder(URI_GRANT_OBJECT_TYPE_METADATA, URI_GRANT_COMPONENTS_METADATA)
                 .setAppFunctionData(
                     "uri",
-                    AppFunctionData.serialize(Uri.parse("content://com.example/1"), Uri::class.java),
+                    AppFunctionData.serialize(
+                        URI_OBJECT_TYPE_METADATA,
+                        URI_GRANT_COMPONENTS_METADATA,
+                        Uri.parse("content://com.example/1"),
+                        Uri::class.java,
+                    ),
                 )
                 .setInt(
                     "modeFlags",
@@ -85,4 +100,75 @@ class AppFunctionUriGrantTest {
                 )
             )
     }
+
+    @Test
+    @Config(minSdk = 37)
+    fun toPlatformClass_shouldSucceed() {
+        val uriGrant =
+            AppFunctionUriGrant(
+                uri = Uri.parse("content://com.example/1"),
+                modeFlags =
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+
+        val platformClass = uriGrant.toPlatformClass()
+
+        assertThat(platformClass.uri).isEqualTo(Uri.parse("content://com.example/1"))
+        assertThat(platformClass.modeFlags)
+            .isEqualTo(
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+    }
+
+    @Test
+    fun visitAppFunctionUriGrants_withoutSpec_visitsEachGrantOnce() {
+        val grant1 =
+            AppFunctionUriGrant(
+                uri = Uri.parse("content://com.example/1"),
+                modeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        val grant2 =
+            AppFunctionUriGrant(
+                uri = Uri.parse("content://com.example/2"),
+                modeFlags = Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        val grant3 =
+            AppFunctionUriGrant(
+                uri = Uri.parse("content://com.example/3"),
+                modeFlags =
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+            )
+        val nestedDoc =
+            GenericDocument.Builder<GenericDocument.Builder<*>>("", "", "com.example.Nested")
+                .setPropertyString("title", "hello")
+                .setPropertyBoolean("enabled", true)
+                .setPropertyLong("count", 42L)
+                .setPropertyDocument("singleGrant", grant1.toGenericDocument())
+                .setPropertyDocument(
+                    "grantList",
+                    grant2.toGenericDocument(),
+                    grant3.toGenericDocument(),
+                )
+                .build()
+        val rootDoc =
+            GenericDocument.Builder<GenericDocument.Builder<*>>("", "", "")
+                .setPropertyDocument("returnValue", nestedDoc)
+                .build()
+
+        val visited = mutableListOf<AppFunctionUriGrant>()
+        AppFunctionData(rootDoc, Bundle.EMPTY).visitAppFunctionUriGrants { visited.add(it) }
+
+        assertThat(visited).containsExactly(grant1, grant2, grant3)
+    }
+
+    private fun AppFunctionUriGrant.toGenericDocument(): GenericDocument =
+        AppFunctionData.serialize(
+                URI_GRANT_OBJECT_TYPE_METADATA,
+                URI_GRANT_COMPONENTS_METADATA,
+                this,
+                AppFunctionUriGrant::class.java,
+            )
+            .genericDocument
 }

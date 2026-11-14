@@ -16,25 +16,25 @@
 
 package androidx.benchmark
 
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.annotation.RestrictTo
 import androidx.annotation.VisibleForTesting
 import androidx.test.platform.app.InstrumentationRegistry
+import java.util.concurrent.TimeUnit
 
 /** This allows tests to override arguments from code */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 @get:RestrictTo(RestrictTo.Scope.LIBRARY)
 @set:RestrictTo(RestrictTo.Scope.LIBRARY)
 @VisibleForTesting
-var argumentSource: Bundle? = null
+public var argumentSource: Bundle? = null
 
 @Suppress("NullableBooleanElvis") // suggestion makes boolean argument defaults less clear
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-object Arguments {
+public object Arguments {
     // public properties are shared by micro + macro benchmarks
-    val suppressedErrors: Set<String>
+    public val suppressedErrors: Set<String>
 
     /**
      * Set to true to enable androidx.tracing.perfetto tracepoints (such as composition tracing)
@@ -42,11 +42,11 @@ object Arguments {
      * Note that when StartupMode.COLD is used, additional work must be performed during target app
      * startup to initialize tracing.
      */
-    val perfettoSdkTracingEnable: Boolean
+    public val perfettoSdkTracingEnable: Boolean
         get() = perfettoSdkTracingEnableOverride ?: _perfettoSdkTracingEnable
 
     private val _perfettoSdkTracingEnable: Boolean
-    @VisibleForTesting var perfettoSdkTracingEnableOverride: Boolean? = null
+    @VisibleForTesting public var perfettoSdkTracingEnableOverride: Boolean? = null
 
     /**
      * Base URL for help articles for Startup Insights.
@@ -54,28 +54,45 @@ object Arguments {
      * This property should only be used while the Startup Insights feature is under development. It
      * can be overridden for testing purposes using [startupInsightsHelpUrlBaseOverride].
      */
-    val startupInsightsHelpUrlBase: String?
+    public val startupInsightsHelpUrlBase: String?
         get() = startupInsightsHelpUrlBaseOverride ?: _startupInsightsHelpUrlBase
 
     private val _startupInsightsHelpUrlBase: String?
-    @VisibleForTesting var startupInsightsHelpUrlBaseOverride: String? = null
+    @VisibleForTesting public var startupInsightsHelpUrlBaseOverride: String? = null
 
-    val enabledRules: Set<RuleType>
+    /**
+     * Whether to require clocks to be locked. Important: This is *disabled* by default as it was
+     * introduced in later versions of benchmark, and running with unlocked clocks is a legitimate
+     * use case for Macrobenchmarks.
+     */
+    public val requireLockedClocks: Boolean
 
-    enum class RuleType {
+    public val enabledRules: Set<RuleType>
+
+    public enum class RuleType {
         Microbenchmark,
         Macrobenchmark,
         BaselineProfile,
     }
 
-    val enableCompilation: Boolean
-    val killProcessDelayMillis: Long
-    val dryRunMode: Boolean
-    val dropShadersEnable: Boolean
-    val dropShadersThrowOnFailure: Boolean
-    val skipBenchmarksOnEmulator: Boolean
-    val saveProfileWaitMillis: Long
-    val killExistingPerfettoRecordings: Boolean
+    public val enableCompilation: Boolean
+    public val killProcessDelayMillis: Long
+    public val dryRunMode: Boolean
+    public val dropShadersEnable: Boolean
+    public val dropShadersThrowOnFailure: Boolean
+    public val skipBenchmarksOnEmulator: Boolean
+    public val saveProfileWaitMillis: Long
+    public val killExistingPerfettoRecordings: Boolean
+
+    /**
+     * Event sample period (`-c` option in `simpleperf record`) used when capturing native library
+     * load order via `page-faults` events.
+     *
+     * Specifies that one sample is recorded every [loadOrderSampleFreq] `page-faults` events. Lower
+     * values increase sampling fidelity at the cost of larger trace files and higher overhead.
+     * Defaults to `1`.
+     */
+    public val loadOrderSampleFreq: Int
 
     // internal properties are microbenchmark only
     internal val outputEnable: Boolean
@@ -87,22 +104,25 @@ object Arguments {
     internal val profilerSampleDurationSeconds: Long
     internal val profilerSkipWhenDurationRisksAnr: Boolean
     internal val profilerPerfCompareEnable: Boolean
-    internal val thermalThrottleSleepDurationSeconds: Long
-    val cpuEventCounterEnable: Boolean // non-internal, checked in CpuEventCounterBenchmark
+    internal val thermalThrottleSleepDurationMs: Long
+        get() = thermalThrottleSleepDurationMsOverride ?: _thermalThrottleSleepDurationMs
+
+    // Kept in milliseconds so tests can use a short sleep, while the public argument stays in
+    // seconds to match the existing command-line API.
+    private val _thermalThrottleSleepDurationMs: Long
+    @VisibleForTesting internal var thermalThrottleSleepDurationMsOverride: Long? = null
+    public val cpuEventCounterEnable: Boolean // non-internal, checked in CpuEventCounterBenchmark
     internal val cpuEventCounterMask: Int
     internal val requireAot: Boolean
     internal val requireJitDisabledIfRooted: Boolean
-    val throwOnMainThreadMeasureRepeated: Boolean // non-internal, used in BenchmarkRule
-    val measureRepeatedOnMainThrowOnDeadline: Boolean // non-internal, used in BenchmarkRule
+    public val throwOnMainThreadMeasureRepeated: Boolean // non-internal, used in BenchmarkRule
+    public val measureRepeatedOnMainThrowOnDeadline: Boolean // non-internal, used in BenchmarkRule
 
     internal var error: String? = null
     internal val additionalTestOutputDir: String?
-
-    internal val zipInMemoryTraceData: Boolean
-
     private val targetPackageName: String?
 
-    val payload: Map<String, String>
+    public val payload: Map<String, String>
 
     private const val prefix = "androidx.benchmark."
 
@@ -124,12 +144,7 @@ object Arguments {
         val argumentName = "profiling.mode"
         val argumentValue = getBenchmarkArgument(argumentName, "DEFAULT_VAL")
         if (argumentValue == "DEFAULT_VAL") {
-            return if (Build.VERSION.SDK_INT <= 21) {
-                // Have observed stack corruption on API 21, we haven't spent the time to find out
-                // why, or if it's better on other low API levels. See b/300658578
-                // TODO: consider adding warning here
-                null to true
-            } else if (DeviceInfo.methodTracingAffectsMeasurements) {
+            return if (DeviceInfo.methodTracingAffectsMeasurements) {
                 // We warn here instead of in Errors since this doesn't affect all measurements -
                 // BenchmarkState throws rather than measuring incorrectly, and the first benchmark
                 // can still measure with a trace safely
@@ -192,10 +207,6 @@ object Arguments {
                 ?: arguments.getBenchmarkArgument("fullTracing.enable")?.toBoolean()
                 ?: false
 
-        zipInMemoryTraceData = // experimental
-            arguments.getBenchmarkArgument("zipTraceWithInMemoryEvents.enable")?.toBoolean()
-                ?: false // off by default due to issue opening in Studio
-
         _startupInsightsHelpUrlBase =
             arguments.getBenchmarkArgument("startupInsights.helpUrlBase", defaultValue = null)
 
@@ -216,7 +227,7 @@ object Arguments {
             arguments
                 .getBenchmarkArgument(
                     key = "enabledRules",
-                    defaultValue = RuleType.values().joinToString(separator = ",") { it.toString() },
+                    defaultValue = RuleType.entries.joinToString(separator = ",") { it.toString() },
                 )
                 .run {
                     if (this.lowercase() == "none") {
@@ -228,14 +239,14 @@ object Arguments {
                                 .map { it.trim() }
                                 .filter { it.isNotEmpty() }
                                 .map { arg ->
-                                    RuleType.values().find {
-                                        arg.lowercase() == it.toString().lowercase()
+                                    RuleType.entries.find {
+                                        arg.equals(it.toString(), ignoreCase = true)
                                     } ?: throw Throwable("unable to find $arg")
                                 }
                                 .toSet()
                         } catch (e: Throwable) {
                             // defer parse error, so it doesn't show up as a missing class
-                            val allRules = RuleType.values()
+                            val allRules = RuleType.entries.toTypedArray()
                             val allRulesString = allRules.joinToString(",") { it.toString() }
                             error =
                                 "unable to parse enabledRules='$this', should be 'None' or" +
@@ -316,11 +327,13 @@ object Arguments {
                     " See CpuEventCounters.Event for flag definitions."
         }
 
-        thermalThrottleSleepDurationSeconds =
-            arguments
-                .getBenchmarkArgument("thermalThrottle.sleepDurationSeconds")
-                ?.ifBlank { null }
-                ?.toLong() ?: 90
+        _thermalThrottleSleepDurationMs =
+            TimeUnit.SECONDS.toMillis(
+                arguments
+                    .getBenchmarkArgument("thermalThrottle.sleepDurationSeconds")
+                    ?.ifBlank { null }
+                    ?.toLong() ?: 90
+            )
 
         additionalTestOutputDir = arguments.getString("additionalTestOutputDir")
         Log.d(BenchmarkState.TAG, "additionalTestOutputDir=$additionalTestOutputDir")
@@ -341,12 +354,14 @@ object Arguments {
                 .getBenchmarkArgument("measureRepeatedOnMainThread.throwOnDeadline")
                 ?.toBoolean() ?: true
 
-        requireAot = arguments.getBenchmarkArgument("requireAot")?.toBoolean() ?: false
+        requireAot = arguments.getBenchmarkArgument("requireAot")?.toBoolean() ?: true
         requireJitDisabledIfRooted =
             arguments.getBenchmarkArgument("requireJitDisabledIfRooted")?.toBoolean() ?: false
+        requireLockedClocks =
+            arguments.getBenchmarkArgument("requireLockedClocks")?.toBoolean() ?: false
 
         throwOnMainThreadMeasureRepeated =
-            arguments.getBenchmarkArgument("throwOnMainThreadMeasureRepeated")?.toBoolean() ?: false
+            arguments.getBenchmarkArgument("throwOnMainThreadMeasureRepeated")?.toBoolean() ?: true
 
         killExistingPerfettoRecordings =
             arguments.getBenchmarkArgument("killExistingPerfettoRecordings")?.toBoolean()
@@ -354,22 +369,25 @@ object Arguments {
                 ?: arguments.getString("killExistingPerfettoRecordings")?.toBoolean()
                 ?: true
 
+        loadOrderSampleFreq =
+            arguments.getBenchmarkArgument("loadOrder.sampleFreq")?.ifBlank { null }?.toInt() ?: 1
+
         if (arguments.getString("orchestratorService") != null) {
             InstrumentationResults.scheduleIdeWarningOnNextReport(
                 """
-                    AndroidX Benchmark does not support running with the AndroidX Test Orchestrator.
+                AndroidX Benchmark does not support running with the AndroidX Test Orchestrator.
 
-                    AndroidX benchmarks (micro and macro) produce one JSON file per test module,
-                    which together with Test Orchestrator restarting the process frequently causes
-                    benchmark output JSON files to be repeatedly overwritten during the test.
-                    """
+                AndroidX benchmarks (micro and macro) produce one JSON file per test module,
+                which together with Test Orchestrator restarting the process frequently causes
+                benchmark output JSON files to be repeatedly overwritten during the test.
+                """
                     .trimIndent()
             )
         }
         payload = arguments.getBenchmarkArgumentsWithPrefix("output.payload")
     }
 
-    fun macrobenchMethodTracingEnabled(): Boolean {
+    public fun macrobenchMethodTracingEnabled(): Boolean {
         return when {
             dryRunMode -> false
             profilerDefault -> false // don't enable tracing by default in macrobench
@@ -377,7 +395,7 @@ object Arguments {
         }
     }
 
-    fun throwIfError() {
+    public fun throwIfError() {
         if (error != null) {
             throw AssertionError(error)
         }
@@ -388,15 +406,15 @@ object Arguments {
      * this is supported only when MacrobenchmarkRule and BaselineProfileRule are used with the
      * baseline profile gradle plugin. This feature requires AGP 8.3.0-alpha10 as minimum version.
      */
-    fun getTargetPackageNameOrThrow(): String =
+    public fun getTargetPackageNameOrThrow(): String =
         targetPackageName
             ?: throw IllegalArgumentException(
                 """
-        Can't retrieve the target package name from instrumentation arguments.
-        This feature requires the baseline profile gradle plugin with minimum version 1.3.0-alpha01
-        and the Android Gradle Plugin minimum version 8.3.0-alpha10.
-        Please ensure your project has the correct versions in order to use this feature.
-    """
+                Can't retrieve the target package name from instrumentation arguments.
+                This feature requires the baseline profile gradle plugin with minimum version 1.3.0-alpha01
+                and the Android Gradle Plugin minimum version 8.3.0-alpha10.
+                Please ensure your project has the correct versions in order to use this feature.
+                """
                     .trimIndent()
             )
 }

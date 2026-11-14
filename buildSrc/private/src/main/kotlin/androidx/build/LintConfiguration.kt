@@ -26,7 +26,6 @@ import com.android.build.gradle.api.KotlinMultiplatformAndroidPlugin
 import java.io.File
 import org.gradle.api.GradleException
 import org.gradle.api.Project
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.plugins.JavaPlugin
 import org.gradle.kotlin.dsl.getByType
 import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
@@ -49,16 +48,10 @@ fun Project.configureLint() {
                 if (project.multiplatformExtension == null) {
                     configureNonAndroidProjectForLint()
                 }
-            // Only configure non-Android multiplatform projects via KotlinBasePlugin.
-            // Multiplatform projects targeting Android (e.g. `id("com.android.library")`) are
-            // configured via AppPlugin or LibraryPlugin.
+            // Configure lint for the JVM target of multiplatform projects. Lint for the android
+            // target is configured through KotlinMultiplatformAndroidPlugin above
             is KotlinBasePlugin ->
-                if (
-                    project.multiplatformExtension != null &&
-                        !project.plugins.hasPlugin(AppPlugin::class.java) &&
-                        !project.plugins.hasPlugin(LibraryPlugin::class.java) &&
-                        !project.plugins.hasPlugin(KotlinMultiplatformAndroidPlugin::class.java)
-                ) {
+                if (project.multiplatformExtension != null) {
                     configureNonAndroidProjectForLint()
                 }
         }
@@ -110,13 +103,11 @@ private fun Project.findLintProject(path: String): Project? {
 
 private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
     val extension = project.androidXExtension
+    val type = extension.type.get()
     val lintChecksProject = findLintProject(":lint-checks") ?: return
     project.dependencies.add("lintChecks", lintChecksProject)
 
-    if (
-        extension.type == SoftwareType.GRADLE_PLUGIN ||
-            extension.type == SoftwareType.INTERNAL_GRADLE_PLUGIN
-    ) {
+    if (type in setOf(SoftwareType.GRADLE_PLUGIN, SoftwareType.INTERNAL_GRADLE_PLUGIN)) {
         project.rootProject.findProject(":lint:lint-gradle")?.let {
             project.dependencies.add("lintChecks", it)
         }
@@ -144,9 +135,8 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         ignoreTestSources = false
         checkTestSources = false
 
-        // Write output directly to the console (and nowhere else).
-        textReport = true
-        htmlReport = false
+        // Write output directly to the console.
+        printTextReport = true
 
         // Format output for convenience.
         explainIssues = true
@@ -156,14 +146,14 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         // We run lint on each library, so we don't want transitive checking of each dependency
         checkDependencies = false
 
-        if (extension.type.allowCallingVisibleForTestsApis) {
+        if (type.allowCallingVisibleForTestsApis) {
             // Test libraries are allowed to call @VisibleForTests code
             disable.add("VisibleForTests")
         } else {
             fatal.add("VisibleForTests")
         }
 
-        if (extension.type.isForTesting) {
+        if (type.isForTesting) {
             // Disable this check as we do allow usage of junit as a dependency
             disable.add("InvalidPackage")
         } else {
@@ -193,7 +183,7 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         fatal.add("RestrictedApiAndroidX")
 
         // Provide stricter enforcement for project types intended to run on a device.
-        if (extension.type.compilationTarget == CompilationTarget.DEVICE) {
+        if (type.compilationTarget == CompilationTarget.DEVICE) {
             fatal.add("Assert")
             fatal.add("NewApi")
             fatal.add("ObsoleteSdkInt")
@@ -201,7 +191,7 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
             fatal.add("UnusedResources")
             fatal.add("KotlinPropertyAccess")
             fatal.add("LambdaLast")
-            if (extension.type != SoftwareType.PUBLISHED_PROTO_LIBRARY) {
+            if (type != SoftwareType.PUBLISHED_PROTO_LIBRARY) {
                 // Enforce UnknownNullness for all device targeting projects except for proto
                 // projects that generate code without proper nullability annotations.
                 fatal.add("UnknownNullness")
@@ -228,7 +218,7 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         // Broken in 7.0.0-alpha15 due to b/187343720
         disable.add("UnusedResources")
 
-        if (extension.type == SoftwareType.SAMPLES) {
+        if (type == SoftwareType.SAMPLES) {
             // TODO: b/190833328 remove if / when AGP will analyze dependencies by default
             //  This is needed because SampledAnnotationDetector uses partial analysis, and
             //  hence requires dependencies to be analyzed.
@@ -236,17 +226,11 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         }
 
         // Only run certain checks where API tracking is important.
-        if (extension.type.checkApi is RunApiTasks.No) {
+        if (type.checkApi is RunApiTasks.No) {
             disable.add("IllegalExperimentalApiUsage")
         }
 
-        // Run the JSpecifyNullness check unless opted-out (for projects that haven't migrated yet).
-        if (extension.optOutJSpecify) {
-            disable.add("JSpecifyNullness")
-        } else {
-            fatal.add("JSpecifyNullness")
-        }
-
+        fatal.add("JSpecifyNullness") // Require JSpecify annotations to be used
         fatal.add("UastImplementation") // go/hide-uast-impl
         fatal.add("KotlincFE10") // b/239982263
 
@@ -262,7 +246,7 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         // isn't able to handle experimental properties correctly.
         // Projects that don't run API compatibility checks can define experimental properties (lint
         // check disabled) since the entire API surface makes no compatibility guarantees.
-        if (extension.type.targetsKotlinConsumersOnly || !extension.shouldConfigureApiTasks()) {
+        if (type.targetsKotlinConsumersOnly || !extension.shouldConfigureApiTasks().get()) {
             disable.add("ExperimentalPropertyAnnotation")
         } else {
             fatal.add("ExperimentalPropertyAnnotation")
@@ -278,7 +262,7 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         fatal.add("PrivateResource")
 
         val lintXmlPath =
-            if (extension.type == SoftwareType.SAMPLES) {
+            if (type == SoftwareType.SAMPLES) {
                 "buildSrc/lint/lint_samples.xml"
             } else {
                 "buildSrc/lint/lint.xml"
@@ -300,7 +284,6 @@ private fun Project.configureLint(lint: Lint, isLibrary: Boolean) {
         // suppress warnings more specifically than issue-wide severity (regexes)
         // Currently suppresses warnings from baseline files working as intended
         lintConfig = File(project.getSupportRootFolder(), lintXmlPath)
-        baseline = lintBaseline.get().asFile
     }
     project.buildOnServerDependsOnLint()
 }
@@ -310,6 +293,3 @@ private fun Project.buildOnServerDependsOnLint() {
         project.addToBuildOnServer("lint")
     }
 }
-
-private val Project.lintBaseline: RegularFileProperty
-    get() = project.objects.fileProperty().fileValue(File(projectDir, "lint-baseline.xml"))

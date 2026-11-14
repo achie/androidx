@@ -28,7 +28,6 @@ import androidx.camera.camera2.pipe.CameraContext
 import androidx.camera.camera2.pipe.CameraController
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraGraphId
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.ConfigQueryResult
 import androidx.camera.camera2.pipe.OutputStream
@@ -41,7 +40,10 @@ import androidx.camera.camera2.pipe.core.Log
 import androidx.camera.camera2.pipe.core.Threads
 import androidx.camera.camera2.pipe.graph.GraphListener
 import androidx.camera.camera2.pipe.graph.StreamGraphImpl
+import androidx.camera.common.CameraId
+import androidx.camera.common.unwrapAs
 import javax.inject.Inject
+import javax.inject.Provider
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -55,7 +57,7 @@ constructor(
     private val camera2DeviceCache: Camera2DeviceCache,
     private val camera2MetadataCache: Camera2MetadataCache,
     private val camera2DeviceManager: Camera2DeviceManager,
-    private val camera2CameraControllerComponent: Camera2ControllerComponent.Builder,
+    private val camera2CameraControllerComponent: Provider<Camera2ControllerComponent.Builder>,
     @CameraPipeContext private val cameraPipeContext: Context,
 ) : CameraBackend, Camera2CameraController.ShutdownListener {
     private val lock = Any()
@@ -168,8 +170,9 @@ constructor(
                             } else {
                                 null
                             },
+                        useReadoutTimestamp = outputConfig.useReadoutTimestamp,
                     )
-                    ?.unwrapAs(OutputConfiguration::class)
+                    ?.unwrapAs<OutputConfiguration>()
                     ?.let { outputConfigSet.add(it) }
             }
         }
@@ -208,6 +211,7 @@ constructor(
         // Use Dagger to create the camera2 controller component, then create the CameraController.
         val cameraControllerComponent =
             camera2CameraControllerComponent
+                .get()
                 .camera2ControllerConfig(
                     Camera2ControllerConfig(
                         this,

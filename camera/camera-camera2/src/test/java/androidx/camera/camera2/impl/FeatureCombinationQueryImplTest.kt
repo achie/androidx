@@ -18,6 +18,10 @@ package androidx.camera.camera2.impl
 
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE
+import android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT
+import android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR
+import android.hardware.camera2.CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW
 import android.hardware.camera2.CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
 import android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE
 import android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE
@@ -31,6 +35,7 @@ import androidx.camera.camera2.pipe.OutputStream
 import androidx.camera.camera2.pipe.StreamFormat
 import androidx.camera.camera2.pipe.testing.CameraPipeSimulator
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.camera2.testing.FakeCameraInfoAdapterCreator.createCameraQuirks
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.ImageCapture
@@ -60,10 +65,20 @@ import org.robolectric.annotation.internal.DoNotInstrument
 @Config(minSdk = 35)
 class FeatureCombinationQueryImplTest {
     private val cameraMetadata =
-        FakeCameraMetadata(
-            characteristics =
+        FakeCameraMetadata.fromTemplate(
+            template = HighEndDeviceTemplate,
+            characteristicsOverrides =
                 buildMap {
                     if (Build.VERSION.SDK_INT >= 33) {
+                        put(
+                            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
+                            intArrayOf(
+                                REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                                REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR,
+                                REQUEST_AVAILABLE_CAPABILITIES_RAW,
+                                REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT,
+                            ),
+                        )
                         put(
                             CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES,
                             DynamicRangeProfiles(
@@ -75,7 +90,7 @@ class FeatureCombinationQueryImplTest {
                             ),
                         )
                     }
-                }
+                },
         )
 
     private val cameraPipe =
@@ -206,16 +221,16 @@ class FeatureCombinationQueryImplTest {
         hasJpegR: Boolean = false,
     ): SessionConfig {
         return map {
-                it.createUseCaseConfig(hasJpegR)
-                    .createSessionConfigBuilder(it.getResolution(), dynamicRange)
-                    .setExpectedFrameRateRange(fpsRange)
-                    .setPreviewStabilization(
-                        if (hasPreviewStabilization) StabilizationMode.ON
-                        else StabilizationMode.UNSPECIFIED
-                    )
-                    .build()
-                    .apply { createdSurfaces.addAll(this.surfaces) }
-            }
+            it.createUseCaseConfig(hasJpegR)
+                .createSessionConfigBuilder(it.getResolution(), dynamicRange)
+                .setExpectedFrameRateRange(fpsRange)
+                .setPreviewStabilization(
+                    if (hasPreviewStabilization) StabilizationMode.ON
+                    else StabilizationMode.UNSPECIFIED
+                )
+                .build()
+                .apply { createdSurfaces.addAll(this.surfaces) }
+        }
             .merge()
     }
 

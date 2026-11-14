@@ -15,7 +15,6 @@
  */
 package androidx.compose.remote.integration.view.demos;
 
-
 import static android.widget.LinearLayout.VERTICAL;
 
 import static androidx.compose.remote.integration.view.demos.DemosComposeKt.getRemoteComposable;
@@ -30,6 +29,7 @@ import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
@@ -61,10 +61,12 @@ import android.widget.Toast;
 import android.widget.ToggleButton;
 
 import androidx.compose.remote.core.CoreDocument.ShaderControl;
-import androidx.compose.remote.core.RemoteComposeBuffer;
+import androidx.compose.remote.core.Limits;
 import androidx.compose.remote.creation.RemoteComposeContext;
 import androidx.compose.remote.creation.RemoteComposeWriter;
+import androidx.compose.remote.integration.view.demos.customviews.AndroidCustomSupport;
 import androidx.compose.remote.integration.view.demos.examples.DemoPaths;
+import androidx.compose.remote.integration.view.demos.utils.DemoRcResolver;
 import androidx.compose.remote.integration.view.demos.utils.RCDoc;
 import androidx.compose.remote.player.core.RemoteDocument;
 import androidx.compose.remote.player.view.RemoteComposePlayer;
@@ -78,6 +80,7 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -90,7 +93,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
@@ -104,14 +106,26 @@ import java.util.zip.ZipOutputStream;
 @SuppressLint("RestrictedApiAndroidX")
 public class ExperimentRecyclerActivity extends Activity {
     static Bitmap sPersonImage3;
-    static RemoteComposeBuffer sCurrentBuffer = DemoPaths.pathTest().getBuffer();
+    static byte @NonNull [] sCurrentDoc = DemoPaths.pathTest().encodeToByteArray();
     private FrameMetrics mMetrics;
     static final String CHANNEL_ID = "custom_notification_channel";
     static int sNotificationId = 1;
     public static final boolean BACKGROUND = false;
+    private static final boolean NO_COMPOSE = false;
 
-    public static @NonNull RemoteComposeBuffer getCurrentDoc() {
-        return sCurrentBuffer;
+    static {
+        Limits.DEFAULT_MAX_AVG_FPS = 120;
+    }
+
+
+    public static byte @NonNull [] getCurrentDoc() {
+        return sCurrentDoc;
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        paletteChange();
     }
 
     /**
@@ -124,14 +138,18 @@ public class ExperimentRecyclerActivity extends Activity {
 
         sPersonImage3 = BitmapFactory.decodeResource(context.getResources(),
                 R.drawable.mostly_cloudy);
-        ArrayList<RCDoc> list = new ArrayList<>(DemosCreation.getDemos());
-        list.addAll(getRemoteComposable(context));
+        ArrayList<RCDoc> list = new ArrayList<>(DemosCreation.getDemos(this, 4 + 2));
+        ArrayList<@NotNull RCDoc> cDocs = getRemoteComposable(context, "#/");
+        list.addAll(cDocs);
 
         return list;
     }
 
     RecyclerView mRecyclerView;
     LinearLayoutManager mLinearLayoutManager;
+    ToggleButton mLockButton;
+    /** Demo a Prev/Next step is heading for, or {@link RecyclerView#NO_POSITION} when settled. */
+    private int mStepTarget = RecyclerView.NO_POSITION;
     static int sScrWidth = 1080;
     static int sWidth = 1080;
     static int sHeight = 1080;
@@ -166,7 +184,10 @@ public class ExperimentRecyclerActivity extends Activity {
                 return d1.toString().compareTo(d2.toString());
             }
         });
-        sCurrentBuffer = Objects.requireNonNull(mDocList.get(0).getDoc()).getDocument().getBuffer();
+        byte[] firstBytes = docToBytes(mDocList.get(0));
+        if (firstBytes != null) {
+            sCurrentDoc = firstBytes;
+        }
 
         // Set adapter to RecyclerView
         mRecyclerView.setAdapter(new MyAdapter(mDocList));
@@ -177,6 +198,7 @@ public class ExperimentRecyclerActivity extends Activity {
         LinearLayout docControl = new LinearLayout(this);
         docControl.setOrientation(LinearLayout.HORIZONTAL);
         ToggleButton lock = new ToggleButton(this);
+        mLockButton = lock;
         //        lock.setSwitchMinWidth(200);
         lock.setOnCheckedChangeListener(this::lock);
         lock.setText("lock Off");
@@ -203,14 +225,76 @@ public class ExperimentRecyclerActivity extends Activity {
                 mTextView.setText("" + off);
             }
         });
+        // Re-lock once a Prev/Next step stops moving; see stepDemo.
+        mRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    onStepSettled();
+                }
+            }
+        });
         docControl.addView(mTextView);
         lock.setBackgroundColor(0xFFAAFFAA);
         docControl.addView(lock);
         docControl.addView(mStatsView);
+        // ===================== Next section button ================
+        TextView next = new TextView(this);
+        next.setText(">");
+        next.setTextSize(24);
+        next.setBackgroundColor(Color.LTGRAY);
 
+        next.setPadding(0, 0, 0, 0);
+        next.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                nextSection();
+            }
+        });
+        TextView prev = new TextView(this);
+        prev.setText("<");
+        prev.setTextSize(24);
+        prev.setPadding(0, 0, 0, 0);
+        prev.setBackgroundColor(Color.LTGRAY);
+        prev.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                prevSection();
+            }
+        });
+        docControl.addView(prev);
+        docControl.addView(next);
+
+        // ==========================================================
         layout.addView(docControl);
         LinearLayout row = new LinearLayout(this);
         float textSize = 15;
+
+        // ============ Demo stepping: unlock, scroll one demo, lock it again ============
+        // One tap per demo, so a screen recording can be driven without touching the list.
+        // Its own row above the Menu row, since the doc control row is already full.
+        LinearLayout stepRow = new LinearLayout(this);
+        Button prevDemo = new Button(this);
+        LinearLayout.LayoutParams prevParams = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        prevParams.weight = 1;
+        prevDemo.setLayoutParams(prevParams);
+        prevDemo.setTextSize(textSize);
+        prevDemo.setText("Prev");
+        prevDemo.setOnClickListener(v -> stepDemo(-1));
+        stepRow.addView(prevDemo);
+
+        Button nextDemo = new Button(this);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        nextParams.weight = 1;
+        nextDemo.setLayoutParams(nextParams);
+        nextDemo.setTextSize(textSize);
+        nextDemo.setText("Next");
+        nextDemo.setOnClickListener(v -> stepDemo(1));
+        stepRow.addView(nextDemo);
+        layout.addView(stepRow);
+
         // ==================== ExperimentActivity  launch ==========================
 
         Button launch = new Button(this);
@@ -256,6 +340,15 @@ public class ExperimentRecyclerActivity extends Activity {
         toPlayer.setText("Player");
         toPlayer.setOnClickListener(this::setToPlayer);
         row.addView(toPlayer);
+        // ==================== Save All ==========================
+        Button saveAll = new Button(this);
+        saveAll.setTextSize(textSize);
+        p = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT);
+        p.weight = 1;
+        saveAll.setLayoutParams(p);
+        saveAll.setText("Save\nAll");
+        saveAll.setOnClickListener(this::saveAll);
+        row.addView(saveAll);
         createNotificationChannel();
         // ================================ ==========================
 
@@ -279,6 +372,104 @@ public class ExperimentRecyclerActivity extends Activity {
 
         // Set RecyclerView as the content view
         setContentView(layout);
+    }
+
+    void nextSection() {
+
+    }
+
+    void prevSection() {
+
+    }
+
+    /** Index of the demo currently filling the screen, or {@link RecyclerView#NO_POSITION}. */
+    private int currentDemoPosition() {
+        int off = mLinearLayoutManager.findFirstVisibleItemPosition();
+        if (off == RecyclerView.NO_POSITION) {
+            return RecyclerView.NO_POSITION;
+        }
+        View view = mLinearLayoutManager.findViewByPosition(off);
+        // The first visible item is still the previous demo once it is mostly scrolled off.
+        if (view != null && view.getLeft() < -sScrWidth / 2) {
+            off++;
+        }
+        return off;
+    }
+
+    /**
+     * Unlocks, smooth scrolls {@code direction} demos, then locks again once the scroll settles.
+     *
+     * <p>The lock is what holds a demo still for a screen recording, and a suppressed RecyclerView
+     * silently drops scroll requests, so stepping has to bracket the scroll rather than just issue
+     * it.
+     *
+     * <p>Taps land during a scroll as readily as between them, and count from wherever the step in
+     * flight is heading rather than from what is on screen at that instant - so three quick taps
+     * advance three demos, and a tap is never swallowed for arriving at an awkward moment.
+     */
+    private void stepDemo(int direction) {
+        int from = mStepTarget != RecyclerView.NO_POSITION ? mStepTarget : currentDemoPosition();
+        if (from == RecyclerView.NO_POSITION) {
+            return;
+        }
+        mStepTarget = Math.max(0, Math.min(mDocList.size() - 1, from + direction));
+
+        mRecyclerView.suppressLayout(false);
+        setLockToggle(false);
+        // Supersedes any smooth scroll already running.
+        mRecyclerView.smoothScrollToPosition(mStepTarget);
+    }
+
+    /**
+     * Locks the demo a step landed on, once the RecyclerView stops moving.
+     *
+     * <p>Going idle is not the same as having arrived - a touch on the list cancels a smooth scroll
+     * wherever it happens to be, and a slow demo can have one time out - so an unfinished scroll is
+     * snapped the rest of the way first. Locking on idle alone is what leaves the list frozen
+     * halfway between two demos.
+     */
+    private void onStepSettled() {
+        if (mStepTarget == RecyclerView.NO_POSITION) {
+            return;
+        }
+        View view = mLinearLayoutManager.findViewByPosition(mStepTarget);
+        if (view == null || Math.abs(view.getLeft()) > 2) {
+            int pending = mStepTarget;
+            mLinearLayoutManager.scrollToPositionWithOffset(mStepTarget, 0);
+            // The snap needs a layout pass before suppressLayout freezes it.
+            mRecyclerView.post(() -> {
+                if (mStepTarget == pending) {
+                    lockStep();
+                }
+            });
+            return;
+        }
+        lockStep();
+    }
+
+    private void lockStep() {
+        mStepTarget = RecyclerView.NO_POSITION;
+        lockCurrentDemo();
+    }
+
+    /** Freezes the RecyclerView on the demo now on screen. */
+    private void lockCurrentDemo() {
+        mRecyclerView.suppressLayout(true);
+        setLockToggle(true);
+    }
+
+    /**
+     * Moves the lock toggle to {@code checked} without running {@link #lock}, whose own scroll and
+     * suppress sequence would fight the one {@link #stepDemo} is in the middle of.
+     */
+    private void setLockToggle(boolean checked) {
+        if (mLockButton == null || mLockButton.isChecked() == checked) {
+            return;
+        }
+        mLockButton.setOnCheckedChangeListener(null);
+        mLockButton.setChecked(checked);
+        mLockButton.setBackgroundColor(checked ? 0xFFFFAAAA : 0xFFAAFFAA);
+        mLockButton.setOnCheckedChangeListener(this::lock);
     }
 
     void setUpMetrics() {
@@ -334,19 +525,30 @@ public class ExperimentRecyclerActivity extends Activity {
         setUpMetrics();
     }
 
+    private void saveAll(View v) {
+        File storageDir = new File("/storage/self/primary/Download/");
+        File[] toRemove = storageDir.listFiles();
+        for (int i = 0; i < toRemove.length; i++) {
+            File file = toRemove[i];
+            if (file.getName().endsWith(".rc")) {
+                file.delete();
+            }
+        }
+
+        for (RCDoc doc : mDocList) {
+            if (NO_COMPOSE && doc.toString().startsWith("Compose")) {
+                continue;
+            }
+            saveDoc(doc.toString(), docToBytes(doc), getApplicationContext(), false);
+        }
+    }
+
     private void sendDoc(RCDoc doc) {
-        sCurrentBuffer = Objects.requireNonNull(doc.getDoc()).getDocument().getBuffer();
-        byte[] buffer = Arrays.copyOf(sCurrentBuffer.getBuffer().getBuffer(),
-                sCurrentBuffer.getBuffer().getSize());
-        int bufferSize = buffer.length;
-        byte[] bytes = new byte[bufferSize];
-        try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(buffer, 0,
-                bufferSize)) {
-            int read = byteArrayInputStream.read(bytes);
-            Log.v("MAIN", "save   " + read + " bytes");
+        byte[] bytes = docToBytes(doc);
+        if (bytes != null) {
+            sCurrentDoc = bytes;
+            Log.v("MAIN", "save   " + bytes.length + " bytes");
             saveDoc(doc.toString(), bytes, getApplicationContext(), false);
-        } catch (IOException e) {
-            Log.e("MAIN", "Error reading bytes");
         }
     }
 
@@ -357,24 +559,23 @@ public class ExperimentRecyclerActivity extends Activity {
         int left = Objects.requireNonNull(mLinearLayoutManager.findViewByPosition(off)).getLeft();
         if (left < -sScrWidth / 2) off++;
         View view = mLinearLayoutManager.findViewByPosition(off);
-        System.out.println(view);
-
+        {
+            System.out.println(view);
+            MyViewHolder holder = (MyViewHolder) mRecyclerView.findViewHolderForAdapterPosition(
+                    off);
+            if (holder != null) {
+                Log.v("DEBUG", holder.mUi.mPlayer.getDocument().getDocument().toNestedString());
+            }
+        }
         RCDoc doc = mDocList.get(off);
 //        MyViewHolder holder = (MyViewHolder) mRecyclerView.findViewHolderForAdapterPosition(off);
 
-        sCurrentBuffer = Objects.requireNonNull(doc.getDoc()).getDocument().getBuffer();
-        byte[] buffer = Arrays.copyOf(sCurrentBuffer.getBuffer().getBuffer(),
-                sCurrentBuffer.getBuffer().getSize());
-        int bufferSize = buffer.length;
-        byte[] bytes = new byte[bufferSize];
-        try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(buffer, 0,
-                bufferSize)) {
-            int read = byteArrayInputStream.read(bytes);
-            System.out.println("read " + read);
-            saveDoc(doc.toString(), bytes, getApplicationContext(), false);
-        } catch (IOException e) {
-            Log.e("MAIN", "Error reading bytes");
+        byte[] bytes = docToBytes(doc);
+        if (bytes == null) {
+            return;
         }
+        sCurrentDoc = bytes;
+        saveDoc(doc.toString(), bytes, getApplicationContext(), false);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             RemoteViews.DrawInstructions drawInstruction = new RemoteViews.DrawInstructions.Builder(
@@ -480,17 +681,12 @@ public class ExperimentRecyclerActivity extends Activity {
     }
 
     static byte[] docToBytes(RCDoc doc) {
-        sCurrentBuffer = Objects.requireNonNull(doc.getDoc()).getDocument().getBuffer();
-        byte[] buffer = Arrays.copyOf(sCurrentBuffer.getBuffer().getBuffer(),
-                sCurrentBuffer.getBuffer().getSize());
-        int bufferSize = buffer.length;
-        byte[] bytes = new byte[bufferSize];
-        try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(buffer, 0,
-                bufferSize)) {
-            int read = byteArrayInputStream.read(bytes);
-            Log.v("MAIN", "read " + read);
-        } catch (IOException e) {
-            Log.d("MAIN", "Unable to read doc ");
+        if (doc == null) {
+            return null;
+        }
+        byte[] bytes = doc.getBytes();
+        if (bytes != null) {
+            sCurrentDoc = bytes;
         }
         return bytes;
     }
@@ -500,9 +696,6 @@ public class ExperimentRecyclerActivity extends Activity {
         int off = mLinearLayoutManager.findFirstVisibleItemPosition();
         int left = Objects.requireNonNull(mLinearLayoutManager.findViewByPosition(off)).getLeft();
         if (left < -sScrWidth / 2) off++;
-        View view = mLinearLayoutManager.findViewByPosition(off);
-        System.out.println(view);
-
         return mDocList.get(off);
     }
 
@@ -535,19 +728,12 @@ public class ExperimentRecyclerActivity extends Activity {
 
         AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(getApplicationContext());
 
-        sCurrentBuffer = Objects.requireNonNull(doc.getDoc()).getDocument().getBuffer();
-        byte[] buffer = Arrays.copyOf(sCurrentBuffer.getBuffer().getBuffer(),
-                sCurrentBuffer.getBuffer().getSize());
-        int bufferSize = buffer.length;
-        byte[] bytes = new byte[bufferSize];
-        try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(buffer, 0,
-                bufferSize)) {
-            int read = byteArrayInputStream.read(bytes);
-            System.out.println("read " + read);
-            saveDoc(doc.toString(), bytes, getApplicationContext(), false);
-        } catch (IOException e) {
-            // Handle the exception
+        byte[] bytes = docToBytes(doc);
+        if (bytes == null) {
+            return;
         }
+        sCurrentDoc = bytes;
+        saveDoc(doc.toString(), bytes, getApplicationContext(), false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             RemoteViews.DrawInstructions drawInstruction = new RemoteViews.DrawInstructions.Builder(
                     List.of(bytes)).build();
@@ -606,6 +792,23 @@ public class ExperimentRecyclerActivity extends Activity {
     /**
      * Called when the checked state of a compound button has changed.
      *
+     */
+    public void paletteChange() {
+        int off = mLinearLayoutManager.findFirstVisibleItemPosition();
+
+        Card card = (Card) mLinearLayoutManager.findViewByPosition(off);
+        if (card == null) {
+            System.err.println("card is null");
+            return;
+        }
+
+        card.mPlayer.reloadPalette();
+
+    }
+
+    /**
+     * Called when the checked state of a compound button has changed.
+     *
      * @param buttonView The button view whose state has changed.
      * @param isChecked  The new checked state of buttonView.
      */
@@ -651,8 +854,12 @@ public class ExperimentRecyclerActivity extends Activity {
             super(context);
             setOrientation(VERTICAL);
             mPlayer = new RemoteComposePlayer(context);
+            mPlayer.setCustomSupport(new AndroidCustomSupport(mPlayer));
+            mPlayer.setRcResolver(DemoRcResolver.create(context));
             mTitle = new TextView(context);
             mStats = new TextView(context);
+            System.out.println("adding id listener");
+
             mPlayer.setShaderControl(new ShaderControl() {
                 @Override
                 public boolean isShaderValid(@NonNull String shader) {
@@ -662,7 +869,7 @@ public class ExperimentRecyclerActivity extends Activity {
 //            int mode =(mPlayer.getResources().getConfiguration().isNightModeActive())?Rc.Theme
 //            .DARK:Rc.Theme.LIGHT;
 //            mPlayer.setTheme(mode);
-            mTitle.setTextSize(32);
+            mTitle.setTextSize(24);
             mTitle.setTypeface(mTitle.getTypeface(), Typeface.BOLD);
             mTitle.setTextColor(Color.BLACK);
             mTitle.setBackgroundColor(0xFFDDDDDD);
@@ -678,6 +885,9 @@ public class ExperimentRecyclerActivity extends Activity {
             } else { // landscape
                 Log.v("MAIN", "landscape mode");
                 size = sHeight / 2;
+            }
+            if (size < 200) {
+                size = 1200;
             }
             LayoutParams params = new LayoutParams(size, size);
             // mPlayer.setBackground(sDrawable);
@@ -861,6 +1071,9 @@ public class ExperimentRecyclerActivity extends Activity {
                 }
                 if (docData != null) {
                     mUi.mPlayer.setDocument(byteData);
+                    mUi.mPlayer.addIdActionListener((id, action) -> {
+                        System.out.println("action id: " + id + " action: \"" + action + "\"");
+                    });
                 }
             }
 
@@ -878,7 +1091,9 @@ public class ExperimentRecyclerActivity extends Activity {
                 mSize = mItem.size();
                 mZipSize = mItem.zipSize();
             }
-            String stats = "  Load: " + mTimeStr + "\n   cmd: " + ops + " / " + mDocOps
+            float build = mItem.getBuildTime();
+            String stats = "  Load: " + mTimeStr + " bld: " + mDf2.format(build) + "ms\n   cmd: "
+                    + ops + " / " + mDocOps
                     + "\n  Size: " + mDf2.format(mSize) + "/" + mDf2.format(mZipSize)
                     + " B" + "\n Frame: "
                     + mDf2.format(evalTime) + " ms";
@@ -908,6 +1123,88 @@ public class ExperimentRecyclerActivity extends Activity {
     /**
      * Creates a document with a name and a writer supplier
      *
+     * @param name        name of the document
+     * @param docSupplier the writer supplier
+     * @return the document
+     */
+    @SuppressLint("RestrictedApiAndroidX")
+    public static @NonNull RCDoc get(@NonNull String name,
+            @NonNull Supplier<byte @NonNull []> docSupplier) {
+        return new RCDoc() {
+            @NonNull
+            final Supplier<byte @NonNull []> mSupplier = docSupplier;
+            byte @Nullable [] mDoc;
+            float mBuildTime = 0;
+
+            @Override
+            public float getBuildTime() {
+                return mBuildTime;
+            }
+
+            public byte @NonNull [] doc() {
+                if (mDoc == null) {
+                    mDoc = mSupplier.get();
+                }
+
+                return mDoc;
+            }
+
+            @Override
+            public int getColor() {
+                return 0;
+            }
+
+            @Override
+            public void run() {
+            }
+
+            @Override
+            public int size() {
+                return doc().length;
+            }
+
+            @Override
+            public int zipSize() {
+
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                try {
+                    DeflaterOutputStream deflaterOutputStream = new DeflaterOutputStream(baos);
+                    deflaterOutputStream.write(doc(), 0, doc().length);
+                    deflaterOutputStream.finish();
+
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+
+                return baos.size();
+            }
+
+            @Override
+            @NonNull
+            public String toString() {
+                return name;
+            }
+
+            @Override
+            public byte @NonNull [] getBytes() {
+                return doc();
+            }
+
+            @Override
+            public RemoteDocument getDoc() {
+                Log.v("perf", "build doc \"" + name + "\"");
+                long time = System.nanoTime();
+                RemoteDocument ret = new RemoteDocument(
+                        new ByteArrayInputStream(doc(), 0, doc().length));
+                mBuildTime = (System.nanoTime() - time) * 1E-6f;
+                return ret;
+            }
+        };
+    }
+
+    /**
+     * Creates a document with a name and a writer supplier
+     *
      * @param name           name of the document
      * @param writerSupplier the writer supplier
      * @return the document
@@ -917,6 +1214,12 @@ public class ExperimentRecyclerActivity extends Activity {
             @NonNull Supplier<RemoteComposeWriter> writerSupplier) {
         return new RCDoc() {
             private RemoteComposeWriter mWriter;
+            float mBuildTime = 0;
+
+            @Override
+            public float getBuildTime() {
+                return mBuildTime;
+            }
 
             public RemoteComposeWriter writer() {
                 if (mWriter == null) {
@@ -965,11 +1268,20 @@ public class ExperimentRecyclerActivity extends Activity {
             }
 
             @Override
+            public byte @NonNull [] getBytes() {
+                return writer().encodeToByteArray();
+            }
+
+            @Override
             public RemoteDocument getDoc() {
                 Log.v("perf", "build doc \"" + name + "\"");
+                long time = System.nanoTime();
+
                 mWriter = writer();
-                return new RemoteDocument(
+                RemoteDocument ret = new RemoteDocument(
                         new ByteArrayInputStream(writer().buffer(), 0, writer().bufferSize()));
+                mBuildTime = (System.nanoTime() - time) * 1E-6f;
+                return ret;
             }
         };
     }
@@ -988,6 +1300,12 @@ public class ExperimentRecyclerActivity extends Activity {
         return new RCDoc() {
             private RemoteComposeWriter mWriter;
             private RemoteComposeWriter mWriter2;
+            float mBuildTime = 0;
+
+            @Override
+            public float getBuildTime() {
+                return mBuildTime;
+            }
 
             public RemoteComposeWriter writer() {
                 if (mWriter == null) {
@@ -1050,10 +1368,18 @@ public class ExperimentRecyclerActivity extends Activity {
             }
 
             @Override
+            public byte @NonNull [] getBytes() {
+                return writer().encodeToByteArray();
+            }
+
+            @Override
             public RemoteDocument getDoc() {
                 Log.v("perf", "build doc \"" + name + "\"");
-                return new RemoteDocument(
+                long time = System.nanoTime();
+                RemoteDocument ret = new RemoteDocument(
                         new ByteArrayInputStream(writer().buffer(), 0, writer().bufferSize()));
+                mBuildTime = (System.nanoTime() - time) * 1E-6f;
+                return ret;
             }
         };
     }
@@ -1065,12 +1391,19 @@ public class ExperimentRecyclerActivity extends Activity {
      * @param buff       the document
      * @param appContext the application context
      */
-    public static void saveDoc(@NonNull String name, byte @NonNull [] buff, @NonNull Context
+    public static void saveDoc(@NonNull String name, byte @Nullable [] buff, @NonNull Context
             appContext, boolean compress) {
+        if (buff == null) {
+            return;
+        }
         int len = buff.length;
         if (name.indexOf('/') >= 0) {
-            name = name.substring(name.lastIndexOf('/'));
+            name = name.substring(name.lastIndexOf('/') + 1);
         }
+
+        name = name.replaceFirst("^\\d+", "");
+        // convert to snake case
+        name = name.replaceAll("([a-z])([A-Z])", "$1_$2").toLowerCase();
         File storageDir = appContext.getExternalFilesDir(
                 Environment.DIRECTORY_PICTURES); // Using internal storage
         if (storageDir != null) {
@@ -1081,20 +1414,28 @@ public class ExperimentRecyclerActivity extends Activity {
             if (!mkdirs) {
                 return;
             }
-
         }
-        String str = Base64.getEncoder().encodeToString(buff);
-        StringBuilder output = new StringBuilder("\ndata = ");
-        int chunk = 72;
-        for (int i = 0; i < str.length(); i += chunk) {
-            int endIndex = Math.min(i + chunk, str.length());
-            if (i != 0) output.append("+");
-            output.append("\"").append(str.substring(i, endIndex)).append("\"\n");
+        System.out.println("saving " + name);
+        if (DEBUG) {
+            String str = Base64.getEncoder().encodeToString(buff);
+            StringBuilder output = new StringBuilder("\ndata = ");
+            int chunk = 72;
+            for (int i = 0; i < str.length(); i += chunk) {
+                int endIndex = Math.min(i + chunk, str.length());
+                if (i != 0) output.append("+");
+                output.append("\"").append(str.substring(i, endIndex)).append("\"\n");
+            }
+            Log.v("MAIN", "base64String: " + output);
         }
-
-        Log.v("MAIN", "base64String: " + output);
 
         File imageFile = new File(storageDir, name + ".rc");
+        if (imageFile.exists()) {
+            System.out.println("WARNING IMAGE EXIST " + name + " len = " + buff.length + "  "
+                    + imageFile.length());
+            if (buff.length != imageFile.length()) {
+                imageFile = new File(storageDir, name + "_c.rc");
+            }
+        }
         if (compress) {
             imageFile = new File(storageDir, name + ".rcz");
         }

@@ -16,10 +16,15 @@
 
 package androidx.text.vertical
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.os.Build
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextPaint
-import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
@@ -30,45 +35,246 @@ class VerticalTextLayoutTest {
     // In this test case, just check the set in builder and get in instance.
 
     val PAINT =
-        TextPaint().apply() {
+        TextPaint().apply {
             textSize = 10f // make 1em = 10px
         }
 
     val JP_TEXT = "吾輩は猫である。\n1904年(明治39年)生まれである。\n英名はI Am a Catである。"
 
     @Test
-    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
-    fun verticalTextLayout_Create_Api36() {
+    fun constructor() {
         val layout = createVerticalTextLayout()
         assertThat(layout.width).isGreaterThan(0f)
-        assertThat(layout.impl).isInstanceOf(VerticalTextLayoutApi36Impl::class.java)
-        (layout.impl as VerticalTextLayoutApi36Impl).run {
+        layout.run {
             assertThat(text).isEqualTo(JP_TEXT)
             assertThat(start).isEqualTo(0)
             assertThat(end).isEqualTo(JP_TEXT.length)
             assertThat(paint).isSameInstanceAs(PAINT)
             assertThat(height).isEqualTo(100f)
-            assertThat(orientation).isEqualTo(TextOrientation.MIXED)
+            assertThat(orientation).isEqualTo(TextOrientation.Mixed)
         }
     }
 
     @Test
-    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
-    fun verticalTextLayout_isVerticalTextSupported_Api36() {
+    fun isVerticalTextSupported() {
         assertThat(createVerticalTextLayout().isVerticalTextSupported()).isTrue()
     }
 
-    @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    fun verticalTextLayout_CreateDefaultParams_UnderApi36() {
-        val layout = createVerticalTextLayout()
-        assertThat(layout.width).isEqualTo(0f) // fallback to default params
-        assertThat(layout.impl).isInstanceOf(VerticalTextLayoutNoOpImpl::class.java)
+    @Test
+    fun lineCount_singleColumn() {
+        val layout = VerticalTextLayout("あ", 0, 1, PAINT, 100f)
+        assertThat(layout.lineCount).isEqualTo(1)
     }
 
-    @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    fun verticalTextLayout_isVerticalTextSupported_UnderApi36() {
-        assertThat(createVerticalTextLayout().isVerticalTextSupported()).isFalse()
+    @Test
+    fun lineCount_multipleColumns() {
+        val text = "吾輩は猫である。名前はまだ無い。"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 30f)
+        assertThat(layout.lineCount).isGreaterThan(1)
     }
+
+    @Test
+    fun lineCount_isConsistentWithWidth() {
+        val text = "吾輩は猫である。名前はまだ無い。"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 30f)
+        assertThat(layout.lineCount).isGreaterThan(0)
+        assertThat(layout.width).isGreaterThan(0f)
+    }
+
+    @Test
+    fun getLineHeight_singleColumn_equalsSumOfAdvances() {
+        val text = "吾輩は猫である。"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 1000f)
+        assertThat(layout.lineCount).isEqualTo(1)
+        val expectedAdvance = PAINT.measureTextVertical(text, 0, text.length)
+        assertThat(layout.getLineHeight(0)).isWithin(1e-3f).of(expectedAdvance)
+        assertThat(layout.contentHeight).isWithin(1e-3f).of(layout.getLineHeight(0))
+    }
+
+    @Test
+    fun getLineHeight_multiColumn_maxEqualsContentHeight() {
+        val text = "吾輩は猫である。名前はまだ無い。"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 30f)
+        assertThat(layout.lineCount).isGreaterThan(1)
+        for (i in 0 until layout.lineCount) {
+            assertThat(layout.getLineHeight(i)).isGreaterThan(0f)
+            assertThat(layout.getLineHeight(i)).isAtMost(30f)
+        }
+        assertThat(layout.getLineHeight(0))
+            .isGreaterThan(layout.getLineHeight(layout.lineCount - 1))
+        val maxLineHeight = (0 until layout.lineCount).maxOf { layout.getLineHeight(it) }
+        assertThat(layout.contentHeight).isWithin(1e-3f).of(maxLineHeight)
+    }
+
+    @Test
+    fun columnWidth_isBoundingWidth_andWidthSumsColumns() {
+        val text =
+            SpannableString("吾輩は猫である。名前はまだ無い。").apply {
+                setSpan(RubySpan("わがはい"), 0, 2, Spanned.SPAN_INCLUSIVE_EXCLUSIVE)
+            }
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 30f)
+        assertThat(layout.lineCount).isGreaterThan(1)
+        assertThat(layout.columnWidth).isWithin(1e-3f).of(1.5f * PAINT.textSize)
+        assertThat(layout.getLineWidth(0)).isWithin(1e-3f).of(1.5f * PAINT.textSize)
+        assertThat(layout.getLineWidth(1)).isWithin(1e-3f).of(1.0f * PAINT.textSize)
+        assertThat(layout.width)
+            .isWithin(1e-3f)
+            .of((1.5f + (layout.lineCount - 1) * 1.0f) * PAINT.textSize)
+    }
+
+    @Test
+    fun getLineStart_and_getLineEnd_matchColumnBoundaries() {
+        val prefix = "PREFIX_"
+        val body = "吾輩は猫である。名前はまだ無い。"
+        val suffix = "_SUFFIX"
+        val fullText = prefix + body + suffix
+        val start = prefix.length
+        val end = start + body.length
+        val layout = VerticalTextLayout(fullText, start, end, PAINT, 30f)
+        assertThat(layout.lineCount).isGreaterThan(1)
+        assertThat(layout.getLineStart(0)).isEqualTo(start)
+        assertThat(layout.getLineEnd(layout.lineCount - 1)).isEqualTo(end)
+        for (i in 0 until layout.lineCount - 1) {
+            assertThat(layout.getLineEnd(i)).isGreaterThan(layout.getLineStart(i))
+            assertThat(layout.getLineEnd(i)).isEqualTo(layout.getLineStart(i + 1))
+        }
+    }
+
+    @Test
+    fun lineMetrics_outOfBounds_throwsIndexOutOfBoundsException() {
+        val text = "吾輩は猫である。"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 1000f)
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.getLineHeight(-1) }
+        assertThrows(IndexOutOfBoundsException::class.java) {
+            layout.getLineHeight(layout.lineCount)
+        }
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.getLineStart(-1) }
+        assertThrows(IndexOutOfBoundsException::class.java) {
+            layout.getLineStart(layout.lineCount)
+        }
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.getLineEnd(-1) }
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.getLineEnd(layout.lineCount) }
+    }
+
+    @Test
+    fun draw_smokeTest() {
+        val layout = createVerticalTextLayout()
+        val canvas = Canvas()
+        layout.draw(canvas, 0f, 0f)
+        // ensure no crash
+    }
+
+    @Test
+    fun draw_positionsCharacters() {
+        val text = "あい"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 100f)
+        val draws = mutableListOf<Triple<String, Float, Float>>()
+        val canvas =
+            object : Canvas() {
+                var currentY = 0f
+
+                override fun translate(dx: Float, dy: Float) {
+                    currentY += dy
+                }
+
+                override fun drawText(
+                    text: CharSequence,
+                    start: Int,
+                    end: Int,
+                    x: Float,
+                    y: Float,
+                    paint: Paint,
+                ) {
+                    draws.add(Triple(text.subSequence(start, end).toString(), x, currentY + y))
+                }
+
+                override fun drawText(text: String, x: Float, y: Float, paint: Paint) {
+                    draws.add(Triple(text, x, currentY + y))
+                }
+            }
+
+        layout.draw(canvas, 0f, 0f)
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
+            // In backport, it should draw character by character (or cluster by cluster)
+            assertThat(draws.size).isAtLeast(2)
+
+            // Check if Y is increasing.
+            for (i in 0 until draws.size - 1) {
+                assertThat(draws[i + 1].third).isGreaterThan(draws[i].third)
+            }
+        } else {
+            // In native, it might be a single drawText call.
+            assertThat(draws.size).isAtLeast(1)
+        }
+    }
+
+    @Test
+    fun constructor_emptyRange_createsZeroLineLayout() {
+        val emptyText = VerticalTextLayout("", 0, 0, PAINT, 100f)
+        val emptySlice = VerticalTextLayout("あいう", 2, 2, PAINT, 100f)
+        for (layout in listOf(emptyText, emptySlice)) {
+            assertThat(layout.lineCount).isEqualTo(0)
+            assertThat(layout.width).isEqualTo(0f)
+            assertThat(layout.contentHeight).isEqualTo(0f)
+            assertThat(layout.columnWidth).isEqualTo(0f)
+        }
+    }
+
+    @Test
+    fun draw_lineRange_drawsOnlyRequestedColumns() {
+        val text = "あ\nい\nう"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 100f)
+        assertThat(layout.lineCount).isEqualTo(3)
+
+        // Columns are 1em = 10px wide and grow leftward from x = 100, so column 1 spans [80, 90).
+        val full = layout.drawToBitmap { draw(it, 100f, 0f) }
+        val slice = layout.drawToBitmap { draw(it, 100f, 0f, 1, 2) }
+        try {
+            val sliceInk = slice.inkColumns()
+            assertThat(sliceInk).isNotEmpty()
+            assertThat(sliceInk.min()).isAtLeast(79)
+            assertThat(sliceInk.max()).isAtMost(90)
+            val fullInk = full.inkColumns()
+            assertThat(fullInk.min()).isLessThan(79)
+            assertThat(fullInk.max()).isGreaterThan(90)
+            // The slice keeps column 1 at its full-layout position.
+            for (x in 81 until 89) {
+                assertThat(slice.column(x)).isEqualTo(full.column(x))
+            }
+        } finally {
+            full.recycle()
+            slice.recycle()
+        }
+    }
+
+    @Test
+    fun draw_lineRange_outOfBounds_throwsIndexOutOfBoundsException() {
+        val text = "あ\nい\nう"
+        val layout = VerticalTextLayout(text, 0, text.length, PAINT, 100f)
+        val canvas = Canvas()
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.draw(canvas, 0f, 0f, -1, 1) }
+        assertThrows(IndexOutOfBoundsException::class.java) {
+            layout.draw(canvas, 0f, 0f, 0, layout.lineCount + 1)
+        }
+        assertThrows(IndexOutOfBoundsException::class.java) { layout.draw(canvas, 0f, 0f, 2, 1) }
+    }
+
+    private fun VerticalTextLayout.drawToBitmap(
+        block: VerticalTextLayout.(Canvas) -> Unit
+    ): Bitmap {
+        val bitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        block(Canvas(bitmap))
+        return bitmap
+    }
+
+    /** Returns the x coordinates that hold at least one non-transparent pixel. */
+    private fun Bitmap.inkColumns(): Set<Int> =
+        (0 until width).filterTo(mutableSetOf()) { x ->
+            (0 until height).any { y -> getPixel(x, y) != 0 }
+        }
+
+    private fun Bitmap.column(x: Int): IntArray = IntArray(height) { y -> getPixel(x, y) }
 
     private fun createVerticalTextLayout() =
         VerticalTextLayout(JP_TEXT, 0, JP_TEXT.length, PAINT, 100f)

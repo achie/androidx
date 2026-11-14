@@ -17,82 +17,98 @@
 package androidx.lifecycle.internal
 
 import androidx.annotation.MainThread
+import androidx.savedstate.SavedState
+import androidx.savedstate.SavedStateContainer
 import androidx.savedstate.SavedStateRegistry.SavedStateProvider
-import androidx.savedstate.savedState
-import kotlin.js.JsName
+import androidx.savedstate.SavedStateValue
+import androidx.savedstate.read
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-internal class SavedStateHandleImpl(initialState: Map<String, Any?> = emptyMap()) {
+internal const val SAVED_STATE_VALUE_KEY = "androidx.lifecycle.savedstate.value"
 
-    val regular = initialState.toMutableMap()
-    private val providers = mutableMapOf<String, SavedStateProvider>()
-    private val flows = mutableMapOf<String, MutableStateFlow<Any?>>()
-    val mutableFlows = mutableMapOf<String, MutableStateFlow<Any?>>()
+internal class SavedStateHandleImpl(val container: SavedStateContainer) {
 
-    val savedStateProvider = SavedStateProvider {
-        // Synchronize the current value of a MutableStateFlow with the regular values.
-        // It copies the original map to avoid re-entrance.
-        for ((key, mutableFlow) in mutableFlows.toMap()) {
-            set(key, mutableFlow.value)
+    constructor(initialState: Map<String, Any?> = emptyMap()) : this(SavedStateContainer()) {
+        for ((key, value) in initialState) {
+            container.putSavedStateValue(
+                key,
+                SimpleSavedStateValue(initialValue = unwrapSavedStateValue(value)),
+            )
         }
-
-        // Get the saved state from each SavedStateProvider registered with this
-        // SavedStateHandle, iterating through a copy to avoid re-entrance
-        for ((key, provider) in providers.toMap()) {
-            set(key, provider.saveState())
-        }
-
-        savedState(initialState = regular)
     }
 
-    @JsName("fun_savedStateProvider")
-    fun savedStateProvider(): SavedStateProvider = savedStateProvider
+    fun asContainer(): SavedStateContainer = container
 
-    @MainThread operator fun contains(key: String): Boolean = key in regular
+    fun getOrCreateContainer(key: String): SavedStateContainer {
+        val existing = container.getSavedStateValue<Any?, SavedStateValue<Any?>>(key)
+        if (existing is SimpleSavedStateValue<*>) {
+            val savedState = existing.value as? SavedState
+            container.removeSavedStateValue<Any?, SavedStateValue<Any?>>(key)
+            return container.getOrCreateContainer(key).also { childContainer ->
+                savedState?.read {
+                    for ((childKey, childValue) in toMap()) {
+                        childContainer.putSavedStateValue(
+                            childKey,
+                            SimpleSavedStateValue(initialValue = unwrapSavedStateValue(childValue)),
+                        )
+                    }
+                }
+            }
+        }
+        return container.getOrCreateContainer(key)
+    }
+
+    @MainThread
+    operator fun contains(key: String): Boolean {
+        if (key !in container) return false
+        // Registering a SavedStateProvider puts a SavedStateProviderSavedStateValue into the
+        // container immediately, before any state has been saved or restored. To preserve the
+        // behavior where this only returns true once a value is associated with the key
+        // (while still returning true for explicit null values in SimpleSavedStateValue or
+        // StateFlowSavedStateValue), we make sure the value is set for the provider to return true.
+        val savedStateValue = container.getSavedStateValue<Any?, SavedStateValue<Any?>>(key)
+        return savedStateValue !is SavedStateProviderSavedStateValue ||
+            savedStateValue.value != null
+    }
 
     @MainThread
     fun <T> getStateFlow(key: String, initialValue: T): StateFlow<T> {
-        // If a flow exists we should just return it, and since it is a StateFlow and a value must
-        // always be set, we know a value must already be available
-        val flow =
-            flows.getOrPut(key) {
-                // If there is not a value associated with the key, add the initial value,
-                // otherwise, use the one we already have.
-                if (key !in regular) {
-                    regular[key] = initialValue
-                }
-                MutableStateFlow(regular[key])
-            }
-        @Suppress("UNCHECKED_CAST")
-        return flow.asStateFlow() as StateFlow<T>
+        return getMutableStateFlow(key, initialValue).asStateFlow()
     }
 
     @MainThread
     fun <T> getMutableStateFlow(key: String, initialValue: T): MutableStateFlow<T> {
-        // If a flow exists we should just return it, and since it is a StateFlow and a value must
-        // always be set, we know a value must already be available
-        val flow =
-            mutableFlows.getOrPut(key) {
-                // If there is not a value associated with the key, add the initial value,
-                // otherwise, use the one we already have.
-                if (key !in regular) {
-                    regular[key] = initialValue
+        val existing = container.getSavedStateValue<T, SavedStateValue<T>>(key)
+        val savedStateValue =
+            when (existing) {
+                is StateFlowSavedStateValue<T> -> existing
+                is SimpleSavedStateValue<T> -> {
+                    StateFlowSavedStateValue(existing.value).also {
+                        container.putSavedStateValue(key, it)
+                    }
                 }
-                MutableStateFlow(regular[key])
+                null -> {
+                    StateFlowSavedStateValue(initialValue).also {
+                        container.putSavedStateValue(key, it)
+                    }
+                }
+                else -> {
+                    StateFlowSavedStateValue(get(key) ?: initialValue).also {
+                        container.putSavedStateValue(key, it)
+                    }
+                }
             }
-        @Suppress("UNCHECKED_CAST")
-        return flow as MutableStateFlow<T>
+        return savedStateValue.flow
     }
 
-    @MainThread fun keys(): Set<String> = regular.keys + providers.keys
+    @MainThread fun keys(): Set<String> = container.keys()
 
     @MainThread
     operator fun <T> get(key: String): T? {
         return try {
-            @Suppress("UNCHECKED_CAST")
-            (mutableFlows[key]?.value ?: regular[key]) as T?
+            container.getSavedStateValue<T, SavedStateValue<T>>(key)?.value
         } catch (e: ClassCastException) {
             // Instead of failing on ClassCastException, we remove the value from the
             // SavedStateHandle and return null.
@@ -103,28 +119,51 @@ internal class SavedStateHandleImpl(initialState: Map<String, Any?> = emptyMap()
 
     @MainThread
     operator fun <T> set(key: String, value: T?) {
-        regular[key] = value
-        flows[key]?.value = value
-        mutableFlows[key]?.value = value
+        val currentSavedStateValue = container.getSavedStateValue<T?, SavedStateValue<T?>>(key)
+        when (currentSavedStateValue) {
+            is SimpleSavedStateValue<T?> -> {
+                currentSavedStateValue.value = value
+            }
+
+            is StateFlowSavedStateValue<T?> -> {
+                currentSavedStateValue.value = value
+            }
+
+            is SavedStateProviderSavedStateValue -> {
+                currentSavedStateValue.value = value as? SavedState
+            }
+
+            null -> {
+                container.putSavedStateValue(key, SimpleSavedStateValue(initialValue = value))
+            }
+        }
     }
 
     @MainThread
     fun <T> remove(key: String): T? {
-        @Suppress("UNCHECKED_CAST") val latestValue = regular.remove(key) as T?
-        flows.remove(key)
-        mutableFlows.remove(key)
+        val latestValue = get<T>(key)
+        container.removeSavedStateValue<T, SavedStateValue<T>>(key)
         return latestValue
     }
 
     @MainThread
     fun setSavedStateProvider(key: String, provider: SavedStateProvider) {
-        providers[key] = provider
+        container.putSavedStateValue(
+            key,
+            SavedStateProviderSavedStateValue(value = get(key), provider = provider),
+        )
     }
 
     @MainThread
     fun clearSavedStateProvider(key: String) {
-        providers.remove(key)
+        val removed =
+            container.removeSavedStateValue<SavedState?, SavedStateProviderSavedStateValue>(key)
+        if (removed?.value != null) {
+            set(key, removed.value)
+        }
     }
 }
 
 internal expect fun isAcceptableType(value: Any?): Boolean
+
+internal expect fun <T> unwrapSavedStateValue(value: T): T

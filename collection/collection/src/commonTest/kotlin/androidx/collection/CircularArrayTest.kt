@@ -30,11 +30,30 @@ public class CircularArrayTest {
     @Test
     public fun creatingWithZeroCapacity() {
         assertFailsWith<IllegalArgumentException> { CircularArray<String>(0) }
+        assertFailsWith<IllegalArgumentException> { CircularArray<String>(-1) }
     }
 
     @Test
     public fun creatingWithOverCapacity() {
+        assertFailsWith<IllegalArgumentException> { CircularArray<String>((1 shl 30) + 1) }
         assertFailsWith<IllegalArgumentException> { CircularArray<String>(Int.MAX_VALUE) }
+    }
+
+    @Test
+    public fun variousInitialCapacities() {
+        for (minCapacity in 1..33) {
+            val array = CircularArray<Int>(minCapacity)
+            for (i in 0 until minCapacity) {
+                if (i % 2 == 0) {
+                    array.addLast(i)
+                } else {
+                    array.addFirst(-i)
+                }
+            }
+            assertEquals(minCapacity, array.size())
+            repeat(minCapacity) { array.popFirst() }
+            assertTrue(array.isEmpty())
+        }
     }
 
     @Test
@@ -134,5 +153,32 @@ public class CircularArrayTest {
 
         // Collection is empty so this should throw.
         assertFailsWith<IndexOutOfBoundsException> { array.popLast() }
+    }
+
+    @Test
+    public fun firstReturnsNull() {
+        val array = CircularArray<String?>(4)
+        array.addLast(null)
+        array.addLast(ELEMENT_X)
+        assertNull(array.first)
+    }
+
+    @Test
+    public fun lastReturnsNull() {
+        val array = CircularArray<String?>(4)
+        array.addLast(ELEMENT_X)
+        array.addLast(null)
+        assertNull(array.last)
+    }
+
+    @Test
+    public fun getReturnsNull() {
+        val array = CircularArray<String?>(4)
+        array.addLast(ELEMENT_X)
+        array.addLast(null)
+        array.addLast(ELEMENT_Y)
+        assertEquals(ELEMENT_X, array[0])
+        assertNull(array[1])
+        assertEquals(ELEMENT_Y, array[2])
     }
 }

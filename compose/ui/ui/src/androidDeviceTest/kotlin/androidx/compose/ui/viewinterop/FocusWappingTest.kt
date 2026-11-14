@@ -29,14 +29,12 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.requestFocus
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assume
 import org.junit.Rule
 import org.junit.Test
@@ -44,7 +42,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class FocusWappingTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun focusForwardWraps() {
@@ -80,7 +78,6 @@ class FocusWappingTest {
         Assume.assumeTrue(inputModeManager.inputMode == InputMode.Keyboard)
 
         rule.onNodeWithTag(tag2).requestFocus()
-        @OptIn(ExperimentalTestApi::class)
         rule.onNodeWithTag(tag2).performKeyInput {
             keyDown(Key.Tab)
             keyUp(Key.Tab)
@@ -122,7 +119,6 @@ class FocusWappingTest {
         Assume.assumeTrue(inputModeManager.inputMode == InputMode.Keyboard)
 
         rule.onNodeWithTag(tag1).requestFocus()
-        @OptIn(ExperimentalTestApi::class)
         rule.onNodeWithTag(tag1).performKeyInput {
             keyDown(Key.ShiftLeft)
             keyDown(Key.Tab)

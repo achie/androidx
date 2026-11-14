@@ -1,0 +1,2635 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.camera.video
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.Application
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.media.MediaCodec
+import android.media.MediaFormat.MIMETYPE_VIDEO_AVC
+import android.media.MediaRecorder
+import android.net.Uri
+import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.util.Range
+import android.util.Size
+import androidx.camera.core.DynamicRange
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.SurfaceRequest.FRAME_RATE_RANGE_UNSPECIFIED
+import androidx.camera.core.impl.AdapterCameraInfo
+import androidx.camera.core.impl.Observable.Observer
+import androidx.camera.core.impl.SessionConfig.SESSION_TYPE_HIGH_SPEED
+import androidx.camera.core.impl.SessionConfig.SESSION_TYPE_REGULAR
+import androidx.camera.core.impl.utils.executor.CameraXExecutors
+import androidx.camera.core.impl.utils.executor.CameraXExecutors.directExecutor
+import androidx.camera.core.impl.utils.executor.CameraXExecutors.mainThreadExecutor
+import androidx.camera.testing.fakes.FakeCamera
+import androidx.camera.testing.fakes.FakeCameraInfoInternal
+import androidx.camera.testing.impl.GarbageCollectionUtil
+import androidx.camera.testing.impl.fakes.FakeByteBufferInput
+import androidx.camera.testing.impl.fakes.FakeCameraConfig
+import androidx.camera.testing.impl.fakes.FakeEncoder
+import androidx.camera.testing.impl.fakes.FakeSessionProcessor
+import androidx.camera.testing.impl.fakes.FakeVideoEncoderInfo
+import androidx.camera.testing.impl.fakes.NoOpMuxer
+import androidx.camera.testing.impl.mocks.helpers.CallTimes
+import androidx.camera.testing.impl.video.Recording
+import androidx.camera.testing.impl.video.RecordingSession
+import androidx.camera.video.MediaSpec.Companion.OUTPUT_FORMAT_WEBM
+import androidx.camera.video.Recorder.AudioState
+import androidx.camera.video.Recorder.VIDEO_CAPABILITIES_SOURCE_CAMCORDER_PROFILE
+import androidx.camera.video.Recorder.VIDEO_CAPABILITIES_SOURCE_CODEC_CAPABILITIES
+import androidx.camera.video.Recorder.sRetrySetupVideoDelayMs
+import androidx.camera.video.Recorder.sRetrySetupVideoMaxCount
+import androidx.camera.video.VideoOutput.SourceState.ACTIVE_NON_STREAMING
+import androidx.camera.video.VideoOutput.SourceState.ACTIVE_STREAMING
+import androidx.camera.video.VideoOutput.SourceState.INACTIVE
+import androidx.camera.video.VideoRecordEvent.Finalize
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_INVALID_OUTPUT_OPTIONS
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_NONE
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_RECORDER_ERROR
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE
+import androidx.camera.video.VideoRecordEvent.Pause
+import androidx.camera.video.VideoRecordEvent.Resume
+import androidx.camera.video.internal.BufferProvider
+import androidx.camera.video.internal.OutputStorage
+import androidx.camera.video.internal.audio.AudioStreamFactory
+import androidx.camera.video.internal.audio.FakeAudioStream
+import androidx.camera.video.internal.encoder.AudioEncoderFactory
+import androidx.camera.video.internal.encoder.DefaultVideoEncoderFactory
+import androidx.camera.video.internal.encoder.EncodeException
+import androidx.camera.video.internal.encoder.EncodedData
+import androidx.camera.video.internal.encoder.Encoder
+import androidx.camera.video.internal.encoder.EncoderCallback
+import androidx.camera.video.internal.encoder.FakeAudioEncoderFactory
+import androidx.camera.video.internal.encoder.FakeEncodedData
+import androidx.camera.video.internal.encoder.FakeVideoEncoderFactory
+import androidx.camera.video.internal.encoder.InvalidConfigException
+import androidx.camera.video.internal.encoder.VideoEncoderConfig
+import androidx.camera.video.internal.encoder.VideoEncoderFactory
+import androidx.camera.video.internal.muxer.MuxerException
+import androidx.camera.video.internal.muxer.MuxerFactory
+import androidx.camera.video.internal.utils.FakeMediaContentProvider
+import androidx.camera.video.internal.utils.FakeMediaContentProvider.Companion.AUTHORITY
+import androidx.camera.video.internal.utils.FakeMediaContentProvider.Companion.COLLECTION_URI
+import androidx.camera.video.internal.utils.FakeMediaContentProvider.Companion.ENTRY_URI
+import androidx.camera.video.internal.utils.StorageUtil.NO_SPACE_LEFT_MESSAGE
+import androidx.test.core.app.ApplicationProvider
+import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import org.junit.After
+import org.junit.Assert.assertThrows
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.mockito.ArgumentMatchers.argThat
+import org.mockito.Mockito.inOrder
+import org.mockito.Mockito.mock
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.internal.DoNotInstrument
+
+@RunWith(RobolectricTestRunner::class)
+@DoNotInstrument
+@Config(sdk = [Config.ALL_SDKS])
+class RecorderTest {
+
+    @get:Rule
+    val temporaryFolder =
+        TemporaryFolder(ApplicationProvider.getApplicationContext<Context>().cacheDir)
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+    private val fakeCamera = FakeCamera()
+    private val surfaceRequestsToClose = mutableListOf<SurfaceRequest>()
+    private val recordersToRelease = mutableListOf<Recorder>()
+    private lateinit var recordingSession: RecordingSession
+    private var currentTimestampUs = 100_000L
+    private var latestVideoEncoder: FakeEncoder? = null
+    private var latestAudioEncoder: FakeEncoder? = null
+    private var latestSurfaceRequest: SurfaceRequest? = null
+
+    private val storageFullException by lazy { IOException(NO_SPACE_LEFT_MESSAGE) }
+
+    @Before
+    fun setUp() {
+        // PendingRecording.withAudioEnabled() checks RECORD_AUDIO permission via
+        // PermissionChecker.checkSelfPermission() and throws SecurityException if not granted,
+        // before Recorder/AudioSource or FakeAudioStream is ever invoked.
+        shadowOf(context as Application).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        currentTimestampUs = 100_000L
+        recordingSession =
+            RecordingSession(
+                RecordingSession.Defaults(
+                    context = context,
+                    outputOptionsProvider = { createFileOutputOptions() },
+                    withAudio = true,
+                    callbackExecutor = directExecutor(),
+                    verifyStatusCount = 0,
+                    verifyTimeoutMs = 100L,
+                    verifyStatusTimeoutMs = 100L,
+                    verifyNoFinalizeTimeoutMs = 0L,
+                    verifyOutputFile = false,
+                    onAction = { recording -> idle(recording.recorder) },
+                )
+            )
+    }
+
+    @After
+    fun tearDown() {
+        if (this::recordingSession.isInitialized) {
+            recordingSession.release(500)
+        }
+        idleMainLooper()
+
+        recordersToRelease.forEach {
+            it.onSourceStateChanged(INACTIVE)
+        }
+        surfaceRequestsToClose.forEach { it.deferrableSurface.close() }
+        idleMainLooper()
+
+        val latch = CountDownLatch(2)
+        Recorder.AUDIO_EXECUTOR.execute { latch.countDown() }
+        CameraXExecutors.audioExecutor().execute { latch.countDown() }
+        latch.await(1, TimeUnit.SECONDS)
+    }
+
+    private fun idleMainLooper() = shadowOf(Looper.getMainLooper()).idle()
+
+    @Test
+    fun defaultRecorder_hasEmptyAudioProcessors() {
+        val recorder = Recorder.Builder().build()
+        assertThat(recorder.audioProcessors).isEmpty()
+    }
+
+    @Test
+    fun setAudioProcessors_setsProcessorsOnRecorder() {
+        val processor1 = NoOpAudioProcessor()
+        val processor2 = NoOpAudioProcessor()
+        val processors = listOf(processor1, processor2)
+        val recorder = Recorder.Builder().setAudioProcessors(processors).build()
+
+        assertThat(recorder.audioProcessors).containsExactly(processor1, processor2).inOrder()
+    }
+
+    @Test
+    fun setAudioProcessors_defensiveCopy() {
+        val processor1 = NoOpAudioProcessor()
+        val processor2 = NoOpAudioProcessor()
+        val mutableList = mutableListOf<AudioProcessor>(processor1)
+        val recorder = Recorder.Builder().setAudioProcessors(mutableList).build()
+
+        mutableList.add(processor2)
+        assertThat(recorder.audioProcessors).containsExactly(processor1)
+    }
+
+    @Test
+    fun setAudioProcessors_nullElementThrowsNullPointerException() {
+        assertThrows(NullPointerException::class.java) {
+            val listWithNull = listOf(NoOpAudioProcessor(), null)
+            @Suppress("UNCHECKED_CAST")
+            Recorder.Builder().setAudioProcessors(listWithNull as List<AudioProcessor>)
+        }
+    }
+
+    @Test
+    fun canSetTargetVideoEncodingBitrate() {
+        val recorder = Recorder.Builder().setTargetVideoEncodingBitRate(6_000_000).build()
+
+        assertThat(recorder.targetVideoEncodingBitRate).isEqualTo(6_000_000)
+    }
+
+    @Test
+    fun recordingWithNegativeBitRate() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setTargetVideoEncodingBitRate(-5)
+        }
+    }
+
+    @Test
+    fun canSetTargetAudioEncodingBitrate() {
+        val recorder = Recorder.Builder().setTargetAudioEncodingBitRate(128_000).build()
+
+        assertThat(recorder.targetAudioEncodingBitRate).isEqualTo(128_000)
+    }
+
+    @Test
+    fun recordingWithNegativeAudioBitRate() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setTargetAudioEncodingBitRate(-5)
+        }
+    }
+
+    @Test
+    fun canSetTargetAudioChannelCount() {
+        val recorder = Recorder.Builder().setTargetAudioChannelCount(2).build()
+
+        assertThat(recorder.targetAudioChannelCount).isEqualTo(2)
+    }
+
+    @Test
+    fun recordingWithNegativeAudioChannelCount() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setTargetAudioChannelCount(-5)
+        }
+    }
+
+    @Test
+    fun videoEncoderInfoFinder_isDefaultFinderByDefault() {
+        val recorder = Recorder.Builder().build()
+
+        assertThat(recorder.videoEncoderInfoFinder)
+            .isEqualTo(DefaultVideoEncoderFactory.DEFAULT_FINDER)
+    }
+
+    @Test
+    fun videoEncoderInfoFinder_findsEncoderInfoOfVideoEncoderFactory() {
+        val videoEncoderInfo = FakeVideoEncoderInfo()
+        val videoEncoderFactory =
+            FakeVideoEncoderFactory(encoderInfoProvider = { videoEncoderInfo }) { _, _ ->
+                throw UnsupportedOperationException()
+            }
+
+        val recorder = Recorder.Builder().setVideoEncoderFactory(videoEncoderFactory).build()
+
+        assertThat(recorder.videoEncoderInfoFinder.find(MIMETYPE_VIDEO_AVC))
+            .isSameInstanceAs(videoEncoderInfo)
+    }
+
+    @Test
+    fun canSetAudioSource() {
+        // Arrange.
+        val recorder = createRecorder(audioSource = MediaRecorder.AudioSource.VOICE_RECOGNITION)
+
+        // Assert.
+        assertThat(recorder.audioSource).isEqualTo(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+
+        // Act: ensure the value is correctly propagated to the internal AudioSource instance.
+        // Start recording to create the AudioSource instance.
+        createRecording(recorder = recorder, withAudio = true).start()
+
+        // Assert.
+        assertThat(recorder.mAudioSource!!.mAudioSource)
+            .isEqualTo(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+    }
+
+    @Test
+    @Config(maxSdk = 25)
+    @SuppressLint("NewApi") // Intentionally testing behavior of calling from invalid API level
+    fun prepareRecordingWithFileDescriptor_throwsExceptionBeforeApi26() {
+        val recorder = Recorder.Builder().build()
+        val file = createTempFile()
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE).use { pfd ->
+            assertThrows(UnsupportedOperationException::class.java) {
+                recorder.prepareRecording(context, FileDescriptorOutputOptions.Builder(pfd).build())
+            }
+        }
+    }
+
+    @Test
+    fun optionsOverridesDefaults() {
+        val qualitySelector = QualitySelector.from(Quality.HIGHEST)
+        val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
+
+        assertThat(recorder.qualitySelector).isEqualTo(qualitySelector)
+    }
+
+    @Test
+    fun canRetrieveProvidedExecutorFromRecorder() {
+        val myExecutor = Executor { command -> command?.run() }
+        val recorder = Recorder.Builder().setExecutor(myExecutor).build()
+
+        assertThat(recorder.executor).isSameInstanceAs(myExecutor)
+    }
+
+    @Test
+    fun cannotRetrieveExecutorWhenExecutorNotProvided() {
+        val recorder = Recorder.Builder().build()
+
+        assertThat(recorder.executor).isNull()
+    }
+
+    @Test
+    fun cannotStartMultiplePendingRecordingsWhileInitializing() {
+        val recorder = Recorder.Builder().build()
+        val file1 = createTempFile()
+        val file2 = createTempFile()
+        val recording =
+            recorder.prepareRecording(context, FileOutputOptions.Builder(file1).build()).start(
+                directExecutor()
+            ) {}
+
+        recording.use {
+            assertThrows(IllegalStateException::class.java) {
+                recorder.prepareRecording(context, FileOutputOptions.Builder(file2).build()).start(
+                    directExecutor()
+                ) {}
+            }
+        }
+    }
+
+    @Test
+    fun defaultVideoCapabilitiesSource() {
+        val recorder = Recorder.Builder().build()
+
+        assertThat(recorder.videoCapabilitiesSource)
+            .isEqualTo(VIDEO_CAPABILITIES_SOURCE_CAMCORDER_PROFILE)
+    }
+
+    @Test
+    fun canSetVideoCapabilitiesSource() {
+        val recorder =
+            Recorder.Builder()
+                .setVideoCapabilitiesSource(VIDEO_CAPABILITIES_SOURCE_CODEC_CAPABILITIES)
+                .build()
+
+        assertThat(recorder.videoCapabilitiesSource)
+            .isEqualTo(VIDEO_CAPABILITIES_SOURCE_CODEC_CAPABILITIES)
+    }
+
+    @Test
+    fun canSetVideoEncodingFrameRate() {
+        val recorder = Recorder.Builder().build().apply { setVideoEncodingFrameRate(60) }
+
+        assertThat(recorder.videoEncodingFrameRate).isEqualTo(60)
+    }
+
+    @Test
+    fun setNonSupportedVideoCapabilitiesSource_throwException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setVideoCapabilitiesSource(Integer.MAX_VALUE)
+        }
+    }
+
+    @Test
+    fun staticSupportedMimeTypesShouldBeLowerCase() {
+        for (mimeType in
+            Recorder.SUPPORTED_VIDEO_MIME_TYPES + Recorder.SUPPORTED_AUDIO_MIME_TYPES) {
+            assertWithMessage("MIME type $mimeType is not lower case")
+                .that(mimeType)
+                .isEqualTo(mimeType.lowercase())
+        }
+    }
+
+    @Test
+    fun canSetOutputFormat() {
+        val recorder = Recorder.Builder().setOutputFormat(OUTPUT_FORMAT_WEBM).build()
+
+        assertThat(recorder.outputFormat).isEqualTo(OUTPUT_FORMAT_WEBM)
+    }
+
+    @Test
+    fun canSetVideoMimeType() {
+        val mimeTypes = Recorder.SUPPORTED_VIDEO_MIME_TYPES
+
+        mimeTypes.forEach { mimeType ->
+            val recorder = Recorder.Builder().setVideoMimeType(mimeType).build()
+
+            assertThat(recorder.videoMimeType).isEqualTo(mimeType)
+        }
+    }
+
+    @Test
+    fun setUnsupportedVideoMimeType_throwsException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setVideoMimeType("unknown")
+        }
+    }
+
+    @Test
+    fun canSetAudioMimeType() {
+        val mimeTypes = Recorder.SUPPORTED_AUDIO_MIME_TYPES
+
+        mimeTypes.forEach { mimeType ->
+            val recorder = Recorder.Builder().setAudioMimeType(mimeType).build()
+
+            assertThat(recorder.audioMimeType).isEqualTo(mimeType)
+        }
+    }
+
+    @Test
+    fun setUnsupportedAudioMimeType_throwsException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Recorder.Builder().setAudioMimeType("unknown")
+        }
+    }
+
+    @Test
+    fun getHighSpeedVideoCapabilities_whenCameraDoesNotSupportHighSpeed_returnNull() {
+        val cameraInfo = FakeCameraInfoInternal().apply { isHighSpeedSupported = false }
+
+        val videoCapabilities = Recorder.getHighSpeedVideoCapabilities(cameraInfo)
+
+        assertThat(videoCapabilities).isNull()
+    }
+
+    @Test
+    fun getVideoCapabilities_withUnsupportedMimeType_returnNull() {
+        val cameraInfo = FakeCameraInfoInternal()
+
+        val capabilities = Recorder.getVideoCapabilities(cameraInfo, "video/unknown")
+
+        assertThat(capabilities).isNull()
+    }
+
+    @Test
+    fun muxerFactory_failedToSetOutput_receiveError() {
+        val muxerFactory = MuxerFactory {
+            object : NoOpMuxer() {
+                override fun setOutput(path: String, format: Int) {
+                    throw IOException("Failure on purpose")
+                }
+            }
+        }
+        val recorder = createRecorder(muxerFactory = muxerFactory)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start().sendFrames(1).verifyFinalize(error = ERROR_INVALID_OUTPUT_OPTIONS)
+    }
+
+    @Test
+    fun mediaStoreOutput_recordsToInsertedEntry() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+
+        val result =
+            createRecording(outputOptions = createMediaStoreOutputOptions())
+                .startAndVerify()
+                .sendFrames()
+                .stopAndVerify()
+
+        assertThat(result.uri).isEqualTo(ENTRY_URI)
+        assertThat(provider.deletedUris).isEmpty()
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_parentFolderMissing_recreatesParentFolderAndRecords() {
+        val file = File(temporaryFolder.root, "Movies/video.mp4")
+        val provider = setUpFakeMediaContentProvider(file)
+
+        val result =
+            createRecording(outputOptions = createMediaStoreOutputOptions())
+                .startAndVerify()
+                .sendFrames()
+                .stopAndVerify()
+
+        assertThat(result.uri).isEqualTo(ENTRY_URI)
+        assertThat(file.exists()).isTrue()
+        assertThat(provider.openFileCount).isEqualTo(2)
+        assertThat(provider.deletedUris).isEmpty()
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_parentFolderMissingAndRetryFails_deletesEntryAndReceivesError() {
+        val file = File(temporaryFolder.root, "Movies/video.mp4")
+        val provider = setUpFakeMediaContentProvider(file)
+        provider.openFileHandler = { _, _ -> throw FileNotFoundException("ENOENT") }
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(requireNotNull(file.parentFile).isDirectory).isTrue()
+        assertThat(provider.openFileCount).isEqualTo(2)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_parentFolderExistsAndOpenFails_deletesEntryWithoutRetry() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+        provider.openFileHandler = { _, _ -> throw FileNotFoundException("EACCES") }
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.openFileCount).isEqualTo(1)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_parentFolderCannotBeCreated_deletesEntryWithoutRetry() {
+        val regularFile = temporaryFolder.newFile("not_a_folder")
+        val provider = setUpFakeMediaContentProvider(File(regularFile, "Movies/video.mp4"))
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.openFileCount).isEqualTo(1)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_openFileThrowsRuntimeException_deletesEntryAndReceivesError() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+        provider.openFileHandler = { _, _ -> throw SecurityException("Failure on purpose") }
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_nullFileDescriptor_deletesEntryAndReceivesError() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+        provider.openFileHandler = { _, _ -> null }
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_muxerFailsToSetOutput_closesFileDescriptorAndDeletesEntry() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+        var outputFileDescriptor: ParcelFileDescriptor? = null
+        val muxerFactory = MuxerFactory {
+            object : NoOpMuxer() {
+                override fun setOutput(parcelFileDescriptor: ParcelFileDescriptor, format: Int) {
+                    outputFileDescriptor = parcelFileDescriptor
+                    throw IllegalStateException("Failure on purpose")
+                }
+            }
+        }
+
+        val result =
+            startMediaStoreRecordingAndVerifyInvalidOutputOptions(
+                recorder = createRecorder(muxerFactory = muxerFactory)
+            )
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(requireNotNull(outputFileDescriptor).fileDescriptor.valid()).isFalse()
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(minSdk = 26)
+    @Test
+    fun mediaStoreOutput_deleteEntryFails_stillReceivesError() {
+        val provider = setUpFakeMediaContentProvider(File(temporaryFolder.root, "video.mp4"))
+        provider.openFileHandler = { _, _ -> throw FileNotFoundException("EACCES") }
+        provider.deleteException = IllegalStateException("Failure on purpose")
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Config(maxSdk = 25)
+    @Test
+    fun mediaStoreOutput_pathUnavailableBeforeApi26_deletesEntryAndReceivesError() {
+        val provider = setUpFakeMediaContentProvider(dataPath = null)
+
+        val result = startMediaStoreRecordingAndVerifyInvalidOutputOptions()
+
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+        assertThat(provider.deletedUris).containsExactly(ENTRY_URI)
+    }
+
+    @Test
+    fun canPauseResume() {
+        createRecording()
+            .startAndVerify()
+            .sendFrames()
+            .pauseAndVerify()
+            .resumeAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+    }
+
+    @Test
+    fun canStartRecordingPaused_whenRecorderInitializing() {
+        val recorder = createRecorder(sendSurfaceRequest = false)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+        recording.pause()
+        recorder.sendSurfaceRequest()
+
+        recording.verifyStart()
+        recording.verifyPause()
+    }
+
+    @Test
+    fun canReceiveRecordingStats() {
+        val recording = createRecording()
+
+        recording
+            .startAndVerify()
+            .sendFrames(5)
+            .also { it.verifyStatus(statusCount = 5) }
+            .pauseAndVerify()
+            .resumeAndVerify()
+            .sendFrames(5)
+            .also { it.verifyStatus(statusCount = 5) }
+            .stopAndVerify()
+
+        val events = recording.getAllEvents()
+        assertThat(events.size)
+            .isAtLeast(
+                1 /* Start */ +
+                    5 /* Status */ +
+                    1 /* Pause */ +
+                    1 /* Resume */ +
+                    5 /* Status */ +
+                    1 /* Stop */
+            )
+
+        List(events.size - 1) { index ->
+                Pair(events[index].recordingStats, events[index + 1].recordingStats)
+            }
+            .forEach { (former: RecordingStats, latter: RecordingStats) ->
+                assertThat(former.numBytesRecorded).isAtMost(latter.numBytesRecorded)
+                assertThat(former.recordedDurationNanos).isAtMost(latter.recordedDurationNanos)
+            }
+
+        events.last().recordingStats.also {
+            assertThat(it.numBytesRecorded).isGreaterThan(0L)
+            assertThat(it.recordedDurationNanos).isGreaterThan(0L)
+        }
+    }
+
+    @Test
+    fun setFileSizeLimit() {
+        val fileSizeLimit = 500L * 1024L // 500 KB
+        val outputOptions = createFileOutputOptions(fileSizeLimit = fileSizeLimit)
+        val recording = createRecording(outputOptions = outputOptions)
+
+        recording.startAndVerify().sendFrames(1)
+        // Send enough bytes to exceed 95% of 500 KB (~486 KB)
+        recording.sendFrames(count = 10, size = 60 * 1024)
+
+        val result = recording.verifyFinalize(error = ERROR_FILE_SIZE_LIMIT_REACHED)
+        assertThat(result.finalize.recordingStats.numBytesRecorded).isLessThan(fileSizeLimit)
+    }
+
+    @Test
+    fun setFileSizeLimitLowerThanInitialDataSize() {
+        val fileSizeLimit = 1L // 1 byte
+        val outputOptions = createFileOutputOptions(fileSizeLimit = fileSizeLimit)
+        val recording = createRecording(outputOptions = outputOptions)
+
+        recording.start().sendFrames(count = 1, size = 1024)
+        recording.verifyFinalize(error = ERROR_FILE_SIZE_LIMIT_REACHED)
+    }
+
+    @Test
+    fun stop_withErrorWhenDurationLimitReached() {
+        val durationLimitMs = 3000L
+        val outputOptions = createFileOutputOptions(durationLimitMillis = durationLimitMs)
+        val recording = createRecording(outputOptions = outputOptions)
+
+        recording.startAndVerify().sendFrames(1)
+        // Advance presentation timestamps past 3000ms (each frame in sendFrames with stepUs =
+        // 1_600_000L)
+        recording.sendFrames(count = 3, stepUs = 1_600_000L)
+
+        val result = recording.verifyFinalize(error = ERROR_DURATION_LIMIT_REACHED)
+        assertThat(result.finalize.recordingStats.recordedDurationNanos)
+            .isAtMost(TimeUnit.MILLISECONDS.toNanos(durationLimitMs))
+    }
+
+    @Test
+    fun checkStreamState() {
+        val recorder = createRecorder()
+
+        @Suppress("UNCHECKED_CAST")
+        val streamInfoObserver = mock(Observer::class.java) as Observer<StreamInfo>
+        val inOrder = inOrder(streamInfoObserver)
+        recorder.streamInfo.addObserver(directExecutor(), streamInfoObserver)
+        idleMainLooper()
+
+        inOrder
+            .verify(streamInfoObserver)
+            .onNewData(argThat { it!!.streamState == StreamInfo.StreamState.INACTIVE })
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+
+        inOrder
+            .verify(streamInfoObserver)
+            .onNewData(argThat { it!!.streamState == StreamInfo.StreamState.ACTIVE })
+
+        recording.stop()
+
+        inOrder
+            .verify(streamInfoObserver)
+            .onNewData(argThat { it!!.streamState == StreamInfo.StreamState.INACTIVE })
+    }
+
+    @Test
+    fun start_throwsExceptionWhenActive() {
+        val recorder = createRecorder()
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+
+        assertThrows(IllegalStateException::class.java) {
+            val recording2 = createRecording(recorder = recorder)
+            recording2.start()
+        }
+    }
+
+    @Test
+    fun start_whenSourceActiveNonStreaming() {
+        val recorder = createRecorder(initSourceState = ACTIVE_NON_STREAMING)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        recording.verifyStart()
+        recording.sendFrames(5)
+        recording.verifyStatus()
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun start_finalizeImmediatelyWhenSourceInactive() {
+        val recorder = createRecorder(initSourceState = INACTIVE)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+
+        recording.verifyFinalize(error = ERROR_SOURCE_INACTIVE)
+    }
+
+    @Test
+    fun pause_whenSourceActiveNonStreaming() {
+        val recorder =
+            createRecorder(sendSurfaceRequest = false, initSourceState = ACTIVE_NON_STREAMING)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start()
+        recording.pause()
+        recorder.sendSurfaceRequest()
+
+        recording.verifyStart()
+        recording.verifyPause()
+        recording.stopAndVerify(error = ERROR_NO_VALID_DATA)
+    }
+
+    @Test
+    fun pause_noOpWhenAlreadyPaused() {
+        val recording = createRecording()
+
+        recording.startAndVerify().pauseAndVerify().pause()
+
+        val events = recording.getAllEvents()
+        val pauseEvents = events.filterIsInstance<Pause>()
+        assertThat(pauseEvents.size).isAtMost(1)
+    }
+
+    @Test
+    fun pause_throwsExceptionWhenStopping() {
+        val recording = createRecording()
+
+        recording.startAndVerify().sendFrames().stopAndVerify()
+
+        assertThrows(IllegalStateException::class.java) { recording.pause() }
+    }
+
+    @Test
+    fun resume_noOpWhenNotPaused() {
+        val recording = createRecording()
+
+        recording.startAndVerify().resume()
+
+        val resumeEvents = recording.getAllEvents().filterIsInstance<Resume>()
+        assertThat(resumeEvents).isEmpty()
+    }
+
+    @Test
+    fun resume_throwsExceptionWhenStopping() {
+        val recording = createRecording()
+
+        recording.startAndVerify().stop()
+
+        assertThrows(IllegalStateException::class.java) { recording.resume() }
+    }
+
+    @Test
+    fun stop_beforeSurfaceRequested() {
+        val recorder = createRecorder(sendSurfaceRequest = false)
+        val recording = createRecording(recorder = recorder)
+
+        recording.start().stop()
+        recorder.sendSurfaceRequest()
+
+        recording.verifyFinalize(error = ERROR_NO_VALID_DATA)
+    }
+
+    @SuppressLint("CheckResult") // Intended to be garbage collected
+    @Test
+    fun stop_whenRecordingIsGarbageCollected() {
+        val recorder = createRecorder()
+        val events = mutableListOf<VideoRecordEvent>()
+
+        // start unreferenced recording
+        recorder.prepareRecording(context, createFileOutputOptions()).start(directExecutor()) {
+            events.add(it)
+        }
+        idleMainLooper()
+        repeat(5) {
+            if (events.filterIsInstance<Finalize>().isNotEmpty()) return@repeat
+            GarbageCollectionUtil.runFinalization()
+            idleMainLooper()
+        }
+
+        assertThat(events.filterIsInstance<Finalize>()).isNotEmpty()
+    }
+
+    @Test
+    fun mute_receiveCorrectAudioStats() {
+        val recording = createRecording(withAudio = true)
+
+        recording.startAndVerify().muteAndVerify(true).muteAndVerify(false)
+
+        recording.sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun mute_withInitialMuted() {
+        val recording = createRecording(withAudio = true, initialAudioMuted = true)
+
+        recording.startAndVerify()
+
+        recording.verifyMute(true)
+        recording.sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun mute_defaultToNotMuted() {
+        val recorder = createRecorder()
+        createRecording(recorder = recorder, withAudio = true)
+            .startAndVerify()
+            .mute(true)
+            .sendFrames()
+            .stopAndVerify()
+
+        val recording2 =
+            createRecording(recorder = recorder, withAudio = true).startAndVerify().sendFrames()
+        val status = recording2.getStatusEvents().first()
+
+        assertThat(status.recordingStats.audioStats.audioState)
+            .isEqualTo(AudioStats.AUDIO_STATE_ACTIVE)
+
+        recording2.stopAndVerify()
+    }
+
+    @Test
+    fun mute_noOpIfAudioDisabled() {
+        val recording = createRecording(withAudio = false)
+
+        recording.startAndVerify()
+
+        recording.mute(true).mute(false).sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun canRecordWithoutAudio() {
+        createRecording(withAudio = false).startAndVerify().sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun canRecordMultipleFilesWithThenWithoutAudio() {
+        val recorder = createRecorder()
+        createRecording(recorder = recorder, withAudio = true)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+        createRecording(recorder = recorder, withAudio = false)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+    }
+
+    @Test
+    fun canRecordMultipleFilesWithoutThenWithAudio() {
+        val recorder = createRecorder()
+        createRecording(recorder = recorder, withAudio = false)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+        createRecording(recorder = recorder, withAudio = true)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+    }
+
+    @Test
+    fun canStartNextRecordingPausedAfterFirstRecordingFinalized() {
+        val recorder = createRecorder()
+        createRecording(recorder = recorder).startAndVerify().sendFrames().stopAndVerify()
+
+        createRecording(recorder = recorder)
+            .start()
+            .also { it.verifyStart() }
+            .pauseAndVerify()
+            .stopAndVerify(error = ERROR_NO_VALID_DATA)
+    }
+
+    @Test
+    fun canSwitchAudioOnOff() {
+        val recorder = createRecorder()
+
+        createRecording(recorder = recorder, withAudio = true)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+
+        val recording =
+            createRecording(recorder = recorder, withAudio = false).startAndVerify().sendFrames()
+        val status = recording.getStatusEvents().first()
+        assertThat(status.recordingStats.audioStats.audioState)
+            .isEqualTo(AudioStats.AUDIO_STATE_DISABLED)
+        recording.stopAndVerify()
+
+        createRecording(recorder = recorder, withAudio = true)
+            .startAndVerify()
+            .sendFrames()
+            .stopAndVerify()
+    }
+
+    @Test
+    fun audioAmplitudeIsNoneWhenAudioIsDisabled() {
+        val recorder = createRecorder()
+        recorder.mAudioAmplitude = 0.5
+        val recording =
+            createRecording(recorder = recorder, withAudio = false).startAndVerify().sendFrames()
+
+        val status = recording.getStatusEvents().first()
+        val amplitude = status.recordingStats.audioStats.audioAmplitude
+        assertThat(amplitude).isEqualTo(AudioStats.AUDIO_AMPLITUDE_NONE)
+
+        val result = recording.stopAndVerify()
+        assertThat(result.finalize.recordingStats.audioStats.audioAmplitude)
+            .isEqualTo(AudioStats.AUDIO_AMPLITUDE_NONE)
+    }
+
+    @Test
+    fun canGetAudioStatsAmplitude() {
+        val recorder = createRecorder()
+        recorder.mAudioAmplitude = 0.5
+        val recording =
+            createRecording(recorder = recorder, withAudio = true).startAndVerify().sendFrames()
+
+        val status = recording.getStatusEvents().first()
+        val amplitude = status.recordingStats.audioStats.audioAmplitude
+        assertThat(amplitude).isAtLeast(AudioStats.AUDIO_AMPLITUDE_NONE)
+
+        val result = recording.stopAndVerify()
+        assertThat(result.finalize.recordingStats.audioStats.audioAmplitude)
+            .isAtLeast(AudioStats.AUDIO_AMPLITUDE_NONE)
+    }
+
+    @Test
+    fun canRecoverFromErrorState() {
+        val recorder =
+            createRecorder(
+                videoEncoderFactory = createFailingVideoEncoderFactory(),
+                retrySetupVideoMaxCount = 0,
+            )
+        assertThat(recorder.streamInfo.fetchData().get()!!.id).isEqualTo(StreamInfo.STREAM_ID_ERROR)
+
+        createRecording(recorder = recorder).start().verifyFinalize(error = ERROR_RECORDER_ERROR)
+
+        createRecording(recorder = recorder).startAndVerify().sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun canRetrySetupVideo() {
+        val recorder =
+            createRecorder(
+                videoEncoderFactory = createFailingVideoEncoderFactory(),
+                retrySetupVideoMaxCount = 3,
+                retrySetupVideoDelayMs = 10,
+            )
+        shadowOf(Looper.getMainLooper()).idleFor(50, TimeUnit.MILLISECONDS)
+
+        createRecording(recorder = recorder).startAndVerify().sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun insufficientStorageWhenRecording_shouldFailWithInsufficientStorageError() {
+        val storageAvailableBytes = 100L * 1024L * 1024L // 100MB
+        val requiredFreeStorageBytes = storageAvailableBytes + 10L
+        val outputStorageFactory =
+            object : OutputStorage.Factory {
+                override fun create(outputOptions: OutputOptions): OutputStorage =
+                    object : OutputStorage {
+                        override fun getOutputOptions(): OutputOptions = outputOptions
+
+                        override fun getAvailableBytes(): Long = storageAvailableBytes
+                    }
+            }
+        val recorder =
+            createRecorder(
+                outputStorageFactory = outputStorageFactory,
+                requiredFreeStorageBytes = requiredFreeStorageBytes,
+            )
+        val recording = createRecording(recorder = recorder)
+
+        val result = recording.start().verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+    }
+
+    @Test
+    fun insufficientStorageDuringRecording_shouldFailWithInsufficientStorageError() {
+        var storageAvailableBytes = 100L * 1024L * 1024L // 100MB
+        val requiredFreeStorageBytes = storageAvailableBytes - 10L
+        val outputStorageFactory =
+            object : OutputStorage.Factory {
+                override fun create(outputOptions: OutputOptions): OutputStorage =
+                    object : OutputStorage {
+                        override fun getOutputOptions(): OutputOptions = outputOptions
+
+                        override fun getAvailableBytes(): Long = storageAvailableBytes
+                    }
+            }
+        val recorder =
+            createRecorder(
+                outputStorageFactory = outputStorageFactory,
+                requiredFreeStorageBytes = requiredFreeStorageBytes,
+            )
+        val recording = createRecording(recorder = recorder)
+
+        recording.startAndVerify().sendFrames(3).also { it.verifyStatus(statusCount = 3) }
+        storageAvailableBytes = requiredFreeStorageBytes - 10L
+        recording.sendFrames(1)
+
+        val result = recording.verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+        assertThat(result.finalize.error).isEqualTo(ERROR_INSUFFICIENT_STORAGE)
+    }
+
+    @Test
+    fun insufficientStorageOnNextRecordingStarts_shouldFailWithInsufficientStorageError() {
+        var storageAvailableBytes = 100L * 1024L * 1024L // 100MB
+        val requiredFreeStorageBytes = storageAvailableBytes - 10L
+        val outputStorageFactory =
+            object : OutputStorage.Factory {
+                override fun create(outputOptions: OutputOptions): OutputStorage =
+                    object : OutputStorage {
+                        override fun getOutputOptions(): OutputOptions = outputOptions
+
+                        override fun getAvailableBytes(): Long = storageAvailableBytes
+                    }
+            }
+        val recorder =
+            createRecorder(
+                outputStorageFactory = outputStorageFactory,
+                requiredFreeStorageBytes = requiredFreeStorageBytes,
+            )
+        val recording = createRecording(recorder = recorder)
+
+        recording.startAndVerify().sendFrames().stopAndVerify()
+
+        storageAvailableBytes = requiredFreeStorageBytes - 10L
+
+        val recording2 = createRecording(recorder = recorder).start()
+
+        val result = recording2.verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+        assertThat(result.uri).isEqualTo(Uri.EMPTY)
+    }
+
+    @Test
+    fun throwStorageFullExceptionOnMuxerStart_receiveInsufficientStorageError() {
+        val muxerFactory = MuxerFactory {
+            object : NoOpMuxer() {
+                override fun start() {
+                    throw MuxerException(storageFullException)
+                }
+            }
+        }
+        val recorder = createRecorder(muxerFactory = muxerFactory)
+
+        val recording = createRecording(recorder = recorder).start().sendFrames(1)
+
+        recording.verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+    }
+
+    @Test
+    fun throwStorageFullExceptionOnMuxerWriteSampleData_receiveInsufficientStorageError() {
+        val muxerFactory = MuxerFactory {
+            object : NoOpMuxer() {
+                override fun writeSampleData(
+                    trackIndex: Int,
+                    byteBuffer: ByteBuffer,
+                    bufferInfo: MediaCodec.BufferInfo,
+                ) {
+                    throw MuxerException(storageFullException)
+                }
+            }
+        }
+        val recorder = createRecorder(muxerFactory = muxerFactory)
+
+        val recording = createRecording(recorder = recorder).start().sendFrames(1)
+
+        recording.verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+    }
+
+    @Test
+    fun throwStorageFullExceptionOnMuxerStop_receiveInsufficientStorageError() {
+        val muxerFactory = MuxerFactory {
+            object : NoOpMuxer() {
+                override fun stop() {
+                    throw MuxerException(storageFullException)
+                }
+            }
+        }
+        val recorder = createRecorder(muxerFactory = muxerFactory)
+
+        val recording = createRecording(recorder = recorder).startAndVerify().sendFrames()
+        recording.stop()
+
+        recording.verifyFinalize(error = ERROR_INSUFFICIENT_STORAGE)
+    }
+
+    @Test
+    fun recorder_retainsRecording_duringSourceReconfiguration() {
+        val outputOptions = createFileOutputOptions()
+        val recorder = createRecorder()
+        val recording = createRecording(recorder = recorder, outputOptions = outputOptions)
+
+        recording.startAndVerify().sendFrames()
+
+        recorder.onSourceStateChanged(VideoOutput.SourceState.CONFIGURING)
+        idleMainLooper()
+
+        recorder.sendSurfaceRequest()
+
+        recording.verifyNoFinalize()
+
+        recording.clearEvents()
+
+        recording.sendFrames(3)
+        recording.verifyStatus(statusCount = 3)
+
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun recorder_stopsRecording_whenResolutionChangesDuringSourceReconfiguration() {
+        // Arrange.
+        val recorder = createRecorder()
+        val recording = createRecording(recorder = recorder).startAndVerify().sendFrames()
+
+        // Act: the source is reconfigured with a different resolution, e.g. a rotated one.
+        recorder.onSourceStateChanged(VideoOutput.SourceState.CONFIGURING)
+        idleMainLooper()
+        recorder.sendSurfaceRequest(Size(480, 640))
+
+        // Assert: the recording is stopped instead of continuing with a different resolution.
+        recording.verifyFinalize(error = ERROR_SOURCE_INACTIVE)
+
+        // Assert: a new recording can be started with the new resolution.
+        createRecording(recorder = recorder).startAndVerify().sendFrames().stopAndVerify()
+    }
+
+    @Test
+    fun recorder_stopsRecording_whenMuxerStartsWithPreviousEncoderAfterResolutionChange() {
+        // Arrange: the recording is started, but the muxer hasn't started since no frame is sent.
+        val recorder = createRecorder()
+        val oldSurfaceRequest = checkNotNull(latestSurfaceRequest)
+        val recording = createRecording(recorder = recorder).start()
+        recording.verifyStart()
+
+        // Act: the source is reconfigured with a different resolution while the previous
+        // surface is still in use, as VideoCapture does.
+        recorder.onSourceStateChanged(VideoOutput.SourceState.CONFIGURING)
+        idleMainLooper()
+        val newSurfaceRequest = SurfaceRequest(Size(480, 640), fakeCamera) {}
+        latestSurfaceRequest = newSurfaceRequest
+        surfaceRequestsToClose.add(newSurfaceRequest)
+        recorder.onSurfaceRequested(newSurfaceRequest)
+        idleMainLooper()
+        // The previous encoder sends its first frame, so the muxer starts with its resolution.
+        recording.sendFrames()
+        // The previous surface is released, so the new encoder can be set up.
+        oldSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+
+        // Assert: the recording is stopped instead of continuing with a different resolution.
+        recording.verifyFinalize(error = ERROR_SOURCE_INACTIVE)
+    }
+
+    @Test
+    fun persistentRecording_stopsRecording_whenResolutionChangesAfterRebind() {
+        // Arrange.
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true).startAndVerify().sendFrames()
+
+        // Act: unbind and rebind with a different resolution.
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+        recorder.sendSurfaceRequest(Size(480, 640))
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        // Assert.
+        recording.verifyFinalize(error = ERROR_SOURCE_INACTIVE)
+    }
+
+    @Test
+    fun recordingInfo_containsVideoAndAudioEncoderConfigs() {
+        // Arrange.
+        val recorder = createRecorder()
+
+        // Act.
+        val recording = createRecording(recorder, withAudio = true).startAndVerify().sendFrames()
+        idle(recorder)
+
+        // Assert.
+        val recordingInfo = recorder.mInProgressRecording!!.recordingInfo!!
+        assertThat(recordingInfo.videoEncoderConfig.resolution).isEqualTo(Size(640, 480))
+        assertThat(recordingInfo.audioEncoderConfig).isNotNull()
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun recordingInfo_hasNoAudioEncoderConfig_whenAudioIsDisabled() {
+        // Arrange.
+        val recorder = createRecorder()
+
+        // Act.
+        val recording = createRecording(recorder, withAudio = false).startAndVerify().sendFrames()
+        idle(recorder)
+
+        // Assert.
+        val recordingInfo = recorder.mInProgressRecording!!.recordingInfo!!
+        assertThat(recordingInfo.audioEncoderConfig).isNull()
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_afterRebind_finalizeWaitsForAudioEncoderToStop() {
+        // Arrange: a persistent recording with audio whose audio encoder stop can be held back.
+        var audioEncoder: StopDeferringEncoder? = null
+        val recorder =
+            createRecorder(
+                audioEncoderFactory =
+                    FakeAudioEncoderFactory { _, _ ->
+                        StopDeferringEncoder(createFakeAudioEncoder()).also { audioEncoder = it }
+                    }
+            )
+        val recording =
+            createRecording(recorder, withAudio = true, asPersistentRecording = true)
+                .startAndVerify()
+                .sendFrames()
+
+        // Unbind and rebind, so the video encoder is replaced while the audio encoder is kept.
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        recording.sendFrames(3)
+
+        // Act: stop the recording while the audio encoder has not stopped yet.
+        val deferringAudioEncoder = checkNotNull(audioEncoder)
+        deferringAudioEncoder.deferStop = true
+        recording.stop()
+
+        // Assert: the recording is not finalized until the audio encoder stops.
+        recording.verifyNoFinalize()
+        deferringAudioEncoder.completeDeferredStop()
+        idle(recorder)
+        recording.verifyFinalize()
+    }
+
+    @Test
+    fun startRecording_duringSurfaceReconfiguration_doesNotUseTerminatingEncoder() {
+        val startedEncoders = mutableListOf<FakeEncoder>()
+        val recorder =
+            createRecorder(
+                videoEncoderFactory = createStartTrackingVideoEncoderFactory(startedEncoders)
+            )
+        val oldSurfaceRequest = checkNotNull(latestSurfaceRequest)
+        val oldEncoder = checkNotNull(latestVideoEncoder)
+
+        // Send a new surface request while IDLING. The old VideoEncoderSession becomes pending
+        // release until the old surface is released.
+        val newSurfaceRequest = SurfaceRequest(Size(640, 480), fakeCamera) {}
+        latestSurfaceRequest = newSurfaceRequest
+        surfaceRequestsToClose.add(newSurfaceRequest)
+        recorder.onSurfaceRequested(newSurfaceRequest)
+
+        // Start a recording before the new VideoEncoderSession is configured.
+        val recording = createRecording(recorder = recorder).start()
+
+        // The recording is deferred instead of being started on the terminating encoder.
+        recording.verifyNoMoreEvent()
+        assertThat(startedEncoders).isEmpty()
+
+        // Release the old surface so that the new VideoEncoderSession can be configured.
+        oldSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+
+        // The recording starts on the new encoder.
+        recording.verifyStart()
+        val newEncoder = checkNotNull(latestVideoEncoder)
+        assertThat(newEncoder).isNotSameInstanceAs(oldEncoder)
+        assertThat(startedEncoders).containsExactly(newEncoder)
+        recording.sendFrames(3)
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun startRecording_newSurfaceRequestBeforeEncoderReady_doesNotUseTerminatingEncoder() {
+        val startedEncoders = mutableListOf<FakeEncoder>()
+        var onEncoderCreated: (() -> Unit)? = null
+        val recorder =
+            createRecorder(
+                sendSurfaceRequest = false,
+                videoEncoderFactory =
+                    createStartTrackingVideoEncoderFactory(startedEncoders) {
+                        onEncoderCreated?.invoke()
+                        onEncoderCreated = null
+                    },
+            )
+
+        // Start a recording before any surface request. It stays pending until the video
+        // encoder is configured.
+        val recording = createRecording(recorder = recorder).start()
+        recording.verifyNoMoreEvent()
+
+        // Send a second surface request while the VideoEncoderSession of the first surface
+        // request is being configured, i.e. before onConfigured() is invoked for it. This makes
+        // the first VideoEncoderSession pending release before it is reported as configured.
+        val secondSurfaceRequest = SurfaceRequest(Size(640, 480), fakeCamera) {}
+        surfaceRequestsToClose.add(secondSurfaceRequest)
+        onEncoderCreated = { recorder.onSurfaceRequested(secondSurfaceRequest) }
+        val firstSurfaceRequest = recorder.sendSurfaceRequest()
+        val firstEncoder = checkNotNull(latestVideoEncoder)
+
+        // The recording is deferred instead of being started on the terminating encoder.
+        recording.verifyNoMoreEvent()
+        assertThat(startedEncoders).isEmpty()
+
+        // Release the first surface so that the VideoEncoderSession of the second surface request
+        // can be configured.
+        firstSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+
+        // The recording starts on the encoder of the second surface request.
+        recording.verifyStart()
+        val secondEncoder = checkNotNull(latestVideoEncoder)
+        assertThat(secondEncoder).isNotSameInstanceAs(firstEncoder)
+        assertThat(startedEncoders).containsExactly(secondEncoder)
+        recording.sendFrames(3)
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun startRecording_whileStoppingDuringSurfaceReconfiguration_doesNotUseTerminatingEncoder() {
+        val startedEncoders = mutableListOf<FakeEncoder>()
+        val recorder =
+            createRecorder(
+                videoEncoderFactory = createStartTrackingVideoEncoderFactory(startedEncoders)
+            )
+        val oldSurfaceRequest = checkNotNull(latestSurfaceRequest)
+        val oldEncoder = checkNotNull(latestVideoEncoder)
+
+        val firstRecording = createRecording(recorder = recorder).startAndVerify().sendFrames()
+        assertThat(startedEncoders).containsExactly(oldEncoder)
+        startedEncoders.clear()
+
+        // Send a new surface request while RECORDING. The old VideoEncoderSession becomes pending
+        // release until the old surface is released.
+        val newSurfaceRequest = SurfaceRequest(Size(640, 480), fakeCamera) {}
+        latestSurfaceRequest = newSurfaceRequest
+        surfaceRequestsToClose.add(newSurfaceRequest)
+        recorder.onSurfaceRequested(newSurfaceRequest)
+        idleMainLooper()
+
+        // Stop the first recording and immediately start a second recording while STOPPING, so
+        // that onRecordingFinalized() runs in PENDING_RECORDING state.
+        firstRecording.stop()
+        val secondRecording = createRecording(recorder = recorder).start()
+        idleMainLooper()
+
+        firstRecording.verifyFinalize()
+        // The second recording is deferred instead of being started on the terminating encoder,
+        // and the stream state transitions to INACTIVE once the first recording is finalized.
+        secondRecording.verifyNoMoreEvent()
+        assertThat(startedEncoders).isEmpty()
+        assertThat(recorder.streamInfo.fetchData().get()!!.streamState)
+            .isEqualTo(StreamInfo.StreamState.INACTIVE)
+
+        // Release the old surface so that the new VideoEncoderSession can be configured.
+        oldSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+
+        // The second recording starts on the new encoder.
+        secondRecording.verifyStart()
+        val newEncoder = checkNotNull(latestVideoEncoder)
+        assertThat(newEncoder).isNotSameInstanceAs(oldEncoder)
+        assertThat(startedEncoders).containsExactly(newEncoder)
+        secondRecording.sendFrames(3)
+        secondRecording.stopAndVerify()
+    }
+
+    @Test
+    fun startRecording_whileResetting_resetsBeforeStartingOnNewEncoder() {
+        val startedEncoders = mutableListOf<FakeEncoder>()
+        val startTrackingFactory = createStartTrackingVideoEncoderFactory(startedEncoders)
+        var stopDeferringEncoder: StopDeferringEncoder? = null
+        // Only the first (old) video encoder defers stop(), so the first recording can be kept
+        // finalizing while the Recorder is RESETTING.
+        val recorder =
+            createRecorder(
+                videoEncoderFactory =
+                    FakeVideoEncoderFactory { executor, config ->
+                        val encoder =
+                            startTrackingFactory.createEncoder(executor, config) as FakeEncoder
+                        if (stopDeferringEncoder == null) {
+                            StopDeferringEncoder(encoder).also { stopDeferringEncoder = it }
+                        } else {
+                            encoder
+                        }
+                    }
+            )
+        val oldSurfaceRequest = checkNotNull(latestSurfaceRequest)
+        val oldEncoder = checkNotNull(latestVideoEncoder)
+        val deferringEncoder = checkNotNull(stopDeferringEncoder)
+
+        val firstRecording = createRecording(recorder = recorder).startAndVerify().sendFrames()
+        assertThat(startedEncoders).containsExactly(oldEncoder)
+        startedEncoders.clear()
+
+        // Send a new surface request while RECORDING. The old VideoEncoderSession becomes pending
+        // release until the old surface is released.
+        val newSurfaceRequest = SurfaceRequest(Size(640, 480), fakeCamera) {}
+        latestSurfaceRequest = newSurfaceRequest
+        surfaceRequestsToClose.add(newSurfaceRequest)
+        recorder.onSurfaceRequested(newSurfaceRequest)
+        idleMainLooper()
+
+        // Release the old surface. The Recorder requests a reset, which transitions to RESETTING
+        // and stops the first recording. Hold back the encoder stop so that the first recording
+        // is not finalized yet.
+        deferringEncoder.deferStop = true
+        oldSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+        firstRecording.verifyNoFinalize()
+
+        // Start a second recording while RESETTING, i.e. PENDING_RECORDING with a RESETTING
+        // non-pending state.
+        val secondRecording = createRecording(recorder = recorder).start()
+        idleMainLooper()
+        secondRecording.verifyNoMoreEvent()
+        assertThat(oldEncoder.isReleaseCalled).isFalse()
+
+        // Let the first recording be finalized. onRecordingFinalized() must perform the pending
+        // reset, which releases the old encoder, instead of starting the second recording on it.
+        deferringEncoder.completeDeferredStop()
+        idleMainLooper()
+        firstRecording.verifyFinalize(error = ERROR_SOURCE_INACTIVE)
+        assertThat(oldEncoder.isReleaseCalled).isTrue()
+
+        // The second recording starts on the encoder created for the new surface request.
+        secondRecording.verifyStart()
+        val newEncoder = checkNotNull(latestVideoEncoder)
+        assertThat(newEncoder).isNotSameInstanceAs(oldEncoder)
+        assertThat(startedEncoders).containsExactly(newEncoder)
+        secondRecording.sendFrames(3)
+        secondRecording.stopAndVerify()
+    }
+
+    @Test
+    fun sourceInactive_whileStoppedRecordingIsFinalizingInConfiguringState_doesNotCrash() {
+        val (recorder, videoEncoder, _, firstRecording) =
+            setUpStoppedRecordingFinalizingInConfiguringState()
+
+        // Rebind and unbind again before the first recording is finalized. The new video encoder
+        // can't be set up until the old one is released, which happens after it stops, so the
+        // Recorder stays in CONFIGURING.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        recorder.onSourceStateChanged(INACTIVE)
+        idleMainLooper()
+        firstRecording.verifyNoFinalize()
+
+        // The first recording is finalized in CONFIGURING once its encoder stops, with the error
+        // of the user's stop.
+        videoEncoder.completeDeferredStop()
+        idleMainLooper()
+        firstRecording.verifyFinalize(error = ERROR_NONE)
+    }
+
+    @Test
+    fun sourceInactive_whileStoppedRecordingIsFinalizingInIdleState_doesNotCrash() {
+        val (recorder, videoEncoder, audioEncoder, firstRecording) =
+            setUpStoppedRecordingFinalizingInConfiguringState(withAudio = true)
+
+        // Only the video encoder stops, so the first recording is still waiting for the audio
+        // encoder, while the released video encoder lets the Recorder be configured to IDLING on
+        // rebind. Then unbind again.
+        videoEncoder.completeDeferredStop()
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        recorder.onSourceStateChanged(INACTIVE)
+        idleMainLooper()
+        firstRecording.verifyNoFinalize()
+
+        // The first recording is finalized in IDLING once the audio encoder stops, with the error
+        // of the user's stop.
+        checkNotNull(audioEncoder).completeDeferredStop()
+        idleMainLooper()
+        firstRecording.verifyFinalize(error = ERROR_NONE)
+
+        // The Recorder can still record after a new surface is provided.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    @Test
+    fun start_whileStoppedRecordingIsFinalizingInIdleState_startsAfterFinalized() {
+        val (recorder, videoEncoder, audioEncoder, firstRecording) =
+            setUpStoppedRecordingFinalizingInConfiguringState(withAudio = true)
+
+        // Rebind after only the video encoder stops, so the Recorder is IDLING while the first
+        // recording is still waiting for the audio encoder.
+        videoEncoder.completeDeferredStop()
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        // Start a recording while IDLING. It is pending until the first recording is finalized.
+        val thirdRecording = createRecording(recorder = recorder).start()
+        idleMainLooper()
+        thirdRecording.verifyNoMoreEvent()
+        firstRecording.verifyNoFinalize()
+
+        checkNotNull(audioEncoder).completeDeferredStop()
+        idleMainLooper()
+        firstRecording.verifyFinalize(error = ERROR_NONE)
+        thirdRecording.verifyStart()
+        thirdRecording.sendFrames(3)
+        thirdRecording.stopAndVerify()
+    }
+
+    @Test
+    fun sourceInactive_whileStoppedRecordingIsFinalizingInErrorState_doesNotCrash() {
+        var failEncoderCreation = false
+        val originalRetrySetupVideoMaxCount = sRetrySetupVideoMaxCount
+        try {
+            val (recorder, videoEncoder, audioEncoder, firstRecording) =
+                setUpStoppedRecordingFinalizingInConfiguringState(
+                    withAudio = true,
+                    onCreateLaterVideoEncoder = {
+                        if (failEncoderCreation) {
+                            throw InvalidConfigException("Create video encoder fail on purpose.")
+                        }
+                    },
+                )
+            sRetrySetupVideoMaxCount = 0
+
+            // Only the video encoder stops, then rebind with a video encoder that fails to be
+            // created, so that the Recorder goes to ERROR while the first recording is still
+            // waiting for the audio encoder. Then unbind again.
+            videoEncoder.completeDeferredStop()
+            failEncoderCreation = true
+            recorder.sendSurfaceRequest()
+            assertThat(requireNotNull(recorder.streamInfo.fetchData().get()).id)
+                .isEqualTo(StreamInfo.STREAM_ID_ERROR)
+            recorder.onSourceStateChanged(ACTIVE_STREAMING)
+            idleMainLooper()
+            recorder.onSourceStateChanged(INACTIVE)
+            idleMainLooper()
+            firstRecording.verifyNoFinalize()
+
+            // The first recording is finalized in ERROR once the audio encoder stops, with the
+            // error of the user's stop.
+            checkNotNull(audioEncoder).completeDeferredStop()
+            idleMainLooper()
+            firstRecording.verifyFinalize(error = ERROR_NONE)
+        } finally {
+            sRetrySetupVideoMaxCount = originalRetrySetupVideoMaxCount
+        }
+    }
+
+    @Test
+    fun startRecording_afterSurfaceReleasedBeforeSourceInactive_starts() {
+        val recorder = createRecorder()
+        val firstSurfaceRequest = checkNotNull(latestSurfaceRequest)
+
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+
+        // Simulate surface termination completing on mSequentialExecutor before
+        // onSourceStateChanged(INACTIVE) arrives during rapid lifecycle/session transitions.
+        firstSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+        recorder.onSourceStateChanged(INACTIVE)
+        idleMainLooper()
+
+        // Rebind with a new surface request and verify the next recording starts instead of
+        // remaining stuck in PENDING_RECORDING with mNeedsResetBeforeNextStart = true.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_surfaceReleasedBeforeSourceInactive_retainsAudioAndContinues() {
+        val recorder = createRecorder()
+        val firstSurfaceRequest = checkNotNull(latestSurfaceRequest)
+
+        val recording =
+            createRecording(recorder = recorder, withAudio = true, asPersistentRecording = true)
+                .startAndVerify()
+                .sendFrames(3)
+        val initialAudioSource = checkNotNull(recorder.mAudioSource)
+
+        // Simulate surface termination completing before onSourceStateChanged(INACTIVE).
+        firstSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+        recorder.onSourceStateChanged(INACTIVE)
+        idleMainLooper()
+
+        // Audio source should be retained for the persistent recording.
+        assertThat(recorder.mAudioSource).isSameInstanceAs(initialAudioSource)
+
+        // Rebind with a new surface request and verify the persistent recording continues.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        recording.sendFrames(3).stopAndVerify()
+
+        // Verify a subsequent recording can also start cleanly without being blocked by
+        // mNeedsResetBeforeNextStart.
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    private data class FinalizingRecordingSetup(
+        val recorder: Recorder,
+        val videoEncoder: StopDeferringEncoder,
+        val audioEncoder: StopDeferringEncoder?,
+        val firstRecording: Recording,
+    )
+
+    /**
+     * Sets up a Recorder in CONFIGURING state while a stopped recording is still being finalized.
+     *
+     * A recording is stopped with its encoders' stop held back, a second recording is started
+     * (PENDING_RECORDING), the camera is unbound which resets the Recorder, and then the pending
+     * recording is stopped so the Recorder restores the non-pending CONFIGURING state.
+     *
+     * @param withAudio whether the first recording has audio. If true, the stop of the first audio
+     *   encoder is also held back.
+     * @param onCreateLaterVideoEncoder invoked before creating every video encoder except the
+     *   first.
+     */
+    private fun setUpStoppedRecordingFinalizingInConfiguringState(
+        withAudio: Boolean = false,
+        onCreateLaterVideoEncoder: () -> Unit = {},
+    ): FinalizingRecordingSetup {
+        var videoEncoder: StopDeferringEncoder? = null
+        var audioEncoder: StopDeferringEncoder? = null
+        val startTrackingFactory = createStartTrackingVideoEncoderFactory(mutableListOf())
+        // Only the first encoders defer stop(), so the first recording can be kept finalizing
+        // while the Recorder moves on to other states.
+        val recorder =
+            createRecorder(
+                videoEncoderFactory =
+                    FakeVideoEncoderFactory { executor, config ->
+                        if (videoEncoder != null) {
+                            onCreateLaterVideoEncoder()
+                        }
+                        val encoder =
+                            startTrackingFactory.createEncoder(executor, config) as FakeEncoder
+                        if (videoEncoder == null) {
+                            StopDeferringEncoder(encoder).also { videoEncoder = it }
+                        } else {
+                            encoder
+                        }
+                    },
+                audioEncoderFactory =
+                    FakeAudioEncoderFactory { _, _ ->
+                        val encoder = createFakeAudioEncoder()
+                        if (audioEncoder == null) {
+                            StopDeferringEncoder(encoder).also { audioEncoder = it }
+                        } else {
+                            encoder
+                        }
+                    },
+            )
+        val oldSurfaceRequest = checkNotNull(latestSurfaceRequest)
+        val firstVideoEncoder = checkNotNull(videoEncoder)
+        val firstRecording =
+            createRecording(recorder = recorder, withAudio = withAudio)
+                .startAndVerify()
+                .sendFrames()
+        val firstAudioEncoder = if (withAudio) checkNotNull(audioEncoder) else null
+
+        // Stop the first recording but hold back the encoders' stop so it keeps finalizing, then
+        // start a second recording while STOPPING, i.e. PENDING_RECORDING.
+        firstVideoEncoder.deferStop = true
+        firstAudioEncoder?.deferStop = true
+        firstRecording.stop()
+        val secondRecording = createRecording(recorder = recorder).start()
+        idleMainLooper()
+        firstRecording.verifyNoFinalize()
+
+        // Unbind: the source becomes INACTIVE and the old surface is released, which resets the
+        // Recorder while the first recording is still finalizing.
+        recorder.onSourceStateChanged(INACTIVE)
+        oldSurfaceRequest.deferrableSurface.close()
+        idleMainLooper()
+
+        // Stop the pending second recording, so the Recorder restores the non-pending CONFIGURING
+        // state even though the first recording is still in progress.
+        secondRecording.stop()
+        idleMainLooper()
+        secondRecording.verifyFinalize(error = ERROR_NO_VALID_DATA)
+        firstRecording.verifyNoFinalize()
+
+        return FinalizingRecordingSetup(
+            recorder,
+            firstVideoEncoder,
+            firstAudioEncoder,
+            firstRecording,
+        )
+    }
+
+    @Test
+    fun getVideoCapabilitiesStabilizationSupportIsCorrect_whenNotSupportedInExtensions() {
+        val cameraInfo = FakeCameraInfoInternal().apply { isVideoStabilizationSupported = true }
+        val sessionProcessor =
+            FakeSessionProcessor(
+                extensionSpecificChars =
+                    listOf(
+                        android.util.Pair(
+                            CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
+                            intArrayOf(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_OFF),
+                        )
+                    )
+            )
+        val cameraConfig = FakeCameraConfig(sessionProcessor = sessionProcessor)
+        val adapterCameraInfo = AdapterCameraInfo(cameraInfo, cameraConfig)
+        val capabilities = Recorder.getVideoCapabilities(adapterCameraInfo)
+
+        assertThat(capabilities.isStabilizationSupported).isFalse()
+    }
+
+    @Test
+    fun getVideoCapabilitiesStabilizationSupportIsCorrect_whenSupportedInExtensions() {
+        val cameraInfo = FakeCameraInfoInternal().apply { isVideoStabilizationSupported = false }
+        val sessionProcessor =
+            FakeSessionProcessor(
+                extensionSpecificChars =
+                    listOf(
+                        android.util.Pair(
+                            CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
+                            intArrayOf(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON),
+                        )
+                    )
+            )
+        val cameraConfig = FakeCameraConfig(sessionProcessor = sessionProcessor)
+        val adapterCameraInfo = AdapterCameraInfo(cameraInfo, cameraConfig)
+        val capabilities = Recorder.getVideoCapabilities(adapterCameraInfo)
+
+        assertThat(capabilities.isStabilizationSupported).isTrue()
+    }
+
+    @Test
+    fun stopAndSourceInactive_releasesVideoAndAudioEncoders() {
+        val recorder = createRecorder()
+        val recording = createRecording(recorder, withAudio = true).startAndVerify().sendFrames()
+
+        val videoEncoder = checkNotNull(latestVideoEncoder)
+        val audioEncoder = checkNotNull(latestAudioEncoder)
+        assertThat(videoEncoder.isReleaseCalled).isFalse()
+        assertThat(audioEncoder.isReleaseCalled).isFalse()
+
+        recording.stopAndVerify()
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        assertThat(videoEncoder.isReleaseCalled).isTrue()
+        assertThat(audioEncoder.isReleaseCalled).isTrue()
+    }
+
+    @Test
+    fun highSpeedSurfaceRequest_videoEncoderConfigIsHighSpeedCapture() {
+        val videoEncoderConfigs = mutableListOf<VideoEncoderConfig>()
+        val recorder =
+            createRecorder(
+                sendSurfaceRequest = false,
+                videoEncoderFactory = createConfigCapturingVideoEncoderFactory(videoEncoderConfigs),
+            )
+
+        recorder.sendSurfaceRequest(sessionType = SESSION_TYPE_HIGH_SPEED)
+
+        assertThat(videoEncoderConfigs.last().isHighSpeedCapture).isTrue()
+    }
+
+    @Test
+    fun regularSurfaceRequest_videoEncoderConfigIsNotHighSpeedCapture() {
+        val videoEncoderConfigs = mutableListOf<VideoEncoderConfig>()
+        val recorder =
+            createRecorder(
+                sendSurfaceRequest = false,
+                videoEncoderFactory = createConfigCapturingVideoEncoderFactory(videoEncoderConfigs),
+            )
+
+        recorder.sendSurfaceRequest(sessionType = SESSION_TYPE_REGULAR)
+
+        assertThat(videoEncoderConfigs.last().isHighSpeedCapture).isFalse()
+    }
+
+    private fun createConfigCapturingVideoEncoderFactory(
+        videoEncoderConfigs: MutableList<VideoEncoderConfig>
+    ): VideoEncoderFactory = FakeVideoEncoderFactory { _, config ->
+        videoEncoderConfigs.add(config)
+        FakeEncoder(
+                encoderInfo = FakeVideoEncoderInfo(supportedBitrateRange = Range(1, 100_000_000)),
+                encoderConfig = config,
+            )
+            .also { latestVideoEncoder = it }
+    }
+
+    @Test
+    fun audioEncoderError_stopsAudioSourceWhenRecordingFinalized() {
+        // Arrange.
+        val audioStream = createFakeAudioStream()
+        val recorder = createRecorder(audioStreamFactory = { _, _ -> audioStream })
+        val recording = createRecording(recorder, withAudio = true).startAndVerify()
+        audioStream.verifyStartCall(CallTimes(1), VERIFY_AUDIO_STREAM_TIMEOUT_MS)
+
+        // Act: the audio encoder fails, so the recording continues without audio.
+        checkNotNull(latestAudioEncoder)
+            .triggerEncodeError(EncodeException.ERROR_UNKNOWN, "Audio encoder fail on purpose.")
+        idle(recorder)
+        assertThat(recorder.mAudioState).isEqualTo(AudioState.ERROR_ENCODER)
+
+        recording.sendFrames().stopAndVerify()
+
+        // Assert: the audio source is stopped rather than left streaming.
+        audioStream.verifyStopCall(CallTimes(1), VERIFY_AUDIO_STREAM_TIMEOUT_MS)
+    }
+
+    @Test
+    fun audioSourceError_stopsAudioSourceWhenRecordingFinalized() {
+        // Arrange: a failing audio processor makes the audio source report an
+        // AudioSourceAccessException while the recording is in progress.
+        val audioStream = createFakeAudioStream()
+        val recorder =
+            createRecorder(
+                audioStreamFactory = { _, _ -> audioStream },
+                audioProcessors = listOf(FailingAudioProcessor()),
+            )
+        val recording = createRecording(recorder, withAudio = true).startAndVerify()
+        audioStream.verifyStartCall(CallTimes(1), VERIFY_AUDIO_STREAM_TIMEOUT_MS)
+
+        // Act: wait until the audio source error has been propagated to the recorder.
+        val deadlineMs = SystemClock.uptimeMillis() + VERIFY_AUDIO_STREAM_TIMEOUT_MS
+        while (
+            recorder.mAudioState != AudioState.ERROR_SOURCE &&
+                SystemClock.uptimeMillis() < deadlineMs
+        ) {
+            idle(recorder)
+        }
+        assertThat(recorder.mAudioState).isEqualTo(AudioState.ERROR_SOURCE)
+
+        recording.sendFrames().stopAndVerify()
+
+        // Assert: the audio source is stopped rather than left streaming.
+        audioStream.verifyStopCall(CallTimes(1), VERIFY_AUDIO_STREAM_TIMEOUT_MS)
+    }
+
+    @Test
+    fun persistentRecording_stopAfterSourceInactive_finalizes() {
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true, withAudio = true)
+                .startAndVerify()
+                .sendFrames()
+
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_withoutAudio_stopAfterSourceInactive_finalizes() {
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true, withAudio = false)
+                .startAndVerify()
+                .sendFrames()
+
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_stopThenRebind_newVideoEncoderConfiguredWhileStopping_doesNotCrash() {
+        var audioEncoder: StopDeferringEncoder? = null
+        val recorder =
+            createRecorder(
+                audioEncoderFactory =
+                    FakeAudioEncoderFactory { _, _ ->
+                        StopDeferringEncoder(createFakeAudioEncoder()).also { audioEncoder = it }
+                    }
+            )
+        val recording =
+            createRecording(recorder, asPersistentRecording = true, withAudio = true)
+                .startAndVerify()
+                .sendFrames()
+
+        // Unbind, so the video encoder is released while the recording is retained.
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        // Stop the recording, which stays in STOPPING until the audio encoder stops.
+        val deferringAudioEncoder = checkNotNull(audioEncoder)
+        deferringAudioEncoder.deferStop = true
+        recording.stop()
+        idleMainLooper()
+
+        // Rebind, so a new video encoder is configured while the Recorder is STOPPING.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+        recording.verifyNoFinalize()
+
+        deferringAudioEncoder.completeDeferredStop()
+        idle(recorder)
+        recording.verifyFinalize(error = ERROR_NONE)
+
+        // The new video encoder can be used for the next recording.
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_stopThenRebind_newVideoEncoderConfiguredAfterFinalized_doesNotCrash() {
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true, withAudio = false)
+                .startAndVerify()
+                .sendFrames()
+
+        // Unbind and stop the recording, so it is finalized while there is no video encoder.
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+        recording.stopAndVerify()
+
+        // Rebind, so a new video encoder is configured after the recording is finalized.
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_rebindThenStop_newVideoEncoderConfiguredWhileStopping_doesNotCrash() {
+        var failVideoEncoderCreation = false
+        var audioEncoder: StopDeferringEncoder? = null
+        val originalRetrySetupVideoMaxCount = sRetrySetupVideoMaxCount
+        val originalRetrySetupVideoDelayMs = sRetrySetupVideoDelayMs
+        try {
+            val recorder =
+                createRecorder(
+                    videoEncoderFactory =
+                        createVideoEncoderFactory(
+                            shouldFail = {
+                                failVideoEncoderCreation.also { failVideoEncoderCreation = false }
+                            }
+                        ),
+                    audioEncoderFactory =
+                        FakeAudioEncoderFactory { _, _ ->
+                            StopDeferringEncoder(createFakeAudioEncoder()).also {
+                                audioEncoder = it
+                            }
+                        },
+                    retrySetupVideoMaxCount = 1,
+                    retrySetupVideoDelayMs = RETRY_SETUP_VIDEO_DELAY_MS,
+                )
+            val recording =
+                createRecording(recorder, asPersistentRecording = true, withAudio = true)
+                    .startAndVerify()
+                    .sendFrames()
+
+            // Unbind, so the video encoder is released while the recording is retained.
+            recorder.onSourceStateChanged(INACTIVE)
+            latestSurfaceRequest?.deferrableSurface?.close()
+            idleMainLooper()
+
+            // Rebind. The first attempt to create the new video encoder fails, so the new video
+            // encoder isn't configured until the setup is retried.
+            failVideoEncoderCreation = true
+            recorder.sendSurfaceRequest()
+            recorder.onSourceStateChanged(ACTIVE_STREAMING)
+            idleMainLooper()
+
+            // Stop the recording, which stays in STOPPING until the audio encoder stops.
+            val deferringAudioEncoder = checkNotNull(audioEncoder)
+            deferringAudioEncoder.deferStop = true
+            recording.stop()
+            recording.verifyNoFinalize()
+
+            // The new video encoder is configured while the Recorder is STOPPING.
+            shadowOf(Looper.getMainLooper())
+                .idleFor(RETRY_SETUP_VIDEO_DELAY_MS, TimeUnit.MILLISECONDS)
+            recording.verifyNoFinalize()
+
+            deferringAudioEncoder.completeDeferredStop()
+            idle(recorder)
+            recording.verifyFinalize(error = ERROR_NONE)
+
+            // The new video encoder can be used for the next recording.
+            createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+        } finally {
+            sRetrySetupVideoMaxCount = originalRetrySetupVideoMaxCount
+            sRetrySetupVideoDelayMs = originalRetrySetupVideoDelayMs
+        }
+    }
+
+    @Test
+    fun persistentRecording_rebindThenStop_newVideoEncoderConfiguredAfterFinalized_doesNotCrash() {
+        var failVideoEncoderCreation = false
+        val originalRetrySetupVideoMaxCount = sRetrySetupVideoMaxCount
+        val originalRetrySetupVideoDelayMs = sRetrySetupVideoDelayMs
+        try {
+            val recorder =
+                createRecorder(
+                    videoEncoderFactory =
+                        createVideoEncoderFactory(
+                            shouldFail = {
+                                failVideoEncoderCreation.also { failVideoEncoderCreation = false }
+                            }
+                        ),
+                    retrySetupVideoMaxCount = 1,
+                    retrySetupVideoDelayMs = RETRY_SETUP_VIDEO_DELAY_MS,
+                )
+            val recording =
+                createRecording(recorder, asPersistentRecording = true, withAudio = false)
+                    .startAndVerify()
+                    .sendFrames()
+
+            // Unbind, so the video encoder is released while the recording is retained.
+            recorder.onSourceStateChanged(INACTIVE)
+            latestSurfaceRequest?.deferrableSurface?.close()
+            idleMainLooper()
+
+            // Rebind. The first attempt to create the new video encoder fails, so the new video
+            // encoder isn't configured until the setup is retried.
+            failVideoEncoderCreation = true
+            recorder.sendSurfaceRequest()
+            recorder.onSourceStateChanged(ACTIVE_STREAMING)
+            idleMainLooper()
+
+            // Stop the recording. It is finalized right away since it has no video encoder.
+            recording.stopAndVerify()
+
+            // The new video encoder is configured after the recording is finalized.
+            shadowOf(Looper.getMainLooper())
+                .idleFor(RETRY_SETUP_VIDEO_DELAY_MS, TimeUnit.MILLISECONDS)
+
+            createRecording(recorder = recorder).startAndVerify().sendFrames(3).stopAndVerify()
+        } finally {
+            sRetrySetupVideoMaxCount = originalRetrySetupVideoMaxCount
+            sRetrySetupVideoDelayMs = originalRetrySetupVideoDelayMs
+        }
+    }
+
+    @Test
+    fun persistentRecording_canContinueRecordingAfterRebind() {
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true, withAudio = true)
+                .startAndVerify()
+                .sendFrames()
+
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        recording.clearEvents()
+        recording.sendFrames(3)
+        recording.verifyStatus(statusCount = 3)
+
+        recording.stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_releaseVideoEncoderBeforeMuxerStarted_closesCachedKeyFrame() {
+        // Arrange: start a persistent recording with audio. Without audio data yet, the muxer
+        // isn't started and the first video keyframe is cached.
+        val videoEncoderCallbacks = mutableListOf<Pair<EncoderCallback, Executor>>()
+        val recorder =
+            createRecorder(
+                videoEncoderFactory =
+                    createCallbackCapturingVideoEncoderFactory(videoEncoderCallbacks)
+            )
+        createRecording(recorder, asPersistentRecording = true, withAudio = true).startAndVerify()
+        val keyFrame = createVideoEncodedData(isKeyFrame = true)
+        videoEncoderCallbacks.last().deliver(keyFrame)
+        idleMainLooper()
+        assertThat(keyFrame.closedFuture.isDone).isFalse()
+
+        // Act: unbind, which releases the video encoder of the retained recording.
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        // Assert: the cached keyframe is returned so that the video encoder can be released.
+        assertThat(keyFrame.closedFuture.isDone).isTrue()
+    }
+
+    @Test
+    fun persistentRecording_videoDataAfterVideoEncoderReleased_isClosed() {
+        // Arrange: start a persistent recording with audio, so the muxer isn't started, then
+        // unbind, which releases the video encoder of the retained recording.
+        val videoEncoderCallbacks = mutableListOf<Pair<EncoderCallback, Executor>>()
+        val recorder =
+            createRecorder(
+                videoEncoderFactory =
+                    createCallbackCapturingVideoEncoderFactory(videoEncoderCallbacks)
+            )
+        createRecording(recorder, asPersistentRecording = true, withAudio = true).startAndVerify()
+        val releasedEncoderCallback = videoEncoderCallbacks.last()
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        // Act: the released video encoder delivers data that was dispatched before the release.
+        val keyFrame = createVideoEncodedData(isKeyFrame = true)
+        val nonKeyFrame = createVideoEncodedData(isKeyFrame = false)
+        releasedEncoderCallback.deliver(keyFrame)
+        releasedEncoderCallback.deliver(nonKeyFrame)
+        idleMainLooper()
+
+        // Assert: the data is returned so that the video encoder can be released.
+        assertThat(keyFrame.closedFuture.isDone).isTrue()
+        assertThat(nonKeyFrame.closedFuture.isDone).isTrue()
+    }
+
+    @Test
+    fun persistentRecording_canContinueRecordingPausedAfterRebind() {
+        val recorder = createRecorder()
+        val recording =
+            createRecording(recorder, asPersistentRecording = true)
+                .startAndVerify()
+                .sendFrames()
+                .pauseAndVerify()
+
+        recorder.onSourceStateChanged(INACTIVE)
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+
+        recorder.sendSurfaceRequest()
+        recorder.onSourceStateChanged(ACTIVE_STREAMING)
+        idleMainLooper()
+
+        recording.resumeAndVerify().sendFrames(3).stopAndVerify()
+    }
+
+    @Test
+    fun persistentRecording_videoEncoderErrorWhileStopping_finalizes() {
+        val recorder =
+            createRecorder(
+                videoEncoderFactory =
+                    FakeVideoEncoderFactory { _, _ ->
+                        val fakeEncoder = FakeEncoder().also { latestVideoEncoder = it }
+                        object : Encoder by fakeEncoder {
+                            override fun stop(expectedStopTimeUs: Long) {
+                                fakeEncoder.triggerEncodeError(
+                                    EncodeException.ERROR_UNKNOWN,
+                                    "Test error",
+                                )
+                            }
+                        }
+                    }
+            )
+        val recording =
+            createRecording(recorder, asPersistentRecording = true).startAndVerify().sendFrames()
+
+        recording.stop()
+        idleMainLooper()
+
+        recording.verifyFinalize(error = Finalize.ERROR_ENCODING_FAILED)
+    }
+
+    @Test
+    fun recordingWithSetTargetVideoEncodingBitRate() {
+        testRecorderIsConfiguredBasedOnTargetVideoEncodingBitrate(6_000_000)
+    }
+
+    @Test
+    fun recordingWithSetTargetVideoEncodingBitRateOutOfRange() {
+        testRecorderIsConfiguredBasedOnTargetVideoEncodingBitrate(1000_000_000)
+    }
+
+    private fun testRecorderIsConfiguredBasedOnTargetVideoEncodingBitrate(targetBitrate: Int) {
+        val recorder = createRecorder(targetBitrate = targetBitrate)
+        val recording = createRecording(recorder = recorder, withAudio = false)
+
+        recording.startAndVerify().sendFrames().stopAndVerify()
+
+        val videoEncoderBitrateRange = recorder.videoEncoderBitrateRange.fetchData().get()!!
+        assertThat(recorder.mFirstRecordingVideoBitrate)
+            .isIn(
+                com.google.common.collect.Range.closed(
+                    videoEncoderBitrateRange.lower,
+                    videoEncoderBitrateRange.upper,
+                )
+            )
+    }
+
+    private fun createTempFile(): File = temporaryFolder.newFile()
+
+    private fun createFileOutputOptions(
+        file: File = createTempFile(),
+        fileSizeLimit: Long? = null,
+        durationLimitMillis: Long? = null,
+    ): FileOutputOptions =
+        FileOutputOptions.Builder(file)
+            .apply {
+                fileSizeLimit?.let { setFileSizeLimit(it) }
+                durationLimitMillis?.let { setDurationLimitMillis(it) }
+            }
+            .build()
+
+    private fun setUpFakeMediaContentProvider(dataPath: File?): FakeMediaContentProvider =
+        Robolectric.setupContentProvider(FakeMediaContentProvider::class.java, AUTHORITY).apply {
+            this.dataPath = dataPath?.absolutePath
+        }
+
+    private fun createMediaStoreOutputOptions(): MediaStoreOutputOptions =
+        MediaStoreOutputOptions.Builder(context.contentResolver, COLLECTION_URI).build()
+
+    private fun startMediaStoreRecordingAndVerifyInvalidOutputOptions(
+        recorder: Recorder = createRecorder()
+    ): Recording.RecordingResult =
+        createRecording(recorder = recorder, outputOptions = createMediaStoreOutputOptions())
+            .start()
+            .sendFrames()
+            .verifyFinalize(error = ERROR_INVALID_OUTPUT_OPTIONS)
+
+    /**
+     * Creates a [VideoEncoderFactory] that records every encoder that has been started into
+     * [startedEncoders], since [FakeEncoder.isStarted] is reset once the encoder is released.
+     */
+    private fun createStartTrackingVideoEncoderFactory(
+        startedEncoders: MutableList<FakeEncoder>,
+        onEncoderCreated: () -> Unit = {},
+    ): VideoEncoderFactory = FakeVideoEncoderFactory { _, config ->
+        lateinit var encoder: FakeEncoder
+        encoder =
+            FakeEncoder(
+                encoderInfo = FakeVideoEncoderInfo(supportedBitrateRange = Range(1, 100_000_000)),
+                encoderConfig = config,
+                onStateChanged = { isActive ->
+                    if (isActive && encoder !in startedEncoders) {
+                        startedEncoders.add(encoder)
+                    }
+                },
+            )
+        latestVideoEncoder = encoder
+        onEncoderCreated()
+        encoder
+    }
+
+    /** Creates a [VideoEncoderFactory] that fails to create an encoder when [shouldFail]. */
+    private fun createVideoEncoderFactory(shouldFail: () -> Boolean): VideoEncoderFactory =
+        FakeVideoEncoderFactory { _, config ->
+            if (shouldFail()) {
+                throw InvalidConfigException("Create video encoder fail on purpose.")
+            }
+            FakeEncoder(
+                    encoderInfo =
+                        FakeVideoEncoderInfo(supportedBitrateRange = Range(1, 100_000_000)),
+                    encoderConfig = config,
+                )
+                .also { latestVideoEncoder = it }
+        }
+
+    /**
+     * Creates a video encoder factory that records the callbacks the [Recorder] sets on the video
+     * encoders, so that a test can deliver its own [EncodedData] and check that it's closed.
+     */
+    private fun createCallbackCapturingVideoEncoderFactory(
+        callbacks: MutableList<Pair<EncoderCallback, Executor>>
+    ): VideoEncoderFactory = FakeVideoEncoderFactory { _, config ->
+        val fakeEncoder =
+            FakeEncoder(
+                    encoderInfo =
+                        FakeVideoEncoderInfo(supportedBitrateRange = Range(1, 100_000_000)),
+                    encoderConfig = config,
+                )
+                .also { latestVideoEncoder = it }
+        object : Encoder by fakeEncoder {
+            override fun setEncoderCallback(encoderCallback: EncoderCallback, executor: Executor) {
+                callbacks.add(encoderCallback to executor)
+                fakeEncoder.setEncoderCallback(encoderCallback, executor)
+            }
+        }
+    }
+
+    private fun Pair<EncoderCallback, Executor>.deliver(encodedData: EncodedData) {
+        val (callback, executor) = this
+        executor.execute { callback.onEncodedData(encodedData) }
+    }
+
+    private fun createVideoEncodedData(isKeyFrame: Boolean): FakeEncodedData {
+        currentTimestampUs += 100_000L
+        val bufferInfo =
+            MediaCodec.BufferInfo().apply {
+                set(
+                    0,
+                    1024,
+                    currentTimestampUs,
+                    if (isKeyFrame) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0,
+                )
+            }
+        return FakeEncodedData(ByteBuffer.allocateDirect(1024), bufferInfo)
+    }
+
+    private fun createFailingVideoEncoderFactory(failCreationTimes: Int = 2): VideoEncoderFactory {
+        var createEncoderRequestCount = 0
+        return FakeVideoEncoderFactory { _, _ ->
+            if (createEncoderRequestCount < failCreationTimes) {
+                createEncoderRequestCount++
+                throw InvalidConfigException("Create video encoder fail on purpose.")
+            } else {
+                FakeEncoder().also { latestVideoEncoder = it }
+            }
+        }
+    }
+
+    private fun Recorder.sendSurfaceRequest(
+        resolution: Size = Size(640, 480),
+        sessionType: Int = SESSION_TYPE_REGULAR,
+    ): SurfaceRequest {
+        latestSurfaceRequest?.deferrableSurface?.close()
+        idleMainLooper()
+        val request =
+            SurfaceRequest(
+                resolution,
+                fakeCamera,
+                /* isPrimary= */ true,
+                DynamicRange.SDR,
+                sessionType,
+                FRAME_RATE_RANGE_UNSPECIFIED,
+            ) {}
+        latestSurfaceRequest = request
+        surfaceRequestsToClose.add(request)
+        onSurfaceRequested(request)
+        idleMainLooper()
+        return request
+    }
+
+    private fun createRecorder(
+        sendSurfaceRequest: Boolean = true,
+        initSourceState: VideoOutput.SourceState = ACTIVE_STREAMING,
+        videoEncoderFactory: VideoEncoderFactory? = null,
+        audioEncoderFactory: AudioEncoderFactory? = null,
+        muxerFactory: MuxerFactory? = null,
+        outputStorageFactory: OutputStorage.Factory? = null,
+        audioStreamFactory: AudioStreamFactory? = null,
+        targetBitrate: Int? = null,
+        retrySetupVideoMaxCount: Int? = null,
+        retrySetupVideoDelayMs: Long? = null,
+        audioSource: Int? = null,
+        requiredFreeStorageBytes: Long? = null,
+        audioProcessors: List<AudioProcessor>? = null,
+    ): Recorder {
+        val defaultVideoEncoderFactory = FakeVideoEncoderFactory { _, config ->
+            FakeEncoder(
+                    encoderInfo =
+                        FakeVideoEncoderInfo(supportedBitrateRange = Range(1, 100_000_000)),
+                    encoderConfig = config,
+                )
+                .also { latestVideoEncoder = it }
+        }
+        val defaultAudioEncoderFactory = FakeAudioEncoderFactory { _, _ ->
+            createFakeAudioEncoder()
+        }
+        val defaultOutputStorageFactory =
+            object : OutputStorage.Factory {
+                override fun create(outputOptions: OutputOptions): OutputStorage =
+                    object : OutputStorage {
+                        override fun getOutputOptions(): OutputOptions = outputOptions
+
+                        override fun getAvailableBytes(): Long = Long.MAX_VALUE
+                    }
+            }
+        val defaultAudioStreamFactory = AudioStreamFactory { _, _ -> createFakeAudioStream() }
+        val recorder =
+            Recorder.Builder()
+                .setExecutor(mainThreadExecutor())
+                .setVideoEncoderFactory(videoEncoderFactory ?: defaultVideoEncoderFactory)
+                .setAudioEncoderFactory(audioEncoderFactory ?: defaultAudioEncoderFactory)
+                .setMuxerFactory(muxerFactory ?: MuxerFactory { NoOpMuxer() })
+                .setOutputStorageFactory(outputStorageFactory ?: defaultOutputStorageFactory)
+                .setAudioStreamFactory(audioStreamFactory ?: defaultAudioStreamFactory)
+                .apply {
+                    targetBitrate?.let { setTargetVideoEncodingBitRate(it) }
+                    audioSource?.let { setAudioSource(it) }
+                    requiredFreeStorageBytes?.let { setRequiredFreeStorageBytes(it) }
+                    audioProcessors?.let { setAudioProcessors(it) }
+                }
+                .build()
+                .apply {
+                    retrySetupVideoMaxCount?.let { sRetrySetupVideoMaxCount = it }
+                    retrySetupVideoDelayMs?.let { sRetrySetupVideoDelayMs = it }
+                }
+        recordersToRelease.add(recorder)
+        if (sendSurfaceRequest) {
+            recorder.sendSurfaceRequest()
+        }
+        recorder.onSourceStateChanged(initSourceState)
+        idleMainLooper()
+        return recorder
+    }
+
+    private fun createFakeAudioEncoder(): FakeEncoder {
+        val byteBufferInput = FakeByteBufferInput()
+        return FakeEncoder(
+                encoderInput = byteBufferInput,
+                onStateChanged = { isActive ->
+                    byteBufferInput.setState(
+                        if (isActive) BufferProvider.State.ACTIVE else BufferProvider.State.INACTIVE
+                    )
+                },
+            )
+            .also { latestAudioEncoder = it }
+    }
+
+    private fun createRecording(
+        recorder: Recorder = createRecorder(),
+        outputOptions: OutputOptions = createFileOutputOptions(),
+        withAudio: Boolean = false,
+        initialAudioMuted: Boolean = false,
+        asPersistentRecording: Boolean = false,
+    ): Recording =
+        recordingSession.createRecording(
+            recorder = recorder,
+            outputOptions = outputOptions,
+            withAudio = withAudio,
+            initialAudioMuted = initialAudioMuted,
+            asPersistentRecording = asPersistentRecording,
+        )
+
+    private fun idle(recorder: Recorder) {
+        idleMainLooper()
+        recorder.mAudioSource?.let { audioSource ->
+            repeat(2) {
+                val latch = CountDownLatch(1)
+                audioSource.executor.execute { latch.countDown() }
+                latch.await(1, TimeUnit.SECONDS)
+                idleMainLooper()
+            }
+        }
+    }
+
+    private fun Recording.sendFrames(
+        count: Int = 1,
+        size: Int = 1024,
+        stepUs: Long = 100_000L,
+    ): Recording {
+        repeat(count) {
+            if (latestVideoEncoder?.isStarted != true) return@repeat
+            currentTimestampUs += stepUs
+            latestVideoEncoder?.sendEncodedData(
+                size = size,
+                presentationTimeUs = currentTimestampUs,
+                isKeyFrame = true,
+            )
+            if (withAudio && latestAudioEncoder?.isStarted == true) {
+                latestAudioEncoder?.sendEncodedData(
+                    size = 512,
+                    presentationTimeUs = currentTimestampUs,
+                    isKeyFrame = false,
+                )
+            }
+            idle(recorder)
+        }
+        return this
+    }
+
+    private fun createFakeAudioStream(): FakeAudioStream =
+        FakeAudioStream(
+            audioDataProvider = { index ->
+                val byteBuffer = ByteBuffer.allocate(1024).put(0, 10.toByte())
+                FakeAudioStream.AudioData(byteBuffer, index * 10_000_000L)
+            },
+            readDelayMs = 1,
+        )
+
+    private class NoOpAudioProcessor : PassthroughAudioProcessor() {
+        override fun onAudioBuffer(audioBuffer: ByteBuffer) {}
+    }
+
+    /** An [AudioProcessor] that always fails, which makes the audio source report an error. */
+    private class FailingAudioProcessor : PassthroughAudioProcessor() {
+        override fun onAudioBuffer(audioBuffer: ByteBuffer) {
+            throw RuntimeException("Audio processing fail on purpose.")
+        }
+    }
+
+    /**
+     * An [Encoder] that can hold back [stop] so a test controls when the encoder stops.
+     *
+     * Like `EncoderImpl`, [release] while the stop is held back is deferred until the encoder
+     * stops.
+     */
+    private class StopDeferringEncoder(private val delegate: FakeEncoder) : Encoder by delegate {
+        var deferStop = false
+        private var deferredStopTimeUs: Long? = null
+        private var isReleaseDeferred = false
+
+        override fun stop(expectedStopTimeUs: Long) {
+            if (deferStop) {
+                deferredStopTimeUs = expectedStopTimeUs
+            } else {
+                delegate.stop(expectedStopTimeUs)
+            }
+        }
+
+        override fun release() {
+            if (deferredStopTimeUs != null) {
+                isReleaseDeferred = true
+            } else {
+                delegate.release()
+            }
+        }
+
+        fun completeDeferredStop() {
+            val stopTimeUs = checkNotNull(deferredStopTimeUs) { "stop() was not called." }
+            deferredStopTimeUs = null
+            delegate.stop(stopTimeUs)
+            if (isReleaseDeferred) {
+                isReleaseDeferred = false
+                delegate.release()
+            }
+        }
+    }
+
+    private companion object {
+        private const val VERIFY_AUDIO_STREAM_TIMEOUT_MS = 10_000L
+        private const val RETRY_SETUP_VIDEO_DELAY_MS = 10L
+    }
+}

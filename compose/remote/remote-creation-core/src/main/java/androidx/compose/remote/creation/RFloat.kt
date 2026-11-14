@@ -64,7 +64,7 @@ public operator fun Float.rem(v: RFloat): RFloat {
 }
 
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-public class RFloat : Number {
+open public class RFloat : Number {
     public var array: FloatArray = floatArrayOf()
     public var id: Float = 0f // if 0 it has not been sent
     public var writer: RemoteComposeWriter? = null
@@ -131,8 +131,12 @@ public class RFloat : Number {
         return toInt().toChar()
     }
 
-    public operator fun unaryPlus(): RFloat {
+    public operator fun unaryMinus(): RFloat {
         return RFloat(writer, floatArrayOf(*toArray(this), -1f, Rc.FloatExpression.MUL))
+    }
+
+    public operator fun unaryPlus(): RFloat {
+        return this
     }
 
     public operator fun rem(v: Float): RFloat {
@@ -197,12 +201,18 @@ public class RFloat : Number {
         return RFloat(writer, floatArrayOf(*toArray(this), *toArray(v), Rc.FloatExpression.DIV))
     }
 
-    public operator fun get(v: RFloat): RFloat {
-        return RFloat(writer, floatArrayOf(*toArray(v), *toArray(this), Rc.FloatExpression.A_DEREF))
+    public operator fun get(index: RFloat): RFloat {
+        return RFloat(
+            writer,
+            floatArrayOf(*toArray(this), *toArray(index), Rc.FloatExpression.A_DEREF),
+        )
     }
 
-    public operator fun get(v: Int): RFloat {
-        return RFloat(writer, floatArrayOf(v.toFloat(), *toArray(this), Rc.FloatExpression.A_DEREF))
+    public operator fun get(index: Int): RFloat {
+        return RFloat(
+            writer,
+            floatArrayOf(*toArray(this), index.toFloat(), Rc.FloatExpression.A_DEREF),
+        )
     }
 
     public companion object {
@@ -224,8 +234,8 @@ public class RFloat : Number {
     }
 
     public fun genTextId(
-        before: Int = 2,
-        after: Int = 1,
+        before: Short = 2,
+        after: Short = 1,
         flags: Int = Rc.TextFromFloat.PAD_AFTER_ZERO,
     ): Int {
         val w = writer
@@ -327,12 +337,28 @@ public fun log(a: RFloat): RFloat {
     return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.LOG))
 }
 
+public fun log2(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.LOG2))
+}
+
 public fun ln(a: RFloat): RFloat {
     return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.LN))
 }
 
 public fun round(a: RFloat): RFloat {
     return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.ROUND))
+}
+
+public fun inverse(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.INV))
+}
+
+public fun fraction(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.FRACT))
+}
+
+public fun square(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.SQUARE))
 }
 
 /** Math.sin(a) */
@@ -464,7 +490,7 @@ public fun pingPong(max: Number, x: Number): RFloat {
     val maxr = max as? RFloat ?: RFloat(null, max.toFloat())
     var writer = xr.writer
     if (writer == null) {
-        writer = xr.writer
+        writer = maxr.writer
     }
 
     if (writer == null) {
@@ -574,6 +600,58 @@ public fun cubic(x1: Number, x2: Number, y1: Number, y2: Number, value: Number):
     )
 }
 
+/* ==================== Array operations ================== */
+
+/** maximum value of an array */
+public fun arrayMax(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_MAX))
+}
+
+/** The minimum value of an array */
+public fun arrayMin(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_MIN))
+}
+
+/** the sum of the values of an array */
+public fun arraySum(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_SUM))
+}
+
+/** the sum of the values of an array up to index */
+public fun arraySum(a: RFloat, index: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, *index.array, Rc.FloatExpression.A_SUM_UNTIL))
+}
+
+@Suppress("RestrictedApiAndroidX")
+public fun arraySumXY(a: RFloat, b: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, *b.array, Rc.FloatExpression.A_SUM_XY))
+}
+
+@Suppress("RestrictedApiAndroidX")
+public fun arraySumSqr(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_SUM_SQR))
+}
+
+/** the avg values of an array */
+public fun arrayAvg(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_AVG))
+}
+
+/** the length of an array */
+public fun arrayLength(a: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, Rc.FloatExpression.A_LEN))
+}
+
+/** treat the array as a spline and get a value 0 = start 1 = end */
+public fun arraySpline(a: RFloat, pos: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, *pos.array, Rc.FloatExpression.A_SPLINE))
+}
+
+/** treat the array as a spline that loops and get a value 0 = start 1 = start & end */
+public fun splineLoop(a: RFloat, pos: RFloat): RFloat {
+    return RFloat(a.writer, floatArrayOf(*a.array, *pos.array, Rc.FloatExpression.A_SPLINE_LOOP))
+}
+
 /** hours run from Midnight=0 quantized to Hours 0-23 */
 public fun RemoteComposeWriter.Hour(): RFloat {
     return RFloat(this, FLOAT_TIME_IN_HR)
@@ -624,6 +702,36 @@ public fun RemoteComposeWriter.ComponentHeight(): RFloat {
     return RFloat(this, addComponentHeightValue())
 }
 
+/** Content Width */
+public fun RemoteComposeWriter.ComponentContentWidth(): RFloat {
+    return RFloat(this, addComponentContentWidthValue())
+}
+
+/** Content Height */
+public fun RemoteComposeWriter.ComponentContentHeight(): RFloat {
+    return RFloat(this, addComponentContentHeightValue())
+}
+
+/** X */
+public fun RemoteComposeWriter.ComponentX(): RFloat {
+    return RFloat(this, addComponentXValue())
+}
+
+/** Y */
+public fun RemoteComposeWriter.ComponentY(): RFloat {
+    return RFloat(this, addComponentYValue())
+}
+
+/** ROOT X */
+public fun RemoteComposeWriter.ComponentRootX(): RFloat {
+    return RFloat(this, addComponentRootXValue())
+}
+
+/** ROOT Y */
+public fun RemoteComposeWriter.ComponentRootY(): RFloat {
+    return RFloat(this, addComponentRootYValue())
+}
+
 /** generate random number */
 public fun RemoteComposeWriter.rand(): RFloat {
     return RFloat(this, Rc.FloatExpression.RAND)
@@ -651,7 +759,7 @@ public fun RemoteComposeWriter.windowWidth(): RFloat {
 
 /** The height of the document on screen */
 public fun RemoteComposeWriter.windowHeight(): RFloat {
-    return RFloat(this, Rc.System.WINDOW_WIDTH)
+    return RFloat(this, Rc.System.WINDOW_HEIGHT)
 }
 
 public val RemoteComposeWriter.var1: RFloat

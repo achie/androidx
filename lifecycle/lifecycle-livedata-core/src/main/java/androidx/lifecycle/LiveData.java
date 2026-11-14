@@ -134,7 +134,7 @@ public abstract class LiveData<T> {
         observer.mObserver.onChanged((T) mData);
     }
 
-    @SuppressWarnings("WeakerAccess") /* synthetic access */
+    @SuppressWarnings({"WeakerAccess", "ExposedPrivateType"}) /* synthetic access */
     void dispatchingValue(@Nullable ObserverWrapper initiator) {
         if (mDispatchingValue) {
             mDispatchInvalidated = true;
@@ -282,6 +282,7 @@ public abstract class LiveData<T> {
      *
      * @param value The new value
      */
+    @SuppressWarnings("ReferenceEquality")
     protected void postValue(T value) {
         boolean postTask;
         synchronized (mDataLock) {
@@ -318,7 +319,7 @@ public abstract class LiveData<T> {
      *
      * @return the current value or null if {@link #isInitialized()} is false
      */
-    @SuppressWarnings({"unchecked", "GetterSetterNullability"})
+    @SuppressWarnings({"unchecked", "GetterSetterNullability", "ReferenceEquality"})
     public @Nullable T getValue() {
         Object data = mData;
         if (data != NOT_SET) {
@@ -337,6 +338,7 @@ public abstract class LiveData<T> {
      *
      * @return whether an explicit value has been set on this LiveData
      */
+    @SuppressWarnings("ReferenceEquality")
     public boolean isInitialized() {
         return mData != NOT_SET;
     }
@@ -412,7 +414,7 @@ public abstract class LiveData<T> {
         }
     }
 
-    class LifecycleBoundObserver extends ObserverWrapper implements LifecycleEventObserver {
+    private class LifecycleBoundObserver extends ObserverWrapper implements LifecycleEventObserver {
         final @NonNull LifecycleOwner mOwner;
 
         LifecycleBoundObserver(@NonNull LifecycleOwner owner, Observer<? super T> observer) {
@@ -441,6 +443,7 @@ public abstract class LiveData<T> {
             }
         }
 
+        @SuppressWarnings("ReferenceEquality")
         @Override
         boolean isAttachedTo(LifecycleOwner owner) {
             return mOwner == owner;

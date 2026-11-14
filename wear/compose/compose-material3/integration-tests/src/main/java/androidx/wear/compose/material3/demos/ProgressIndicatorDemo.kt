@@ -59,6 +59,7 @@ import androidx.wear.compose.material3.StepperDefaults
 import androidx.wear.compose.material3.SwitchButton
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.samples.CircularProgressIndicatorCustomAnimationSample
+import androidx.wear.compose.material3.samples.ComponentSuppressStatusBarSample
 import androidx.wear.compose.material3.samples.FullScreenProgressIndicatorSample
 import androidx.wear.compose.material3.samples.IndeterminateProgressArcSample
 import androidx.wear.compose.material3.samples.IndeterminateProgressIndicatorSample
@@ -78,6 +79,9 @@ val ProgressIndicatorDemos =
             listOf(
                 ComposableDemo("Full screen") {
                     Centralize { FullScreenProgressIndicatorSample() }
+                },
+                ComposableDemo("Full screen (status bar suppression)") {
+                    Centralize { ComponentSuppressStatusBarSample() }
                 },
                 ComposableDemo("Media button wrapping") {
                     Centralize { MediaButtonProgressIndicatorSample() }
@@ -149,7 +153,9 @@ val ProgressIndicatorDemos =
                 ComposableDemo("Linear Samples") {
                     Centralize { LinearProgressIndicatorSamples() }
                 },
-                ComposableDemo("Animation") { Centralize { LinearProgressIndicatorAnimatedDemo() } },
+                ComposableDemo("Animation") {
+                    Centralize { LinearProgressIndicatorAnimatedDemo() }
+                },
             ),
         ),
         Material3DemoCategory(

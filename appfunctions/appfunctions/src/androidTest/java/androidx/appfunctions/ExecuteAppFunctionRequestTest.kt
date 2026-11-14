@@ -16,12 +16,14 @@
 
 package androidx.appfunctions
 
+import android.app.AppInteractionAttribution
 import android.os.Build
 import android.os.Bundle
 import androidx.appfunctions.ExecuteAppFunctionRequest.Companion.EXTRA_PARAMETERS
-import androidx.appfunctions.ExecuteAppFunctionRequest.Companion.EXTRA_USE_JETPACK_SCHEMA
+import androidx.appfunctions.ExecuteAppFunctionRequest.Companion.toCompatExecuteAppFunctionRequest
 import androidx.appfunctions.metadata.AppFunctionComponentsMetadata
 import androidx.appfunctions.metadata.AppFunctionMetadata
+import androidx.appfunctions.metadata.AppFunctionPackageMetadata
 import androidx.appfunctions.metadata.AppFunctionParameterMetadata
 import androidx.appfunctions.metadata.AppFunctionResponseMetadata
 import androidx.appfunctions.metadata.AppFunctionStringTypeMetadata
@@ -43,7 +45,6 @@ class ExecuteAppFunctionRequestTest {
         assertThat(platformRequest.functionIdentifier).isEqualTo("method")
         assertThat(platformRequest.parameters).isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
         assertThat(platformRequest.extras.getBundle(EXTRA_PARAMETERS)?.isEmpty()).isTrue()
-        assertThat(platformRequest.extras.getBoolean(EXTRA_USE_JETPACK_SCHEMA)).isTrue()
 
         // Test with extras set
         val bundle = Bundle()
@@ -63,15 +64,20 @@ class ExecuteAppFunctionRequestTest {
 
     @Test
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
-    fun toPlatformClass_success() {
+    fun toPlatformExecuteAppFunctionRequest_success() {
         val request = ExecuteAppFunctionRequest("pkg", "method", TEST_APP_FUNCTION_DATA)
-        val platformRequest = request.toPlatformClass()
+        val platformRequest = request.toPlatformExecuteAppFunctionRequest()
 
         assertThat(platformRequest.targetPackageName).isEqualTo("pkg")
         assertThat(platformRequest.functionIdentifier).isEqualTo("method")
         assertThat(platformRequest.parameters).isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
         assertThat(platformRequest.extras.getBundle(EXTRA_PARAMETERS)?.isEmpty()).isTrue()
-        assertThat(platformRequest.extras.getBoolean(EXTRA_USE_JETPACK_SCHEMA)).isTrue()
+        assertThat(
+                platformRequest.extras.getBoolean(
+                    "com.android.extensions.safetyevaluator.events.extra.ENABLE_APP_FUNCTION_EVALUATION"
+                )
+            )
+            .isFalse()
 
         // Test with extras set
         val bundle = Bundle()
@@ -80,13 +86,59 @@ class ExecuteAppFunctionRequestTest {
             AppFunctionData(TEST_APP_FUNCTION_DATA.genericDocument, bundle)
         val requestWithExtras =
             ExecuteAppFunctionRequest("pkg2", "method2", appFunctionDataWithExtras)
-        val platformRequestWithExtras = requestWithExtras.toPlatformClass()
+        val platformRequestWithExtras = requestWithExtras.toPlatformExecuteAppFunctionRequest()
 
         assertThat(platformRequestWithExtras.targetPackageName).isEqualTo("pkg2")
         assertThat(platformRequestWithExtras.functionIdentifier).isEqualTo("method2")
         assertThat(platformRequestWithExtras.parameters)
             .isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
         assertThat(platformRequestWithExtras.extras.getBundle(EXTRA_PARAMETERS)).isEqualTo(bundle)
+        assertThat(
+                platformRequest.extras.getBoolean(
+                    "com.android.extensions.safetyevaluator.events.extra.ENABLE_APP_FUNCTION_EVALUATION"
+                )
+            )
+            .isFalse()
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.CINNAMON_BUN)
+    fun toPlatformExecuteAppFunctionRequestWithAttribution_success() {
+        val request = ExecuteAppFunctionRequest("pkg", "method", TEST_APP_FUNCTION_DATA)
+        val platformRequest = request.toPlatformExecuteAppFunctionRequest()
+
+        assertThat(platformRequest.targetPackageName).isEqualTo("pkg")
+        assertThat(platformRequest.functionIdentifier).isEqualTo("method")
+        assertThat(platformRequest.parameters).isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
+        assertThat(platformRequest.extras.getBundle(EXTRA_PARAMETERS)?.isEmpty()).isTrue()
+        assertThat(platformRequest.attribution).isNull()
+        assertThat(platformRequest.activityId).isNull()
+
+        // Test with attribution set
+        val attribution =
+            AppInteractionAttribution.Builder(AppInteractionAttribution.INTERACTION_TYPE_USER_QUERY)
+                .build()
+        val binder = android.os.Binder()
+        val activityId = Api37Impl.createAppFunctionActivityId(binder)
+        val requestWithAttribution =
+            ExecuteAppFunctionRequest(
+                "pkg2",
+                "method2",
+                TEST_APP_FUNCTION_DATA,
+                attribution,
+                activityId,
+            )
+        val platformRequestWithAttribution =
+            requestWithAttribution.toPlatformExecuteAppFunctionRequest()
+
+        assertThat(platformRequestWithAttribution.targetPackageName).isEqualTo("pkg2")
+        assertThat(platformRequestWithAttribution.functionIdentifier).isEqualTo("method2")
+        assertThat(platformRequestWithAttribution.parameters)
+            .isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
+        assertThat(platformRequestWithAttribution.extras.getBundle(EXTRA_PARAMETERS)?.isEmpty())
+            .isTrue()
+        assertThat(platformRequestWithAttribution.attribution).isEqualTo(attribution)
+        assertThat(platformRequestWithAttribution.activityId).isEqualTo(activityId)
     }
 
     @Test
@@ -109,60 +161,70 @@ class ExecuteAppFunctionRequestTest {
         assertThat(request.functionParameters.genericDocument)
             .isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
         assertThat(request.functionParameters.extras.isEmpty).isTrue()
-        assertThat(request.useJetpackSchema).isFalse()
     }
 
     @Test
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
-    fun fromPlatformClass_success() {
+    fun toCompatExecuteAppFunctionRequest_success() {
         val platformRequest =
             android.app.appfunctions.ExecuteAppFunctionRequest.Builder("pkg", "method")
                 .setParameters(TEST_APP_FUNCTION_DATA.genericDocument)
                 .build()
 
-        val request =
-            ExecuteAppFunctionRequest.fromPlatformClass(platformRequest, TEST_APP_FUNCTION_METADATA)
+        val request = platformRequest.toCompatExecuteAppFunctionRequest(TEST_APP_FUNCTION_METADATA)
 
         assertThat(request.targetPackageName).isEqualTo("pkg")
         assertThat(request.functionIdentifier).isEqualTo("method")
         assertThat(request.functionParameters.genericDocument)
             .isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
         assertThat(request.functionParameters.extras.isEmpty).isTrue()
-        assertThat(request.useJetpackSchema).isFalse()
     }
 
     @Test
-    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.TIRAMISU)
-    fun fromPlatformExtensionClass_fromJetPackInExtrasIsTrue_fromJetPackIsTrue() {
-        assumeAppFunctionExtensionLibraryAvailable()
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.CINNAMON_BUN)
+    fun toCompatExecuteAppFunctionRequestWithAttribution_success() {
+        val attribution =
+            AppInteractionAttribution.Builder(AppInteractionAttribution.INTERACTION_TYPE_USER_QUERY)
+                .build()
+        val binder = android.os.Binder()
+        val activityId = Api37Impl.createAppFunctionActivityId(binder)
         val platformRequest =
-            com.android.extensions.appfunctions.ExecuteAppFunctionRequest.Builder("pkg", "method")
+            android.app.appfunctions.ExecuteAppFunctionRequest.Builder("pkg", "method")
                 .setParameters(TEST_APP_FUNCTION_DATA.genericDocument)
-                .setExtras(Bundle().apply { putBoolean(EXTRA_USE_JETPACK_SCHEMA, true) })
+                .setAttribution(attribution)
+                .setActivityId(activityId)
                 .build()
 
-        val request =
-            ExecuteAppFunctionRequest.fromPlatformExtensionClass(
-                platformRequest,
-                TEST_APP_FUNCTION_METADATA,
-            )
+        val request = platformRequest.toCompatExecuteAppFunctionRequest(TEST_APP_FUNCTION_METADATA)
 
-        assertThat(request.useJetpackSchema).isTrue()
+        assertThat(request.targetPackageName).isEqualTo("pkg")
+        assertThat(request.functionIdentifier).isEqualTo("method")
+        assertThat(request.functionParameters.genericDocument)
+            .isEqualTo(TEST_APP_FUNCTION_DATA.genericDocument)
+        assertThat(request.functionParameters.extras.isEmpty).isTrue()
+        assertThat(request.attribution).isEqualTo(attribution)
+        assertThat(request.activityId).isEqualTo(activityId)
     }
 
     @Test
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.BAKLAVA)
-    fun fromPlatformClass_fromJetPackInExtrasIsTrue_fromJetPackIsTrue() {
-        val platformRequest =
-            android.app.appfunctions.ExecuteAppFunctionRequest.Builder("pkg", "method")
-                .setParameters(TEST_APP_FUNCTION_DATA.genericDocument)
-                .setExtras(Bundle().apply { putBoolean(EXTRA_USE_JETPACK_SCHEMA, true) })
-                .build()
-
+    fun enableSafetyEvaluation_shouldSetExtraInPlatformBundle() {
         val request =
-            ExecuteAppFunctionRequest.fromPlatformClass(platformRequest, TEST_APP_FUNCTION_METADATA)
+            ExecuteAppFunctionRequest(
+                "pkg",
+                "method",
+                TEST_APP_FUNCTION_DATA,
+                enableSafetyEvaluation = true,
+            )
 
-        assertThat(request.useJetpackSchema).isTrue()
+        val platformRequest = request.toPlatformExecuteAppFunctionRequest()
+
+        assertThat(
+                platformRequest.extras.getBoolean(
+                    "com.android.extensions.safetyevaluator.events.extra.ENABLE_APP_FUNCTION_EVALUATION"
+                )
+            )
+            .isTrue()
     }
 
     private fun assumeAppFunctionExtensionLibraryAvailable() {
@@ -171,6 +233,24 @@ class ExecuteAppFunctionRequestTest {
             return
         } catch (e: ClassNotFoundException) {
             throw AssumptionViolatedException("Unable to find AppFunction extension library", e)
+        }
+    }
+
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.CINNAMON_BUN)
+    private object Api37Impl {
+        fun createAppFunctionActivityId(
+            binder: android.os.IBinder
+        ): android.app.appfunctions.AppFunctionActivityId {
+            val parcel = android.os.Parcel.obtain()
+            try {
+                parcel.writeStrongBinder(binder)
+                parcel.setDataPosition(0)
+                return android.app.appfunctions.AppFunctionActivityId.CREATOR.createFromParcel(
+                    parcel
+                )
+            } finally {
+                parcel.recycle()
+            }
         }
     }
 
@@ -191,13 +271,16 @@ class ExecuteAppFunctionRequestTest {
 
         val TEST_APP_FUNCTION_METADATA =
             AppFunctionMetadata(
-                id = "method",
-                packageName = "pkg",
-                isEnabled = true,
+                name = AppFunctionName(packageName = "pkg", functionIdentifier = "method"),
                 schema = null,
                 parameters = TEST_PARAMETERS,
                 response = AppFunctionResponseMetadata(valueType = AppFunctionUnitTypeMetadata()),
-                components = AppFunctionComponentsMetadata(),
+                packageMetadata =
+                    AppFunctionPackageMetadata(
+                        packageName = "pkg",
+                        components = AppFunctionComponentsMetadata(),
+                    ),
+                scope = AppFunctionMetadata.SCOPE_GLOBAL,
             )
     }
 }

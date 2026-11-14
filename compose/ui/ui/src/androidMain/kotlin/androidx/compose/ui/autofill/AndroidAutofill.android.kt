@@ -26,9 +26,9 @@ import android.view.autofill.AutofillManager
 import android.view.autofill.AutofillValue
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.internal.checkPreconditionNotNull
-import androidx.compose.ui.platform.coreshims.ViewCompatShims
 import androidx.compose.ui.util.fastMap
 import androidx.compose.ui.util.fastRoundToInt
+import androidx.core.view.ViewCompat
 
 /**
  * Autofill implementation for Android.
@@ -42,15 +42,24 @@ internal class AndroidAutofill(
     val autofillTree: @Suppress("Deprecation") AutofillTree,
 ) : @Suppress("Deprecation") Autofill {
 
-    val autofillManager =
-        view.context.getSystemService(AutofillManager::class.java)
-            ?: error("Autofill service could not be located.")
+    private var _autofillManager: AutofillManager? = null
+    val autofillManager: AutofillManager
+        get() {
+            var value = _autofillManager
+            if (value == null) {
+                value =
+                    view.context.getSystemService(AutofillManager::class.java)
+                        ?: error("Could not locate AutofillManager from context")
+                _autofillManager = value
+            }
+            return value
+        }
+
     var rootAutofillId: AutofillId
 
     init {
         view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
-        rootAutofillId =
-            checkPreconditionNotNull(ViewCompatShims.getAutofillId(view)?.toAutofillId())
+        rootAutofillId = checkPreconditionNotNull(ViewCompat.getAutofillId(view)?.toAutofillId())
     }
 
     override fun requestAutofillForNode(autofillNode: @Suppress("Deprecation") AutofillNode) {

@@ -18,7 +18,7 @@ package androidx.ink.authoring.latency.aggregators
 
 import androidx.annotation.RestrictTo
 import androidx.annotation.UiThread
-import androidx.ink.authoring.ExperimentalLatencyDataApi
+import androidx.ink.authoring.ExperimentalInkLatencyDataApi
 import kotlinx.coroutines.Job
 
 /**
@@ -35,15 +35,15 @@ import kotlinx.coroutines.Job
  * scope passed into the factory function for the chosen concrete subclass, or call
  * `job().cancelAndJoin()`.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // NonPublicApi
-@ExperimentalLatencyDataApi
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
+@ExperimentalInkLatencyDataApi
 public interface LatencyAggregator {
     /**
      * Inserts a latency measurement between [startNanos] and [endNanos] into the pool of values to
      * be aggregated. These values are expected to be offsets from some consistent time base; e.g.,
      * device boot time or the Unix epoch.
      */
-    @UiThread public fun aggregate(startNanos: Long, endNanos: Long): Unit
+    @UiThread public fun aggregate(startNanos: Long, endNanos: Long)
 
     /**
      * For periodic aggregators, runs the reporting callback immediately and synchronously. For
@@ -57,7 +57,7 @@ public interface LatencyAggregator {
      * into at most one report, so the next report will not include any contribution from inputs
      * received prior to this call.
      */
-    @UiThread public fun reportSynchronously(): Unit
+    @UiThread public fun reportSynchronously()
 
     /** Returns the long-running [Job] for aggregation and reporting. */
     public fun job(): Job

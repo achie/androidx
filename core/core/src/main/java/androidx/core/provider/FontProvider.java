@@ -21,6 +21,7 @@ import android.content.ContentProviderClient;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
@@ -56,6 +57,8 @@ import java.util.Objects;
 
 class FontProvider {
     private FontProvider() {}
+
+    private static final String VARIABLE_FONT_QUERY_PARAM = "VF";
 
     static @NonNull FontFamilyResult getFontFamilyResult(@NonNull Context context,
             @NonNull List<FontRequest> requests, @Nullable CancellationSignal cancellationSignal)
@@ -107,15 +110,23 @@ class FontProvider {
     }
 
     private static class ProviderCacheKey {
-        String mAuthority;
-        String mPackageName;
-        List<List<byte[]>> mCertificates;
+        private final String mAuthority;
+        private final String mPackageName;
+        private final int mCertificatesArray;
+        private final int mSystemCertificatesArray;
+        private final List<List<byte[]>> mCertificates;
+        private final List<List<byte[]>> mSystemCertificates;
 
-        ProviderCacheKey(String authority, String packageName,
-                List<List<byte[]>> certificates) {
+        ProviderCacheKey(@NonNull String authority, @NonNull String packageName,
+                int certificatesArray, int systemCertificatesArray,
+                @Nullable List<List<byte[]>> certificates,
+                @Nullable List<List<byte[]>> systemCertificates) {
             this.mAuthority = authority;
             this.mPackageName = packageName;
+            this.mCertificatesArray = certificatesArray;
+            this.mSystemCertificatesArray = systemCertificatesArray;
             this.mCertificates = certificates;
+            this.mSystemCertificates = systemCertificates;
         }
 
         @Override
@@ -123,14 +134,35 @@ class FontProvider {
             if (this == o) return true;
             if (!(o instanceof ProviderCacheKey)) return false;
             ProviderCacheKey that = (ProviderCacheKey) o;
-            return Objects.equals(mAuthority, that.mAuthority) && Objects.equals(
-                    mPackageName, that.mPackageName) && Objects.equals(mCertificates,
-                    that.mCertificates);
+            if (!mAuthority.equals(that.mAuthority) || !mPackageName.equals(that.mPackageName)) {
+                return false;
+            }
+            if (mCertificatesArray != that.mCertificatesArray
+                    || mSystemCertificatesArray != that.mSystemCertificatesArray) {
+                return false;
+            }
+            if (mCertificatesArray == 0
+                    && !equalsByteArrayLists(mCertificates, that.mCertificates)) {
+                return false;
+            }
+            if (mSystemCertificatesArray == 0
+                    && !equalsByteArrayLists(mSystemCertificates, that.mSystemCertificates)) {
+                return false;
+            }
+            return true;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(mAuthority, mPackageName, mCertificates);
+            int result = Objects.hash(mAuthority, mPackageName, mCertificatesArray,
+                    mSystemCertificatesArray);
+            if (mCertificatesArray == 0) {
+                result = 31 * result + hashByteArrayLists(mCertificates);
+            }
+            if (mSystemCertificatesArray == 0) {
+                result = 31 * result + hashByteArrayLists(mSystemCertificates);
+            }
+            return result;
         }
     }
 
@@ -163,13 +195,38 @@ class FontProvider {
             Trace.beginSection("FontProvider.getProvider");
         }
         try {
-            List<List<byte[]>> requestCertificatesList = getCertificates(request, resources);
-            ProviderCacheKey cacheKey = new ProviderCacheKey(request.getProviderAuthority(),
-                    request.getProviderPackage(), requestCertificatesList);
+            int certsArray = request.getCertificatesArrayResId();
+            int systemCertsArray = request.getSystemCertificatesArrayResId();
+            List<List<byte[]>> requestCertificatesList = null;
+            List<List<byte[]>> requestSystemCertificatesList = null;
+
+            if (certsArray == 0) {
+                requestCertificatesList = request.getCertificates();
+            }
+            if (systemCertsArray == 0) {
+                requestSystemCertificatesList = request.getSystemCertificates();
+            }
+
+            ProviderCacheKey cacheKey = new ProviderCacheKey(
+                    request.getProviderAuthority(),
+                    request.getProviderPackage(),
+                    certsArray,
+                    systemCertsArray,
+                    requestCertificatesList,
+                    requestSystemCertificatesList);
+
             ProviderInfo cachedPackageInfo = sProviderCache.get(cacheKey);
             if (cachedPackageInfo != null) {
                 return cachedPackageInfo;
             }
+
+            if (certsArray != 0) {
+                requestCertificatesList = getCertificates(request, resources);
+            }
+            if (systemCertsArray != 0) {
+                requestSystemCertificatesList = getSystemCertificates(request, resources);
+            }
+
             String providerAuthority = request.getProviderAuthority();
             ProviderInfo info = packageManager.resolveContentProvider(providerAuthority, 0);
             if (info == null) {
@@ -190,13 +247,34 @@ class FontProvider {
                     PackageManager.GET_SIGNATURES);
             signatures = convertToByteArrayList(packageInfo.signatures);
             Collections.sort(signatures, sByteArrayComparator);
-            for (int i = 0; i < requestCertificatesList.size(); ++i) {
-                // Make a copy so we can sort it without modifying the incoming data.
-                List<byte[]> requestSignatures = new ArrayList<>(requestCertificatesList.get(i));
-                Collections.sort(requestSignatures, sByteArrayComparator);
-                if (equalsByteArrayList(signatures, requestSignatures)) {
-                    sProviderCache.put(cacheKey, info);
-                    return info;
+            if (requestCertificatesList != null) {
+                for (int i = 0; i < requestCertificatesList.size(); ++i) {
+                    // Make a copy so we can sort it without modifying the incoming data.
+                    List<byte[]> requestSignatures = new ArrayList<>(
+                            requestCertificatesList.get(i));
+                    Collections.sort(requestSignatures, sByteArrayComparator);
+                    if (equalsByteArrayList(signatures, requestSignatures)) {
+                        sProviderCache.put(cacheKey, info);
+                        return info;
+                    }
+                }
+            }
+            if (requestSystemCertificatesList != null && !requestSystemCertificatesList.isEmpty()) {
+                ApplicationInfo appInfo = info.applicationInfo != null
+                        ? info.applicationInfo : packageInfo.applicationInfo;
+                boolean isSystemApp = appInfo != null
+                        && (appInfo.flags & (ApplicationInfo.FLAG_SYSTEM
+                        | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
+                if (isSystemApp) {
+                    for (int i = 0; i < requestSystemCertificatesList.size(); ++i) {
+                        List<byte[]> requestSignatures = new ArrayList<>(
+                                requestSystemCertificatesList.get(i));
+                        Collections.sort(requestSignatures, sByteArrayComparator);
+                        if (equalsByteArrayList(signatures, requestSignatures)) {
+                            sProviderCache.put(cacheKey, info);
+                            return info;
+                        }
+                    }
                 }
             }
             return null;
@@ -243,7 +321,7 @@ class FontProvider {
                 }
                 try {
                     cursor = queryWrapper.query(uri, projection, "query = ?",
-                            new String[]{request.getQuery()}, null, cancellationSignal);
+                            getSelectionArgs(request), null, cancellationSignal);
                 } finally {
                     if (TypefaceCompat.DOWNLOADABLE_FONT_TRACING) {
                         Trace.endSection();
@@ -283,7 +361,16 @@ class FontProvider {
                                 : 400;
                         boolean italic = italicColumnIndex != -1 && cursor.getInt(italicColumnIndex)
                                 == 1;
-                        result.add(FontInfo.create(fileUri, ttcIndex, weight, italic, resultCode));
+
+                        // Font variation settings can originate from either a font provider or an
+                        // XML definition. While merging or prioritizing these sources would be
+                        // ideal, settings from font providers have historically been ignored and
+                        // are currently unused by any provider.
+                        // Therefore, XML-defined settings are used exclusively for now.
+                        String fontVariationSettings = request.getVariationSettings();
+
+                        result.add(new FontInfo(fileUri, ttcIndex, weight, italic,
+                                fontVariationSettings, resultCode));
                     }
                 }
             } finally {
@@ -300,11 +387,31 @@ class FontProvider {
         }
     }
 
+    protected static String[] getSelectionArgs(FontRequest fontRequest) {
+        String variationSettings = fontRequest.getVariationSettings();
+        if (variationSettings != null && !variationSettings.isBlank()) {
+            // If variation settings are present, send the "VF" in the selectionArgs[1]. This
+            // enables font provider to return a variable font.
+            return new String[]{fontRequest.getQuery(), VARIABLE_FONT_QUERY_PARAM};
+        } else {
+            return new String[]{fontRequest.getQuery()};
+        }
+    }
+
     private static List<List<byte[]>> getCertificates(FontRequest request, Resources resources) {
         if (request.getCertificates() != null) {
             return request.getCertificates();
         }
         int resourceId = request.getCertificatesArrayResId();
+        return FontResourcesParserCompat.readCerts(resources, resourceId);
+    }
+
+    private static List<List<byte[]>> getSystemCertificates(FontRequest request,
+            Resources resources) {
+        if (request.getSystemCertificates() != null) {
+            return request.getSystemCertificates();
+        }
+        int resourceId = request.getSystemCertificatesArrayResId();
         return FontResourcesParserCompat.readCerts(resources, resourceId);
     }
 
@@ -320,8 +427,52 @@ class FontProvider {
         return 0;
     };
 
+    private static boolean equalsByteArrayLists(
+            @Nullable List<List<byte[]>> list1,
+            @Nullable List<List<byte[]>> list2) {
+        if (list1 == list2) {
+            return true;
+        }
+        if (list1 == null || list2 == null) {
+            return false;
+        }
+        if (list1.size() != list2.size()) {
+            return false;
+        }
+        for (int i = 0; i < list1.size(); ++i) {
+            if (!equalsByteArrayList(list1.get(i), list2.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int hashByteArrayLists(@Nullable List<List<byte[]>> list) {
+        if (list == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < list.size(); ++i) {
+            List<byte[]> inner = list.get(i);
+            int innerHash = 1;
+            if (inner != null) {
+                for (int j = 0; j < inner.size(); ++j) {
+                    innerHash = 31 * innerHash + Arrays.hashCode(inner.get(j));
+                }
+            }
+            hash = 31 * hash + innerHash;
+        }
+        return hash;
+    }
+
     private static boolean equalsByteArrayList(List<byte[]> signatures,
             List<byte[]> requestSignatures) {
+        if (signatures == requestSignatures) {
+            return true;
+        }
+        if (signatures == null || requestSignatures == null) {
+            return false;
+        }
         if (signatures.size() != requestSignatures.size()) {
             return false;
         }
@@ -352,6 +503,7 @@ class FontProvider {
                 String[] selectionArgs,
                 String sortOrder,
                 CancellationSignal cancellationSignal);
+
         void close();
 
         static ContentQueryWrapper make(Context context, Uri uri) {
@@ -365,6 +517,7 @@ class FontProvider {
 
     private static class ContentQueryWrapperApi16Impl implements ContentQueryWrapper {
         private final ContentProviderClient mClient;
+
         ContentQueryWrapperApi16Impl(Context context, Uri uri) {
             mClient = context.getContentResolver().acquireUnstableContentProviderClient(uri);
         }
@@ -395,6 +548,7 @@ class FontProvider {
     @RequiresApi(24)
     private static class ContentQueryWrapperApi24Impl implements ContentQueryWrapper {
         private final ContentProviderClient mClient;
+
         ContentQueryWrapperApi24Impl(Context context, Uri uri) {
             mClient = context.getContentResolver().acquireUnstableContentProviderClient(uri);
         }

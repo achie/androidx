@@ -50,12 +50,15 @@ import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.keepScreenOn
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.wear.compose.foundation.CurvedDirection
@@ -88,6 +91,11 @@ import kotlinx.coroutines.launch
  * Example of a [ConfirmationDialog] with an icon and a curved text content:
  *
  * @sample androidx.wear.compose.material3.samples.ConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_ConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the confirmation dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed - either by
  *   swiping right or when the [durationMillis] has passed. Implementation of this lambda must
@@ -142,6 +150,11 @@ public fun ConfirmationDialog(
  * Example of a [ConfirmationDialog] with an icon and a curved text content:
  *
  * @sample androidx.wear.compose.material3.samples.ConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_ConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param curvedText A slot for displaying curved text content which will be shown along the bottom
  *   edge of the dialog. We recommend using [confirmationDialogCurvedText] for this parameter, which
  *   will give the default sweep angle and padding.
@@ -187,6 +200,11 @@ public fun ConfirmationDialogContent(
  * Example of a [ConfirmationDialog] with an icon and a text which fits into 3 lines:
  *
  * @sample androidx.wear.compose.material3.samples.LongTextConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_LongTextConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the confirmation dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed - either by
  *   swiping right or when the [durationMillis] has passed. Implementation of this lambda must
@@ -226,8 +244,8 @@ public fun ConfirmationDialog(
 
 /**
  * This overload of [ConfirmationDialogContent] provides the content for a [ConfirmationDialog] with
- * with an icon and optional short [text]. The length of the text should not exceed 3 lines. If the
- * text is very short and fits into 1-2 words, consider using the alternative [ConfirmationDialog]
+ * an icon and optional short [text]. The length of the text should not exceed 3 lines. If the text
+ * is very short and fits into 1-2 words, consider using the alternative [ConfirmationDialog]
  * overload with the curvedText parameter instead.
  *
  * Prefer using [ConfirmationDialog] directly, which provides built-in animations when
@@ -237,6 +255,11 @@ public fun ConfirmationDialog(
  * Example of a [ConfirmationDialog] with an icon and a text which fits into 3 lines:
  *
  * @sample androidx.wear.compose.material3.samples.LongTextConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_LongTextConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param text A slot for displaying text below the icon. It should not exceed 3 lines.
  * @param modifier Modifier to be applied to the confirmation content.
  * @param colors A [ConfirmationDialogColors] object for customizing the colors used in this
@@ -312,6 +335,11 @@ public fun ConfirmationDialogContent(
  * Example of a [SuccessConfirmationDialog] usage:
  *
  * @sample androidx.wear.compose.material3.samples.SuccessConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SuccessConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the confirmation dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed - either by
  *   swiping right or when the [durationMillis] has passed. Implementation of this lambda must
@@ -375,14 +403,18 @@ public fun SuccessConfirmationDialog(
  * Example of a [SuccessConfirmationDialog] usage:
  *
  * @sample androidx.wear.compose.material3.samples.SuccessConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_SuccessConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param curvedText A slot for displaying curved text content which will be shown along the bottom
  *   edge of the dialog. We recommend using [confirmationDialogCurvedText] for this parameter, which
  *   will give the default sweep angle and padding, and [ConfirmationDialogDefaults.curvedTextStyle]
  *   as the style.
  * @param modifier Modifier to be applied to the confirmation content.
  * @param colors A [ConfirmationDialogColors] object for customizing the colors used in this
- *   [SuccessConfirmationDialog]. will be adjusted by the accessibility manager according to the
- *   content displayed.
+ *   [SuccessConfirmationDialog].
  * @param content A slot for displaying an icon inside the confirmation dialog, which can be
  *   animated. Defaults to an animated [ConfirmationDialogDefaults.SuccessIcon].
  */
@@ -422,9 +454,18 @@ public fun SuccessConfirmationDialogContent(
  *
  * @sample androidx.wear.compose.material3.samples.FailureConfirmationDialogSample
  *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_FailureConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * Example of [FailureConfirmationDialog] with the variant failure icon for a generic error.
  *
  * @sample androidx.wear.compose.material3.samples.FailureConfirmationDialogWithGenericFailureIconSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_FailureConfirmationDialogWithGenericFailureIconSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the confirmation dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed - either by
  *   swiping right or when the [durationMillis] has passed. Implementation of this lambda must
@@ -484,13 +525,28 @@ public fun FailureConfirmationDialog(
  * Where user input is required, such as choosing to ok or cancel an action, use [AlertDialog]
  * instead of [FailureConfirmationDialog].
  *
+ * Example of [FailureConfirmationDialog] usage with default icon:
+ *
+ * @sample androidx.wear.compose.material3.samples.FailureConfirmationDialogSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_FailureConfirmationDialogSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
+ * Example of [FailureConfirmationDialog] with the variant failure icon for a generic error.
+ *
+ * @sample androidx.wear.compose.material3.samples.FailureConfirmationDialogWithGenericFailureIconSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_FailureConfirmationDialogWithGenericFailureIconSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param curvedText A slot for displaying curved text content which will be shown along the bottom
  *   edge of the dialog. We recommend using [confirmationDialogCurvedText] for this parameter, which
  *   will give the default sweep angle and padding.
  * @param modifier Modifier to be applied to the confirmation content.
  * @param colors A [ConfirmationDialogColors] object for customizing the colors used in this
- *   [FailureConfirmationDialog]. will be adjusted by the accessibility manager according to the
- *   content displayed.
+ *   [FailureConfirmationDialog].
  * @param content A slot for displaying an icon inside the confirmation dialog, which can be
  *   animated. The default value is [ConfirmationDialogDefaults.ConnectionFailureIcon], which shows
  *   a broken connection to the phone icon. Alternatively, provide
@@ -573,11 +629,13 @@ public object ConfirmationDialogDefaults {
             animatedDelay(IconDelay, reduceMotionEnabled)
             atEnd = true
         }
-        Icon(
-            painter = rememberAnimatedVectorPainter(animation, atEnd),
-            contentDescription = null,
-            modifier = modifier.size(IconSize),
-        )
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Icon(
+                painter = rememberAnimatedVectorPainter(animation, atEnd),
+                contentDescription = null,
+                modifier = modifier.size(IconSize),
+            )
+        }
     }
 
     /**
@@ -826,12 +884,6 @@ private fun AnimateConfirmationDialog(
     durationMillis: Long,
     content: @Composable () -> Unit,
 ) {
-    if (visible) {
-        // This will activate the screen-on flag for the duration of this screen, so that the
-        // animations run to completion and then the dialog self-dismisses.
-        KeepScreenOn()
-    }
-
     val a11yDurationMillis =
         LocalAccessibilityManager.current?.calculateRecommendedTimeoutMillis(
             originalTimeoutMillis = durationMillis,
@@ -850,7 +902,7 @@ private fun AnimateConfirmationDialog(
 
     Dialog(
         visible = visible,
-        modifier = modifier,
+        modifier = modifier.keepScreenOn(),
         onDismissRequest = onDismissRequest,
         properties = properties,
         content = content,
@@ -944,7 +996,7 @@ private fun iconContainer(curvedContent: Boolean, color: Color): @Composable Box
 
 private fun successIconContainer(color: Color): @Composable BoxScope.() -> Unit = {
     val width = screenWidthFraction(SuccessWidthFraction)
-    val targetHeight = screenHeightFraction(SuccessHeightFraction)
+    val targetHeight = screenWidthFraction(SuccessHeightFraction)
 
     val heightAnimatable = remember { Animatable(width.value) }
     val reduceMotionEnabled = LocalReduceMotion.current

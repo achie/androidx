@@ -7,8 +7,6 @@
 
 package androidx.core.i18n.messageformat_icu.simple;
 
-import android.annotation.SuppressLint;
-
 import androidx.annotation.RestrictTo;
 import androidx.core.i18n.messageformat_icu.util.Output;
 
@@ -220,7 +218,7 @@ public class PluralRules implements Serializable {
             return forLocale(locale, PluralType.CARDINAL);
         }
 
-        /**
+        /*
          * Returns the locales for which there is plurals data.
          *
          * icu_annot::internal CLDR
@@ -229,7 +227,7 @@ public class PluralRules implements Serializable {
         public abstract ULocale[] getAvailableULocales();
          */
 
-        /**
+        /*
          * Returns the 'functionally equivalent' locale with respect to plural rules. Calling PluralRules.forLocale with
          * the functionally equivalent locale, and with the provided locale, returns rules that behave the same. <br/>
          * All locales with the same functionally equivalent locale have plural rules that behave the same. This is not
@@ -708,13 +706,13 @@ public class PluralRules implements Serializable {
         }
 
         /**
-         * {@inheritDoc}
          *
          * icu_annot::internal CLDR
          * This API is ICU internal only.
          */
         // @Deprecated: in fact internal ICU
-        public double get(@SuppressLint("HiddenTypeParameter") Operand operand) {
+        @SuppressWarnings("ExposedPrivateType")
+        public double get(Operand operand) {
             switch(operand) {
             default: return source;
             case i: return integerValue;
@@ -730,7 +728,7 @@ public class PluralRules implements Serializable {
          * This API is ICU internal only.
          */
         // @Deprecated: in fact internal ICU
-        @SuppressLint("HiddenTypeParameter")
+        @SuppressWarnings("ExposedPrivateType")
         public static Operand getOperand(String t) {
             return Operand.valueOf(t);
         }
@@ -2082,7 +2080,7 @@ public class PluralRules implements Serializable {
      * icu_annot::internal CLDR
      * @deprecated ICU internal only
      */
-    // @Deprecated: in fact internal ICU
+    @Deprecated // in fact internal ICU
     public Collection<Double> getSamples(String keyword, SampleType sampleType) {
         if (!keywords.contains(keyword)) {
             return null;
@@ -2148,7 +2146,7 @@ public class PluralRules implements Serializable {
         return rules.getDecimalSamples(keyword, sampleType);
     }
 
-    /**
+    /*
      * Returns the set of locales for which PluralRules are known.
      * @return the set of locales for which PluralRules are known, as a list
      * icu_annot::draft ICU 4.2 (retain)
@@ -2157,7 +2155,7 @@ public class PluralRules implements Serializable {
     }
      */
 
-    /**
+    /*
      * Returns the 'functionally equivalent' locale with respect to
      * plural rules.  Calling PluralRules.forLocale with the functionally equivalent
      * locale, and with the provided locale, returns rules that behave the same.
@@ -2196,7 +2194,7 @@ public class PluralRules implements Serializable {
         return rhs instanceof PluralRules && toString().equals(rhs.toString());
     }
 
-    /**
+    /*
      * Returns true if rhs is equal to this.
      * @param rhs the PluralRules to compare to.
      * @return true if this and rhs are equal.
@@ -2362,7 +2360,7 @@ public class PluralRules implements Serializable {
      * icu_annot::internal CLDR
      * @deprecated internal
      */
-    // @Deprecated: in fact internal ICU
+    @Deprecated // in fact internal ICU
     public int compareTo(PluralRules other) {
         return toString().compareTo(other.toString());
     }
@@ -2375,7 +2373,7 @@ public class PluralRules implements Serializable {
      * icu_annot::internal Visible For Testing
      * @deprecated internal
      */
-    // @Deprecated: in fact internal ICU
+    @Deprecated // in fact internal ICU
     public boolean isLimited(String keyword, SampleType sampleType) {
         return rules.isLimited(keyword, sampleType);
     }
@@ -2384,7 +2382,7 @@ public class PluralRules implements Serializable {
      * icu_annot::internal CLDR
      * @deprecated internal
      */
-    // @Deprecated: in fact internal ICU
+    @Deprecated // in fact internal ICU
     public boolean computeLimited(String keyword, SampleType sampleType) {
         return rules.computeLimited(keyword, sampleType);
     }

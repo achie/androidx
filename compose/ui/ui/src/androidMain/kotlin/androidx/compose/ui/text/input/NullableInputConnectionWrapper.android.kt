@@ -52,9 +52,7 @@ internal fun NullableInputConnectionWrapper(
             NullableInputConnectionWrapperApi34(delegate, onConnectionClosed)
         Build.VERSION.SDK_INT >= 25 ->
             NullableInputConnectionWrapperApi25(delegate, onConnectionClosed)
-        Build.VERSION.SDK_INT >= 24 ->
-            NullableInputConnectionWrapperApi24(delegate, onConnectionClosed)
-        else -> NullableInputConnectionWrapperApi21(delegate, onConnectionClosed)
+        else -> NullableInputConnectionWrapperApi24(delegate, onConnectionClosed)
     }
 
 /**
@@ -63,8 +61,9 @@ internal fun NullableInputConnectionWrapper(
  * instead of throwing.
  *
  * This class allows the PlatformTextInput system to make stronger guarantees about the lifetime of
- * [InputConnection]s – see [PlatformTextInputMethodRequest.createInputConnection] for documentation
- * about what these guarantees are.
+ * [InputConnection]s – see
+ * [androidx.compose.ui.platform.PlatformTextInputMethodRequest.createInputConnection] for
+ * documentation about what these guarantees are.
  *
  * This class has two responsibilities besides basic delegation:
  * - Clear its reference to its delegate as eagerly as possible, so even if this instance is leaked
@@ -172,7 +171,6 @@ private open class NullableInputConnectionWrapperApi21(
     protected open fun closeDelegate(delegate: InputConnection) {}
 }
 
-@RequiresApi(24)
 private open class NullableInputConnectionWrapperApi24(
     delegate: InputConnection,
     onConnectionClosed: (NullableInputConnectionWrapper) -> Unit,

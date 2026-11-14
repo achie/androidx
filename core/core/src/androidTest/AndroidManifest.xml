@@ -77,6 +77,8 @@
                 android:value="androidx.core.content.pm.TestShortcutInfoChangeListener" />
         </activity>
 
+        <activity android:name="androidx.core.TestActivity" />
+
         <activity
             android:name="androidx.core.app.TestComponentActivity"
             android:exported="true" />
@@ -197,6 +199,11 @@
             android:name="androidx.core.app.JobIntentServiceTest$TargetService"
             android:exported="true"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
+            android:name="androidx.core.os.MemorySnapshotTestService"
+            android:process=":secondary"
+            android:exported="false" />
 
     </application>
     <uses-permission android:name="android.permission.VIBRATE" />

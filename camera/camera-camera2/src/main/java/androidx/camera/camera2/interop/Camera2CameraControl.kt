@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.camera.camera2.interop
 
 import androidx.annotation.RestrictTo
@@ -24,9 +26,9 @@ import androidx.camera.camera2.compat.Camera2CameraControlCompat
 import androidx.camera.camera2.impl.ComboRequestListener
 import androidx.camera.camera2.impl.UseCaseCameraControl
 import androidx.camera.camera2.impl.UseCaseCameraRequestControl
-import androidx.camera.camera2.impl.UseCaseThreads
 import androidx.camera.core.CameraControl
 import androidx.camera.core.impl.CameraControlInternal
+import androidx.camera.core.impl.MutableConfig
 import androidx.camera.core.impl.utils.futures.Futures
 import androidx.core.util.Preconditions
 import com.google.common.util.concurrent.ListenableFuture
@@ -41,13 +43,22 @@ import com.google.common.util.concurrent.ListenableFuture
  * If any option applied by Camera2CameraControl conflicts with the options required by CameraX
  * internally. The options from Camera2CameraControl will override, which may result in unexpected
  * behavior depends on the options being applied.
+ *
+ * @deprecated Use [Camera2Interop.forCameraControl] and
+ *   [androidx.camera.core.CameraControl.applyInteropAsync] in Java, or [applyCamera2Interop] /
+ *   [applyCamera2InteropAsync] in Kotlin instead.
  */
 @SuppressWarnings("HiddenSuperclass")
 @ExperimentalCamera2Interop
+@Deprecated(
+    message =
+        "Use the CameraControl.applyCamera2Interop or CameraControl.applyCamera2InteropAsync " +
+            "extension functions instead, e.g., " +
+            "'cameraControl.applyCamera2Interop { setCaptureRequestOption(key, value) }'."
+)
 public class Camera2CameraControl
 private constructor(
     private val compat: Camera2CameraControlCompat,
-    private val threads: UseCaseThreads,
     @get:VisibleForTesting internal val requestListener: ComboRequestListener,
 ) : UseCaseCameraControl {
 
@@ -57,11 +68,7 @@ private constructor(
         @RestrictTo(RestrictTo.Scope.LIBRARY)
         set(value) {
             _useCaseCameraRequestControl = value
-            _useCaseCameraRequestControl?.also {
-                requestListener.removeListener(compat)
-                requestListener.addListener(compat, threads.sequentialExecutor)
-                compat.applyAsync(it, false)
-            }
+            _useCaseCameraRequestControl?.also { compat.applyAsync(it, false) }
         }
 
     @RestrictTo(RestrictTo.Scope.LIBRARY)
@@ -69,7 +76,6 @@ private constructor(
         // Clear the current task, but don't clear the CaptureRequestOptions. Camera2CameraControl
         // will store the CaptureRequestOptions while use case is detached.
         compat.cancelCurrentTask()
-        requestListener.removeListener(compat)
     }
 
     /**
@@ -119,6 +125,10 @@ private constructor(
         return updateAsync("addCaptureRequestOptions")
     }
 
+    internal fun getSynchronizedMutableConfig(): MutableConfig {
+        return compat.getSynchronizedMutableConfig()
+    }
+
     /**
      * Gets all the capture request options that is currently applied by the [Camera2CameraControl].
      *
@@ -141,6 +151,10 @@ private constructor(
     public fun clearCaptureRequestOptions(): ListenableFuture<Void?> {
         compat.clearRequestOption()
         return updateAsync("clearCaptureRequestOptions")
+    }
+
+    internal fun updateCamera2InteropAsync(): ListenableFuture<Void?> {
+        return updateAsync("Camera2Interop")
     }
 
     private fun updateAsync(tag: String): ListenableFuture<Void?> =
@@ -168,7 +182,7 @@ private constructor(
          */
         @JvmStatic
         public fun from(cameraControl: CameraControl): Camera2CameraControl {
-            var cameraControlImpl = (cameraControl as CameraControlInternal).implementation
+            val cameraControlImpl = (cameraControl as CameraControlInternal).implementation
             Preconditions.checkArgument(
                 cameraControlImpl is CameraControlAdapter,
                 "CameraControl doesn't contain Camera2 implementation.",
@@ -181,10 +195,9 @@ private constructor(
         @JvmStatic
         public fun create(
             compat: Camera2CameraControlCompat,
-            threads: UseCaseThreads,
             requestListener: ComboRequestListener,
         ): Camera2CameraControl {
-            return Camera2CameraControl(compat, threads, requestListener)
+            return Camera2CameraControl(compat, requestListener)
         }
     }
 }

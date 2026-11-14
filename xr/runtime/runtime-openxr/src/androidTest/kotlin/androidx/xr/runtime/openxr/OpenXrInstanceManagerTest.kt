@@ -1,0 +1,91 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.xr.runtime.openxr
+
+import android.content.Context
+import androidx.activity.ComponentActivity
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.rules.ActivityScenarioRule
+import androidx.test.filters.SdkSuppress
+import com.google.common.truth.Truth.assertThat
+import org.junit.Assert.assertThrows
+import org.junit.Assume.assumeNoException
+import org.junit.Rule
+import org.junit.Test
+
+// TODO - b/382119583: Remove the @SdkSuppress annotation once "androidx.xr.runtime.openxr.test"
+// supports a lower SDK version.
+@SdkSuppress(minSdkVersion = 29)
+class OpenXrInstanceManagerTest {
+
+    @get:Rule val activityRule = ActivityScenarioRule(ComponentActivity::class.java)
+
+    companion object {
+        init {
+            System.loadLibrary("androidx.xr.runtime.openxr.test")
+        }
+    }
+
+    @Test
+    fun initialize_setsXrInstanceHandleAndInstanceProcAddrToNonZero() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val provider = OpenXrInstanceManager()
+
+        provider.initialize(context, emptyList())
+
+        // The values below comes from kInstance a in
+        // third_party/jetpack_xr_natives/common/openxr_stub.cc
+        assertThat(provider.xrInstanceHandle).isEqualTo(1111L)
+        assertThat(provider.xrInstanceProcAddr).isNotEqualTo(0L)
+    }
+
+    @Test
+    fun initialize_withActivityBinding_setsXrInstanceHandleAndInstanceProcAddrToNonZero() {
+        val provider = OpenXrInstanceManager()
+        var unsupported: Throwable? = null
+
+        activityRule.scenario.onActivity { activity ->
+            try {
+                provider.initialize(activity, emptyList(), bindActivity = true)
+            } catch (e: UnsatisfiedLinkError) {
+                // The prebuilt native library predates the Activity binding.
+                unsupported = e
+            } catch (e: IllegalStateException) {
+                // TODO: b/578068806 - Remove once the native library defaults to the modular
+                // OpenXR instance manager; the legacy one does not support the Activity binding.
+                unsupported = e
+            }
+        }
+        // Skipped while the native library does not support the Activity binding.
+        assumeNoException(unsupported)
+
+        // The values below comes from kInstance a in
+        // third_party/jetpack_xr_natives/common/openxr_stub.cc
+        assertThat(provider.xrInstanceHandle).isEqualTo(1111L)
+        assertThat(provider.xrInstanceProcAddr).isNotEqualTo(0L)
+    }
+
+    @Test
+    fun initialize_withActivityBindingAndNonActivityContext_throwsIllegalArgumentException() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val provider = OpenXrInstanceManager()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            provider.initialize(context, emptyList(), bindActivity = true)
+        }
+    }
+}

@@ -1,0 +1,514 @@
+/*
+ * Copyright 2025 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@file:OptIn(ExperimentalRemoteCreationComposeApi::class)
+@file:JvmName("CaptureRemoteDocumentKt")
+@file:JvmMultifileClass
+
+package androidx.compose.remote.creation.compose.capture
+
+import android.content.Context
+import android.content.res.Configuration
+import android.os.Binder
+import android.os.Build
+import android.os.Parcelable
+import android.text.format.DateFormat
+import android.util.Size
+import android.util.SizeF
+import android.util.SparseArray
+import androidx.annotation.RestrictTo
+import androidx.compose.remote.core.RemoteClock
+import androidx.compose.remote.creation.compose.ExperimentalRemoteCreationComposeApi
+import androidx.compose.remote.creation.compose.capture.headless.HeadlessLifecycleOwner
+import androidx.compose.remote.creation.compose.layout.RemoteComposable
+import androidx.compose.remote.creation.compose.layout.toRemoteLayoutDirection
+import androidx.compose.remote.creation.compose.state.rf
+import androidx.compose.remote.creation.profile.Profile
+import androidx.compose.remote.creation.profile.RcPlatformProfiles
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.neverEqualPolicy
+import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.runtime.retain.LocalRetainedValuesStoreProvider
+import androidx.compose.runtime.retain.RetainedValuesStore
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.saveable.SaveableStateRegistry
+import androidx.compose.runtime.snapshots.SnapshotMutableState
+import androidx.compose.runtime.structuralEqualityPolicy
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.savedstate.SavedState
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.compose.LocalSavedStateRegistryOwner
+import androidx.savedstate.read
+import androidx.savedstate.savedState
+import androidx.savedstate.write
+import java.io.Serializable
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+
+/**
+ * Capture a single RemoteCompose document from the specified [content] Composable by rendering it
+ * once inside a virtual display.
+ *
+ * This is a suspending function that performs the composition and rendering, returning a
+ * [RemoteCapturedDocument] which contains the serialized bytes and metadata.
+ *
+ * Example of capturing a single RemoteCompose document as a byte array:
+ *
+ * @sample androidx.compose.remote.creation.compose.samples.CaptureSingleRemoteDocumentSample
+ * @param context The Android [Context] to use.
+ * @param creationDisplayInfo Details about the virtual display to capture for (size, density,
+ *   etc.). Defaults to display metrics derived from [context].
+ * @param remoteDensity The logical screen density and font scale to use for unit conversions.
+ *   Defaults to density derived from [creationDisplayInfo]. Note: If passing custom values, they
+ *   should typically match the density and font scale specified in [creationDisplayInfo] to avoid
+ *   layout scaling discrepancies.
+ * @param layoutDirection The layout direction (LTR or RTL) to use. Defaults to the layout direction
+ *   of [context]'s configuration.
+ * @param clock The clock used for the composition timeline. Defaults to [RemoteClock.SYSTEM].
+ * @param profile The writing profile that determines supported operations. Defaults to
+ *   [RcPlatformProfiles.ANDROIDX].
+ * @param writerEvents Callback to handle non-serializable events (e.g. pending intents).
+ * @param content The Composable content to render and capture.
+ * @return A [RemoteCapturedDocument] containing the serialized document bytes.
+ */
+public suspend fun captureSingleRemoteDocument(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo = createCreationDisplayInfo(context),
+    remoteDensity: RemoteDensity =
+        RemoteDensity(
+            creationDisplayInfo.density.rf,
+            creationDisplayInfo.fontScale.rf,
+        ),
+    layoutDirection: LayoutDirection =
+        toLayoutDirection(context.resources.configuration.layoutDirection),
+    clock: RemoteClock = RemoteClock.SYSTEM,
+    profile: Profile = RcPlatformProfiles.ANDROIDX,
+    writerEvents: RemoteWriterEvents = RemoteWriterEvents(),
+    content: @Composable @RemoteComposable () -> Unit,
+): RemoteCapturedDocument =
+    captureSingleRemoteDocument(
+        context = context,
+        creationDisplayInfo = creationDisplayInfo,
+        remoteDensity = remoteDensity,
+        layoutDirection = layoutDirection,
+        clock = clock,
+        profile = profile,
+        writerEvents = writerEvents,
+        savedState = null,
+        retainedValuesStore = null,
+        content = content,
+    )
+
+/**
+ * Like the public [captureSingleRemoteDocument], but with an optional [savedState] used to
+ * initialize and save [LocalSaveableStateRegistry] during the capture so values held with
+ * [androidx.compose.runtime.saveable.rememberSaveable] can be saved and restored across captures,
+ * and an optional [retainedValuesStore] provided as
+ * [androidx.compose.runtime.retain.LocalRetainedValuesStore] so values held with
+ * [androidx.compose.runtime.retain.retain] are preserved across captures.
+ *
+ * **Security note:** [savedState] must only come from trusted in-process state or OS-managed
+ * instance state. Do not pass a [SavedState] decoded from untrusted external or IPC input, as
+ * restoring an Android `Bundle` instantiates arbitrary [Parcelable] and [Serializable] classes on
+ * the classpath.
+ *
+ * @return a [RemoteCapturedDocument] containing the serialized document bytes and captured
+ *   callbacks
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public suspend fun captureSingleRemoteDocument(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo = createCreationDisplayInfo(context),
+    remoteDensity: RemoteDensity =
+        RemoteDensity(
+            creationDisplayInfo.density.rf,
+            creationDisplayInfo.fontScale.rf,
+        ),
+    layoutDirection: LayoutDirection =
+        toLayoutDirection(context.resources.configuration.layoutDirection),
+    clock: RemoteClock = RemoteClock.SYSTEM,
+    profile: Profile = RcPlatformProfiles.ANDROIDX,
+    writerEvents: RemoteWriterEvents = RemoteWriterEvents(),
+    savedState: SavedState?,
+    retainedValuesStore: RetainedValuesStore? = null,
+    content: @Composable @RemoteComposable () -> Unit,
+): RemoteCapturedDocument {
+    val lifecycleOwner = HeadlessLifecycleOwner(savedState)
+    val saveableStateRegistry =
+        if (savedState != null) {
+            createSaveableStateRegistry(lifecycleOwner.savedStateRegistry)
+        } else {
+            null
+        }
+    val document =
+        captureSingleRemoteDocument(
+            creationDisplayInfo = creationDisplayInfo,
+            remoteDensity = remoteDensity,
+            layoutDirection = layoutDirection.toRemoteLayoutDirection(),
+            clock = clock,
+            profile = profile,
+            writerCallback = writerEvents,
+            tracer = AndroidCaptureTracer,
+            onDispose = { saveAndClose(savedState, lifecycleOwner, saveableStateRegistry) },
+            content =
+                withAndroidLocals(
+                    context = context,
+                    creationDisplayInfo = creationDisplayInfo,
+                    layoutDirection = layoutDirection,
+                    lifecycleOwner = lifecycleOwner,
+                    saveableStateRegistry = saveableStateRegistry,
+                    retainedValuesStore = retainedValuesStore,
+                    content = content,
+                ),
+        )
+    return RemoteCapturedDocument(document, writerEvents.pendingIntents, writerEvents.lambdas)
+}
+
+/**
+ * Capture a stream of RemoteCompose documents by rendering the specified [content] Composable in a
+ * virtual display and emitting the resulting byte arrays whenever recomposition occurs and the
+ * layout visually changes.
+ *
+ * This API allows capturing dynamic Compose content (e.g., containing animations, transitions, or
+ * state updates) as a Flow of serialized document byte arrays.
+ *
+ * Crucially, recomposition is handled cleanly, and duplicate documents (where nothing visually
+ * changed in the layout tree) are automatically filtered out, so new byte arrays are only emitted
+ * when the document actually changes.
+ *
+ * Remote documents are expected to change rarely; animate with remote expressions rather than
+ * recomposition. Content that updates faster than a few documents in quick succession followed by
+ * about one per second is throttled, and a warning is logged. The latest state is still emitted
+ * once the throttle allows.
+ *
+ * Example of capturing a [Flow] of updated RemoteCompose documents as state changes:
+ *
+ * @sample androidx.compose.remote.creation.compose.samples.CaptureRemoteDocumentSample
+ * @param context The Android [Context] to use.
+ * @param creationDisplayInfo Details about the virtual display to capture for (size, density,
+ *   etc.).
+ * @param remoteDensity The logical screen density and font scale to use for unit conversions.
+ *   Defaults to density derived from [creationDisplayInfo]. Note: If passing custom values, they
+ *   should typically match the density and font scale specified in [creationDisplayInfo] to avoid
+ *   layout scaling discrepancies.
+ * @param layoutDirection The layout direction (LTR or RTL) to use. Defaults to the layout direction
+ *   of [context]'s configuration when `null`.
+ * @param clock The clock used for the recomposer timeline. Defaults to [RemoteClock.SYSTEM].
+ * @param profile The writing profile that determines supported operations. Defaults to
+ *   [RcPlatformProfiles.ANDROIDX].
+ * @param writerEvents Callback to handle non-serializable events (e.g. pending intents).
+ * @param coroutineContext The CoroutineContext to run recomposition and rendering on. Defaults to
+ *   [Dispatchers.Default].
+ * @param content The Composable content to render and capture.
+ * @return A [Flow] of [ByteArray]s containing the serialized RemoteCompose documents.
+ */
+public fun captureRemoteDocument(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo,
+    remoteDensity: RemoteDensity =
+        RemoteDensity(
+            creationDisplayInfo.density.rf,
+            creationDisplayInfo.fontScale.rf,
+        ),
+    layoutDirection: LayoutDirection? = null,
+    clock: RemoteClock = RemoteClock.SYSTEM,
+    profile: Profile = RcPlatformProfiles.ANDROIDX,
+    writerEvents: RemoteWriterEvents = RemoteWriterEvents(),
+    coroutineContext: CoroutineContext = Dispatchers.Default,
+    content: @Composable @RemoteComposable () -> Unit,
+): Flow<ByteArray> =
+    captureRemoteDocument(
+        context = context,
+        creationDisplayInfo = creationDisplayInfo,
+        updateThrottle = CaptureUpdateThrottle.Default,
+        remoteDensity = remoteDensity,
+        layoutDirection = layoutDirection,
+        writerEvents = writerEvents,
+        clock = clock,
+        profile = profile,
+        coroutineContext = coroutineContext,
+        savedState = null,
+        retainedValuesStore = null,
+        content = content,
+    )
+
+/**
+ * Like the public [captureRemoteDocument], but with [updateThrottle] deciding how often documents
+ * are emitted instead of [CaptureUpdateThrottle.Default], an optional [savedState], and an optional
+ * [retainedValuesStore].
+ *
+ * **Security note:** [savedState] must only come from trusted in-process state or OS-managed
+ * instance state. Do not pass a [SavedState] decoded from untrusted external or IPC input, as
+ * restoring an Android `Bundle` instantiates arbitrary [Parcelable] and [Serializable] classes on
+ * the classpath.
+ *
+ * @return a [Flow] of [ByteArray]s containing the serialized RemoteCompose documents
+ *
+ * TODO(b/567847315): Make the update strategy public together with [CaptureUpdateThrottle].
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun captureRemoteDocument(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo,
+    updateThrottle: CaptureUpdateThrottle = CaptureUpdateThrottle.Default,
+    remoteDensity: RemoteDensity =
+        RemoteDensity(
+            creationDisplayInfo.density.rf,
+            creationDisplayInfo.fontScale.rf,
+        ),
+    layoutDirection: LayoutDirection? = null,
+    writerEvents: RemoteWriterEvents = RemoteWriterEvents(),
+    clock: RemoteClock = RemoteClock.SYSTEM,
+    profile: Profile = RcPlatformProfiles.ANDROIDX,
+    coroutineContext: CoroutineContext = Dispatchers.Default,
+    savedState: SavedState? = null,
+    retainedValuesStore: RetainedValuesStore? = null,
+    content: @Composable @RemoteComposable () -> Unit,
+): Flow<ByteArray> = flow {
+    val resolvedLayoutDirection =
+        layoutDirection ?: toLayoutDirection(context.resources.configuration.layoutDirection)
+    val lifecycleOwner = HeadlessLifecycleOwner(savedState)
+    val saveableStateRegistry =
+        if (savedState != null) {
+            createSaveableStateRegistry(lifecycleOwner.savedStateRegistry)
+        } else {
+            null
+        }
+    emitAll(
+        captureRemoteDocument(
+            creationDisplayInfo = creationDisplayInfo,
+            updateThrottle = updateThrottle,
+            remoteDensity = remoteDensity,
+            layoutDirection = resolvedLayoutDirection.toRemoteLayoutDirection(),
+            clock = clock,
+            profile = profile,
+            writerCallback = writerEvents,
+            coroutineContext = coroutineContext,
+            tracer = AndroidCaptureTracer,
+            onDispose = { saveAndClose(savedState, lifecycleOwner, saveableStateRegistry) },
+            content =
+                withAndroidLocals(
+                    context = context,
+                    creationDisplayInfo = creationDisplayInfo,
+                    layoutDirection = resolvedLayoutDirection,
+                    lifecycleOwner = lifecycleOwner,
+                    saveableStateRegistry = saveableStateRegistry,
+                    retainedValuesStore = retainedValuesStore,
+                    content = content,
+                ),
+        )
+    )
+}
+
+/**
+ * Wraps [content] so that the Android-specific CompositionLocals a capture needs ([LocalContext],
+ * [LocalConfiguration], [LocalFontWeightAdjustment] and [LocalIs24HourFormat]) are provided from
+ * [context].
+ */
+private fun withAndroidLocals(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo,
+    layoutDirection: LayoutDirection,
+    lifecycleOwner: HeadlessLifecycleOwner,
+    saveableStateRegistry: SaveableStateRegistry?,
+    retainedValuesStore: RetainedValuesStore?,
+    content: @Composable @RemoteComposable () -> Unit,
+): @Composable @RemoteComposable () -> Unit {
+    val configuration = context.resources.configuration
+    return {
+        CompositionLocalProvider(
+            LocalContext provides context,
+            LocalConfiguration provides configuration,
+            LocalInspectionMode provides creationDisplayInfo.isInspectionMode,
+            LocalDensity provides
+                Density(
+                    creationDisplayInfo.density,
+                    creationDisplayInfo.fontScale,
+                ),
+            LocalLayoutDirection provides layoutDirection,
+            LocalRemoteLayoutDirection providesComputed
+                {
+                    LocalLayoutDirection.currentValue.toRemoteLayoutDirection()
+                },
+            LocalLifecycleOwner provides lifecycleOwner,
+            LocalSavedStateRegistryOwner provides lifecycleOwner,
+            LocalSaveableStateRegistry provides saveableStateRegistry,
+            LocalFontWeightAdjustment provides platformFontWeightAdjustment(configuration),
+            LocalIs24HourFormat provides DateFormat.is24HourFormat(context),
+        ) {
+            if (retainedValuesStore != null) {
+                LocalRetainedValuesStoreProvider(retainedValuesStore, content)
+            } else {
+                content()
+            }
+        }
+    }
+}
+
+internal fun platformFontWeightAdjustment(configuration: Configuration): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (configuration.fontWeightAdjustment != Configuration.FONT_WEIGHT_ADJUSTMENT_UNDEFINED) {
+            configuration.fontWeightAdjustment
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+
+private const val SAVEABLE_STATE_KEY =
+    "androidx.compose.remote.creation.compose.capture.SaveableStateRegistry"
+
+// TODO: Move to `runtime-saveable` 1.14.0 and `savedstate` 1.6.0 once stable, and replace this
+// with `SaveableStateRegistry(savedStateRegistry.asContainer(), ::canBeSavedToBundle)`.
+private fun createSaveableStateRegistry(
+    savedStateRegistry: SavedStateRegistry
+): SaveableStateRegistry {
+    val restored =
+        savedStateRegistry.consumeRestoredStateForKey(SAVEABLE_STATE_KEY)?.toSaveableStateMap()
+    return SaveableStateRegistry(restored, ::canBeSavedToBundle)
+}
+
+private fun saveAndClose(
+    savedState: SavedState?,
+    lifecycleOwner: HeadlessLifecycleOwner,
+    saveableStateRegistry: SaveableStateRegistry?,
+) {
+    if (savedState != null) {
+        savedState.write { clear() }
+        if (saveableStateRegistry != null) {
+            val savedMap = saveableStateRegistry.performSave()
+            lifecycleOwner.savedStateRegistry.unregisterSavedStateProvider(SAVEABLE_STATE_KEY)
+            if (savedMap.isNotEmpty()) {
+                val stateToSave = savedMap.toSavedState()
+                lifecycleOwner.savedStateRegistry.registerSavedStateProvider(SAVEABLE_STATE_KEY) {
+                    stateToSave
+                }
+            }
+        }
+        lifecycleOwner.performSave()
+    }
+    lifecycleOwner.close()
+}
+
+@Suppress("UNCHECKED_CAST")
+internal fun SavedState.toSaveableStateMap(): Map<String, List<Any?>>? {
+    val map = read { toMap() } as? Map<String, List<Any?>>
+    return map?.takeIf { it.isNotEmpty() }
+}
+
+internal fun Map<String, List<Any?>>.toSavedState(): SavedState {
+    val normalized =
+        HashMap<String, Any?>(size).also { out ->
+            for ((key, value) in this) {
+                // Normalize list implementations (such as SubList from partial consumption) to
+                // ArrayList so Android Bundle storage preserves element references in memory and
+                // parcels elements via Parcel.writeList across process death.
+                out[key] = value as? ArrayList<Any?> ?: ArrayList(value)
+            }
+        }
+    return savedState(normalized)
+}
+
+/**
+ * Checks whether [value] can be stored in an Android `Bundle`, matching Compose UI's
+ * `DisposableSaveableStateRegistry`.
+ */
+internal fun canBeSavedToBundle(value: Any): Boolean {
+    if (value is SnapshotMutableState<*>) {
+        val policy = value.policy
+        if (
+            policy !== neverEqualPolicy<Any?>() &&
+                policy !== structuralEqualityPolicy<Any?>() &&
+                policy !== referentialEqualityPolicy<Any?>()
+        ) {
+            return false
+        }
+        val stateValue = value.value
+        return stateValue == null || canBeSavedToBundle(stateValue)
+    }
+    // Kotlin lambdas implement Serializable on the JVM but cannot be saved to a Bundle.
+    if (value is Function<*> && value is Serializable) {
+        return false
+    }
+    if (value is Parcelable || value is Serializable) {
+        return true
+    }
+    @Suppress("USELESS_IS_CHECK") // SizeF is not Parcelable before API 31.
+    if (value is Binder || value is Size || value is SizeF || value is SparseArray<*>) {
+        return true
+    }
+    return false
+}
+
+/**
+ * Bridge for modules pinned to a prebuilt that still references [WriterEvents] and
+ * [CapturedDocument].
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+@Deprecated("Use overload with RemoteWriterEvents", level = DeprecationLevel.HIDDEN)
+public suspend fun captureSingleRemoteDocument(
+    context: Context,
+    creationDisplayInfo: RemoteCreationDisplayInfo = createCreationDisplayInfo(context),
+    remoteDensity: RemoteDensity =
+        RemoteDensity(
+            creationDisplayInfo.density.rf,
+            creationDisplayInfo.fontScale.rf,
+        ),
+    layoutDirection: LayoutDirection =
+        toLayoutDirection(context.resources.configuration.layoutDirection),
+    @Suppress("UNUSED_PARAMETER") clock: RemoteClock = RemoteClock.SYSTEM,
+    profile: Profile = RcPlatformProfiles.ANDROIDX,
+    @Suppress("UNUSED_PARAMETER") writerEvents: WriterEvents = WriterEvents(),
+    content: @Composable @RemoteComposable () -> Unit,
+): CapturedDocument {
+    val result =
+        captureSingleRemoteDocument(
+            context = context,
+            creationDisplayInfo = creationDisplayInfo,
+            remoteDensity = remoteDensity,
+            layoutDirection = layoutDirection,
+            profile = profile,
+            writerEvents = RemoteWriterEvents(),
+            content = content,
+        )
+    return CapturedDocument(result.bytes, result.pendingIntents)
+}
+
+internal object AndroidCaptureTracer : CaptureTracer {
+    override fun <T> trace(lazyLabel: () -> String, block: () -> T): T =
+        androidx.tracing.trace(lazyLabel = lazyLabel, block = block)
+
+    override suspend fun <T> traceAsync(
+        lazyMethodName: () -> String,
+        lazyCookie: () -> Int,
+        block: suspend () -> T,
+    ): T =
+        androidx.tracing.traceAsync(lazyMethodName = lazyMethodName, lazyCookie = lazyCookie) {
+            block()
+        }
+}

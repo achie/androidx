@@ -20,12 +20,16 @@ import static androidx.camera.core.featuregroup.GroupableFeature.FPS_60;
 import static androidx.camera.core.featuregroup.GroupableFeature.HDR_HLG10;
 import static androidx.camera.core.featuregroup.GroupableFeature.IMAGE_ULTRA_HDR;
 import static androidx.camera.core.featuregroup.GroupableFeature.PREVIEW_STABILIZATION;
+import static androidx.camera.core.impl.ImageOutputConfig.INVALID_ROTATION;
 import static androidx.camera.core.impl.utils.executor.CameraXExecutors.directExecutor;
 
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertThrows;
+import static org.robolectric.Shadows.shadowOf;
 
+import android.content.Context;
+import android.os.Looper;
 import android.util.Rational;
 import android.view.Surface;
 
@@ -33,8 +37,10 @@ import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraUseCaseAdapterProvider;
 import androidx.camera.core.CompositionSettings;
 import androidx.camera.core.DynamicRange;
+import androidx.camera.core.ImageCapture;
 import androidx.camera.core.LegacySessionConfig;
 import androidx.camera.core.Preview;
+import androidx.camera.core.RotationProvider;
 import androidx.camera.core.SessionConfig;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.ViewPort;
@@ -44,6 +50,8 @@ import androidx.camera.core.impl.AdapterCameraInfo;
 import androidx.camera.core.impl.CameraInternal;
 import androidx.camera.core.impl.Config;
 import androidx.camera.core.impl.MutableOptionsBundle;
+import androidx.camera.core.impl.OptionsBundle;
+import androidx.camera.core.impl.StreamSpec;
 import androidx.camera.core.impl.utils.Threads;
 import androidx.camera.core.internal.CameraUseCaseAdapter;
 import androidx.camera.core.internal.StreamSpecsCalculatorImpl;
@@ -56,6 +64,7 @@ import androidx.camera.testing.impl.fakes.FakeSurfaceEffect;
 import androidx.camera.testing.impl.fakes.FakeSurfaceProcessor;
 import androidx.camera.testing.impl.fakes.FakeUseCase;
 import androidx.camera.testing.impl.fakes.FakeUseCaseConfigFactory;
+import androidx.test.core.app.ApplicationProvider;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -81,6 +90,7 @@ public class LifecycleCameraTest {
     private FakeLifecycleOwner mLifecycleOwner;
     private CameraCoordinator mCameraCoordinator;
     private CameraUseCaseAdapter mCameraUseCaseAdapter;
+    private @NonNull RotationProvider mRotationProvider;
     private FakeCamera mFakeCamera;
     private FakeUseCase mFakeUseCase;
     private FakeUseCase mFakeUseCase2;
@@ -100,6 +110,8 @@ public class LifecycleCameraTest {
                 new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
                         new FakeCameraDeviceSurfaceManager()),
                 new FakeUseCaseConfigFactory());
+        mRotationProvider = new RotationProvider(
+                (Context) ApplicationProvider.getApplicationContext(), true);
 
         ((FakeCameraInfoInternal) mFakeCamera.getCameraInfo()).setCameraUseCaseAdapterProvider(
                 new CameraUseCaseAdapterProvider() {
@@ -123,7 +135,9 @@ public class LifecycleCameraTest {
 
 
         mFakeUseCase = new FakeUseCase();
+        mFakeUseCase.setAutoRotationSupported(true);
         mFakeUseCase2 = new FakeUseCase();
+        mFakeUseCase2.setAutoRotationSupported(true);
         mViewPort = new ViewPort.Builder(
                 new Rational(4, 3), Surface.ROTATION_0).build();
         mEffect = new FakeSurfaceEffect(directExecutor(), mFakeSurfaceProcessor);
@@ -138,14 +152,16 @@ public class LifecycleCameraTest {
     public void lifecycleCameraCanBeMadeObserverOfLifecycle() {
         assertThat(mLifecycleOwner.getObserverCount()).isEqualTo(0);
 
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         assertThat(mLifecycleOwner.getObserverCount()).isEqualTo(1);
     }
 
     @Test
     public void lifecycleCameraCanStopObservingALifecycle() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         assertThat(mLifecycleOwner.getObserverCount()).isEqualTo(1);
 
@@ -156,7 +172,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void lifecycleCameraCanBeReleasedMultipleTimes() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleCamera.release();
         mLifecycleCamera.release();
@@ -164,7 +181,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void lifecycleStart_triggersOnActive() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleOwner.start();
 
@@ -173,7 +191,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void lifecycleStop_triggersOnInactive() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleOwner.start();
 
@@ -184,7 +203,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void lifecycleStart_doesNotTriggerOnActiveIfSuspended() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleCamera.suspend();
         mLifecycleOwner.start();
@@ -209,8 +229,10 @@ public class LifecycleCameraTest {
                 new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
                         new FakeCameraDeviceSurfaceManager()),
                 new FakeUseCaseConfigFactory());
-        LifecycleCamera lifecycleCamera1 = new LifecycleCamera(lifecycle1, adapter1);
-        LifecycleCamera lifecycleCamera2 = new LifecycleCamera(lifecycle2, adapter2);
+        LifecycleCamera lifecycleCamera1 = new LifecycleCamera(lifecycle1, adapter1,
+                mRotationProvider);
+        LifecycleCamera lifecycleCamera2 = new LifecycleCamera(lifecycle2, adapter2,
+                mRotationProvider);
 
         // Set an config to CameraControl internally.
         Config.Option<Integer> option = Config.Option.create("OPTION_ID", Integer.class);
@@ -248,7 +270,8 @@ public class LifecycleCameraTest {
         Config config = MutableOptionsBundle.create();
         mFakeCamera.getCameraControlInternal().addInteropConfig(config);
 
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleOwner.start();
 
@@ -263,7 +286,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void unsuspendOfStartedLifecycle_triggersOnActive() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
 
         mLifecycleCamera.suspend();
         mLifecycleOwner.start();
@@ -283,7 +307,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindSessionConfig_willBindToCameraInternal()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig =
@@ -306,7 +331,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void bindSessionConfig_withFeatures_featuresSetToAttachedUseCases() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
         ((FakeCameraInfoInternal) mFakeCamera.getCameraInfo()).setSupportedDynamicRanges(
                 Collections.singleton(DynamicRange.HLG_10_BIT));
@@ -336,7 +362,8 @@ public class LifecycleCameraTest {
     public void bindSessionConfig_withUnsupportedPreferredFeatures_correctFeaturesAttached() {
         // Arrange: Set up resources; HLG10, FPS_60, and PREVIEW_STABILIZATION are supported
         //   features while Ultra HDR is unsupported by the default behavior of fake surface manager
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
         ((FakeCameraInfoInternal) mFakeCamera.getCameraInfo()).setSupportedDynamicRanges(
                 Collections.singleton(DynamicRange.HLG_10_BIT));
@@ -369,7 +396,8 @@ public class LifecycleCameraTest {
             throws InterruptedException {
         // Arrange: Set up resources; HLG10, FPS_60, and PREVIEW_STABILIZATION are supported
         //   features while Ultra HDR is unsupported by the default behavior of fake surface manager
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
         ((FakeCameraInfoInternal) mFakeCamera.getCameraInfo()).setSupportedDynamicRanges(
                 Collections.singleton(DynamicRange.HLG_10_BIT));
@@ -409,7 +437,8 @@ public class LifecycleCameraTest {
             throws InterruptedException {
         // Arrange: Set up resources; feature selection listener is set, but no required or
         // preferred feature is added.
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
         Preview preview = new Preview.Builder().build();
 
@@ -439,7 +468,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void bindSessionConfig_isBoundIsCorrect() throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig =
@@ -458,7 +488,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindLegacySessionConfig_willBindToCameraInternal()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig legacySessionConfig = new LegacySessionConfig(
@@ -480,7 +511,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void unbind_willUnbindFromCameraInternal() throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -492,7 +524,8 @@ public class LifecycleCameraTest {
     @Test
     public void unbindAll_willUnbindFromCameraInternal()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -502,9 +535,74 @@ public class LifecycleCameraTest {
     }
 
     @Test
+    public void lifecycleDestroy_releasesEffects() throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        mLifecycleCamera.bind(new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                .addEffect(mEffect)
+                .build());
+
+        mLifecycleOwner.stop();
+        mLifecycleOwner.destroy();
+
+        assertThat(mLifecycleCamera.getCameraUseCaseAdapter().getEffects()).isEmpty();
+    }
+
+    @Test
+    public void unbindAll_releasesEffects() throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        mLifecycleCamera.bind(new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                .addEffect(mEffect)
+                .build());
+
+        mLifecycleCamera.unbindAll();
+
+        assertThat(mLifecycleCamera.getCameraUseCaseAdapter().getEffects()).isEmpty();
+    }
+
+    @Test
+    public void unbindSessionConfig_releasesEffects() throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        SessionConfig sessionConfig = new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                .addEffect(mEffect)
+                .build();
+        mLifecycleCamera.bind(sessionConfig);
+
+        mLifecycleCamera.unbind(sessionConfig);
+
+        assertThat(mLifecycleCamera.getCameraUseCaseAdapter().getEffects()).isEmpty();
+    }
+
+    @Test
+    public void unbindLegacySessionConfig_releasesEffectsOnlyWhenNothingIsBound()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        mLifecycleCamera.bind(new LegacySessionConfig(
+                Arrays.asList(mFakeUseCase, mFakeUseCase2), null,
+                Collections.singletonList(mEffect)));
+
+        // Act & Assert: effects are kept while a use case is still bound.
+        mLifecycleCamera.unbind(createLegacySessonConfig(mFakeUseCase));
+        assertThat(mLifecycleCamera.getCameraUseCaseAdapter().getEffects())
+                .containsExactly(mEffect);
+
+        // Act & Assert: effects are released once nothing is bound.
+        mLifecycleCamera.unbind(createLegacySessonConfig(mFakeUseCase2));
+        assertThat(mLifecycleCamera.getCameraUseCaseAdapter().getEffects()).isEmpty();
+    }
+
+    @Test
     public void bindLegacySessonConfig_thenSessionConfig_throwExceptions()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -516,7 +614,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindLegacySessonConfigWithSessionConfig_throwExceptions()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createSessionConfig(mFakeUseCase));
@@ -530,7 +629,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindMultipleSessonConfig_latestSessionConfigIsBound()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig1 = createSessionConfig(mFakeUseCase);
@@ -548,7 +648,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindSessonConfigWithLegacySessionConfig_throwExceptions()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -562,7 +663,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindLegacySessionConfigMultipleTimes_parametersUpdate_notThrowExceptions()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig legacySessionConfig1 = new LegacySessionConfig(
@@ -588,7 +690,8 @@ public class LifecycleCameraTest {
     @Test
     public void canBindUnbindLegacySessionConfigMultipleTimes_withDuplicateUseCases()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase, mFakeUseCase));
@@ -604,7 +707,8 @@ public class LifecycleCameraTest {
     @Test
     public void unbindSessionConfig_canBindSessionConfigAgain()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig = createSessionConfig(mFakeUseCase);
@@ -620,7 +724,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void unbindSessionConfig_noSessionConfigBoundPreviously_noOps() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig = createSessionConfig(mFakeUseCase);
@@ -630,7 +735,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void unbindLegacyConfig_noSessionConfigBoundPreviously_noExceptions() {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig legacyConfig = createLegacySessonConfig(mFakeUseCase);
@@ -641,7 +747,8 @@ public class LifecycleCameraTest {
     @Test
     public void unbindNonBoundSessionConfig_noOps()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         SessionConfig sessionConfig1 = createSessionConfig(mFakeUseCase);
@@ -659,7 +766,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindLegacySessionConfig_thenUnbindSessionConfig_noOps()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -671,7 +779,8 @@ public class LifecycleCameraTest {
     @Test
     public void bindSessionConfig_thenUnbindLegacySessionConfig_noOps()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createSessionConfig(mFakeUseCase));
@@ -683,7 +792,8 @@ public class LifecycleCameraTest {
     @Test
     public void unbindLegacyConfigsMultipleTimes_canBindSessionConfigAgain()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -699,7 +809,8 @@ public class LifecycleCameraTest {
     @Test
     public void canNotBindSessionConfig_whenThereAreBoundUseCases()
             throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
@@ -713,7 +824,8 @@ public class LifecycleCameraTest {
 
     @Test
     public void unbindAll_canBindSessionConfigAgain() throws CameraUseCaseAdapter.CameraException {
-        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter);
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
         mLifecycleOwner.start();
 
         mLifecycleCamera.bind(createSessionConfig(mFakeUseCase));
@@ -724,5 +836,424 @@ public class LifecycleCameraTest {
         // After unbinding, it can now bind new SessionConfig.
         mLifecycleCamera.bind(createSessionConfig(mFakeUseCase2));
         assertThat(mFakeCamera.getAttachedUseCases()).containsExactly(mFakeUseCase2);
+    }
+
+    @Test
+    public void bindSessionConfig_autoRotationEnabled_rotationProviderSet()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        mFakeUseCase.setRotationProvider(null);
+        SessionConfig sessionConfig =
+                new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                        .setAutoRotationEnabled(true)
+                        .build();
+        mLifecycleCamera.bind(sessionConfig);
+
+        assertThat(mFakeUseCase.getRotationProvider()).isEqualTo(mRotationProvider);
+
+        // Verify listener is added
+        mRotationProvider.updateOrientationForTesting(90);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertThat(mFakeUseCase.getLastRotation()).isEqualTo(Surface.ROTATION_270);
+    }
+
+    @Test
+    public void bindSessionConfig_autoRotationDisabled_rotationProviderNotSet()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        mFakeUseCase.setRotationProvider(null);
+        SessionConfig sessionConfig =
+                new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                        .setAutoRotationEnabled(false)
+                        .build();
+        mLifecycleCamera.bind(sessionConfig);
+
+        assertThat(mFakeUseCase.getRotationProvider()).isNull();
+
+        // Verify listener is not added
+        mFakeUseCase.clearLastRotation();
+        mRotationProvider.updateOrientationForTesting(90);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertThat(mFakeUseCase.getLastRotation()).isEqualTo(INVALID_ROTATION);
+    }
+
+    @Test
+    public void unbindSessionConfig_rotationProviderCleared()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        SessionConfig sessionConfig =
+                new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                        .setAutoRotationEnabled(true)
+                        .build();
+        mLifecycleCamera.bind(sessionConfig);
+        mLifecycleCamera.unbind(sessionConfig);
+
+        assertThat(mFakeUseCase.getRotationProvider()).isNull();
+
+        // Verify listener is removed
+        mFakeUseCase.clearLastRotation();
+        mRotationProvider.updateOrientationForTesting(90);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertThat(mFakeUseCase.getLastRotation()).isEqualTo(INVALID_ROTATION);
+    }
+
+    @Test
+    public void unbindAll_rotationProviderCleared()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        SessionConfig sessionConfig =
+                new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                        .setAutoRotationEnabled(true)
+                        .build();
+        mLifecycleCamera.bind(sessionConfig);
+        mLifecycleCamera.unbindAll();
+
+        assertThat(mFakeUseCase.getRotationProvider()).isNull();
+
+        // Verify listener is removed
+        mFakeUseCase.clearLastRotation();
+        mRotationProvider.updateOrientationForTesting(90);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertThat(mFakeUseCase.getLastRotation()).isEqualTo(INVALID_ROTATION);
+    }
+
+    @Test
+    public void bindSessionConfigWithInitialEnabledUseCases_bindsAllUseCases()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        SessionConfig config = new SessionConfig.Builder(mFakeUseCase, mFakeUseCase2)
+                .setInitialEnabledUseCases(mFakeUseCase)
+                .build();
+
+        mLifecycleCamera.bind(config);
+
+        assertThat(mCameraUseCaseAdapter.getUseCases()).containsExactly(mFakeUseCase,
+                mFakeUseCase2);
+    }
+
+    @Test
+    public void bindUnsupportedInitialEnabledUseCases_throwsAndKeepsTheCurrentBinding()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleCamera.bind(new SessionConfig(mFakeUseCase));
+        // A camera filter is not supported when initialEnabledUseCases is a strict subset.
+        SessionConfig config = new SessionConfig(
+                Arrays.asList(mFakeUseCase, mFakeUseCase2),
+                /*viewPort=*/ null,
+                /*effects=*/ Collections.emptyList(),
+                StreamSpec.FRAME_RATE_RANGE_UNSPECIFIED,
+                /*requiredFeatureGroup=*/ Collections.emptySet(),
+                /*preferredFeatureGroup=*/ Collections.emptyList(),
+                /*isAutoRotationEnabled=*/ false,
+                /*isLegacy=*/ false,
+                androidx.camera.core.impl.SessionConfig.SESSION_TYPE_REGULAR,
+                /*requireNonEmptyUseCases=*/ true,
+                cameraInfos -> cameraInfos,
+                OptionsBundle.emptyBundle(),
+                Collections.singletonList(mFakeUseCase));
+
+        assertThrows(IllegalArgumentException.class, () -> mLifecycleCamera.bind(config));
+
+        assertThat(mCameraUseCaseAdapter.getUseCases()).containsExactly(mFakeUseCase);
+    }
+
+    @Test
+    public void bindInitialEnabledUseCasesWithFeatureGroup_throwsAndKeepsTheCurrentBinding()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleCamera.bind(new SessionConfig(mFakeUseCase));
+        Preview preview = new Preview.Builder().build();
+        ImageCapture imageCapture = new ImageCapture.Builder().build();
+
+        SessionConfig configWithRequiredFeature =
+                new SessionConfig.Builder(preview, imageCapture)
+                        .setRequiredFeatureGroup(GroupableFeature.HDR_HLG10)
+                        .setInitialEnabledUseCases(preview)
+                        .build();
+        assertThrows(IllegalArgumentException.class,
+                () -> mLifecycleCamera.bind(configWithRequiredFeature));
+
+        SessionConfig configWithPreferredFeature =
+                new SessionConfig.Builder(preview, imageCapture)
+                        .setPreferredFeatureGroup(GroupableFeature.FPS_60)
+                        .setInitialEnabledUseCases(preview)
+                        .build();
+        assertThrows(IllegalArgumentException.class,
+                () -> mLifecycleCamera.bind(configWithPreferredFeature));
+
+        assertThat(mCameraUseCaseAdapter.getUseCases()).containsExactly(mFakeUseCase);
+    }
+
+    @Test
+    public void onDestroy_clearsBoundSessionConfig() throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        SessionConfig sessionConfig = createSessionConfig(mFakeUseCase);
+        mLifecycleCamera.bind(sessionConfig);
+        assertThat(mLifecycleCamera.isBound(sessionConfig)).isTrue();
+
+        mLifecycleOwner.stop();
+        mLifecycleOwner.destroy();
+
+        assertThat(mLifecycleCamera.isBound(sessionConfig)).isFalse();
+        assertThat(mLifecycleCamera.getBoundSessionConfig()).isNull();
+    }
+
+    @Test
+    public void onDestroy_clearsRotationProvider() throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+        SessionConfig sessionConfig =
+                new SessionConfig.Builder(Arrays.asList(mFakeUseCase))
+                        .setAutoRotationEnabled(true)
+                        .build();
+        mLifecycleCamera.bind(sessionConfig);
+
+        assertThat(mFakeUseCase.getRotationProvider()).isEqualTo(mRotationProvider);
+
+        // Act: destroy lifecycle without calling unbindAll() explicitly
+        mLifecycleOwner.stop();
+        mLifecycleOwner.destroy();
+
+        // Assert: UseCase.mRotationProvider are cleared
+        assertThat(mFakeUseCase.getRotationProvider()).isNull();
+
+        // Verify rotation listener is removed
+        mFakeUseCase.clearLastRotation();
+        mRotationProvider.updateOrientationForTesting(90);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertThat(mFakeUseCase.getLastRotation()).isEqualTo(INVALID_ROTATION);
+    }
+
+    @Test
+    public void bindSessionConfigFailure_clearsBoundSessionConfigAndSessionInteropConfig() {
+        FakeCameraDeviceSurfaceManager restrictiveSurfaceManager =
+                new FakeCameraDeviceSurfaceManager();
+        restrictiveSurfaceManager.setValidSurfaceCombos(Collections.emptySet());
+        CameraUseCaseAdapter failingAdapter = new CameraUseCaseAdapter(
+                mFakeCamera,
+                mCameraCoordinator,
+                new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
+                        restrictiveSurfaceManager),
+                new FakeUseCaseConfigFactory());
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, failingAdapter, mRotationProvider);
+        mLifecycleOwner.start();
+
+        Config.Option<Integer> testOption = Config.Option.create("camera.test.interop",
+                Integer.class);
+        SessionConfig sessionConfig = new SessionConfig.Builder(mFakeUseCase)
+                .setInterop(builder -> builder.getInteropMutableConfig().insertOption(testOption,
+                        42))
+                .build();
+
+        assertThrows(CameraUseCaseAdapter.CameraException.class,
+                () -> mLifecycleCamera.bind(sessionConfig));
+
+        assertThat(mLifecycleCamera.isBound(sessionConfig)).isFalse();
+        assertThat(mLifecycleCamera.getBoundSessionConfig()).isNull();
+        assertThat(mFakeCamera.getSessionInteropConfig()).isNull();
+    }
+
+    @Test
+    public void twoLifecycleCamerasSharingCamera_isolateAndRestoreSessionInteropConfig()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        Config.Option<Integer> testOption = Config.Option.create("camera.test.interop",
+                Integer.class);
+        SessionConfig sessionConfig1 = new SessionConfig.Builder(mFakeUseCase)
+                .setInterop(builder -> builder.getInteropMutableConfig().insertOption(testOption,
+                        1))
+                .build();
+        mLifecycleCamera.bind(sessionConfig1);
+        assertThat(mFakeCamera.getSessionInteropConfig())
+                .isEqualTo(sessionConfig1.getInteropConfig());
+
+        // Second LifecycleOwner is already STARTED when its LifecycleCamera is created and bound,
+        // matching LifecycleCameraRepository.bindToLifecycleCamera where bind() runs before the
+        // previous active LifecycleCamera is suspended.
+        FakeLifecycleOwner lifecycleOwner2 = new FakeLifecycleOwner();
+        lifecycleOwner2.start();
+        CameraUseCaseAdapter adapter2 = new CameraUseCaseAdapter(
+                mFakeCamera,
+                mCameraCoordinator,
+                new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
+                        new FakeCameraDeviceSurfaceManager()),
+                new FakeUseCaseConfigFactory());
+        LifecycleCamera lifecycleCamera2 = new LifecycleCamera(
+                lifecycleOwner2, adapter2, mRotationProvider);
+        assertThat(mFakeCamera.getSessionInteropConfig())
+                .isEqualTo(sessionConfig1.getInteropConfig());
+
+        SessionConfig sessionConfig2 = new SessionConfig.Builder(mFakeUseCase2)
+                .setInterop(builder -> builder.getInteropMutableConfig().insertOption(testOption,
+                        2))
+                .build();
+        lifecycleCamera2.bind(sessionConfig2);
+        mLifecycleCamera.suspend();
+        assertThat(mFakeCamera.getSessionInteropConfig())
+                .isEqualTo(sessionConfig2.getInteropConfig());
+
+        // Stopping the second LifecycleOwner and unsuspending the first restores sessionConfig1's
+        // interop config.
+        lifecycleOwner2.stop();
+        assertThat(mFakeCamera.getSessionInteropConfig()).isNull();
+        mLifecycleCamera.unsuspend();
+        assertThat(mFakeCamera.getSessionInteropConfig())
+                .isEqualTo(sessionConfig1.getInteropConfig());
+    }
+
+    @Test
+    public void bindSessionConfig_whenFeatureGroupResolutionFails_doesNotMutateBoundOrInteropState()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        Config.Option<Integer> testOption = Config.Option.create("camera.test.interop",
+                Integer.class);
+        Preview preview = new Preview.Builder().build();
+        // IMAGE_ULTRA_HDR requires ImageCapture, so resolveFeatureGroup throws
+        // IllegalArgumentException before UseCases are attached.
+        SessionConfig failingConfig = new SessionConfig.Builder(Collections.singletonList(preview))
+                .setRequiredFeatureGroup(IMAGE_ULTRA_HDR)
+                .setInterop(builder -> builder.getInteropMutableConfig().insertOption(testOption,
+                        99))
+                .build();
+
+        Threads.runOnMainSync(() -> assertThrows(IllegalArgumentException.class,
+                () -> mLifecycleCamera.bind(failingConfig)));
+        assertThat(mLifecycleCamera.isBound(failingConfig)).isFalse();
+        assertThat(mLifecycleCamera.getBoundSessionConfig()).isNull();
+        assertThat(mFakeCamera.getSessionInteropConfig()).isNull();
+
+        // Fallback legacy bind succeeds without requiring unbind first, and does not inherit the
+        // failed SessionConfig's interop options.
+        mLifecycleCamera.bind(createLegacySessonConfig(mFakeUseCase));
+        assertThat(mFakeCamera.getAttachedUseCases()).containsExactly(mFakeUseCase);
+        assertThat(mFakeCamera.getSessionInteropConfig().listOptions()).isEmpty();
+    }
+
+    @Test
+    public void twoLifecycleCamerasSharingCamera_preserveAndIsolateBoundSessionConfig()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        FakeLifecycleOwner lifecycleOwner2 = new FakeLifecycleOwner();
+        CameraUseCaseAdapter adapter2 = new CameraUseCaseAdapter(
+                mFakeCamera,
+                mCameraCoordinator,
+                new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
+                        new FakeCameraDeviceSurfaceManager()),
+                new FakeUseCaseConfigFactory());
+        LifecycleCamera lifecycleCamera2 = new LifecycleCamera(
+                lifecycleOwner2, adapter2, mRotationProvider);
+
+        SessionConfig sessionConfig1 = new SessionConfig.Builder(mFakeUseCase, mFakeUseCase2)
+                .setInitialEnabledUseCases(mFakeUseCase)
+                .build();
+        mLifecycleCamera.bind(sessionConfig1);
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
+
+        // Binding legacy use cases to a stopped second LifecycleCamera must not overwrite the
+        // active LifecycleCamera's enabled UseCases on the underlying camera.
+        FakeUseCase otherUseCase = new FakeUseCase();
+        otherUseCase.setAutoRotationSupported(true);
+        lifecycleCamera2.bind(createLegacySessonConfig(otherUseCase));
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
+
+        // Switching active LifecycleOwners isolates the enabled UseCases per adapter.
+        mLifecycleOwner.stop();
+        assertThat(mFakeCamera.getEnabledUseCases()).isNull();
+
+        lifecycleOwner2.start();
+        assertThat(mFakeCamera.getEnabledUseCases()).isNull();
+
+        // Resuming the first LifecycleOwner restores its enabled UseCases.
+        lifecycleOwner2.stop();
+        mLifecycleOwner.start();
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
+    }
+
+    @Test
+    public void twoStartedLifecycleCamerasSharingCamera_overlapBindAndStopPreservesActiveConfig()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+        mLifecycleOwner.start();
+
+        SessionConfig sessionConfig1 = new SessionConfig.Builder(mFakeUseCase, mFakeUseCase2)
+                .setInitialEnabledUseCases(mFakeUseCase)
+                .build();
+        mLifecycleCamera.bind(sessionConfig1);
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
+
+        // Second LifecycleOwner is already STARTED when its LifecycleCamera is created and bound,
+        // matching LifecycleCameraRepository.bindToLifecycleCamera where bind() runs before the
+        // previous active LifecycleCamera is suspended.
+        FakeLifecycleOwner lifecycleOwner2 = new FakeLifecycleOwner();
+        lifecycleOwner2.start();
+        CameraUseCaseAdapter adapter2 = new CameraUseCaseAdapter(
+                mFakeCamera,
+                mCameraCoordinator,
+                new StreamSpecsCalculatorImpl(new FakeUseCaseConfigFactory(),
+                        new FakeCameraDeviceSurfaceManager()),
+                new FakeUseCaseConfigFactory());
+        LifecycleCamera lifecycleCamera2 = new LifecycleCamera(
+                lifecycleOwner2, adapter2, mRotationProvider);
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
+
+        FakeUseCase useCaseB1 = new FakeUseCase();
+        useCaseB1.setAutoRotationSupported(true);
+        FakeUseCase useCaseB2 = new FakeUseCase();
+        useCaseB2.setAutoRotationSupported(true);
+        SessionConfig sessionConfig2 = new SessionConfig.Builder(useCaseB1, useCaseB2)
+                .setInitialEnabledUseCases(useCaseB1)
+                .build();
+        lifecycleCamera2.bind(sessionConfig2);
+        mLifecycleCamera.suspend();
+
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(useCaseB1);
+    }
+
+    @Test
+    public void bindBeforeLifecycleStart_doesNotApplyEnabledUseCasesUntilStarted()
+            throws CameraUseCaseAdapter.CameraException {
+        mLifecycleCamera = new LifecycleCamera(mLifecycleOwner, mCameraUseCaseAdapter,
+                mRotationProvider);
+
+        SessionConfig sessionConfig = new SessionConfig.Builder(mFakeUseCase, mFakeUseCase2)
+                .setInitialEnabledUseCases(mFakeUseCase)
+                .build();
+        // Bind while LifecycleOwner is still in CREATED state (before start()).
+        mLifecycleCamera.bind(sessionConfig);
+
+        assertThat(mFakeCamera.getEnabledUseCases()).isNull();
+        assertThat(mCameraUseCaseAdapter.getBoundSessionConfig()).isSameInstanceAs(sessionConfig);
+
+        // Starting the LifecycleOwner applies the initialEnabledUseCases to the camera.
+        mLifecycleOwner.start();
+        assertThat(mFakeCamera.getEnabledUseCases()).containsExactly(mFakeUseCase);
     }
 }

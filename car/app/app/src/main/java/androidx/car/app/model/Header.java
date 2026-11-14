@@ -23,6 +23,7 @@ import static java.util.Objects.requireNonNull;
 import androidx.car.app.annotations.CarProtocol;
 import androidx.car.app.annotations.KeepFields;
 import androidx.car.app.annotations.RequiresCarApi;
+import androidx.car.app.model.constraints.BackgroundConstraints;
 import androidx.car.app.model.constraints.CarTextConstraints;
 import androidx.car.app.navigation.model.MapWithContentTemplate;
 import androidx.car.app.utils.CollectionUtils;
@@ -45,18 +46,27 @@ public final class Header {
     private final @NonNull List<Action> mEndHeaderActions;
     private final @Nullable Action mStartHeaderAction;
     private final @Nullable CarText mTitle;
+    private final @Nullable CarText mSubtitle;
+    private final @Nullable Background mBackground;
+    private final @Nullable CarIcon mStartHeaderImage;
 
     Header(Builder builder) {
         mTitle = builder.mTitle;
+        mSubtitle = builder.mSubtitle;
         mStartHeaderAction = builder.mStartHeaderAction;
         mEndHeaderActions = CollectionUtils.unmodifiableCopy(builder.mEndHeaderActions);
+        mBackground = builder.mBackground;
+        mStartHeaderImage = builder.mStartHeaderImage;
     }
 
     /** Constructs an empty instance, used by serialization code. */
     private Header() {
         mTitle = null;
+        mSubtitle = null;
         mStartHeaderAction = null;
         mEndHeaderActions = new ArrayList<>();
+        mBackground = null;
+        mStartHeaderImage = null;
     }
 
     /**
@@ -66,6 +76,34 @@ public final class Header {
      */
     public @Nullable CarText getTitle() {
         return mTitle;
+    }
+
+    /**
+     * Returns the subtitle of the component or {@code null} if not set.
+     *
+     * @see Builder#setSubtitle(CharSequence)
+     */
+    @RequiresCarApi(9)
+    public @Nullable CarText getSubtitle() {
+        return mSubtitle;
+    }
+
+    /**
+     * Returns the {@link Background} of the component or {@code null} if not set.
+     *
+     * @see Builder#setBackground(Background)
+     */
+    @RequiresCarApi(9)
+    public @Nullable Background getBackground() {
+        return mBackground;
+    }
+
+    /**
+     * Returns the start image of the component or {@code null} if not set.
+     */
+    @RequiresCarApi(9)
+    public @Nullable CarIcon getStartHeaderImage() {
+        return mStartHeaderImage;
     }
 
     /**
@@ -90,12 +128,16 @@ public final class Header {
 
     @Override
     public @NonNull String toString() {
-        return "Header: " + mTitle;
+        return "Header: " + mTitle + ", Subtitle: " + mSubtitle + ", Background: " + mBackground
+                + ", StartHeaderImage: " + mStartHeaderImage;
+
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mTitle, mEndHeaderActions, mStartHeaderAction);
+        return Objects.hash(mTitle, mSubtitle, mEndHeaderActions, mStartHeaderAction, mBackground,
+                mStartHeaderImage);
+
     }
 
     @Override
@@ -109,8 +151,11 @@ public final class Header {
         Header otherComponent = (Header) other;
 
         return Objects.equals(mTitle, otherComponent.mTitle)
+                && Objects.equals(mSubtitle, otherComponent.mSubtitle)
                 && Objects.equals(mEndHeaderActions, otherComponent.mEndHeaderActions)
-                && Objects.equals(mStartHeaderAction, otherComponent.mStartHeaderAction);
+                && Objects.equals(mStartHeaderAction, otherComponent.mStartHeaderAction)
+                && Objects.equals(mBackground, otherComponent.mBackground)
+                && Objects.equals(mStartHeaderImage, otherComponent.mStartHeaderImage);
     }
 
     /** A builder of {@link Header}. */
@@ -118,6 +163,9 @@ public final class Header {
         final List<Action> mEndHeaderActions = new ArrayList<>();
         @Nullable Action mStartHeaderAction;
         @Nullable CarText mTitle;
+        @Nullable CarText mSubtitle;
+        @Nullable Background mBackground;
+        @Nullable CarIcon mStartHeaderImage;
 
         /**
          * Adds an {@link Action} that will be displayed at the end of a header.
@@ -190,6 +238,69 @@ public final class Header {
         }
 
         /**
+         * Sets the subtitle of the component.
+         *
+         * <p>Support colors and icons.
+         *
+         * @throws NullPointerException     if {@code subtitle} is null
+         * @throws IllegalArgumentException if {@code subtitle} contains unsupported spans
+         * @see CarText
+         */
+        @RequiresCarApi(9)
+        public @NonNull Builder setSubtitle(@NonNull CharSequence subtitle) {
+            return setSubtitle(CarText.create(subtitle));
+        }
+
+        /**
+         * Sets the subtitle of the component.
+         *
+         * <p>Support colors and icons.
+         *
+         * @throws NullPointerException     if {@code subtitle} is null
+         * @throws IllegalArgumentException if {@code subtitle} contains unsupported spans
+         * @see CarText
+         */
+        @RequiresCarApi(9)
+        public @NonNull Builder setSubtitle(@NonNull CarText subtitle) {
+            mSubtitle = requireNonNull(subtitle);
+            CarTextConstraints.TEXT_WITH_COLORS_AND_ICON.validateOrThrow(mSubtitle);
+            return this;
+        }
+
+        /**
+         * Sets the {@link Background} of the component.
+         *
+         * @throws NullPointerException if {@code background} is null
+         */
+        @RequiresCarApi(9)
+        public @NonNull Builder setBackground(@NonNull Background background) {
+            BackgroundConstraints.UNCONSTRAINED.validateOrThrow(background);
+            mBackground = requireNonNull(background);
+            return this;
+        }
+
+        /**
+         * Sets the image that will be displayed at the start of the header after the
+         * {@link #setStartHeaderAction(Action)}.
+         *
+         * <p>Only custom {@link CarIcon}s are supported.
+         *
+         * @throws NullPointerException     if {@code startHeaderImage} is null
+         * @throws IllegalArgumentException if {@code startHeaderImage} is not a custom icon
+         */
+        @RequiresCarApi(9)
+        public @NonNull Builder setStartHeaderImage(@NonNull CarIcon startHeaderImage) {
+            requireNonNull(startHeaderImage);
+            if (startHeaderImage.getType() != CarIcon.TYPE_CUSTOM) {
+                throw new IllegalArgumentException(
+                        "Only custom images are supported for startHeaderImage");
+            }
+            mStartHeaderImage = startHeaderImage;
+            return this;
+        }
+
+
+        /**
          * Constructs the component defined by this builder.
          *
          * <h4>Requirements</h4>
@@ -203,8 +314,8 @@ public final class Header {
          */
         public @NonNull Header build() {
             if (CarText.isNullOrEmpty(mTitle) && mStartHeaderAction == null) {
-                throw new IllegalStateException("Either the title or start header action must be "
-                        + "set");
+                throw new IllegalStateException(
+                        "Either the title or start header action must be set");
             }
 
             return new Header(this);

@@ -20,9 +20,12 @@ package androidx.compose.ui.input.pointer
 
 import android.view.MotionEvent.ACTION_HOVER_ENTER
 import android.view.MotionEvent.ACTION_HOVER_EXIT
+import android.view.MotionEvent.ACTION_HOVER_MOVE
 import androidx.collection.IntObjectMap
 import androidx.compose.runtime.retain.ForgetfulRetainedValuesStore
 import androidx.compose.runtime.retain.RetainedValuesStore
+import androidx.compose.ui.ComposeUiFlags
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.Autofill
@@ -45,7 +48,6 @@ import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.modifier.ModifierLocalManager
-import androidx.compose.ui.node.InternalCoreApi
 import androidx.compose.ui.node.LayoutNode
 import androidx.compose.ui.node.LayoutNodeDrawScope
 import androidx.compose.ui.node.LookaheadDelegate
@@ -55,11 +57,13 @@ import androidx.compose.ui.node.Owner
 import androidx.compose.ui.node.OwnerSnapshotObserver
 import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.node.RootForTest
+import androidx.compose.ui.node.add
 import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.PlatformTextInputSessionScope
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.TaskDispatchers
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.WindowInfo
@@ -68,6 +72,7 @@ import androidx.compose.ui.spatial.RectManager
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextInputService
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
@@ -92,10 +97,11 @@ import org.junit.runner.RunWith
 class HitPathTrackerTest {
 
     private lateinit var hitPathTracker: HitPathTracker
-    private val layoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+    private lateinit var layoutNode: LayoutNode
 
     @Before
     fun setup() {
+        layoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
         hitPathTracker = HitPathTracker(layoutNode.outerCoordinator)
     }
 
@@ -419,7 +425,12 @@ class HitPathTrackerTest {
 
     @Test
     fun dispatchChanges_hitResultHasSingleMatch_pointerInputHandlerCalled() {
-        val pif = PointerInputNodeMock()
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(13), listOf(pif))
 
         hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -439,9 +450,15 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_hitResultHasMultipleMatches_pointerInputHandlersCalledInCorrectOrder() {
         val log = mutableListOf<LogEntry>()
-        val pif1 = PointerInputNodeMock(log)
-        val pif2 = PointerInputNodeMock(log)
-        val pif3 = PointerInputNodeMock(log)
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(13), listOf(pif1, pif2, pif3))
 
         hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -461,9 +478,14 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_hasDownAndUpPath_pointerInputHandlersCalledInCorrectOrder() {
         val log = mutableListOf<LogEntry>()
-        val pif1 = PointerInputNodeMock(log)
-        val pif2 = PointerInputNodeMock(log)
-        val pif3 = PointerInputNodeMock(log)
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(13), listOf(pif1, pif2, pif3))
 
         hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -489,10 +511,16 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2IndependentBranchesFromRoot_eventsSplitCorrectlyAndCallOrderCorrect() {
         val log = mutableListOf<LogEntry>()
-        val pif1 = PointerInputNodeMock(log)
-        val pif2 = PointerInputNodeMock(log)
-        val pif3 = PointerInputNodeMock(log)
-        val pif4 = PointerInputNodeMock(log)
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif4 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(3), listOf(pif1, pif2))
         hitPathTracker.addHitPath(PointerId(5), listOf(pif3, pif4))
         val event1 = down(3)
@@ -539,9 +567,25 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2BranchesWithSharedParent_eventsSplitCorrectlyAndCallOrderCorrect() {
         val log = mutableListOf<LogEntry>()
-        val parent = PointerInputNodeMock(log)
-        val child1 = PointerInputNodeMock(log)
-        val child2 = PointerInputNodeMock(log)
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val child1LayoutNode = LayoutNode(0, 0, 100, 100)
+        val child2LayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(child1LayoutNode)
+        parentLayoutNode.add(child2LayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(child1LayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(child2LayoutNode, Constraints.fixed(100, 100))
+
+        val parent =
+            PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val child1 =
+            PointerInputNodeMock(log = log, coordinator = child1LayoutNode.outerCoordinator)
+        val child2 =
+            PointerInputNodeMock(log = log, coordinator = child2LayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(3), listOf(parent, child1))
         hitPathTracker.addHitPath(PointerId(5), listOf(parent, child2))
         val event1 = down(3)
@@ -607,8 +651,18 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2PointersShareCompletePath_eventsDoNotSplitAndCallOrderCorrect() {
         val log = mutableListOf<LogEntry>()
-        val child1 = PointerInputNodeMock(log)
-        val child2 = PointerInputNodeMock(log)
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val child1LayoutNode = LayoutNode(0, 0, 100, 100)
+        val child2LayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(child1LayoutNode)
+        parentLayoutNode.add(child2LayoutNode)
+
+        val child1 =
+            PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val child2 =
+            PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(3), listOf(child1, child2))
         hitPathTracker.addHitPath(PointerId(5), listOf(child1, child2))
         val event1 = down(3)
@@ -653,6 +707,12 @@ class HitPathTrackerTest {
 
     @Test
     fun dispatchChanges_hitResultHasSingleMatch_changesAreUpdatedCorrectly() {
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
         val pif1 =
             PointerInputNodeMock(
                 pointerEventHandler = { pointerEvent, _, _ ->
@@ -660,7 +720,8 @@ class HitPathTrackerTest {
                         if (it.pressed != it.previousPressed) it.consume()
                         it
                     }
-                }
+                },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         hitPathTracker.addHitPath(PointerId(13), listOf(pif1))
@@ -676,6 +737,12 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_hitResultHasMultipleMatchesAndDownAndUpPaths_changesAreUpdatedCorrectly() {
         val log = mutableListOf<LogEntry>()
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
         val pif1 =
             PointerInputNodeMock(
                 log = log,
@@ -683,6 +750,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         val pif2 =
@@ -692,6 +760,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         val pif3 =
@@ -701,6 +770,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         hitPathTracker.addHitPath(PointerId(13), listOf(pif1, pif2, pif3))
@@ -719,32 +789,32 @@ class HitPathTrackerTest {
 
         assertThat(log1[0].pointerInputNode).isEqualTo(pif1)
         PointerEventSubject.assertThat(log1[0].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(expectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(expectedChange))
         assertThat(log1[0].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[1].pointerInputNode).isEqualTo(pif2)
         PointerEventSubject.assertThat(log1[1].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedChange))
         assertThat(log1[1].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[2].pointerInputNode).isEqualTo(pif3)
         PointerEventSubject.assertThat(log1[2].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedChange))
         assertThat(log1[2].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[3].pointerInputNode).isEqualTo(pif3)
         PointerEventSubject.assertThat(log1[3].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedChange))
         assertThat(log1[3].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[4].pointerInputNode).isEqualTo(pif2)
         PointerEventSubject.assertThat(log1[4].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedChange))
         assertThat(log1[4].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[5].pointerInputNode).isEqualTo(pif1)
         PointerEventSubject.assertThat(log1[5].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedChange))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedChange))
         assertThat(log1[5].pass).isEqualTo(PointerEventPass.Main)
 
         PointerInputChangeSubject.assertThat(internalPointerEvent.changes.valueAt(0))
@@ -754,6 +824,12 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2IndependentBranchesFromRoot_changesAreUpdatedCorrectly() {
         val log = mutableListOf<LogEntry>()
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
         val pif1 =
             PointerInputNodeMock(
                 log = log,
@@ -763,6 +839,7 @@ class HitPathTrackerTest {
                     }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
         val pif2 =
             PointerInputNodeMock(
@@ -773,6 +850,7 @@ class HitPathTrackerTest {
                     }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
         val pif3 =
             PointerInputNodeMock(
@@ -781,6 +859,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
         val pif4 =
             PointerInputNodeMock(
@@ -789,6 +868,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
         hitPathTracker.addHitPath(PointerId(3), listOf(pif1, pif2))
         hitPathTracker.addHitPath(PointerId(5), listOf(pif3, pif4))
@@ -815,42 +895,42 @@ class HitPathTrackerTest {
 
         assertThat(log1[0].pointerInputNode).isEqualTo(pif1)
         PointerEventSubject.assertThat(log1[0].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(expectedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(expectedEvent1))
         assertThat(log1[0].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[1].pointerInputNode).isEqualTo(pif2)
         PointerEventSubject.assertThat(log1[1].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent1))
         assertThat(log1[1].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[2].pointerInputNode).isEqualTo(pif2)
         PointerEventSubject.assertThat(log1[2].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent1))
         assertThat(log1[2].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[3].pointerInputNode).isEqualTo(pif1)
         PointerEventSubject.assertThat(log1[3].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent1))
         assertThat(log1[3].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log2[0].pointerInputNode).isEqualTo(pif3)
         PointerEventSubject.assertThat(log2[0].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(expectedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(expectedEvent2))
         assertThat(log2[0].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log2[1].pointerInputNode).isEqualTo(pif4)
         PointerEventSubject.assertThat(log2[1].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent2))
         assertThat(log2[1].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log2[2].pointerInputNode).isEqualTo(pif4)
         PointerEventSubject.assertThat(log2[2].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent2))
         assertThat(log2[2].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log2[3].pointerInputNode).isEqualTo(pif3)
         PointerEventSubject.assertThat(log2[3].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedExpectedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedExpectedEvent2))
         assertThat(log2[3].pass).isEqualTo(PointerEventPass.Main)
 
         assertEquals(2, internalPointerEvent.changes.size())
@@ -863,6 +943,19 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2BranchesWithSharedParent_changesAreUpdatedCorrectly() {
         val log = mutableListOf<LogEntry>()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val child1LayoutNode = LayoutNode(0, 0, 100, 100)
+        val child2LayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(child1LayoutNode)
+        parentLayoutNode.add(child2LayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(child1LayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(child2LayoutNode, Constraints.fixed(100, 100))
+
         val parent =
             PointerInputNodeMock(
                 log = log,
@@ -872,6 +965,7 @@ class HitPathTrackerTest {
                     }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         val child1 =
@@ -883,6 +977,7 @@ class HitPathTrackerTest {
                     }
                     pointerEvent.changes
                 },
+                coordinator = child1LayoutNode.outerCoordinator,
             )
 
         val child2 =
@@ -894,6 +989,7 @@ class HitPathTrackerTest {
                     }
                     pointerEvent.changes
                 },
+                coordinator = child2LayoutNode.outerCoordinator,
             )
 
         hitPathTracker.addHitPath(PointerId(3), listOf(parent, child1))
@@ -916,32 +1012,32 @@ class HitPathTrackerTest {
 
         assertThat(log1[0].pointerInputNode).isEqualTo(parent)
         PointerEventSubject.assertThat(log1[0].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(expectedEvent1, expectedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(expectedEvent1, expectedEvent2))
         assertThat(log1[0].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[1].pointerInputNode).isEqualTo(child1)
         PointerEventSubject.assertThat(log1[1].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedEvent1))
         assertThat(log1[1].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[2].pointerInputNode).isEqualTo(child1)
         PointerEventSubject.assertThat(log1[2].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedEvent1))
         assertThat(log1[2].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[3].pointerInputNode).isEqualTo(child2)
         PointerEventSubject.assertThat(log1[3].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedEvent2))
         assertThat(log1[3].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[4].pointerInputNode).isEqualTo(child2)
         PointerEventSubject.assertThat(log1[4].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedEvent2))
         assertThat(log1[4].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[5].pointerInputNode).isEqualTo(parent)
         PointerEventSubject.assertThat(log1[5].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1, consumedEvent2))
+            .isStructurallyEqualTo(pointerMoveEventOf(consumedEvent1, consumedEvent2))
         assertThat(log1[5].pass).isEqualTo(PointerEventPass.Main)
 
         assertEquals(2, internalPointerEvent.changes.size())
@@ -955,6 +1051,12 @@ class HitPathTrackerTest {
     @Test
     fun dispatchChanges_2PointersShareCompletePath_changesAreUpdatedCorrectly() {
         val log = mutableListOf<LogEntry>()
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
         val child1 =
             PointerInputNodeMock(
                 log = log,
@@ -962,6 +1064,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
         val child2 =
             PointerInputNodeMock(
@@ -970,6 +1073,7 @@ class HitPathTrackerTest {
                     pointerEvent.changes.map { it.consume() }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
 
         hitPathTracker.addHitPath(PointerId(3), listOf(child1, child2))
@@ -992,22 +1096,30 @@ class HitPathTrackerTest {
 
         assertThat(log1[0].pointerInputNode).isEqualTo(child1)
         PointerEventSubject.assertThat(log1[0].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(expectedEvent1, expectedEvent2))
+            .isStructurallyEqualTo(
+                pointerEventOf(expectedEvent1, expectedEvent2, motionEvent = MotionEventMove)
+            )
         assertThat(log1[0].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[1].pointerInputNode).isEqualTo(child2)
         PointerEventSubject.assertThat(log1[1].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1, consumedEvent2))
+            .isStructurallyEqualTo(
+                pointerEventOf(consumedEvent1, consumedEvent2, motionEvent = MotionEventMove)
+            )
         assertThat(log1[1].pass).isEqualTo(PointerEventPass.Initial)
 
         assertThat(log1[2].pointerInputNode).isEqualTo(child2)
         PointerEventSubject.assertThat(log1[2].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1, consumedEvent2))
+            .isStructurallyEqualTo(
+                pointerEventOf(consumedEvent1, consumedEvent2, motionEvent = MotionEventMove)
+            )
         assertThat(log1[2].pass).isEqualTo(PointerEventPass.Main)
 
         assertThat(log1[3].pointerInputNode).isEqualTo(child1)
         PointerEventSubject.assertThat(log1[3].pointerEvent)
-            .isStructurallyEqualTo(pointerEventOf(consumedEvent1, consumedEvent2))
+            .isStructurallyEqualTo(
+                pointerEventOf(consumedEvent1, consumedEvent2, motionEvent = MotionEventMove)
+            )
         assertThat(log1[3].pass).isEqualTo(PointerEventPass.Main)
 
         assertEquals(2, internalPointerEvent.changes.size())
@@ -2332,9 +2444,22 @@ class HitPathTrackerTest {
     // root(5) -> middle(5) -> leaf(5)
     @Test
     fun removeHitPath_2PathsShareNodes1PointerIdRemoved_resultContainsRemainingPath() {
-        val root = PointerInputNodeMock()
-        val middle = PointerInputNodeMock()
-        val leaf = PointerInputNodeMock()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val middleLayoutNode = LayoutNode(0, 0, 100, 100)
+        val leafLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(middleLayoutNode)
+        middleLayoutNode.add(leafLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(middleLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(leafLayoutNode, Constraints.fixed(100, 100))
+
+        val root = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val middle = PointerInputNodeMock(coordinator = middleLayoutNode.outerCoordinator)
+        val leaf = PointerInputNodeMock(coordinator = leafLayoutNode.outerCoordinator)
 
         val pointerId1 = PointerId(3)
         val pointerId2 = PointerId(5)
@@ -2367,9 +2492,22 @@ class HitPathTrackerTest {
     // Assert: root(5) -> middle(5)
     @Test
     fun removeHitPath_2PathsShare2NodesLongPathPointerIdRemoved_resultJustHasShortPath() {
-        val root = PointerInputNodeMock()
-        val middle = PointerInputNodeMock()
-        val leaf = PointerInputNodeMock()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val middleLayoutNode = LayoutNode(0, 0, 100, 100)
+        val leafLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(middleLayoutNode)
+        middleLayoutNode.add(leafLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(middleLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(leafLayoutNode, Constraints.fixed(100, 100))
+
+        val root = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val middle = PointerInputNodeMock(coordinator = middleLayoutNode.outerCoordinator)
+        val leaf = PointerInputNodeMock(coordinator = leafLayoutNode.outerCoordinator)
 
         val pointerId1 = PointerId(3)
         val pointerId2 = PointerId(5)
@@ -2397,9 +2535,22 @@ class HitPathTrackerTest {
     // Assert: root(3) -> middle(3) -> leaf(3)
     @Test
     fun removeHitPath_2PathsShare2NodesShortPathPointerIdRemoved_resultJustHasLongPath() {
-        val root = PointerInputNodeMock()
-        val middle = PointerInputNodeMock()
-        val leaf = PointerInputNodeMock()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val middleLayoutNode = LayoutNode(0, 0, 100, 100)
+        val leafLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(middleLayoutNode)
+        middleLayoutNode.add(leafLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(middleLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(leafLayoutNode, Constraints.fixed(100, 100))
+
+        val root = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val middle = PointerInputNodeMock(coordinator = middleLayoutNode.outerCoordinator)
+        val leaf = PointerInputNodeMock(coordinator = leafLayoutNode.outerCoordinator)
 
         val pointerId1 = PointerId(3)
         val pointerId2 = PointerId(5)
@@ -2432,9 +2583,22 @@ class HitPathTrackerTest {
     // Assert: root(5)
     @Test
     fun removeHitPath_2PathsShare1NodeLongPathPointerIdRemoved_resultJustHasShortPath() {
-        val root = PointerInputNodeMock()
-        val middle = PointerInputNodeMock()
-        val leaf = PointerInputNodeMock()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val middleLayoutNode = LayoutNode(0, 0, 100, 100)
+        val leafLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(middleLayoutNode)
+        middleLayoutNode.add(leafLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(middleLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(leafLayoutNode, Constraints.fixed(100, 100))
+
+        val root = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val middle = PointerInputNodeMock(coordinator = middleLayoutNode.outerCoordinator)
+        val leaf = PointerInputNodeMock(coordinator = leafLayoutNode.outerCoordinator)
 
         val pointerId1 = PointerId(3)
         val pointerId2 = PointerId(5)
@@ -2455,9 +2619,22 @@ class HitPathTrackerTest {
     // Assert: root(3) -> middle(3) -> leaf(3)
     @Test
     fun removeHitPath_2PathsShare1NodeShortPathPointerIdRemoved_resultJustHasLongPath() {
-        val root = PointerInputNodeMock()
-        val middle = PointerInputNodeMock()
-        val leaf = PointerInputNodeMock()
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val middleLayoutNode = LayoutNode(0, 0, 100, 100)
+        val leafLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(middleLayoutNode)
+        middleLayoutNode.add(leafLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(middleLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(leafLayoutNode, Constraints.fixed(100, 100))
+
+        val root = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val middle = PointerInputNodeMock(coordinator = middleLayoutNode.outerCoordinator)
+        val leaf = PointerInputNodeMock(coordinator = leafLayoutNode.outerCoordinator)
 
         val pointerId1 = PointerId(3)
         val pointerId2 = PointerId(5)
@@ -2644,7 +2821,12 @@ class HitPathTrackerTest {
 
     @Test
     fun dispatchChanges_1NodeDispatchToNode_reportsWasDispatchedToSomething() {
-        val pif = PointerInputNodeMock()
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif = PointerInputNodeMock(coordinator = layoutNode.outerCoordinator)
         hitPathTracker.addHitPath(PointerId(13), listOf(pif))
 
         val hitSomething = hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -2688,20 +2870,21 @@ class HitPathTrackerTest {
     private fun dispatchChanges_pifRemovesSelfDuringDispatch_noPassesReceivedAfterwards(
         removalPass: PointerEventPass
     ) {
-        val layoutCoordinates = LayoutCoordinatesStub(true)
-        lateinit var pifRef: PointerInputNodeMock
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
         val pif =
             PointerInputNodeMock(
                 pointerEventHandler = { pointerEvent, pass, _ ->
                     if (pass == removalPass) {
-                        layoutCoordinates.isAttached = false
-                        pifRef.remove()
+                        layoutNode.detach()
                     }
                     pointerEvent.changes
                 },
-                coordinator = layoutCoordinates,
+                coordinator = parentLayoutNode.outerCoordinator,
             )
-        pifRef = pif
         hitPathTracker.addHitPath(PointerId(13), listOf(pif))
 
         hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -2738,23 +2921,87 @@ class HitPathTrackerTest {
         )
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun dispatchChanges_dispatchUnchangedPosition_flagEnabled() {
+        val previousFlagValue = ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled
+        try {
+            ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled = true
+
+            val parentLayoutNode = layoutNode
+
+            // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer
+            // input).
+            layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+            val pif = PointerInputNodeMock(coordinator = layoutNode.outerCoordinator)
+            hitPathTracker.addHitPath(PointerId(13), listOf(pif))
+
+            val down = down(13, 1, 0f, 0f)
+            val move = down.moveTo(2, 0f, 0f)
+
+            assertThat(hitPathTracker.dispatchChanges(internalPointerEventOf(down))).isTrue()
+            assertThat(hitPathTracker.dispatchChanges(internalPointerEventOf(move))).isTrue()
+        } finally {
+            ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled = previousFlagValue
+        }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun dispatchChanges_dispatchUnchangedPosition_flagDisabled() {
+        val previousFlagValue = ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled
+        try {
+            ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled = false
+
+            val parentLayoutNode = layoutNode
+
+            // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer
+            // input).
+            layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+            val pif = PointerInputNodeMock(coordinator = layoutNode.outerCoordinator)
+            hitPathTracker.addHitPath(PointerId(13), listOf(pif))
+
+            val down = down(13, 1, 0f, 0f)
+            val move = down.moveTo(2, 0f, 0f)
+
+            assertThat(hitPathTracker.dispatchChanges(internalPointerEventOf(down))).isTrue()
+            assertThat(hitPathTracker.dispatchChanges(internalPointerEventOf(move))).isFalse()
+        } finally {
+            ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled = previousFlagValue
+        }
+    }
+
     private fun dispatchChanges_pifRemovedByParentDuringDispatch_noPassesReceivedAfterwards(
         removalPass: PointerEventPass
     ) {
         val log = mutableListOf<LogEntry>()
-        val childLayoutCoordinates = LayoutCoordinatesStub(true)
-        val childPif = PointerInputNodeMock(log, coordinator = childLayoutCoordinates)
+
+        // Create LayoutNodes in a parent-child hierarchy
+        val parentLayoutNode = layoutNode
+        val childLayoutNode = LayoutNode(0, 0, 100, 100)
+
+        parentLayoutNode.add(childLayoutNode)
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+        layoutNode.owner!!.measureAndLayout(childLayoutNode, Constraints.fixed(100, 100))
+
         val parentPif =
             PointerInputNodeMock(
-                log,
+                log = log,
                 pointerEventHandler = { pointerEvent, pass, _ ->
                     if (pass == removalPass) {
-                        childLayoutCoordinates.isAttached = false
-                        childPif.remove()
+                        childLayoutNode.detach()
                     }
                     pointerEvent.changes
                 },
+                coordinator = parentLayoutNode.outerCoordinator,
             )
+
+        val childPif = PointerInputNodeMock(log, coordinator = childLayoutNode.outerCoordinator)
+
         hitPathTracker.addHitPath(PointerId(13), listOf(parentPif, childPif))
 
         hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
@@ -2774,137 +3021,19 @@ class HitPathTrackerTest {
         }
     }
 
-    @Test
-    fun dispatchChanges_pifRemovedByChildDuringInitial_noPassesReceivedAfterwards() {
-        dispatchChanges_pifRemovedByChildDuringDispatch_noPassesReceivedAfterwards(
-            PointerEventPass.Initial
-        )
-    }
-
-    @Test
-    fun dispatchChanges_pifRemovedByChildDuringMain_noPassesReceivedAfterwards() {
-        dispatchChanges_pifRemovedByChildDuringDispatch_noPassesReceivedAfterwards(
-            PointerEventPass.Main
-        )
-    }
-
-    @Test
-    fun dispatchChanges_pifRemovedByChildDuringFinal_noPassesReceivedAfterwards() {
-        dispatchChanges_pifRemovedByChildDuringDispatch_noPassesReceivedAfterwards(
-            PointerEventPass.Final
-        )
-    }
-
-    private fun dispatchChanges_pifRemovedByChildDuringDispatch_noPassesReceivedAfterwards(
-        removalPass: PointerEventPass
-    ) {
-        val log = mutableListOf<LogEntry>()
-        val parentLayoutCoordinates = LayoutCoordinatesStub(true)
-        val parentPif = PointerInputNodeMock(log, coordinator = parentLayoutCoordinates)
-        val childPif =
-            PointerInputNodeMock(
-                log,
-                pointerEventHandler = { pointerEvent, pass, _ ->
-                    if (pass == removalPass) {
-                        parentLayoutCoordinates.isAttached = false
-                        parentPif.remove()
-                    }
-                    pointerEvent.changes
-                },
-            )
-        hitPathTracker.addHitPath(PointerId(13), listOf(parentPif, childPif))
-
-        hitPathTracker.dispatchChanges(internalPointerEventOf(down(13)))
-
-        val log1 = log.getOnPointerEventLog().filter { it.pointerInputNode == parentPif }
-        val count =
-            when (removalPass) {
-                PointerEventPass.Initial -> 1
-                PointerEventPass.Main -> 1
-                PointerEventPass.Final -> 3
-            }
-        assertThat(log1).hasSize(count)
-        PointerEventPass.values().forEachIndexed { index, pass ->
-            if (index < count) {
-                assertThat(log1[index].pass).isEqualTo(pass)
-            }
-        }
-    }
-
-    @Test
-    fun dispatchChanges_pifMovesSelfDuringInitial_pointerCoordsCorrectAfterMove() {
-        dispatchChanges_pifMovesSelfDuringDispatch_pointerCoordsCorrectAfterMove(
-            PointerEventPass.Initial
-        )
-    }
-
-    @Test
-    fun dispatchChanges_pifMovesSelfDuringMain_pointerCoordsCorrectAfterMove() {
-        dispatchChanges_pifMovesSelfDuringDispatch_pointerCoordsCorrectAfterMove(
-            PointerEventPass.Main
-        )
-    }
-
-    // This is a bit of a weird test. For performance reasons, HitPathTracker mutates an
-    // InternalPointerEvent with position changes.  Previously there was a bug where during
-    // dispatch, the pointer positions would be offset by the location of the PointerInputFilter,
-    // then they would be dispatched to the PointerInputFilter, that dispatch would move the
-    // PointerInputFilter, and then we'd get the new location of the PointerInputFilter and to
-    // undo the position change that occurred before dispatch.  That position change after
-    // dispatch is simply meant to reset the position back to being global for the next dispatch
-    // to another PointerInputFilter.
-    //
-    // This test makes sure we don't create that bug again accidentally.
-    private fun dispatchChanges_pifMovesSelfDuringDispatch_pointerCoordsCorrectAfterMove(
-        movePass: PointerEventPass
-    ) {
-        val log = mutableListOf<LogEntry>()
-        val layoutCoordinates = LayoutCoordinatesStub(true)
-        val pif =
-            PointerInputNodeMock(
-                log = log,
-                pointerEventHandler = { pointerEvent, pass, _ ->
-                    if (pass == movePass) {
-                        layoutCoordinates.additionalOffset = Offset(500f, 500f)
-                    }
-                    pointerEvent.changes
-                },
-                coordinator = layoutCoordinates,
-            )
-        val parent = PointerInputNodeMock(log)
-        val child = PointerInputNodeMock(log)
-        hitPathTracker.addHitPath(PointerId(13), listOf(parent, pif, child))
-
-        val actual = internalPointerEventOf(down(13, 120, 1.0f, 1.0f))
-        val expected = pointerEventOf(down(13, 120, 1.0f, 1.0f))
-
-        hitPathTracker.dispatchChanges(actual)
-
-        val log1 =
-            log.getOnPointerEventLog().filter {
-                it.pointerInputNode == parent || it.pointerInputNode == child
-            }
-
-        assertThat(log1).hasSize(6)
-        log1.forEach {
-            PointerEventSubject.assertThat(it.pointerEvent).isStructurallyEqualTo(expected)
-        }
-    }
-
-    @Test
-    fun dispatchChanges_pifMovesSelfDuringFinal_pointerCoordsCorrectAfterMove() {
-        dispatchChanges_pifMovesSelfDuringDispatch_pointerCoordsCorrectAfterMove(
-            PointerEventPass.Final
-        )
-    }
-
+    @OptIn(ExperimentalComposeUiApi::class)
     @Test
     fun addHitPath_hoverMove_noChange() {
         val log = mutableListOf<LogEntry>()
-        val parentLayoutCoordinates = LayoutCoordinatesStub(true)
-        val pif1 = PointerInputNodeMock(log = log, coordinator = parentLayoutCoordinates)
-        val pif2 = PointerInputNodeMock(log = log, coordinator = parentLayoutCoordinates)
-        val pif3 = PointerInputNodeMock(log = log, coordinator = parentLayoutCoordinates)
+
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(log = log, coordinator = parentLayoutNode.outerCoordinator)
         val pointerId = PointerId(0)
 
         hitPathTracker.addHitPath(pointerId, listOf(pif1, pif2, pif3))
@@ -2943,8 +3072,13 @@ class HitPathTrackerTest {
 
         assertThat(areEqual(hitPathTracker.root, expectedRoot)).isTrue()
 
-        // When the same position is sent, it should ignore the change.
-        assertThat(log).hasSize(0)
+        // When the same position is sent, it should ignore the change, but only if
+        // isTriggerMoveEventsWhenLocationHasNotChangedEnabled isn't enabled
+        if (ComposeUiFlags.isTriggerMoveEventsWhenLocationHasNotChangedEnabled) {
+            assertThat(log).isNotEmpty()
+        } else {
+            assertThat(log).isEmpty()
+        }
     }
 
     private fun assertHoverEvent(
@@ -3182,10 +3316,14 @@ class HitPathTrackerTest {
 
     @Test
     fun dispatchChangesClearsStaleIdsPartialHit() {
-        val parentLayoutCoordinates = LayoutCoordinatesStub(true)
-        val pif1 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
-        val pif2 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
-        val pif3 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
         val pointerId1 = PointerId(0)
         val pointerId2 = PointerId(5)
 
@@ -3208,10 +3346,14 @@ class HitPathTrackerTest {
 
     @Test
     fun dispatchChangesClearsStaleIdsPartialHitWithInvalidHistory() {
-        val parentLayoutCoordinates = LayoutCoordinatesStub(true)
-        val pif1 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
-        val pif2 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
-        val pif3 = PointerInputNodeMock(coordinator = parentLayoutCoordinates)
+        val parentLayoutNode = layoutNode
+
+        // Manually "place" LayoutNodes; Ensures `isPlaced` is true (required for pointer input).
+        layoutNode.owner!!.measureAndLayout(parentLayoutNode, Constraints.fixed(100, 100))
+
+        val pif1 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val pif2 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
+        val pif3 = PointerInputNodeMock(coordinator = parentLayoutNode.outerCoordinator)
         val pointerId1 = PointerId(0)
         val pointerId2 = PointerId(5)
 
@@ -3223,7 +3365,14 @@ class HitPathTrackerTest {
                 down(
                     id = 5,
                     historicalData =
-                        listOf(HistoricalChange(uptimeMillis = 1L, position = Offset.Unspecified)),
+                        listOf(
+                            HistoricalChange(
+                                uptimeMillis = 1L,
+                                position = Offset.Unspecified,
+                                scaleFactor = 0f,
+                                panOffset = Offset.Zero,
+                            )
+                        ),
                 )
             )
 
@@ -3281,12 +3430,848 @@ class HitPathTrackerTest {
 
         return check
     }
+
+    @Test
+    fun trackpadPan_hoverExitAndPruned_childScrolledOffScreen() {
+        val log = mutableListOf<LogEntry>()
+        val parentLayoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+
+        val childCoordinates = LayoutCoordinatesStub(true, IntSize(50, 50))
+        childCoordinates.setPosition(0, 0)
+        childCoordinates.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(50, 50) { measurables.forEach { it.measure(constraints).place(0, 0) } }
+            }
+        childCoordinates.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates.layoutNode,
+            Constraints.fixed(50, 50),
+        )
+
+        val childNode = PointerInputNodeMock(log = log, coordinator = childCoordinates)
+        val pointerId = PointerId(0)
+
+        // 1. Initial hit path setup
+        hitPathTracker.addHitPath(pointerId, listOf(childNode))
+
+        // 2. Dispatch hover enter event (pointer at 10, 10)
+        hitPathTracker.dispatchChanges(hoverInternalPointerEvent(ACTION_HOVER_ENTER, 10f, 10f))
+
+        // Assert child node is hovered (isIn = true) and receives Enter event
+        assertHoverEvent(log, childNode to PointerEventType.Enter)
+        log.clear()
+
+        // 3. Start a trackpad pan gesture (pointer remains stationary at 10, 10)
+        // Simulate a scroll by moving the child node's position to (60, 60),
+        // so the pointer at (10, 10) is now out of bounds of the child node!
+        childCoordinates.setPosition(60, 60)
+
+        // Dispatch a PanMove event at (10, 10)
+        val panEvent =
+            PointerInputEvent(
+                uptime = 10L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 10L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = null,
+                activeGesture = PointerClassification.Pan,
+            )
+        val changes =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 10L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 0L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                    ),
+                )
+            }
+        val internalPanEvent = InternalPointerEvent(changes, panEvent)
+
+        hitPathTracker.dispatchChanges(internalPanEvent)
+
+        // Assert child node received both Hover Exit and the original Move/Pan events because it
+        // scrolled out of bounds.
+        assertThat(log).hasSize(6)
+        assertOnPointerEventEntry(
+            log[0],
+            "LogEntry[0]",
+            PointerEventPass.Initial,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[1],
+            "LogEntry[1]",
+            PointerEventPass.Main,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[2],
+            "LogEntry[2]",
+            PointerEventPass.Final,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[3],
+            "LogEntry[3]",
+            PointerEventPass.Initial,
+            PointerEventType.Move,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[4],
+            "LogEntry[4]",
+            PointerEventPass.Main,
+            PointerEventType.Move,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[5],
+            "LogEntry[5]",
+            PointerEventPass.Final,
+            PointerEventType.Move,
+            childNode,
+        )
+
+        // Assert child node is now pruned from the tree because it went out of bounds during a Pan
+        // gesture!
+        assertThat(hitPathTracker.root.children.size).isEqualTo(0)
+    }
+
+    @Test
+    fun trackpadPan_hoverTransitionToHoverAndMove() {
+        val log = mutableListOf<LogEntry>()
+        val parentLayoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+
+        // Child node 1 (scrolls out of bounds)
+        val childCoordinates1 = LayoutCoordinatesStub(true, IntSize(50, 50))
+        childCoordinates1.setPosition(0, 0)
+        childCoordinates1.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(50, 50) { measurables.forEach { it.measure(constraints).place(0, 0) } }
+            }
+        childCoordinates1.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates1.layoutNode,
+            Constraints.fixed(50, 50),
+        )
+
+        val childNode1 = PointerInputNodeMock(log = log, coordinator = childCoordinates1)
+        val pointerId = PointerId(0)
+
+        // 1. Initial hit path setup
+        hitPathTracker.addHitPath(pointerId, listOf(childNode1))
+
+        // 2. Dispatch hover enter event (pointer at 10, 10)
+        hitPathTracker.dispatchChanges(hoverInternalPointerEvent(ACTION_HOVER_ENTER, 10f, 10f))
+        assertHoverEvent(log, childNode1 to PointerEventType.Enter)
+        log.clear()
+
+        // 3. Start a trackpad pan gesture (pointer remains stationary at 10, 10)
+        // Child 1 scrolls out of bounds to (60, 60)
+        childCoordinates1.setPosition(60, 60)
+
+        // Dispatch a PanMove event at (10, 10)
+        val panEvent =
+            PointerInputEvent(
+                uptime = 10L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 10L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = null,
+                activeGesture = PointerClassification.Pan,
+            )
+        val changes =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 10L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 0L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                    ),
+                )
+            }
+        val internalPanEvent = InternalPointerEvent(changes, panEvent)
+        hitPathTracker.dispatchChanges(internalPanEvent)
+
+        // Assert child 1 received Hover Exit and the original Move/Pan event, and is pruned
+        assertThat(log).hasSize(6)
+        assertOnPointerEventEntry(
+            log[0],
+            "LogEntry[0]",
+            PointerEventPass.Initial,
+            PointerEventType.Exit,
+            childNode1,
+        )
+        assertOnPointerEventEntry(
+            log[1],
+            "LogEntry[1]",
+            PointerEventPass.Main,
+            PointerEventType.Exit,
+            childNode1,
+        )
+        assertOnPointerEventEntry(
+            log[2],
+            "LogEntry[2]",
+            PointerEventPass.Final,
+            PointerEventType.Exit,
+            childNode1,
+        )
+        assertOnPointerEventEntry(
+            log[3],
+            "LogEntry[3]",
+            PointerEventPass.Initial,
+            PointerEventType.Move,
+            childNode1,
+        )
+        assertOnPointerEventEntry(
+            log[4],
+            "LogEntry[4]",
+            PointerEventPass.Main,
+            PointerEventType.Move,
+            childNode1,
+        )
+        assertOnPointerEventEntry(
+            log[5],
+            "LogEntry[5]",
+            PointerEventPass.Final,
+            PointerEventType.Move,
+            childNode1,
+        )
+        assertThat(hitPathTracker.root.children.size).isEqualTo(0)
+        log.clear()
+
+        // 4. Dispatch PanEnd (ACTION_UP) at (10, 10)
+        // In MotionEventAdapter, this event has activeGesture = Pan, pressed = false, position =
+        // (10, 10)
+        val panEndEvent =
+            PointerInputEvent(
+                uptime = 20L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 20L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = null,
+                activeGesture = PointerClassification.Pan,
+            )
+        val changesEnd =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 20L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 10L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                    ),
+                )
+            }
+        val internalPanEndEvent = InternalPointerEvent(changesEnd, panEndEvent)
+        hitPathTracker.dispatchChanges(internalPanEndEvent)
+        assertThat(log).isEmpty() // Child 1 is already pruned, should receive no events
+        log.clear()
+
+        // 5. Dispatch Hover Enter (transition back to hover) at (10, 10)
+        // A new child 2 is now under the cursor at (0, 0)
+        val childCoordinates2 = LayoutCoordinatesStub(true, IntSize(50, 50))
+        childCoordinates2.setPosition(0, 0)
+        childCoordinates2.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(50, 50) { measurables.forEach { it.measure(constraints).place(0, 0) } }
+            }
+        childCoordinates2.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates2.layoutNode,
+            Constraints.fixed(50, 50),
+        )
+
+        val childNode2 = PointerInputNodeMock(log = log, coordinator = childCoordinates2)
+        hitPathTracker.addHitPath(pointerId, listOf(childNode2))
+
+        hitPathTracker.dispatchChanges(hoverInternalPointerEvent(ACTION_HOVER_ENTER, 10f, 10f))
+
+        // Assert child 2 receives Hover Enter!
+        assertHoverEvent(log, childNode2 to PointerEventType.Enter)
+        log.clear()
+
+        // 6. Hover move to (20, 20) (still within child 2)
+        hitPathTracker.addHitPath(pointerId, listOf(childNode2))
+        hitPathTracker.dispatchChanges(hoverInternalPointerEvent(ACTION_HOVER_MOVE, 20f, 20f))
+        assertHoverEvent(log, childNode2 to PointerEventType.Move)
+    }
+
+    @Test
+    fun trackpadPan_preservesPanEvents_whenNodeInBounds() {
+        val log = mutableListOf<LogEntry>()
+        val parentLayoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+
+        val childCoordinates = LayoutCoordinatesStub(true, IntSize(100, 100))
+        childCoordinates.setPosition(0, 0)
+        childCoordinates.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(100, 100) { measurables.forEach { it.measure(constraints).place(0, 0) } }
+            }
+        childCoordinates.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates.layoutNode,
+            Constraints.fixed(100, 100),
+        )
+
+        val childNode = PointerInputNodeMock(log = log, coordinator = childCoordinates)
+        val pointerId = PointerId(0)
+
+        // 1. Initial hit path setup
+        hitPathTracker.addHitPath(pointerId, listOf(childNode))
+
+        // 2. Dispatch PanStart event (pointer at 10, 10)
+        val panStartEvent =
+            PointerInputEvent(
+                uptime = 10L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 10L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_DOWN, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val startChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 10L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 0L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                    ),
+                )
+            }
+        val internalPanStartEvent = InternalPointerEvent(startChanges, panStartEvent)
+        hitPathTracker.dispatchChanges(internalPanStartEvent)
+
+        // Assert child node received both Enter and PanStart events when entering bounds during pan
+        assertThat(log).hasSize(6)
+        assertOnPointerEventEntry(
+            log[0],
+            "LogEntry[0]",
+            PointerEventPass.Initial,
+            PointerEventType.Enter,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[1],
+            "LogEntry[1]",
+            PointerEventPass.Main,
+            PointerEventType.Enter,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[2],
+            "LogEntry[2]",
+            PointerEventPass.Final,
+            PointerEventType.Enter,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[3],
+            "LogEntry[3]",
+            PointerEventPass.Initial,
+            PointerEventType.PanStart,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[4],
+            "LogEntry[4]",
+            PointerEventPass.Main,
+            PointerEventType.PanStart,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[5],
+            "LogEntry[5]",
+            PointerEventPass.Final,
+            PointerEventType.PanStart,
+            childNode,
+        )
+        log.clear()
+
+        // 3. Dispatch PanMove event
+        val panMoveEvent =
+            PointerInputEvent(
+                uptime = 20L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 20L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset(0f, 10f),
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_MOVE, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val moveChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 20L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 10L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                        panOffset = Offset(0f, 10f),
+                    ),
+                )
+            }
+        val internalPanMoveEvent = InternalPointerEvent(moveChanges, panMoveEvent)
+        hitPathTracker.dispatchChanges(internalPanMoveEvent)
+
+        // Assert child node received PanMove event (and no synthetic Enter)
+        assertHoverEvent(log, childNode to PointerEventType.PanMove)
+        log.clear()
+
+        // 3b. Dispatch a second PanMove event to ensure subsequent pan moves do not re-dispatch
+        // Enter
+        val secondPanMoveEvent =
+            PointerInputEvent(
+                uptime = 25L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 25L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset(0f, 20f),
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_MOVE, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val secondMoveChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 25L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 20L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                        panOffset = Offset(0f, 20f),
+                    ),
+                )
+            }
+        val internalSecondPanMoveEvent = InternalPointerEvent(secondMoveChanges, secondPanMoveEvent)
+        hitPathTracker.dispatchChanges(internalSecondPanMoveEvent)
+
+        // Assert child node received only PanMove event on second move
+        assertHoverEvent(log, childNode to PointerEventType.PanMove)
+        log.clear()
+
+        // 4. Dispatch PanEnd event
+        val panEndEvent =
+            PointerInputEvent(
+                uptime = 30L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 30L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_UP, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val endChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 30L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 20L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                    ),
+                )
+            }
+        val internalPanEndEvent = InternalPointerEvent(endChanges, panEndEvent)
+        hitPathTracker.dispatchChanges(internalPanEndEvent)
+
+        // Assert child node received PanEnd event
+        assertHoverEvent(log, childNode to PointerEventType.PanEnd)
+    }
+
+    @Test
+    fun trackpadPan_preservesPanEvents_whenNodeExitsBounds() {
+        val log = mutableListOf<LogEntry>()
+        val parentLayoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+
+        val childCoordinates = LayoutCoordinatesStub(true, IntSize(50, 50))
+        childCoordinates.setPosition(0, 0)
+        childCoordinates.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(50, 50) { measurables.forEach { it.measure(constraints).place(0, 0) } }
+            }
+        childCoordinates.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates.layoutNode,
+            Constraints.fixed(50, 50),
+        )
+
+        val childNode = PointerInputNodeMock(log = log, coordinator = childCoordinates)
+        val pointerId = PointerId(0)
+
+        // 1. Initial hit path setup
+        hitPathTracker.addHitPath(pointerId, listOf(childNode))
+
+        // 2. Dispatch hover enter event (pointer at 10, 10)
+        hitPathTracker.dispatchChanges(hoverInternalPointerEvent(ACTION_HOVER_ENTER, 10f, 10f))
+        assertHoverEvent(log, childNode to PointerEventType.Enter)
+        log.clear()
+
+        // 3. Move child out of bounds to (60, 60) and dispatch PanMove event at (10, 10)
+        childCoordinates.setPosition(60, 60)
+        val panMoveEvent =
+            PointerInputEvent(
+                uptime = 10L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 10L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset(0f, 10f),
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_MOVE, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val moveChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(
+                    pointerId.value,
+                    PointerInputChange(
+                        id = pointerId,
+                        uptimeMillis = 10L,
+                        position = Offset(10f, 10f),
+                        pressed = false,
+                        previousUptimeMillis = 0L,
+                        previousPosition = Offset(10f, 10f),
+                        previousPressed = false,
+                        isInitiallyConsumed = false,
+                        type = PointerType.Mouse,
+                        scrollDelta = Offset.Zero,
+                        panOffset = Offset(0f, 10f),
+                    ),
+                )
+            }
+        val internalPanMoveEvent = InternalPointerEvent(moveChanges, panMoveEvent)
+        hitPathTracker.dispatchChanges(internalPanMoveEvent)
+
+        // Assert child node received both Exit and PanMove events
+        assertThat(log).hasSize(6)
+        assertOnPointerEventEntry(
+            log[0],
+            "LogEntry[0]",
+            PointerEventPass.Initial,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[1],
+            "LogEntry[1]",
+            PointerEventPass.Main,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[2],
+            "LogEntry[2]",
+            PointerEventPass.Final,
+            PointerEventType.Exit,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[3],
+            "LogEntry[3]",
+            PointerEventPass.Initial,
+            PointerEventType.PanMove,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[4],
+            "LogEntry[4]",
+            PointerEventPass.Main,
+            PointerEventType.PanMove,
+            childNode,
+        )
+        assertOnPointerEventEntry(
+            log[5],
+            "LogEntry[5]",
+            PointerEventPass.Final,
+            PointerEventType.PanMove,
+            childNode,
+        )
+        // Assert child node is pruned from HitPathTracker now that it has exited bounds during the
+        // gesture (no remaining active nodes in the hit path)
+        assertThat(hitPathTracker.root.children.size).isEqualTo(0)
+    }
+
+    @Test
+    fun trackpadPan_syntheticHoverConsumption_doesNotMutatePanChanges() {
+        val log = mutableListOf<LogEntry>()
+        val parentLayoutNode = LayoutNode(0, 0, 100, 100).also { it.attach(MockOwner()) }
+        val rootCoordinates = parentLayoutNode.nodes.innerCoordinator
+        val hitPathTracker = HitPathTracker(rootCoordinates)
+
+        val childCoordinates = LayoutCoordinatesStub(true, IntSize(100, 100))
+        childCoordinates.setPosition(0, 0)
+        childCoordinates.layoutNode.measurePolicy =
+            object : LayoutNode.NoIntrinsicsMeasurePolicy("stub") {
+                override fun androidx.compose.ui.layout.MeasureScope.measure(
+                    measurables: List<androidx.compose.ui.layout.Measurable>,
+                    constraints: Constraints,
+                ): androidx.compose.ui.layout.MeasureResult =
+                    layout(100, 100) {
+                        measurables.forEach { it.measure(constraints).place(0, 0) }
+                    }
+            }
+        childCoordinates.layoutNode.attach(parentLayoutNode.owner!!)
+        parentLayoutNode.owner!!.measureAndLayout(
+            childCoordinates.layoutNode,
+            Constraints.fixed(100, 100),
+        )
+
+        // A child node that consumes on synthetic Enter events
+        val childNode =
+            PointerInputNodeMock(
+                log = log,
+                coordinator = childCoordinates,
+                pointerEventHandler = { pointerEvent, pass, _ ->
+                    if (
+                        pointerEvent.type == PointerEventType.Enter &&
+                            pass == PointerEventPass.Final
+                    ) {
+                        pointerEvent.changes.forEach { it.consume() }
+                    }
+                },
+            )
+        val pointerId = PointerId(0)
+
+        hitPathTracker.addHitPath(pointerId, listOf(childNode))
+
+        val panStartEvent =
+            PointerInputEvent(
+                uptime = 10L,
+                pointers =
+                    listOf(
+                        PointerInputEventData(
+                            id = pointerId,
+                            uptime = 10L,
+                            positionOnScreen = Offset(10f, 10f),
+                            position = Offset(10f, 10f),
+                            down = false,
+                            pressure = 0f,
+                            type = PointerType.Mouse,
+                            activeHover = false,
+                            historical = emptyList(),
+                            scaleGestureFactor = 0f,
+                            panGestureOffset = Offset.Zero,
+                        )
+                    ),
+                motionEvent = createPanMotionEvent(android.view.MotionEvent.ACTION_DOWN, 10f, 10f),
+                activeGesture = PointerClassification.Pan,
+            )
+        val originalChange =
+            PointerInputChange(
+                id = pointerId,
+                uptimeMillis = 10L,
+                position = Offset(10f, 10f),
+                pressed = false,
+                previousUptimeMillis = 0L,
+                previousPosition = Offset(10f, 10f),
+                previousPressed = false,
+                isInitiallyConsumed = false,
+                type = PointerType.Mouse,
+                scrollDelta = Offset.Zero,
+            )
+        val startChanges =
+            androidx.collection.LongSparseArray<PointerInputChange>(1).apply {
+                put(pointerId.value, originalChange)
+            }
+        val internalPanStartEvent = InternalPointerEvent(startChanges, panStartEvent)
+        hitPathTracker.dispatchChanges(internalPanStartEvent)
+
+        // Assert that consuming the synthetic Enter event did not mutate the primary change
+        assertThat(originalChange.isConsumed).isFalse()
+    }
 }
 
-internal class LayoutCoordinatesStub(override var isAttached: Boolean = true) :
-    NodeCoordinator(LayoutNode()) {
+internal class LayoutCoordinatesStub(
+    override var isAttached: Boolean = true,
+    size: IntSize = IntSize.Zero,
+) : NodeCoordinator(LayoutNode()) {
 
-    var additionalOffset = Offset.Zero
+    init {
+        measuredSize = size
+    }
+
+    fun setSize(width: Int, height: Int) {
+        measuredSize = IntSize(width, height)
+    }
+
+    fun setPosition(x: Int, y: Int) {
+        position = IntOffset(x, y)
+    }
 
     override fun ensureLookaheadDelegateCreated() {
         TODO("Not yet implemented")
@@ -3307,7 +4292,7 @@ internal class LayoutCoordinatesStub(override var isAttached: Boolean = true) :
         TODO("Not yet implemented")
     }
 
-    override val tail: androidx.compose.ui.Modifier.Node = object : Modifier.Node() {}
+    override val tail: Modifier.Node = object : Modifier.Node() {}
 
     override fun measure(constraints: Constraints): Placeable {
         TODO("Not yet implemented")
@@ -3336,7 +4321,17 @@ internal class LayoutCoordinatesStub(override var isAttached: Boolean = true) :
         // In normal NodeCoordinator, an invalid Offset will crash the app farther down in the code.
         // (Specifically, in the Offset class when you try to create a new Offset.)
         checkPrecondition(relativeToSource.isValid()) { "Offset is unspecified" }
-        return relativeToSource
+        // In `LayoutCoordinatesStub`, we simulate coordinator scrolling and moving by changing
+        // its `position` property. This custom coordinate conversion is required to account for
+        // these simulated position offsets so that hit-testing boundary checks evaluate correctly.
+        val sourcePosition =
+            if (sourceCoordinates is NodeCoordinator) {
+                sourceCoordinates.position
+            } else {
+                IntOffset.Zero
+            }
+        val relativeToSourceGlobal = relativeToSource + sourcePosition.toOffset()
+        return relativeToSourceGlobal - position.toOffset()
     }
 
     override fun localBoundingBoxOf(
@@ -3347,7 +4342,7 @@ internal class LayoutCoordinatesStub(override var isAttached: Boolean = true) :
     }
 }
 
-@OptIn(InternalCoreApi::class, InternalComposeUiApi::class)
+@OptIn(InternalComposeUiApi::class)
 private class MockOwner(
     val position: IntOffset = IntOffset.Zero,
     override val root: LayoutNode = LayoutNode(),
@@ -3407,6 +4402,9 @@ private class MockOwner(
     override val softwareKeyboardController: SoftwareKeyboardController
         get() = TODO("Not yet implemented")
 
+    override val localeList: LocaleList
+        get() = TODO("Not yet implemented")
+
     override suspend fun textInputSession(
         session: suspend PlatformTextInputSessionScope.() -> Nothing
     ): Nothing {
@@ -3431,6 +4429,9 @@ private class MockOwner(
         get() = TODO("Not yet implemented")
 
     override val windowInfo: WindowInfo
+        get() = TODO("Not yet implemented")
+
+    override val taskDispatchers: TaskDispatchers
         get() = TODO("Not yet implemented")
 
     override val rectManager: RectManager = RectManager()
@@ -3517,7 +4518,10 @@ private class MockOwner(
 
     override fun measureAndLayout(sendPointerUpdate: Boolean) {}
 
-    override fun measureAndLayout(layoutNode: LayoutNode, constraints: Constraints) {}
+    override fun measureAndLayout(layoutNode: LayoutNode, constraints: Constraints) {
+        val placeable = layoutNode.outerCoordinator.measure(constraints)
+        with(placementScope) { placeable.place(0, 0) }
+    }
 
     override fun forceMeasureTheSubtree(layoutNode: LayoutNode, affectsLookahead: Boolean) {}
 

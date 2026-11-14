@@ -93,6 +93,15 @@ public class RemoteComposeContextAndroid : RemoteComposeContext {
         content()
     }
 
+    public constructor(
+        platform: RcPlatformServices,
+        apiLevel: Int,
+        vararg tags: RemoteComposeWriter.HTag,
+        content: RemoteComposeContextAndroid.() -> Unit,
+    ) : super(RemoteComposeWriterAndroid(platform, apiLevel, *tags)) {
+        content()
+    }
+
     public fun addBitmap(image: Bitmap): Int {
         return mRemoteWriter.addBitmap(image)
     }
@@ -196,6 +205,17 @@ public class RemoteComposeContextAndroid : RemoteComposeContext {
         drawTextAnchored(id, x.toFloat(), y.toFloat(), panX.toFloat(), panY.toFloat(), flags)
     }
 
+    public fun drawTextAnchored(
+        str: String,
+        x: Number,
+        y: Number,
+        panX: Number,
+        panY: Number,
+        flags: Int,
+    ) {
+        drawTextAnchored(str, x.toFloat(), y.toFloat(), panX.toFloat(), panY.toFloat(), flags)
+    }
+
     public fun loop(from: Float, step: Float, until: Float, content: RcFloatArgumentCallback) {
         val indexId = createID(0)
         mRemoteWriter.startLoop(indexId, from, step, until)
@@ -219,15 +239,30 @@ public class RemoteComposeContextAndroid : RemoteComposeContext {
         endLoop()
     }
 
-    public fun createTextFromFloat(value: RFloat, before: Int, after: Int, flags: Int): Int {
+    public fun createTextFromFloat(value: RFloat, before: Short, after: Short, flags: Int): Int {
         return mRemoteWriter.createTextFromFloat(value.toFloat(), before, after, flags)
     }
 
+    /** Begin a global scope The section is moved above the root in the doc */
     public fun beginGlobal() {
         mRemoteWriter.beginGlobal()
     }
 
+    /** End a global scope The section is moved above the root in the doc */
     public fun endGlobal() {
         mRemoteWriter.endGlobal()
+    }
+
+    /**
+     * This support skipping sections of code if a condition is true The bytes between are never
+     * seen by the parser
+     *
+     * @param type the type of condition
+     * @param value the value to compare against
+     */
+    public fun skip(type: Short, value: Int, content: RemoteComposeContextAndroid.() -> Unit) {
+        val pos = mRemoteWriter.beginSkip(type, value)
+        content()
+        mRemoteWriter.endSkip(pos)
     }
 }

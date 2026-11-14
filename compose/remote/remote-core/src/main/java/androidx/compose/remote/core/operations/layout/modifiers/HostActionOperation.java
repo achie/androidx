@@ -26,7 +26,6 @@ import androidx.compose.remote.core.SerializableToString;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.documentation.DocumentationBuilder;
 import androidx.compose.remote.core.operations.layout.ActionOperation;
-import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.utilities.StringSerializer;
 import androidx.compose.remote.core.serialize.MapSerializer;
 import androidx.compose.remote.core.serialize.Serializable;
@@ -83,15 +82,12 @@ public class HostActionOperation extends Operation
     }
 
     @Override
-    public void write(@NonNull WireBuffer buffer) {}
+    public void write(@NonNull WireBuffer buffer) {
+        apply(buffer, mActionId);
+    }
 
     @Override
-    public void runAction(
-            @NonNull RemoteContext context,
-            @NonNull CoreDocument document,
-            @NonNull Component component,
-            float x,
-            float y) {
+    public void runAction(@NonNull RemoteContext context, @NonNull CoreDocument document) {
         context.runAction(mActionId, "");
     }
 
@@ -113,7 +109,7 @@ public class HostActionOperation extends Operation
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int actionId = buffer.readInt();
+        int actionId = buffer.readId();
         operations.add(new HostActionOperation(actionId));
     }
 

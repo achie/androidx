@@ -16,7 +16,6 @@
 
 @file:OptIn(
     ExperimentalMaterial3AdaptiveApi::class,
-    ExperimentalMaterial3Api::class,
     ExperimentalMaterial3XrApi::class,
 )
 
@@ -25,19 +24,14 @@ package androidx.xr.compose.material3.integration.testapp
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.adaptive.layout.AnimatedPane
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
@@ -46,46 +40,63 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.xr.compose.material3.DefaultNavigationBarOrbiterProperties
-import androidx.xr.compose.material3.DefaultNavigationRailOrbiterProperties
-import androidx.xr.compose.material3.EnableXrComponentOverrides
+import androidx.core.view.WindowCompat
+import androidx.xr.compose.material3.DefaultSpatialNavigationBarOrbiterProperties
+import androidx.xr.compose.material3.DefaultSpatialNavigationRailOrbiterProperties
+import androidx.xr.compose.material3.DefaultSpatialWideNavigationRailOrbiterProperties
 import androidx.xr.compose.material3.ExperimentalMaterial3XrApi
-import androidx.xr.compose.material3.LocalNavigationBarOrbiterProperties
-import androidx.xr.compose.material3.LocalNavigationRailOrbiterProperties
-import androidx.xr.compose.material3.LocalShortNavigationBarOrbiterProperties
+import androidx.xr.compose.material3.LocalSpatialNavigationBarOrbiterProperties
+import androidx.xr.compose.material3.LocalSpatialNavigationRailOrbiterProperties
+import androidx.xr.compose.material3.LocalSpatialShortNavigationBarOrbiterProperties
+import androidx.xr.compose.material3.LocalSpatialWideNavigationRailOrbiterProperties
+import androidx.xr.compose.material3.integration.testapp.components.ListDetailPaneScaffold
+import androidx.xr.compose.material3.integration.testapp.components.NavigationSuiteScaffold
+import androidx.xr.compose.spatial.Subspace
+import androidx.xr.compose.subspace.SpatialMainPanel
+import androidx.xr.compose.subspace.layout.SubspaceModifier
+import androidx.xr.compose.subspace.layout.movable
+import androidx.xr.compose.subspace.layout.resizable
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent { EnableXrComponentOverrides { Content() } }
+        WindowCompat.enableEdgeToEdge(window)
+        // Add the MainPanel so that the PlanarEmbeddedSubspace has a size to fit to, but set it to
+        // transparent so that it will not be seen behind the content.
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+        setContent {
+            Subspace {
+                SpatialMainPanel(SubspaceModifier.movable().resizable())
+            }
+            Content()
+        }
     }
 }
 
 @Composable
+@Suppress("DEPRECATION") // Move to currentWindowAdaptiveInfoV2 when dependency is updated
 private fun Content() {
     var navSuiteType: NavigationSuiteType? by remember { mutableStateOf(null) }
     var orbiterPosition: OrbiterPosition by remember { mutableStateOf(OrbiterPosition.Outside) }
-    val orbiterOffsetType = orbiterPosition.getOffsetType()
-    val orbiterOffset = navSuiteType.calculateOffsetForPosition(orbiterPosition)
 
     var navSuiteSelectedItem by remember { mutableStateOf(NavSuiteItem.HOME) }
 
     CompositionLocalProvider(
-        LocalNavigationBarOrbiterProperties provides
-            DefaultNavigationBarOrbiterProperties.copy(
-                offset = orbiterOffset,
-                offsetType = orbiterOffsetType,
+        LocalSpatialNavigationBarOrbiterProperties provides
+            DefaultSpatialNavigationBarOrbiterProperties.copy(
+                position = orbiterPosition.toHorizontalAlignment()
             ),
-        LocalNavigationRailOrbiterProperties provides
-            DefaultNavigationRailOrbiterProperties.copy(
-                offset = orbiterOffset,
-                offsetType = orbiterOffsetType,
+        LocalSpatialNavigationRailOrbiterProperties provides
+            DefaultSpatialNavigationRailOrbiterProperties.copy(
+                position = orbiterPosition.toVerticalAlignment()
             ),
-        LocalShortNavigationBarOrbiterProperties provides
-            DefaultNavigationBarOrbiterProperties.copy(
-                offset = orbiterOffset,
-                offsetType = orbiterOffsetType,
+        LocalSpatialShortNavigationBarOrbiterProperties provides
+            DefaultSpatialNavigationBarOrbiterProperties.copy(
+                position = orbiterPosition.toHorizontalAlignment()
+            ),
+        LocalSpatialWideNavigationRailOrbiterProperties provides
+            DefaultSpatialWideNavigationRailOrbiterProperties.copy(
+                position = orbiterPosition.toVerticalAlignment()
             ),
     ) {
         NavigationSuiteScaffold(
@@ -99,7 +110,7 @@ private fun Content() {
                     )
                 }
             },
-            layoutType =
+            navigationSuiteType =
                 navSuiteType
                     ?: NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(
                         currentWindowAdaptiveInfo()
@@ -130,10 +141,9 @@ private fun Home() {
                 listOf(ThreePaneScaffoldDestinationItem(ListDetailPaneScaffoldRole.List))
         )
     ListDetailPaneScaffold(
-        directive = navigator.scaffoldDirective,
-        value = navigator.scaffoldValue,
-        listPane = { AnimatedPane { ListPane(navigator) } },
-        detailPane = { AnimatedPane { DetailPane(navigator) } },
+        navigator = navigator,
+        listPane = { ListPane(navigator) },
+        detailPane = { DetailPane(navigator) },
     )
 }
 

@@ -32,6 +32,7 @@ import androidx.appsearch.exceptions.AppSearchException;
 import androidx.appsearch.localstorage.AppSearchConfig;
 import androidx.appsearch.localstorage.AppSearchConfigImpl;
 import androidx.appsearch.localstorage.AppSearchImpl;
+import androidx.appsearch.localstorage.AppSearchUserPlugins;
 import androidx.appsearch.localstorage.LocalStorageIcingOptionsConfig;
 import androidx.appsearch.localstorage.OptimizeStrategy;
 import androidx.appsearch.localstorage.UnlimitedLimitConfig;
@@ -70,11 +71,7 @@ public class VisibilityStoreTest {
         mAppSearchImpl = AppSearchImpl.create(
                 appSearchDir,
                 config,
-                /*initStatsBuilder=*/ null,
-                /*callStatsBuilder=*/ null,
-                /*visibilityChecker=*/ null,
-                /*revocableFileDescriptorStore=*/ null,
-                /*icingSearchEngine=*/ null,
+                AppSearchUserPlugins.EMPTY,
                 ALWAYS_OPTIMIZE);
         mVisibilityStore = VisibilityStore.createDocumentVisibilityStore(mAppSearchImpl,
                 /*callStatsBuilder=*/ null);
@@ -215,6 +212,7 @@ public class VisibilityStoreTest {
                 /*accountPropertyPaths=*/ Collections.emptyMap(),
                 /*forceOverride=*/ true,
                 /*version=*/ VisibilityToDocumentConverter.SCHEMA_VERSION_LATEST,
+                /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                 /*setSchemaStatsBuilder=*/ null,
                 /*callStatsBuilder=*/ null);
         assertThat(internalSetSchemaResponse.isSuccess()).isTrue();
@@ -423,6 +421,7 @@ public class VisibilityStoreTest {
                 /*accountPropertyPaths=*/ Collections.emptyMap(),
                 /*forceOverride=*/ true,
                 /*version=*/ VisibilityToDocumentConverter.SCHEMA_VERSION_LATEST,
+                /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                 /*setSchemaStatsBuilder=*/ null,
                 /*callStatsBuilder=*/ null);
 
@@ -498,6 +497,7 @@ public class VisibilityStoreTest {
                 /*forceOverride=*/ true,
                 /*version=*/ VisibilityToDocumentConverter
                         .OVERLAY_SCHEMA_VERSION_PUBLIC_ACL_VISIBLE_TO_CONFIG,
+                /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                 /*setSchemaStatsBuilder=*/ null,
                 /*callStatsBuilder=*/ null);
 

@@ -23,6 +23,7 @@ import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.VariableSupport;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.operations.Utils;
+import androidx.compose.remote.core.operations.loom.LoomWireBuffer;
 import androidx.compose.remote.core.serialize.MapSerializer;
 import androidx.compose.remote.core.serialize.Serializable;
 
@@ -42,9 +43,129 @@ public class PaintBundle implements Serializable {
     int @Nullable [] mOutArray = null;
     int mPos = 0;
 
-    /**
-     * Apply changes to a PaintChanges interface
-     */
+    /** Resolve ids in the paint bundle as they are read off the wire. */
+    public void resolveIds(@NonNull WireBuffer buffer) {
+        int i = 0;
+        while (i < mPos) {
+            int cmd = mArray[i++];
+            int type = cmd & 0xFFFF;
+            switch (type) {
+                case STROKE_MITER:
+                case STROKE_WIDTH:
+                case ALPHA:
+                case TEXT_SIZE:
+                case SHADER_MATRIX:
+                    mArray[i] = resolveFloatId(mArray[i], buffer);
+                    i++;
+                    break;
+                case COLOR_FILTER_ID:
+                case COLOR_ID:
+                case SHADER:
+                case TYPEFACE:
+                case FALLBACK_TYPEFACE:
+                case TEXTURE:
+                    if (buffer instanceof LoomWireBuffer) {
+                        mArray[i] =
+                                ((LoomWireBuffer) buffer).getRemapContext().resolveId(mArray[i]);
+                    }
+                    i++;
+                    break;
+                case COLOR:
+                case COLOR_FILTER:
+                    i++;
+                    break;
+                case STROKE_JOIN:
+                case FILTER_BITMAP:
+                case STROKE_CAP:
+                case STYLE:
+                case IMAGE_FILTER_QUALITY:
+                case BLEND_MODE:
+                case ANTI_ALIAS:
+                case CLEAR_COLOR_FILTER:
+                    break;
+                case FONT_AXIS:
+                    int count = cmd >> 16;
+                    for (int j = 0; j < count; j++) {
+                        if (buffer instanceof LoomWireBuffer) {
+                            mArray[i] =
+                                    ((LoomWireBuffer) buffer)
+                                            .getRemapContext()
+                                            .resolveId(mArray[i]);
+                        }
+                        i++;
+                        mArray[i] = resolveFloatId(mArray[i], buffer);
+                        i++;
+                    }
+                    break;
+                case GRADIENT:
+                    i = resolveGradientIds(cmd, mArray, i, buffer);
+                    break;
+                case PATH_EFFECT:
+                    count = cmd >> 16;
+                    for (int j = 0; j < count; j++) {
+                        mArray[i] = resolveFloatId(mArray[i], buffer);
+                        i++;
+                    }
+                    break;
+            }
+        }
+    }
+
+    private int resolveFloatId(int val, @NonNull WireBuffer buffer) {
+        float f = Float.intBitsToFloat(val);
+        if (Float.isNaN(f)) {
+            if (buffer instanceof LoomWireBuffer) {
+                return Float.floatToRawIntBits(
+                        ((LoomWireBuffer) buffer).getRemapContext().resolveNanId(f));
+            }
+        }
+        return val;
+    }
+
+    private int resolveGradientIds(int cmd, int[] array, int i, @NonNull WireBuffer buffer) {
+        int ret = i;
+        int type = (cmd >> 16);
+        int control = array[ret++];
+        int len = 0xFF & control;
+        int register = 0xFFFF & (control >> 16);
+        for (int j = 0; j < len; j++) {
+            if ((register & (1 << j)) != 0) {
+                if (buffer instanceof LoomWireBuffer) {
+                    array[ret] = ((LoomWireBuffer) buffer).getRemapContext().resolveId(array[ret]);
+                }
+            }
+            ret++;
+        }
+        len = array[ret++]; // stops
+        for (int j = 0; j < len; j++) {
+            array[ret] = resolveFloatId(array[ret], buffer);
+            ret++;
+        }
+        // center/radius/etc
+        array[ret] = resolveFloatId(array[ret], buffer);
+        ret++;
+        array[ret] = resolveFloatId(array[ret], buffer);
+        ret++;
+        if (type == LINEAR_GRADIENT) {
+            array[ret] = resolveFloatId(array[ret], buffer);
+            ret++;
+            array[ret] = resolveFloatId(array[ret], buffer);
+            ret++;
+        } else if (type == RADIAL_GRADIENT) {
+            array[ret] = resolveFloatId(array[ret], buffer);
+            ret++;
+        } else if (type == RADIAL_GRADIENT2) {
+            // startRadius, endX, endY, endRadius (startX/startY consumed above)
+            for (int j = 0; j < 4; j++) {
+                array[ret] = resolveFloatId(array[ret], buffer);
+                ret++;
+            }
+        }
+        ret++; // tileMode
+        return ret;
+    }
+
+    /** Apply changes to a PaintChanges interface */
     public void applyPaintChange(@NonNull PaintContext paintContext, @NonNull PaintChanges p) {
         int i = 0;
         int mask = 0;
@@ -70,6 +191,13 @@ public class PaintBundle implements Serializable {
                     } else {
                         p.setTypeFace(font_type, weight, italic);
                     }
+                    break;
+                case FALLBACK_TYPEFACE:
+                    int fStyle = (cmd >> 16);
+                    int fWeight = fStyle & 0x3ff;
+                    boolean fItalic = (fStyle >> 10) > 0;
+                    int fFont_type = mOutArray[i++];
+                    p.setFallbackTypeFace(fFont_type, fWeight, fItalic);
                     break;
                 case COLOR_ID: // mOutArray should have already decoded it
                 case COLOR:
@@ -149,6 +277,9 @@ public class PaintBundle implements Serializable {
                     }
                     p.setPathEffect(pathEffect);
 
+                    break;
+                case ANTI_ALIAS:
+                    // TODO enable this and fix add p.setAntiAlias((cmd >> 16) != 0);
                     break;
                 default:
                     System.err.println("error unknown Paint Type " + (cmd & 0xFFFF));
@@ -236,6 +367,16 @@ public class PaintBundle implements Serializable {
                     int font_type = mArray[i++];
                     ret.append("    TypeFace(" + (font_type + ", " + weight + ", " + italic));
                     break;
+                case FALLBACK_TYPEFACE:
+                    int fstyle = (cmd >> 16);
+                    int fweight = fstyle & 0x3ff;
+                    boolean fitalic = (fstyle >> 10) > 0;
+                    int ffont_type = mArray[i++];
+                    ret.append(
+                            "    FallbackTypeFace("
+                                    + (ffont_type + ", " + fweight + ", " + fitalic));
+                    break;
+
                 case COLOR:
                     ret.append("    Color(" + colorInt(mArray[i++]));
                     break;
@@ -328,6 +469,9 @@ public class PaintBundle implements Serializable {
                 case SHADER_MATRIX:
                     ret.append("    ShaderMatrix(" + asFloatStr(mArray[i++]));
                     break;
+                default:
+                    ret.append("    UNKNOWN_OPCODE(" + type + ")");
+                    break;
             }
             ret.append("),\n");
         }
@@ -355,7 +499,7 @@ public class PaintBundle implements Serializable {
         int register = 0xFFFF & (control >> 16);
         int tileMode = 0;
         switch (type) {
-            /* see {@link #setLinearGradient} */
+                /* see {@link #setLinearGradient} */
             case LINEAR_GRADIENT:
                 if (len > 0) {
 
@@ -385,7 +529,7 @@ public class PaintBundle implements Serializable {
                 registerFloat(array[ret++], context, support);
                 tileMode = array[ret++];
                 break;
-            /* see {@link #setRadialGradient} */
+                /* see {@link #setRadialGradient} */
             case RADIAL_GRADIENT:
                 if (len > 0) {
 
@@ -410,7 +554,37 @@ public class PaintBundle implements Serializable {
 
                 tileMode = array[ret++]; // tile Mode
                 break;
-            /* see {@link #setSweepGradient} */
+            case RADIAL_GRADIENT2:
+                if (len > 0) {
+
+                    for (int j = 0; j < len; j++) {
+                        int color = array[ret++];
+                        if ((register & (1 << j)) != 0) {
+                            context.listensTo(color, support);
+                        }
+                    }
+                }
+                len = array[ret++]; // stops
+                for (int j = 0; j < len; j++) {
+                    registerFloat(array[ret++], context, support);
+                }
+
+                //  start x
+                registerFloat(array[ret++], context, support);
+                //  start y
+                registerFloat(array[ret++], context, support);
+                // start radius
+                registerFloat(array[ret++], context, support);
+                //  start center x
+                registerFloat(array[ret++], context, support);
+                //  start center y
+                registerFloat(array[ret++], context, support);
+                // start radius
+                registerFloat(array[ret++], context, support);
+
+                tileMode = array[ret++]; // tile Mode
+                break;
+                /* see {@link #setSweepGradient} */
             case SWEEP_GRADIENT:
                 if (len > 0) {
 
@@ -441,7 +615,7 @@ public class PaintBundle implements Serializable {
         int ret = i;
         int type = (cmd >> 16);
         int tileMode = 0;
-        int len = array[ret++];
+        int len = 0xFF & array[ret++];
         int[] colors = null;
         String[] stops = null;
         switch (type) {
@@ -480,7 +654,7 @@ public class PaintBundle implements Serializable {
                         colors[j] = array[ret++];
                     }
                 }
-                len = array[ret++];
+                len = 0xFF & array[ret++];
                 if (len > 0) {
                     stops = new String[len];
                     for (int j = 0; j < stops.length; j++) {
@@ -506,7 +680,7 @@ public class PaintBundle implements Serializable {
                         colors[j] = array[ret++];
                     }
                 }
-                len = array[ret++];
+                len = 0xFF & array[ret++];
                 if (len > 0) {
                     stops = new String[len];
                     for (int j = 0; j < stops.length; j++) {
@@ -531,7 +705,7 @@ public class PaintBundle implements Serializable {
         int gradientType = (cmd >> 16);
 
         int len = 0xFF & array[ret++]; // maximum 256 colors
-
+        int colorLen = len;
         int[] colors = null;
         if (len > 0) {
             colors = new int[len];
@@ -542,6 +716,9 @@ public class PaintBundle implements Serializable {
         len = array[ret++];
         float[] stops = null;
         if (len > 0 && colors != null) {
+            if (len != colorLen) { // length should be 0 or the same as colors
+                throw new RuntimeException("bad gradient length");
+            }
             stops = new float[len];
             for (int j = 0; j < colors.length; j++) {
                 stops[j] = Float.intBitsToFloat(array[ret++]);
@@ -572,6 +749,18 @@ public class PaintBundle implements Serializable {
                 tileMode = array[ret++];
                 p.setRadialGradient(colors, stops, centerX, centerY, radius, tileMode);
                 break;
+            case RADIAL_GRADIENT2:
+                startX = Float.intBitsToFloat(array[ret++]);
+                startY = Float.intBitsToFloat(array[ret++]);
+                float startR = Float.intBitsToFloat(array[ret++]);
+                endX = Float.intBitsToFloat(array[ret++]);
+                endY = Float.intBitsToFloat(array[ret++]);
+                float endR = Float.intBitsToFloat(array[ret++]);
+
+                tileMode = array[ret++];
+                p.setRadialGradient(
+                        colors, stops, startX, startY, startR, endX, endY, endR, tileMode);
+                break;
             case SWEEP_GRADIENT:
                 centerX = Float.intBitsToFloat(array[ret++]);
                 centerY = Float.intBitsToFloat(array[ret++]);
@@ -600,14 +789,20 @@ public class PaintBundle implements Serializable {
      */
     public void readBundle(@NonNull WireBuffer buffer) {
         int len = buffer.readInt();
-        if (len <= 0 || len > 1024) {
+        if (len < 0 || len > 1024) {
             throw new RuntimeException("buffer corrupt paint len = " + len);
+        }
+        if (len == 0) {
+            mArray = new int[0];
+            mPos = 0;
+            return;
         }
         mArray = new int[len];
         for (int i = 0; i < mArray.length; i++) {
             mArray[i] = buffer.readInt();
         }
         mPos = len;
+        resolveIds(buffer);
     }
 
     public static final int TEXT_SIZE = 1; // float
@@ -634,6 +829,7 @@ public class PaintBundle implements Serializable {
     public static final int FONT_AXIS = 23;
     public static final int TEXTURE = 24;
     public static final int PATH_EFFECT = 25;
+    public static final int FALLBACK_TYPEFACE = 26;
 
     public static final int BLEND_MODE_CLEAR = 0;
     public static final int BLEND_MODE_SRC = 1;
@@ -683,6 +879,7 @@ public class PaintBundle implements Serializable {
     public static final int LINEAR_GRADIENT = 0;
     public static final int RADIAL_GRADIENT = 1;
     public static final int SWEEP_GRADIENT = 2;
+    public static final int RADIAL_GRADIENT2 = 3;
 
     private int mLastShaderSet = -1;
     private boolean mColorFilterSet = false;
@@ -690,15 +887,14 @@ public class PaintBundle implements Serializable {
     /**
      * sets a shader that draws a linear gradient along a line.
      *
-     * @param colors   The sRGB colors to be distributed along the gradient line
-     * @param idMask   The id mask for the shader
-     * @param stops    May be null. The relative positions [0..1] of each corresponding color in the
-     *                 colors array. If this is null, the colors are distributed evenly along the
-     *                 gradient line.
-     * @param startX   The x-coordinate for the start of the gradient line
-     * @param startY   The y-coordinate for the start of the gradient line
-     * @param endX     The x-coordinate for the end of the gradient line
-     * @param endY     The y-coordinate for the end of the gradient line
+     * @param colors The sRGB colors to be distributed along the gradient line
+     * @param idMask The id mask for the shader
+     * @param stops May be null. The relative positions [0..1] of each corresponding color in the
+     *     colors array. If this is null, the colors are distributed evenly along the gradient line.
+     * @param startX The x-coordinate for the start of the gradient line
+     * @param startY The y-coordinate for the start of the gradient line
+     * @param endX The x-coordinate for the end of the gradient line
+     * @param endY The y-coordinate for the end of the gradient line
      * @param tileMode The Shader tiling mode
      */
     public void setLinearGradient(
@@ -732,15 +928,13 @@ public class PaintBundle implements Serializable {
     /**
      * Set a shader that draws a sweep gradient around a center point.
      *
-     * @param colors  The sRGB colors to be distributed around the center. There must be at least 2
-     *                colors in the array.
-     * @param idMask  The id mask for the shader
-     * @param stops   May be NULL. The relative position of each corresponding color in the colors
-     *                array, beginning with 0 and ending with 1.0. If the values are not
-     *                monotonic, the drawing
-     *                may produce unexpected results. If positions is NULL, then the colors are
-     *                automatically
-     *                spaced evenly.
+     * @param colors The sRGB colors to be distributed around the center. There must be at least 2
+     *     colors in the array.
+     * @param idMask The id mask for the shader
+     * @param stops May be NULL. The relative position of each corresponding color in the colors
+     *     array, beginning with 0 and ending with 1.0. If the values are not monotonic, the drawing
+     *     may produce unexpected results. If positions is NULL, then the colors are automatically
+     *     spaced evenly.
      * @param centerX The x-coordinate of the center
      * @param centerY The y-coordinate of the center
      */
@@ -769,18 +963,15 @@ public class PaintBundle implements Serializable {
     /**
      * Sets a shader that draws a radial gradient given the center and radius.
      *
-     * @param colors   The sRGB colors distributed between the center and edge
-     * @param idMask   The id mask for the shader
-     * @param stops    May be <code>null</code>. Valid values are between <code>0.0f</code> and
-     *                 <code>
-     *                 1.0f</code>. The relative position of each corresponding color in the
-     *                 colors array. If
-     *                 <code>null</code>, colors are distributed evenly between the center and
-     *                 edge of the
-     *                 circle.
-     * @param centerX  The x-coordinate of the center of the radius
-     * @param centerY  The y-coordinate of the center of the radius
-     * @param radius   Must be positive. The radius of the gradient.
+     * @param colors The sRGB colors distributed between the center and edge
+     * @param idMask The id mask for the shader
+     * @param stops May be <code>null</code>. Valid values are between <code>0.0f</code> and <code>
+     *                 1.0f</code>. The relative position of each corresponding color in the colors
+     *     array. If <code>null</code>, colors are distributed evenly between the center and edge of
+     *     the circle.
+     * @param centerX The x-coordinate of the center of the radius
+     * @param centerY The y-coordinate of the center of the radius
+     * @param radius Must be positive. The radius of the gradient.
      * @param tileMode The Shader tiling mode
      */
     public void setRadialGradient(
@@ -810,10 +1001,64 @@ public class PaintBundle implements Serializable {
     }
 
     /**
+     * Sets a shader that draws a radial gradient given the center and radius.
+     *
+     * @param colors The sRGB colors distributed between the center and edge
+     * @param idMask The id mask for the shader
+     * @param stops May be <code>null</code>. Valid values are between <code>0.0f</code> and <code>
+     *                    1.0f</code>. The relative position of each corresponding color in the
+     *     colors array. If <code>null</code>, colors are distributed evenly between the center and
+     *     edge of the circle.
+     * @param startX The x-coordinate of the center of the starting circle of the radial gradient,
+     *     often referred to as the focal point.
+     * @param startY The y-coordinate of the center of the starting circle of the radial gradient,
+     *     often referred to as the focal point.
+     * @param startRadius The radius of the starting circle of the radial gradient, often referred
+     *     to as the focal radius. Must be greater than or equal to zero. Value is 0.0f or greater
+     * @param endX The x-coordinate of the center of the radius for the end circle of the radial
+     *     gradient
+     * @param endY The y-coordinate of the center of the radius for the end circle of the radial
+     *     gradient
+     * @param endRadius The radius of the ending circle for this gradient. This must be strictly
+     *     greater than zero. A radius value equal to zero is not allowed. Value is 0.0f or greater
+     * @param tileMode The Shader tiling mode
+     */
+    public void setRadialGradient(
+            int @NonNull [] colors,
+            int idMask,
+            float @Nullable [] stops,
+            float startX,
+            float startY,
+            float startRadius,
+            float endX,
+            float endY,
+            float endRadius,
+            int tileMode) {
+        int len;
+        mArray[mPos++] = GRADIENT | (RADIAL_GRADIENT2 << 16);
+        mArray[mPos++] = (idMask << 16) | (len = colors.length);
+        for (int i = 0; i < len; i++) {
+            mArray[mPos++] = colors[i];
+        }
+        mArray[mPos++] = len = (stops == null) ? 0 : stops.length;
+
+        for (int i = 0; i < len; i++) {
+            mArray[mPos++] = Float.floatToRawIntBits(stops[i]);
+        }
+        mArray[mPos++] = Float.floatToRawIntBits(startX);
+        mArray[mPos++] = Float.floatToRawIntBits(startY);
+        mArray[mPos++] = Float.floatToRawIntBits(startRadius);
+        mArray[mPos++] = Float.floatToRawIntBits(endX);
+        mArray[mPos++] = Float.floatToRawIntBits(endY);
+        mArray[mPos++] = Float.floatToRawIntBits(endRadius);
+        mArray[mPos++] = tileMode;
+    }
+
+    /**
      * Create a color filter that uses the specified color and Porter-Duff mode.
      *
      * @param color The ARGB source color used with the Porter-Duff mode
-     * @param mode  The porter-duff mode that is applied
+     * @param mode The porter-duff mode that is applied
      */
     public void setColorFilter(int color, int mode) {
         mArray[mPos] = COLOR_FILTER | (mode << 16);
@@ -825,7 +1070,7 @@ public class PaintBundle implements Serializable {
      * Create a color filter that uses the specified color and Porter-Duff mode.
      *
      * @param color The id source color used with the Porter-Duff mode
-     * @param mode  The porter-duff mode that is applied
+     * @param mode The porter-duff mode that is applied
      */
     public void setColorFilterId(int color, int mode) {
         mArray[mPos] = COLOR_FILTER_ID | (mode << 16);
@@ -857,9 +1102,9 @@ public class PaintBundle implements Serializable {
      * Set the paint's font 0,1,2 are built else ttf or string based system fonts
      *
      * @param fontType 0 = default 1 = sans serif 2 = serif 3 = monospace
-     * @param weight   100-1000
-     * @param italic   tur
-     * @param ttf      true if ttf font
+     * @param weight 100-1000
+     * @param italic tur
+     * @param ttf true if ttf font
      */
     public void setTextStyle(int fontType, int weight, boolean italic, boolean ttf) {
         int style =
@@ -872,8 +1117,8 @@ public class PaintBundle implements Serializable {
 
     /**
      * @param fontType 0 = default 1 = sans serif 2 = serif 3 = monospace
-     * @param weight   100-1000
-     * @param italic   tur
+     * @param weight 100-1000
+     * @param italic true = italic
      */
     public void setTextStyle(int fontType, int weight, boolean italic) {
         int style = (weight & 0x3FF) | (italic ? 2048 : 0); // pack the weight and italic
@@ -882,9 +1127,20 @@ public class PaintBundle implements Serializable {
     }
 
     /**
+     * @param fontType 0 = default 1 = sans serif 2 = serif 3 = monospace
+     * @param weight 100-1000
+     * @param italic true
+     */
+    public void setFallbackTypeFace(int fontType, int weight, boolean italic) {
+        int style = (weight & 0x3FF) | (italic ? 2048 : 0); // pack the weight and italic
+        mArray[mPos++] = FALLBACK_TYPEFACE | (style << 16);
+        mArray[mPos++] = fontType;
+    }
+
+    /**
      * Set the TextAxis for the text
      *
-     * @param tags   id of axis strings
+     * @param tags id of axis strings
      * @param values values for the axis
      */
     public void setTextAxis(int @NonNull [] tags, float @NonNull [] values) {
@@ -907,7 +1163,7 @@ public class PaintBundle implements Serializable {
      * single pixel independent of the canvas's matrix.
      *
      * @param width set the paint's stroke width, used whenever the paint's style is Stroke or
-     *              StrokeAndFill.
+     *     StrokeAndFill.
      */
     public void setStrokeWidth(float width) {
         mArray[mPos] = STROKE_WIDTH;
@@ -916,9 +1172,7 @@ public class PaintBundle implements Serializable {
         mPos++;
     }
 
-    /**
-     * Set the Color based on Color
-     */
+    /** Set the Color based on Color */
     public void setColor(int color) {
         mArray[mPos] = COLOR;
         mPos++;
@@ -951,9 +1205,7 @@ public class PaintBundle implements Serializable {
         setColor(Utils.toARGB(a, r, g, b));
     }
 
-    /**
-     * Set the Color based on ID
-     */
+    /** Set the Color based on ID */
     public void setColorId(int color) {
         mArray[mPos] = COLOR_ID;
         mPos++;
@@ -965,24 +1217,20 @@ public class PaintBundle implements Serializable {
      * Set the paint's Cap.
      *
      * @param cap set the paint's line cap style, used whenever the paint's style is Stroke or
-     *            StrokeAndFill.
+     *     StrokeAndFill.
      */
     public void setStrokeCap(int cap) {
         mArray[mPos] = STROKE_CAP | (cap << 16);
         mPos++;
     }
 
-    /**
-     * Set the style STROKE and/or FILL
-     */
+    /** Set the style STROKE and/or FILL */
     public void setStyle(int style) {
         mArray[mPos] = STYLE | (style << 16);
         mPos++;
     }
 
-    /**
-     * Set the shader id to use
-     */
+    /** Set the shader id to use */
     public void setShader(int shaderId) {
         mLastShaderSet = shaderId;
         mArray[mPos] = SHADER;
@@ -1012,7 +1260,7 @@ public class PaintBundle implements Serializable {
      * the joins angle is sharp. This value must be >= 0.
      *
      * @param miter set the miter limit on the paint, used whenever the paint's style is Stroke or
-     *              StrokeAndFill.
+     *     StrokeAndFill.
      */
     public void setStrokeMiter(float miter) {
         mArray[mPos] = STROKE_MITER;
@@ -1064,9 +1312,7 @@ public class PaintBundle implements Serializable {
         mPos++;
     }
 
-    /**
-     * Set the texture shader
-     */
+    /** Set the texture shader */
     public void setTextureShader(
             int texture, short tileModeX, short tileModeY, short filterMode, short maxAnisotropy) {
         mArray[mPos] = TEXTURE;
@@ -1193,9 +1439,7 @@ public class PaintBundle implements Serializable {
         return "null";
     }
 
-    /**
-     * Check all the floats for Nan(id) floats and call listenTo
-     */
+    /** Check all the floats for Nan(id) floats and call listenTo */
     public void registerVars(@NonNull RemoteContext context, @NonNull VariableSupport support) {
         int i = 0;
         while (i < mPos) {
@@ -1251,24 +1495,30 @@ public class PaintBundle implements Serializable {
                 case PATH_EFFECT:
                     count = cmd >> 16;
                     if (count > 0) {
-                        i = PaintPathEffects.getIds(mArray, i, off -> {
-                                    if (Float.isNaN(Float.intBitsToFloat(mArray[off]))) {
-                                        context.listensTo(
-                                                Utils.idFromNan(Float.intBitsToFloat(mArray[off])),
-                                                support);
-                                    }
-                                }
-                        );
+                        int next =
+                                PaintPathEffects.getIds(
+                                        mArray,
+                                        i,
+                                        off -> {
+                                            if (Float.isNaN(Float.intBitsToFloat(mArray[off]))) {
+                                                context.listensTo(
+                                                        Utils.idFromNan(
+                                                                Float.intBitsToFloat(mArray[off])),
+                                                        support);
+                                            }
+                                        });
+                        if (next < 0) {
+                            throw new RuntimeException(
+                                    "Unrecognized path effect record at offset " + i);
+                        }
+                        i = next;
                     }
                     break;
-
             }
         }
     }
 
-    /**
-     * Update variables if any are float ids
-     */
+    /** Update variables if any are float ids */
     public void updateVariables(@NonNull RemoteContext context) {
         if (mOutArray == null) {
             mOutArray = Arrays.copyOf(mArray, mArray.length);
@@ -1325,13 +1575,20 @@ public class PaintBundle implements Serializable {
                 case PATH_EFFECT:
                     count = cmd >> 16;
                     if (count > 0) {
-                        i = PaintPathEffects.getIds(mArray, i, off -> {
-                                    mOutArray[off] = fixFloatVar(mArray[off], context);
-                                }
-                        );
+                        int next =
+                                PaintPathEffects.getIds(
+                                        mArray,
+                                        i,
+                                        off -> {
+                                            mOutArray[off] = fixFloatVar(mArray[off], context);
+                                        });
+                        if (next < 0) {
+                            throw new RuntimeException(
+                                    "Unrecognized path effect record at offset " + i);
+                        }
+                        i = next;
                     }
-
-
+                    break;
             }
         }
     }
@@ -1415,6 +1672,44 @@ public class PaintBundle implements Serializable {
                 out[ret] = fixFloatVar(array[ret], context);
                 ret++;
                 //     radius
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                ret++; // tileMode
+                break;
+            case RADIAL_GRADIENT2:
+                //   RadialGradient2
+                if (len > 0) {
+
+                    for (int j = 0; j < len; j++) {
+                        int color = array[ret];
+                        if ((register & (1 << j)) != 0) {
+                            out[ret] = fixColor(color, context);
+                        }
+                        ret++;
+                    }
+                }
+                len = array[ret++];
+                if (len > 0) {
+                    for (int j = 0; j < len; j++) {
+                        out[ret] = fixFloatVar(array[ret], context);
+                        ret++;
+                    }
+                }
+
+                //    start
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                //     start radius
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                //    end
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                out[ret] = fixFloatVar(array[ret], context);
+                ret++;
+                //     end radius
                 out[ret] = fixFloatVar(array[ret], context);
                 ret++;
                 ret++; // tileMode
@@ -1634,6 +1929,37 @@ public class PaintBundle implements Serializable {
                                 "tileMode",
                                 tileMode));
                 break;
+            case RADIAL_GRADIENT2:
+                startX = array[ret++];
+                startY = array[ret++];
+                int startR = array[ret++];
+                endX = array[ret++];
+                endY = array[ret++];
+                int endR = array[ret++];
+                tileMode = array[ret++];
+                list.add(
+                        orderedOf(
+                                "type",
+                                "RadialGradientFocal",
+                                "colors",
+                                colors,
+                                "stops",
+                                stops == null ? List.of() : stops,
+                                "startX",
+                                getVariable(startX),
+                                "startY",
+                                getVariable(startY),
+                                "startR",
+                                getVariable(startR),
+                                "endX",
+                                getVariable(endX),
+                                "endY",
+                                getVariable(endY),
+                                "endR",
+                                getVariable(endR),
+                                "tileMode",
+                                tileMode));
+                break;
             case SWEEP_GRADIENT:
                 centerX = array[ret++];
                 centerY = array[ret++];
@@ -1652,5 +1978,15 @@ public class PaintBundle implements Serializable {
         }
 
         return ret;
+    }
+
+    /** Returns {@code mArray}. */
+    public int @NonNull [] getArray() {
+        return mArray;
+    }
+
+    /** Returns {@code mPos}. */
+    public int getPos() {
+        return mPos;
     }
 }

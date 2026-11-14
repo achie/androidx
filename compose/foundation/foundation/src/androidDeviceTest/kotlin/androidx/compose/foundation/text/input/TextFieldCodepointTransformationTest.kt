@@ -16,6 +16,8 @@
 
 package androidx.compose.foundation.text.input
 
+import androidx.compose.foundation.ComposeFoundationFlags
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.internal.CodepointTransformation
 import androidx.compose.foundation.text.input.internal.mask
@@ -28,8 +30,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
@@ -45,21 +46,32 @@ import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import kotlin.test.fail
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalTestApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class TextFieldCodepointTransformationTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val inputMethodInterceptor = InputMethodInterceptor(rule)
 
     private val Tag = "BasicTextField"
+
+    @Before
+    fun setUp() {
+        ComposeFoundationFlags.isBasicTextFieldOutputTransformationOnlyEnabled = false
+    }
+
+    @After
+    fun tearDown() {
+        ComposeFoundationFlags.isBasicTextFieldOutputTransformationOnlyEnabled = true
+    }
 
     @Test
     fun textField_rendersTheResultOf_codepointTransformation() {

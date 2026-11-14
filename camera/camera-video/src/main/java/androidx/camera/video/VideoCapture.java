@@ -34,12 +34,12 @@ import static androidx.camera.core.impl.UseCaseConfig.OPTION_CAPTURE_TYPE;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_DEFAULT_CAPTURE_CONFIG;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_DEFAULT_SESSION_CONFIG;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_HIGH_RESOLUTION_DISABLED;
+import static androidx.camera.core.impl.UseCaseConfig.OPTION_IS_VIDEO_QUALITY_SELECTOR_DEFAULT;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_RESOLUTION_TO_MAX_FRAME_RATES;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_SESSION_CONFIG_UNPACKER;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_STREAM_USE_CASE;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_SURFACE_OCCUPANCY_PRIORITY;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_TARGET_FRAME_RATE;
-import static androidx.camera.core.impl.UseCaseConfig.OPTION_IS_VIDEO_QUALITY_SELECTOR_DEFAULT;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_VIDEO_STABILIZATION_MODE;
 import static androidx.camera.core.impl.UseCaseConfig.OPTION_ZSL_DISABLED;
 import static androidx.camera.core.impl.utils.Threads.isMainThread;
@@ -53,12 +53,9 @@ import static androidx.camera.core.internal.utils.SizeUtil.getArea;
 import static androidx.camera.video.QualitySelector.getQualityToResolutionMap;
 import static androidx.camera.video.StreamInfo.STREAM_ID_ERROR;
 import static androidx.camera.video.impl.VideoCaptureConfig.OPTION_FORCE_ENABLE_SURFACE_PROCESSING;
-import static androidx.camera.video.impl.VideoCaptureConfig.OPTION_VIDEO_ENCODER_INFO_FINDER;
 import static androidx.camera.video.impl.VideoCaptureConfig.OPTION_VIDEO_OUTPUT;
-import static androidx.camera.video.internal.config.VideoConfigUtil.resolveVideoMimeInfo;
 import static androidx.camera.video.internal.utils.DynamicRangeUtil.isHdrSettingsMatched;
-import static androidx.camera.video.internal.utils.DynamicRangeUtil.videoProfileBitDepthToDynamicRangeBitDepth;
-import static androidx.camera.video.internal.utils.DynamicRangeUtil.videoProfileHdrFormatsToDynamicRangeEncoding;
+import static androidx.camera.video.internal.utils.DynamicRangeUtil.videoProfileToDynamicRange;
 import static androidx.core.util.Preconditions.checkArgument;
 import static androidx.core.util.Preconditions.checkState;
 
@@ -136,13 +133,12 @@ import androidx.camera.video.internal.VideoValidatedEncoderProfilesProxy;
 import androidx.camera.video.internal.compat.quirk.DeviceQuirks;
 import androidx.camera.video.internal.compat.quirk.HdrRepeatingRequestFailureQuirk;
 import androidx.camera.video.internal.compat.quirk.SizeCannotEncodeVideoQuirk;
+import androidx.camera.video.internal.config.MediaConfigUtil;
+import androidx.camera.video.internal.config.MediaInfo;
 import androidx.camera.video.internal.config.VideoMimeInfo;
 import androidx.camera.video.internal.encoder.SwappedVideoEncoderInfo;
 import androidx.camera.video.internal.encoder.VideoEncoderInfo;
-import androidx.camera.video.internal.encoder.VideoEncoderInfoImpl;
-import androidx.camera.video.internal.workaround.VideoEncoderInfoWrapper;
 import androidx.concurrent.futures.CallbackToFutureAdapter;
-import androidx.core.util.Preconditions;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -151,7 +147,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -207,6 +203,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     private @Nullable SourceStreamRequirementObserver mSourceStreamRequirementObserver;
     private SessionConfig.@Nullable CloseableErrorListener mCloseableErrorListener;
     private Map<Quality, List<Size>> mQualityToCustomSizesMap = emptyMap();
+    private @Nullable MediaInfo mResolvedMediaInfo;
 
     /**
      * Create a VideoCapture associated with the given {@link VideoOutput}.
@@ -215,7 +212,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
      */
     public static <T extends VideoOutput> @NonNull VideoCapture<T> withOutput(
             @NonNull T videoOutput) {
-        return new VideoCapture.Builder<>(Preconditions.checkNotNull(videoOutput)).build();
+        return new VideoCapture.Builder<>(requireNonNull(videoOutput)).build();
     }
 
     /**
@@ -323,6 +320,36 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     }
 
     /**
+     * Sets the mirror mode.
+     *
+     * <p>Valid values include: {@link MirrorMode#MIRROR_MODE_OFF},
+     * {@link MirrorMode#MIRROR_MODE_ON} and {@link MirrorMode#MIRROR_MODE_ON_FRONT_ONLY}.
+     * If not set, it defaults to {@link MirrorMode#MIRROR_MODE_OFF}.
+     *
+     * @param mirrorMode The mirror mode.
+     */
+    public void setMirrorMode(@MirrorMode.Mirror int mirrorMode) {
+        if (setMirrorModeInternal(mirrorMode)) {
+            if (!isInSession()) {
+                return;
+            }
+            CameraInternal camera = requireNonNull(getCamera());
+            // When attached to VirtualCamera (e.g. under StreamSharing), avoid tearing down
+            // VideoCapture's internal surface pipeline and rely on StreamSharing pipeline reset.
+            if (camera.getHasTransform()) {
+                updateConfigAndOutput(requireNonNull(getAttachedStreamSpec()));
+            }
+            notifyReset();
+        }
+    }
+
+    @RestrictTo(Scope.LIBRARY_GROUP)
+    @Override
+    protected void onProviderRotationChanged(int rotation) {
+        setTargetRotation(rotation);
+    }
+
+    /**
      * Returns information about the selected resolution.
      *
      * <p>Note that the {@link ResolutionInfo#getResolution()} might not be the same as the
@@ -420,7 +447,6 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         return mirrorMode;
     }
 
-    @SuppressWarnings("unchecked")
     @RestrictTo(Scope.LIBRARY_GROUP)
     @Override
     protected @NonNull StreamSpec onSuggestedStreamSpecUpdated(
@@ -428,14 +454,43 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             @Nullable StreamSpec secondaryStreamSpec) {
         Logger.d(TAG, "onSuggestedStreamSpecUpdated: primaryStreamSpec = " + primaryStreamSpec
                 + ", secondaryStreamSpec " + secondaryStreamSpec);
-        VideoCaptureConfig<T> config = (VideoCaptureConfig<T>) getCurrentConfig();
-        List<Size> customOrderedResolutions = config.getCustomOrderedResolutions(null);
-        if (customOrderedResolutions != null
-                && !customOrderedResolutions.contains(primaryStreamSpec.getResolution())) {
-            Logger.w(TAG, "suggested resolution " + primaryStreamSpec.getResolution()
-                    + " is not in custom ordered resolutions " + customOrderedResolutions);
+
+        mResolvedMediaInfo = resolveMediaInfo(primaryStreamSpec);
+
+        StreamSpec oldStreamSpec = getAttachedStreamSpec();
+        if (isInSession() && shouldUpdateConfigAndOutput(oldStreamSpec, primaryStreamSpec)) {
+            updateConfigAndOutput(primaryStreamSpec);
         }
+
         return primaryStreamSpec;
+    }
+
+    private static boolean shouldUpdateConfigAndOutput(@Nullable StreamSpec oldStreamSpec,
+            @NonNull StreamSpec newStreamSpec) {
+        if (oldStreamSpec == null) {
+            return false;
+        }
+        return !Objects.equals(oldStreamSpec.getResolution(), newStreamSpec.getResolution())
+                || !Objects.equals(
+                        oldStreamSpec.getDynamicRange(),
+                        newStreamSpec.getDynamicRange());
+    }
+
+    @RestrictTo(Scope.LIBRARY_GROUP)
+    @Override
+    public void onUnbind() {
+        mResolvedMediaInfo = null;
+    }
+
+    private @NonNull MediaInfo resolveMediaInfo(@NonNull StreamSpec streamSpec) {
+        CameraInternal camera = requireNonNull(getCamera());
+        EncoderProfilesResolver profilesResolver = getEncoderProfilesResolver(
+                camera.getCameraInfo(), streamSpec.getSessionType());
+        VideoValidatedEncoderProfilesProxy encoderProfiles =
+                profilesResolver.findNearestHigherSupportedEncoderProfilesFor(
+                        streamSpec.getResolution(), streamSpec.getDynamicRange());
+        return MediaConfigUtil.resolveMediaInfo(requireNonNull(getMediaSpec()),
+                streamSpec.getDynamicRange(), encoderProfiles);
     }
 
     /**
@@ -464,28 +519,23 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     /**
      * {@inheritDoc}
      */
-    @SuppressWarnings("unchecked")
     @RestrictTo(Scope.LIBRARY_GROUP)
     @Override
     @MainThread
     public void onSessionStart() {
         super.onSessionStart();
 
-        Logger.d(TAG, "VideoCapture#onStateAttached: cameraID = " + getCameraId());
+        Logger.d(TAG, "VideoCapture#onSessionStart: cameraID = " + getCameraId());
 
         // For concurrent camera, the surface request might not be null when switching
         // from single to dual camera.
         if (getAttachedStreamSpec() == null || mSurfaceRequest != null) {
             return;
         }
-        StreamSpec attachedStreamSpec = Preconditions.checkNotNull(getAttachedStreamSpec());
+        StreamSpec attachedStreamSpec = requireNonNull(getAttachedStreamSpec());
         mStreamInfo = fetchObservableValue(getOutput().getStreamInfo(),
                 StreamInfo.STREAM_INFO_ANY_INACTIVE);
-        mSessionConfigBuilder = createPipeline(
-                (VideoCaptureConfig<T>) getCurrentConfig(), attachedStreamSpec);
-        applyStreamInfoAndStreamSpecToSessionConfigBuilder(mSessionConfigBuilder, mStreamInfo,
-                attachedStreamSpec);
-        updateSessionConfig(List.of(mSessionConfigBuilder.build()));
+        updateConfigAndOutput(attachedStreamSpec);
         // VideoCapture has to be active to apply SessionConfig's template type.
         notifyActive();
         getOutput().getStreamInfo().addObserver(CameraXExecutors.mainThreadExecutor(),
@@ -519,7 +569,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     @Override
     @MainThread
     public void onSessionStop() {
-        Logger.d(TAG, "VideoCapture#onStateDetached");
+        Logger.d(TAG, "VideoCapture#onSessionStop");
 
         checkState(isMainThread(), "VideoCapture can only be detached on the main thread.");
 
@@ -544,6 +594,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         // Clear the pipeline to close the surface, which releases the codec so that it's
         // available for other applications.
         clearPipeline();
+
+        mStreamInfo = StreamInfo.STREAM_INFO_ANY_INACTIVE;
     }
 
     /**
@@ -591,6 +643,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     protected @NonNull UseCaseConfig<?> onMergeConfig(@NonNull CameraInfoInternal cameraInfo,
             UseCaseConfig.@NonNull Builder<?, ?, ?> builder) {
 
+        getOutput().onValidateConfig();
+
         updateCustomOrderedResolutionsByQuality(cameraInfo, builder);
 
         return builder.getUseCaseConfig();
@@ -614,13 +668,14 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         }
     }
 
-    private @NonNull Rect adjustCropRectWithInProgressTransformation(@NonNull Rect cropRect,
+    private @NonNull Rect adjustCropRectWithInProgressTransformation(
+            @NonNull CameraInternal camera,
+            @NonNull Rect cropRect,
             int rotationDegrees) {
         Rect adjustedCropRect = cropRect;
-        if (shouldCompensateTransformation()) {
+        if (shouldCompensateTransformation(camera)) {
             adjustedCropRect = TransformUtils.sizeToRect(TransformUtils.getRotatedSize(
-                    Preconditions.checkNotNull(
-                            mStreamInfo.getInProgressTransformationInfo()).getCropRect(),
+                    requireNonNull(mStreamInfo.getInProgressTransformationInfo()).getCropRect(),
                     rotationDegrees));
         }
         return adjustedCropRect;
@@ -635,7 +690,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     private int getCompensatedRotation(@NonNull CameraInternal cameraInternal) {
         boolean isMirroringRequired = isMirroringRequired(cameraInternal);
         int rotationDegrees = getRelativeRotation(cameraInternal, isMirroringRequired);
-        if (shouldCompensateTransformation()) {
+        if (shouldCompensateTransformation(cameraInternal)) {
             TransformationInfo transformationInfo =
                     requireNonNull(mStreamInfo.getInProgressTransformationInfo());
             int inProgressDegrees = transformationInfo.getRotationDegrees();
@@ -649,10 +704,13 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         return rotationDegrees;
     }
 
-    private @NonNull Size adjustResolutionWithInProgressTransformation(@NonNull Size resolution,
-            @NonNull Rect originalCropRect, @NonNull Rect targetCropRect) {
+    private @NonNull Size adjustResolutionWithInProgressTransformation(
+            @NonNull CameraInternal camera,
+            @NonNull Size resolution,
+            @NonNull Rect originalCropRect,
+            @NonNull Rect targetCropRect) {
         Size nodeResolution = resolution;
-        if (shouldCompensateTransformation() && !targetCropRect.equals(originalCropRect)) {
+        if (shouldCompensateTransformation(camera) && !targetCropRect.equals(originalCropRect)) {
             float targetRatio = ((float) targetCropRect.height()) / originalCropRect.height();
             nodeResolution = new Size((int) Math.ceil(resolution.getWidth() * targetRatio),
                     (int) Math.ceil(resolution.getHeight() * targetRatio));
@@ -697,30 +755,30 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             @NonNull VideoCaptureConfig<T> config,
             @NonNull StreamSpec streamSpec) {
         Threads.checkMainThread();
-        CameraInternal camera = Preconditions.checkNotNull(getCamera());
-        Size resolution = streamSpec.getResolution();
+        clearPipeline();
 
+        CameraInternal camera = requireNonNull(getCamera());
+        Size resolution = streamSpec.getResolution();
         // Currently, VideoCapture uses StreamInfo to handle requests for surface, so
         // handleInvalidate() is not used. But if a different approach is asked in the future,
         // handleInvalidate() can be used as an alternative.
         Runnable onSurfaceInvalidated = this::notifyReset;
         Range<Integer> expectedFrameRate = resolveFrameRate(streamSpec);
-        MediaSpec mediaSpec = requireNonNull(getMediaSpec());
         int sessionType = streamSpec.getSessionType();
-        VideoCapabilities videoCapabilities = getVideoCapabilities(camera.getCameraInfo(),
-                sessionType);
         DynamicRange dynamicRange = streamSpec.getDynamicRange();
-        VideoValidatedEncoderProfilesProxy encoderProfiles =
-                videoCapabilities.findNearestHigherSupportedEncoderProfilesFor(resolution,
-                        dynamicRange);
+        MediaInfo mediaInfo = requireNonNull(mResolvedMediaInfo);
         VideoEncoderInfo videoEncoderInfo = resolveVideoEncoderInfo(
-                config.getVideoEncoderInfoFinder(), encoderProfiles, mediaSpec, dynamicRange);
+                getOutput().getVideoEncoderInfoFinder(), mediaInfo.getVideoMimeInfo());
         mRotationDegrees = getCompensatedRotation(camera);
         Rect originalCropRect = calculateCropRect(resolution, videoEncoderInfo);
-        mCropRect = adjustCropRectWithInProgressTransformation(originalCropRect, mRotationDegrees);
-        Size nodeResolution = adjustResolutionWithInProgressTransformation(resolution,
+        mCropRect = adjustCropRectWithInProgressTransformation(camera, originalCropRect,
+                mRotationDegrees);
+        Size nodeResolution = adjustResolutionWithInProgressTransformation(camera, resolution,
                 originalCropRect, mCropRect);
-        if (shouldCompensateTransformation()) {
+        boolean isBufferRotationRequired =
+                mRotationDegrees != 0 && !MediaConfigUtil.canWriteOrientationMetadata(
+                        mediaInfo.getContainerInfo().getOutputFormat());
+        if (shouldCompensateTransformation(camera)) {
             // If this pipeline is created with in-progress transformation, we need to reset the
             // pipeline when the transformation becomes invalid.
             mHasCompensatingTransformation = true;
@@ -729,15 +787,24 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
                 mCropRect,
                 mRotationDegrees,
                 isCreateNodeNeeded(camera, config, sessionType, mCropRect, resolution,
-                        dynamicRange),
+                        dynamicRange, isBufferRotationRequired),
                 videoEncoderInfo
         );
         mNode = createNodeIfNeeded(camera, config, sessionType, mCropRect, resolution,
-                dynamicRange);
+                dynamicRange, isBufferRotationRequired);
         boolean hasGlProcessing = !camera.getHasTransform() || mNode != null;
         Timebase timebase = resolveTimebase(camera, mNode);
-        Logger.d(TAG, "camera timebase = " + camera.getCameraInfoInternal().getTimebase()
-                + ", processing timebase = " + timebase);
+        Logger.d(TAG, "expectedFrameRate = " + expectedFrameRate
+                + ", originalCropRect = " + originalCropRect
+                + ", mCropRect = " + mCropRect
+                + ", nodeResolution = " + nodeResolution
+                + ", mRotationDegrees = " + mRotationDegrees
+                + ", isBufferRotationRequired = " + isBufferRotationRequired
+                + ", mHasCompensatingTransformation = " + mHasCompensatingTransformation
+                + ", camera timebase = " + camera.getCameraInfoInternal().getTimebase()
+                + ", hasGlProcessing = " + hasGlProcessing
+                + ", processing timebase = " + timebase
+        );
         // Update the StreamSpec with new frame rate range and resolution.
         StreamSpec updatedStreamSpec =
                 streamSpec.toBuilder()
@@ -800,7 +867,14 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             mCloseableErrorListener.close();
         }
         mCloseableErrorListener = new SessionConfig.CloseableErrorListener(
-                (sessionConfig, error) -> resetPipeline());
+                (sessionConfig, error) -> {
+                    if (!isInSession()) {
+                        return;
+                    }
+                    Logger.w(TAG, "SessionConfig onError: error = " + error);
+                    updateConfigAndOutput(requireNonNull(getAttachedStreamSpec()));
+                    notifyReset();
+                });
         sessionConfigBuilder.setErrorListener(mCloseableErrorListener);
         if (streamSpec.getImplementationOptions() != null) {
             sessionConfigBuilder.addImplementationOptions(streamSpec.getImplementationOptions());
@@ -812,7 +886,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     private void onAppEdgeInvalidated(@NonNull SurfaceEdge appEdge, @NonNull CameraInternal camera,
             @NonNull VideoCaptureConfig<T> config, @NonNull Timebase timebase,
             boolean hasGlProcessing) {
-        if (camera == getCamera()) {
+        if (camera == getCamera() && isInSession()) {
             mSurfaceRequest = appEdge.createSurfaceRequest(camera);
             config.getVideoOutput().onSurfaceRequested(mSurfaceRequest, timebase, hasGlProcessing);
             sendTransformationInfoIfReady();
@@ -846,27 +920,24 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         }
         mCropRect = null;
         mSurfaceRequest = null;
-        mStreamInfo = StreamInfo.STREAM_INFO_ANY_INACTIVE;
         mRotationDegrees = 0;
         mHasCompensatingTransformation = false;
     }
 
     @MainThread
-    @SuppressWarnings({"WeakerAccess", "unchecked"}) /* synthetic accessor */
-    void resetPipeline() {
-        // Do nothing when the use case has been unbound.
-        if (getCamera() == null) {
-            return;
-        }
-
-        clearPipeline();
+    @SuppressWarnings("unchecked")
+    private void updateConfigAndOutput(@NonNull StreamSpec streamSpec) {
+        setSourceState(VideoOutput.SourceState.CONFIGURING);
         mSessionConfigBuilder = createPipeline(
-                (VideoCaptureConfig<T>) getCurrentConfig(),
-                Preconditions.checkNotNull(getAttachedStreamSpec()));
+                (VideoCaptureConfig<T>) getCurrentConfig(), streamSpec);
+        applyStreamInfoAndUpdateSessionConfig(streamSpec);
+    }
+
+    @MainThread
+    private void applyStreamInfoAndUpdateSessionConfig(@NonNull StreamSpec streamSpec) {
         applyStreamInfoAndStreamSpecToSessionConfigBuilder(mSessionConfigBuilder, mStreamInfo,
-                getAttachedStreamSpec());
+                streamSpec);
         updateSessionConfig(List.of(mSessionConfigBuilder.build()));
-        notifyReset();
     }
 
     /**
@@ -892,9 +963,6 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
                 SurfaceRequest::willNotProvideSurface;
         private static final VideoCaptureConfig<?> DEFAULT_CONFIG;
 
-        private static final VideoEncoderInfo.Finder
-                DEFAULT_VIDEO_ENCODER_INFO_FINDER = VideoEncoderInfoImpl.FINDER;
-
         static final Range<Integer> DEFAULT_FPS_RANGE = new Range<>(30, 30);
         static final Range<Integer> DEFAULT_HIGH_SPEED_FPS_RANGE = new Range<>(120, 120);
 
@@ -908,7 +976,6 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             Builder<?> builder = new Builder<>(DEFAULT_VIDEO_OUTPUT)
                     .setSurfaceOccupancyPriority(DEFAULT_SURFACE_OCCUPANCY_PRIORITY)
                     .setStreamUseCase(DEFAULT_STREAM_USE_CASE)
-                    .setVideoEncoderInfoFinder(DEFAULT_VIDEO_ENCODER_INFO_FINDER)
                     .setDynamicRange(DEFAULT_DYNAMIC_RANGE);
 
             DEFAULT_CONFIG = builder.getUseCaseConfig();
@@ -938,15 +1005,19 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         return getOutput().getMediaCapabilities(cameraInfo, sessionType);
     }
 
-    private final Observer<StreamInfo> mStreamInfoObserver = new Observer<StreamInfo>() {
-        @SuppressWarnings("unchecked")
+    private @NonNull EncoderProfilesResolver getEncoderProfilesResolver(
+            @NonNull CameraInfo cameraInfo,
+            int sessionType) {
+        return getOutput().getEncoderProfilesResolver(cameraInfo, sessionType);
+    }
+
+    private final Observer<StreamInfo> mStreamInfoObserver = new Observer<>() {
         @Override
         public void onNewData(@Nullable StreamInfo streamInfo) {
             if (streamInfo == null) {
                 throw new IllegalArgumentException("StreamInfo can't be null");
             }
-            if (mSourceState == VideoOutput.SourceState.INACTIVE) {
-                // VideoCapture is unbound.
+            if (!isInSession()) {
                 return;
             }
             Logger.d(TAG, "Stream info update: old: " + mStreamInfo + " new: " + streamInfo);
@@ -954,34 +1025,26 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             StreamInfo currentStreamInfo = mStreamInfo;
             mStreamInfo = streamInfo;
 
-            // Doing resetPipeline() includes notifyReset/notifyUpdated(). Doing NotifyReset()
-            // includes notifyUpdated(). So we just take actions on higher order item for
-            // optimization.
-            StreamSpec attachedStreamSpec = Preconditions.checkNotNull(getAttachedStreamSpec());
+            StreamSpec attachedStreamSpec = requireNonNull(getAttachedStreamSpec());
             if (isStreamIdChanged(currentStreamInfo.getId(), streamInfo.getId())
                     || shouldResetCompensatingTransformation(currentStreamInfo, streamInfo)) {
-                // Reset pipeline if it's one of the following cases:
+                // Call updateConfigAndOutput if it's one of the following cases:
                 // 1. The stream ids are different, which means there's a new surface ready to be
                 // requested.
                 // 2. The in-progress transformation info becomes null, which means a recording
                 // has been finalized, and there's an existing compensating transformation.
-                resetPipeline();
+                updateConfigAndOutput(attachedStreamSpec);
+                notifyReset();
             } else if ((currentStreamInfo.getId() != STREAM_ID_ERROR
                     && streamInfo.getId() == STREAM_ID_ERROR)
                     || (currentStreamInfo.getId() == STREAM_ID_ERROR
                     && streamInfo.getId() != STREAM_ID_ERROR)) {
-                // If id switch to STREAM_ID_ERROR, it means VideoOutput is failed to setup video
+                // If id switch to STREAM_ID_ERROR, it means VideoOutput is failed to set up video
                 // stream. The surface should be removed from camera. Vice versa.
-                applyStreamInfoAndStreamSpecToSessionConfigBuilder(mSessionConfigBuilder,
-                        streamInfo,
-                        attachedStreamSpec);
-                updateSessionConfig(List.of(mSessionConfigBuilder.build()));
+                applyStreamInfoAndUpdateSessionConfig(attachedStreamSpec);
                 notifyReset();
             } else if (currentStreamInfo.getStreamState() != streamInfo.getStreamState()) {
-                applyStreamInfoAndStreamSpecToSessionConfigBuilder(mSessionConfigBuilder,
-                        streamInfo,
-                        attachedStreamSpec);
-                updateSessionConfig(List.of(mSessionConfigBuilder.build()));
+                applyStreamInfoAndUpdateSessionConfig(attachedStreamSpec);
                 notifyUpdated();
             }
         }
@@ -1077,10 +1140,11 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             if (isStreamActive) {
                 sessionConfigBuilder.addSurface(mDeferrableSurface,
                         dynamicRange,
-                        null,
+                        getPhysicalCameraId(),
                         MirrorMode.MIRROR_MODE_UNSPECIFIED);
             } else {
-                sessionConfigBuilder.addNonRepeatingSurface(mDeferrableSurface, dynamicRange);
+                sessionConfigBuilder.addNonRepeatingSurface(
+                        mDeferrableSurface, dynamicRange, getPhysicalCameraId());
             }
         } // Don't attach surface when stream is invalid.
 
@@ -1092,7 +1156,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             int sessionType,
             @NonNull Rect cropRect,
             @NonNull Size resolution,
-            @NonNull DynamicRange dynamicRange
+            @NonNull DynamicRange dynamicRange,
+            boolean shouldRotateBuffer
     ) {
         if (sessionType == SESSION_TYPE_HIGH_SPEED) {
             // High-Speed capture on preview surface (ex: SurfaceTexture Surface) is not
@@ -1100,12 +1165,13 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             return false;
         }
         return getEffect() != null
+                || shouldRotateBuffer
                 || shouldEnableSurfaceProcessingByConfig(camera, config)
                 || shouldEnableSurfaceProcessingByQuirk(camera)
                 || shouldEnableSurfaceProcessingBasedOnDynamicRangeByQuirk(camera, dynamicRange)
                 || shouldCrop(cropRect, resolution)
                 || shouldMirror(camera)
-                || shouldCompensateTransformation();
+                || shouldCompensateTransformation(camera);
     }
 
     private @Nullable SurfaceProcessorNode createNodeIfNeeded(@NonNull CameraInternal camera,
@@ -1113,8 +1179,10 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             int sessionType,
             @NonNull Rect cropRect,
             @NonNull Size resolution,
-            @NonNull DynamicRange dynamicRange) {
-        if (isCreateNodeNeeded(camera, config, sessionType, cropRect, resolution, dynamicRange)) {
+            @NonNull DynamicRange dynamicRange,
+            boolean shouldRotateBuffer) {
+        if (isCreateNodeNeeded(camera, config, sessionType, cropRect, resolution, dynamicRange,
+                shouldRotateBuffer)) {
             Logger.d(TAG, "Surface processing is enabled.");
             return new SurfaceProcessorNode(requireNonNull(getCamera()),
                     getEffect() != null ? getEffect().createSurfaceProcessorInternal() :
@@ -1213,12 +1281,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         Logger.d(TAG, "candidatesList = " + candidatesList);
 
         // Find the smallest change in dimensions.
-        //noinspection ComparatorCombinators - Suggestion by Comparator.comparingInt is for API24+
-        Collections.sort(candidatesList,
-                (s1, s2) -> (Math.abs(s1.getWidth() - cropRect.width()) + Math.abs(
-                        s1.getHeight() - cropRect.height()))
-                        - (Math.abs(s2.getWidth() - cropRect.width()) + Math.abs(
-                        s2.getHeight() - cropRect.height())));
+        candidatesList.sort(Comparator.comparingInt(s -> Math.abs(s.getWidth() - cropRect.width())
+                + Math.abs(s.getHeight() - cropRect.height())));
         Logger.d(TAG, "sorted candidatesList = " + candidatesList);
         Size newSize = candidatesList.get(0);
         int newWidth = newSize.getWidth();
@@ -1266,15 +1330,29 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         }
         try {
             Range<Integer> supportedHeights = videoEncoderInfo.getSupportedHeightsFor(width);
-            candidates.add(new Size(width, supportedHeights.clamp(height)));
+            addIfWithinResolution(candidates, new Size(width, supportedHeights.clamp(height)),
+                    resolution);
         } catch (IllegalArgumentException e) {
             Logger.w(TAG, "No supportedHeights for width: " + width, e);
         }
         try {
             Range<Integer> supportedWidths = videoEncoderInfo.getSupportedWidthsFor(height);
-            candidates.add(new Size(supportedWidths.clamp(width), height));
+            addIfWithinResolution(candidates, new Size(supportedWidths.clamp(width), height),
+                    resolution);
         } catch (IllegalArgumentException e) {
             Logger.w(TAG, "No supportedWidths for height: " + height, e);
+        }
+    }
+
+    private static void addIfWithinResolution(@NonNull Set<Size> candidates, @NonNull Size size,
+            @NonNull Size resolution) {
+        // Clamping to the supported range can enlarge a dimension beyond the surface resolution,
+        // which can't be cropped from the surface.
+        if (size.getWidth() <= resolution.getWidth()
+                && size.getHeight() <= resolution.getHeight()) {
+            candidates.add(size);
+        } else {
+            Logger.d(TAG, "Skip candidate " + size + " exceeding resolution " + resolution);
         }
     }
 
@@ -1299,8 +1377,10 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         return camera.getHasTransform() && isMirroringRequired(camera);
     }
 
-    private boolean shouldCompensateTransformation() {
-        return mStreamInfo.getInProgressTransformationInfo() != null;
+    private boolean shouldCompensateTransformation(@NonNull CameraInternal camera) {
+        // If there has been a buffer copy, it means the surface processing is already enabled on
+        // input stream. Otherwise, compensate transformation as needed.
+        return camera.getHasTransform() && mStreamInfo.getInProgressTransformationInfo() != null;
     }
 
     private static boolean shouldCrop(@NonNull Rect cropRect, @NonNull Size resolution) {
@@ -1359,13 +1439,13 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
 
     private static @NonNull Timebase resolveTimebase(@NonNull CameraInternal camera,
             @Nullable SurfaceProcessorNode node) {
-        // Choose Timebase based on the whether the buffer is copied.
+        // Choose Timebase based on whether the buffer is copied.
         Timebase timebase;
         if (node != null || !camera.getHasTransform()) {
             timebase = camera.getCameraInfoInternal().getTimebase();
         } else {
             // When camera buffers from a REALTIME device are passed directly to a video encoder
-            // from the camera, automatic compensation is done to account for differing timebases
+            // from the camera, automatic compensation is done to account for differing timebase
             // of the audio and camera subsystems. See the document of
             // CameraMetadata#SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME. So the timebase is always
             // UPTIME when encoder surface is directly sent to camera.
@@ -1389,12 +1469,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
 
     private static @Nullable VideoEncoderInfo resolveVideoEncoderInfo(
             VideoEncoderInfo.@NonNull Finder videoEncoderInfoFinder,
-            @Nullable VideoValidatedEncoderProfilesProxy encoderProfiles,
-            @NonNull MediaSpec mediaSpec,
-            @NonNull DynamicRange dynamicRange) {
-        VideoMimeInfo videoMimeInfo = resolveVideoMimeInfo(mediaSpec, dynamicRange,
-                encoderProfiles);
-
+            @NonNull VideoMimeInfo videoMimeInfo) {
         VideoEncoderInfo videoEncoderInfo = videoEncoderInfoFinder.find(
                 videoMimeInfo.getMimeType());
         if (videoEncoderInfo == null) {
@@ -1402,12 +1477,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             // also not be able to find the encoder. VideoCapture will not handle this situation
             // and leave it to VideoOutput to respond.
             Logger.w(TAG, "Can't find videoEncoderInfo");
-            return null;
         }
-
-        Size profileSize = encoderProfiles != null
-                ? encoderProfiles.getDefaultVideoProfile().getResolution() : null;
-        return VideoEncoderInfoWrapper.from(videoEncoderInfo, profileSize);
+        return videoEncoderInfo;
     }
 
     @MainThread
@@ -1471,7 +1542,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
                     return String.format("%s[0x%x]", SURFACE_UPDATE_KEY, completer.hashCode());
                 });
 
-        Futures.addCallback(surfaceUpdateFuture, new FutureCallback<Void>() {
+        Futures.addCallback(surfaceUpdateFuture, new FutureCallback<>() {
             @Override
             public void onSuccess(@Nullable Void result) {
                 // If there is a new surface update request, we will wait to update the video
@@ -1507,19 +1578,25 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         MediaSpec mediaSpec = getMediaSpecOrThrow();
 
         QualitySelector qualitySelector = getQualitySelector(mediaSpec);
+        if (qualitySelector == QualitySelector.NONE) {
+            return;
+        }
 
         VideoCaptureConfig<T> config = (VideoCaptureConfig<T>) builder.getUseCaseConfig();
-        if (config.containsOption(OPTION_CUSTOM_ORDERED_RESOLUTIONS)) {
+        if (config.containsOption(OPTION_CUSTOM_ORDERED_RESOLUTIONS)
+                || config.containsOption(OPTION_RESOLUTION_SELECTOR)) {
             checkArgument(getOutput().isQualitySelectorDefault(),
-                    "Custom ordered resolutions and QualitySelector can't both be set");
+                    "Custom ordered resolutions or ResolutionSelector and QualitySelector can't "
+                            + "both be set");
 
             checkArgument(getFeatureGroupQualitySelector() == null,
-                    "Can't set both custom ordered resolutions and QualitySelector  through"
-                            + " a groupable feature (e.g. GroupableFeatures.UHD_RECORDING)");
+                    "Can't set both custom ordered resolutions or ResolutionSelector and "
+                            + "QualitySelector through a groupable feature (e.g. "
+                            + "GroupableFeatures.UHD_RECORDING)");
 
-            // If custom ordered resolutions is set and QualitySelector is not set by user or
-            // feature groups, the default QualitySelector is skipped to avoid overwriting the
-            // custom ordered resolutions.
+            // If custom ordered resolutions or ResolutionSelector is set and QualitySelector is
+            // not set by user or feature groups, the default QualitySelector is skipped to avoid
+            // overwriting the resolution settings.
             return;
         }
 
@@ -1527,6 +1604,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         int sessionType = getSessionType(config);
         Range<Integer> targetFrameRate = getTargetFrameRate(config);
         VideoCapabilities videoCapabilities = getVideoCapabilities(cameraInfo, sessionType);
+        EncoderProfilesResolver profilesResolver = getEncoderProfilesResolver(cameraInfo,
+                sessionType);
         Logger.d(TAG, "Update custom order resolutions: "
                 + "requestedDynamicRange = " + requestedDynamicRange
                 + ", sessionType = " + sessionType
@@ -1554,8 +1633,8 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         // * Filter by encoder supported size
         LinkedHashMap<Quality, List<Size>> supportedQualityToSizeMap =
                 createOrderedQualityToSizesMap(cameraInfo, mediaSpec, requestedDynamicRange,
-                        videoCapabilities, sessionType, targetFrameRate,
-                        config.getVideoEncoderInfoFinder(), selectedQualities);
+                        videoCapabilities, profilesResolver, sessionType, targetFrameRate,
+                        getOutput().getVideoEncoderInfoFinder(), selectedQualities);
 
         if (sessionType == SESSION_TYPE_HIGH_SPEED) {
             // Sets custom maximum frame rates for high-speed sessions to match the
@@ -1563,7 +1642,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             // cts/RecordingTest.java), as CTS tests for high-speed frame rates are only verified
             // up to the rate advertised by the CamcorderProfile.
             builder.getMutableConfig().insertOption(OPTION_RESOLUTION_TO_MAX_FRAME_RATES,
-                    createSizeToMaxFrameRateMap(supportedQualityToSizeMap, videoCapabilities,
+                    createSizeToMaxFrameRateMap(supportedQualityToSizeMap, profilesResolver,
                             requestedDynamicRange));
         }
 
@@ -1638,6 +1717,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             @NonNull MediaSpec mediaSpec,
             @NonNull DynamicRange requestedDynamicRange,
             @NonNull VideoCapabilities videoCapabilities,
+            @NonNull EncoderProfilesResolver profilesResolver,
             int sessionType,
             @NonNull Range<Integer> targetFrameRate,
             VideoEncoderInfo.@NonNull Finder videoEncoderInfoFinder,
@@ -1647,32 +1727,36 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         int aspectRatio = mediaSpec.getVideoSpec().getAspectRatio();
         Map<Quality, Size> supportedQualityToSizeMap = getQualityToResolutionMap(videoCapabilities,
                 requestedDynamicRange);
+        Logger.d(TAG, "supportedQualityToSizeMap = " + supportedQualityToSizeMap);
         List<Size> supportedResolutions = getSupportedResolutions(cameraInfo, sessionType,
                 targetFrameRate);
+        Logger.d(TAG, "supportedResolutions = " + supportedResolutions);
         QualityRatioToResolutionsTable qualityRatioTable = new QualityRatioToResolutionsTable(
                 supportedResolutions, supportedQualityToSizeMap);
+        Logger.d(TAG, "qualityRatioTable = " + qualityRatioTable);
         // Use LinkedHashMap to maintain the order.
         LinkedHashMap<Quality, List<Size>> orderedQualityToSizesMap = new LinkedHashMap<>();
         for (Quality selectedQuality : selectedQualities) {
             orderedQualityToSizesMap.put(selectedQuality,
                     qualityRatioTable.getResolutions(selectedQuality, aspectRatio));
         }
+        Logger.d(TAG, "orderedQualityToSizesMap = " + orderedQualityToSizesMap);
 
         // Filter out encoder unsupported resolutions.
         return filterOutEncoderUnsupportedResolutions(videoEncoderInfoFinder, mediaSpec,
-                        requestedDynamicRange, videoCapabilities, orderedQualityToSizesMap,
+                        requestedDynamicRange, profilesResolver, orderedQualityToSizesMap,
                         supportedQualityToSizeMap);
     }
 
     @NonNull
     private static Map<Size, Integer> createSizeToMaxFrameRateMap(
             @NonNull Map<Quality, List<Size>> supportedQualityToSizeMap,
-            @NonNull VideoCapabilities videoCapabilities,
+            @NonNull EncoderProfilesResolver profilesResolver,
             @NonNull DynamicRange requestedDynamicRange) {
         Map<Size, Integer> sizeToMaxFps = new HashMap<>();
         for (Map.Entry<Quality, List<Size>> entry : supportedQualityToSizeMap.entrySet()) {
             Quality quality = entry.getKey();
-            int profileFrameRate = requireNonNull(videoCapabilities.getProfiles(quality,
+            int profileFrameRate = requireNonNull(profilesResolver.getProfiles(quality,
                     requestedDynamicRange)).getDefaultVideoProfile().getFrameRate();
             for (Size size : entry.getValue()) {
                 sizeToMaxFps.put(size, profileFrameRate);
@@ -1724,7 +1808,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             VideoEncoderInfo.@NonNull Finder videoEncoderFinder,
             @NonNull MediaSpec mediaSpec,
             @NonNull DynamicRange dynamicRange,
-            @NonNull VideoCapabilities videoCapabilities,
+            @NonNull EncoderProfilesResolver profilesResolver,
             @NonNull LinkedHashMap<Quality, List<Size>> qualityToSizesOrderedMap,
             @NonNull Map<Quality, Size> supportedQualityToSizeMap
     ) {
@@ -1748,7 +1832,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
                 // found by resolution may contain different video mine type which leads to
                 // different codec.
                 VideoValidatedEncoderProfilesProxy encoderProfiles =
-                        videoCapabilities.findNearestHigherSupportedEncoderProfilesFor(resolution,
+                        profilesResolver.findNearestHigherSupportedEncoderProfilesFor(resolution,
                                 dynamicRange);
                 if (encoderProfiles == null) {
                     continue;
@@ -1782,8 +1866,9 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             @NonNull DynamicRange dynamicRange,
             @NonNull MediaSpec mediaSpec) {
         if (dynamicRange.isFullySpecified()) {
-            return resolveVideoEncoderInfo(videoEncoderInfoFinder, encoderProfiles, mediaSpec,
-                    dynamicRange);
+            MediaInfo mediaInfo = MediaConfigUtil.resolveMediaInfo(mediaSpec, dynamicRange,
+                    encoderProfiles);
+            return resolveVideoEncoderInfo(videoEncoderInfoFinder, mediaInfo.getVideoMimeInfo());
         }
         // There could be multiple VideoProfiles that match the non-fully specified DynamicRange.
         // The one with the largest supported size will be returned.
@@ -1792,12 +1877,11 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         for (EncoderProfilesProxy.VideoProfileProxy videoProfile :
                 encoderProfiles.getVideoProfiles()) {
             if (isHdrSettingsMatched(videoProfile, dynamicRange)) {
-                DynamicRange profileDynamicRange = new DynamicRange(
-                        videoProfileHdrFormatsToDynamicRangeEncoding(videoProfile.getHdrFormat()),
-                        videoProfileBitDepthToDynamicRangeBitDepth(videoProfile.getBitDepth()));
-                VideoEncoderInfo videoEncoderInfo =
-                        resolveVideoEncoderInfo(videoEncoderInfoFinder, encoderProfiles, mediaSpec,
-                                profileDynamicRange);
+                DynamicRange profileDynamicRange = videoProfileToDynamicRange(videoProfile);
+                MediaInfo mediaInfo = MediaConfigUtil.resolveMediaInfo(mediaSpec,
+                        profileDynamicRange, encoderProfiles);
+                VideoEncoderInfo videoEncoderInfo = resolveVideoEncoderInfo(videoEncoderInfoFinder,
+                        mediaInfo.getVideoMimeInfo());
                 if (videoEncoderInfo == null) {
                     continue;
                 }
@@ -1816,7 +1900,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     /**
      * Finds the Quality with the size closest to the target size based on area.
      *
-     * @param sizeMap The map of Quality to a list of Size`s.
+     * @param sizeMap The map of Quality to a list of Size.
      * @param targetSize The target size to compare against.
      * @return The Quality with the closest size, or `null` if no match is found.
      */
@@ -1860,7 +1944,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         try {
             return future.get();
         } catch (ExecutionException | InterruptedException e) {
-            // Should not happened
+            // Should not happen
             throw new IllegalStateException(e);
         }
     }
@@ -1912,13 +1996,25 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
     }
 
     /**
+     * Returns whether the use case supports auto-rotation.
+     *
+     * @return true if the use case supports auto-rotation, false otherwise.
+     */
+    @RestrictTo(Scope.LIBRARY_GROUP)
+    @Override
+    public boolean isAutoRotationSupported() {
+        return true;
+    }
+
+    /**
      * Builder for a {@link VideoCapture}.
      *
      * @param <T> the type of VideoOutput
      */
-    @SuppressWarnings("ObjectToString")
+    @SuppressWarnings({"ObjectToString", "HiddenSuperclass"})
     public static final class Builder<T extends VideoOutput> implements
             UseCaseConfig.Builder<VideoCapture<T>, VideoCaptureConfig<T>, Builder<T>>,
+            UseCase.InteropConfigurable<Builder<T>>,
             ImageOutputConfig.Builder<Builder<T>>, ImageInputConfig.Builder<Builder<T>>,
             ThreadConfig.Builder<Builder<T>> {
         private final MutableOptionsBundle mMutableConfig;
@@ -1985,6 +2081,12 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
             return mMutableConfig;
         }
 
+        @RestrictTo(Scope.LIBRARY_GROUP)
+        @Override
+        public @NonNull MutableConfig getInteropMutableConfig() {
+            return mMutableConfig;
+        }
+
         /**
          * {@inheritDoc}
          */
@@ -1992,20 +2094,6 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
         @Override
         public @NonNull VideoCaptureConfig<T> getUseCaseConfig() {
             return new VideoCaptureConfig<>(OptionsBundle.from(mMutableConfig));
-        }
-
-        /** Sets the associated {@link VideoOutput}. */
-        @RestrictTo(Scope.LIBRARY_GROUP)
-        public @NonNull Builder<T> setVideoOutput(@NonNull VideoOutput videoOutput) {
-            getMutableConfig().insertOption(OPTION_VIDEO_OUTPUT, videoOutput);
-            return this;
-        }
-
-        @NonNull Builder<T> setVideoEncoderInfoFinder(
-                VideoEncoderInfo.@NonNull Finder videoEncoderInfoFinder) {
-            getMutableConfig().insertOption(OPTION_VIDEO_ENCODER_INFO_FINDER,
-                    videoEncoderInfoFinder);
-            return this;
         }
 
         /**
@@ -2040,7 +2128,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
          * <p>The name should be a value that can uniquely identify an instance of the object being
          * configured.
          *
-         * <p>If not set, the target name will default to an unique name automatically generated
+         * <p>If not set, the target name will default to a unique name automatically generated
          * with the class canonical name and random UUID.
          *
          * @param targetName A unique string identifier for the instance of the class being
@@ -2345,7 +2433,7 @@ public final class VideoCapture<T extends VideoOutput> extends UseCase {
          * stabilized</td>  </tr>
          * </table><br>
          *
-         * @param enabled True if enable, otherwise false.
+         * @param enabled True if enabled, otherwise false.
          * @return the current Builder.
          *
          * @see VideoCapabilities#isStabilizationSupported()

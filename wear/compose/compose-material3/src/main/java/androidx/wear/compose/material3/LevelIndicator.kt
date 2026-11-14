@@ -30,12 +30,16 @@ import androidx.wear.compose.material3.tokens.ColorSchemeKeyTokens
 import kotlin.math.sin
 
 /**
- * Creates a [LevelIndicator] for screens that that control a setting such as volume with either
- * rotating side button, rotating bezel.
+ * Creates a [LevelIndicator] for screens that control a setting such as volume with either a
+ * rotating side button or rotating bezel.
  *
  * Example of [LevelIndicator]:
  *
  * @sample androidx.wear.compose.material3.samples.LevelIndicatorSample
+ *
+ * ![LevelIndicatorSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_LevelIndicatorSample_CompositeImage.png)
+ *
  * @param value Value of the indicator as a fraction in the range [0,1]. Values outside of the range
  *   [0,1] will be coerced.
  * @param modifier Modifier to be applied to the component
@@ -78,12 +82,16 @@ public fun LevelIndicator(
 }
 
 /**
- * Creates a [StepperLevelIndicator] for screens that that control a setting, such as volume, with a
+ * Creates a [StepperLevelIndicator] for screens that control a setting, such as volume, with a
  * [Stepper].
  *
  * Example of [LevelIndicator] with a [Stepper]:
  *
  * @sample androidx.wear.compose.material3.samples.StepperSample
+ *
+ * ![StepperSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_StepperSample_CompositeImage.png)
+ *
  * @param value Value of the indicator in the [valueRange].
  * @param modifier Modifier to be applied to the component
  * @param valueRange range of values that [value] can take
@@ -117,12 +125,16 @@ public fun StepperLevelIndicator(
     )
 
 /**
- * Creates a [StepperLevelIndicator] for screens that that control a setting, such as volume, with a
+ * Creates a [StepperLevelIndicator] for screens that control a setting, such as volume, with a
  * [Stepper].
  *
  * Example of [LevelIndicator] with a [Stepper] working on an [IntProgression]:
  *
  * @sample androidx.wear.compose.material3.samples.StepperWithIntegerSample
+ *
+ * ![StepperWithIntegerSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_StepperWithIntegerSample_CompositeImage.png)
+ *
  * @param value Current value of the Stepper. If outside of [valueProgression] provided, value will
  *   be coerced to this range.
  * @param modifier Modifier to be applied to the component
@@ -313,6 +325,8 @@ internal class FractionPositionStateAdapter(private val valueFraction: () -> Flo
 
     override val sizeFraction: Float
         get() = valueFraction()
+
+    override var jiggleAmount: Float = 0f
 
     override fun equals(other: Any?): Boolean {
         // Compare lambdas with referential equality

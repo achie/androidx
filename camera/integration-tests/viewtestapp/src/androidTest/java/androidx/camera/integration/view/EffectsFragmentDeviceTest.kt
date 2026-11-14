@@ -17,19 +17,18 @@
 package androidx.camera.integration.view
 
 import android.net.Uri
-import android.os.Build
+import android.os.Build.MODEL
 import android.util.Log
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.integration.view.TestUtil.assertPreviewStreamingState
 import androidx.camera.integration.view.TestUtil.getFragment
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
+import androidx.camera.testing.impl.AndroidUtil
 import androidx.camera.testing.impl.CameraUtil
-import androidx.camera.testing.impl.CoreAppTestUtil
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.view.PreviewView
 import androidx.fragment.app.testing.FragmentScenario
 import androidx.lifecycle.Lifecycle
@@ -40,7 +39,6 @@ import androidx.test.rule.GrantPermissionRule
 import com.google.common.truth.Truth.assertThat
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import org.junit.After
 import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Rule
@@ -56,8 +54,13 @@ class EffectsFragmentDeviceTest(
     private val cameraConfig: CameraXConfig,
 ) {
     @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
+    val requireForegroundRule = RequireForegroundRule {
+        assumeFalse("Test fails on API 24 emulator (b/539514196)", AndroidUtil.isEmulator(24))
+        assumeFalse(
+            "Test fails on cuttlefish (b/465855844)",
+            MODEL.contains("Cuttlefish", ignoreCase = true),
+        )
+    }
 
     @get:Rule
     val useCameraRule =
@@ -79,13 +82,21 @@ class EffectsFragmentDeviceTest(
 
     @Before
     fun setup() {
-        // Clear the device UI and check if there is no dialog or lock screen on the top of the
-        // window before start the test.
-        CoreAppTestUtil.prepareDeviceUI(instrumentation)
         ProcessCameraProvider.configureInstance(cameraConfig)
         cameraProvider =
             ProcessCameraProvider.getInstance(ApplicationProvider.getApplicationContext())[
                     10000, TimeUnit.MILLISECONDS]
+        requireForegroundRule.deferCleanup {
+            try {
+                if (::fragmentScenario.isInitialized) {
+                    fragmentScenario.moveToState(Lifecycle.State.DESTROYED)
+                }
+            } finally {
+                if (::cameraProvider.isInitialized) {
+                    cameraProvider.shutdownAsync()[10000, TimeUnit.MILLISECONDS]
+                }
+            }
+        }
         fragmentScenario =
             FragmentScenario.launchInContainer(
                 EffectsFragment::class.java,
@@ -94,16 +105,6 @@ class EffectsFragmentDeviceTest(
                 null,
             )
         fragment = fragmentScenario.getFragment()
-    }
-
-    @After
-    fun tearDown() {
-        if (::fragmentScenario.isInitialized) {
-            fragmentScenario.moveToState(Lifecycle.State.DESTROYED)
-        }
-        if (::cameraProvider.isInitialized) {
-            cameraProvider.shutdownAsync()[10000, TimeUnit.MILLISECONDS]
-        }
     }
 
     @Test
@@ -128,10 +129,6 @@ class EffectsFragmentDeviceTest(
 
     @Test
     fun shareToImageCapture_canTakePicture() {
-        assumeFalse(
-            "Test fails on cuttlefish b/465855844",
-            Build.MODEL.contains("Cuttlefish", ignoreCase = true),
-        )
         // Act.
         instrumentation.runOnMainSync { fragment.surfaceEffectForImageCapture.isChecked = true }
         // Assert.
@@ -169,10 +166,6 @@ class EffectsFragmentDeviceTest(
 
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                arrayOf(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()))
     }
 }

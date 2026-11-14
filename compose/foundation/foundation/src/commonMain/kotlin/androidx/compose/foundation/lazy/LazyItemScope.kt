@@ -17,11 +17,16 @@
 package androidx.compose.foundation.lazy
 
 import androidx.annotation.FloatRange
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.internal.JvmDefaultWithCompatibility
+import androidx.compose.foundation.lazy.layout.LazyLayoutAnimateItemElement
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Constraints
@@ -31,7 +36,7 @@ import androidx.compose.ui.unit.IntOffset
 @Stable
 @LazyScopeMarker
 @JvmDefaultWithCompatibility
-interface LazyItemScope {
+public interface LazyItemScope {
     /**
      * Have the content fill the [Constraints.maxWidth] and [Constraints.maxHeight] of the parent
      * measurement constraints by setting the [minimum width][Constraints.minWidth] to be equal to
@@ -41,10 +46,13 @@ interface LazyItemScope {
      * [fraction] is 1, so the modifier will make the content fill the whole available space.
      * [fraction] must be between `0` and `1`.
      *
-     * Regular [Modifier.fillMaxSize] can't work inside the scrolling layouts as the items are
-     * measured with [Constraints.Infinity] as the constraints for the main axis.
+     * Regular [androidx.compose.foundation.layout.fillMaxSize] can't work inside the scrolling
+     * layouts as the items are measured with [Constraints.Infinity] as the constraints for the main
+     * axis.
      */
-    fun Modifier.fillParentMaxSize(@FloatRange(from = 0.0, to = 1.0) fraction: Float = 1f): Modifier
+    public fun Modifier.fillParentMaxSize(
+        @FloatRange(from = 0.0, to = 1.0) fraction: Float = 1f
+    ): Modifier
 
     /**
      * Have the content fill the [Constraints.maxWidth] of the parent measurement constraints by
@@ -53,10 +61,11 @@ interface LazyItemScope {
      * [fraction] is 1, so the modifier will make the content fill the whole parent width.
      * [fraction] must be between `0` and `1`.
      *
-     * Regular [Modifier.fillMaxWidth] can't work inside the scrolling horizontally layouts as the
-     * items are measured with [Constraints.Infinity] as the constraints for the main axis.
+     * Regular [androidx.compose.foundation.layout.fillMaxWidth] can't work inside the scrolling
+     * horizontally layouts as the items are measured with [Constraints.Infinity] as the constraints
+     * for the main axis.
      */
-    fun Modifier.fillParentMaxWidth(
+    public fun Modifier.fillParentMaxWidth(
         @FloatRange(from = 0.0, to = 1.0) fraction: Float = 1f
     ): Modifier
 
@@ -67,10 +76,11 @@ interface LazyItemScope {
      * [fraction] is 1, so the modifier will make the content fill the whole parent height.
      * [fraction] must be between `0` and `1`.
      *
-     * Regular [Modifier.fillMaxHeight] can't work inside the scrolling vertically layouts as the
-     * items are measured with [Constraints.Infinity] as the constraints for the main axis.
+     * Regular [androidx.compose.foundation.layout.fillMaxHeight] can't work inside the scrolling
+     * vertically layouts as the items are measured with [Constraints.Infinity] as the constraints
+     * for the main axis.
      */
-    fun Modifier.fillParentMaxHeight(
+    public fun Modifier.fillParentMaxHeight(
         @FloatRange(from = 0.0, to = 1.0) fraction: Float = 1f
     ): Modifier
 
@@ -90,7 +100,7 @@ interface LazyItemScope {
      * @param fadeOutSpec an animation specs to use for animating the item disappearance. When null
      *   is provided the item will be disappearance without animations.
      */
-    fun Modifier.animateItem(
+    public fun Modifier.animateItem(
         fadeInSpec: FiniteAnimationSpec<Float>? = spring(stiffness = Spring.StiffnessMediumLow),
         placementSpec: FiniteAnimationSpec<IntOffset>? =
             spring(
@@ -100,3 +110,24 @@ interface LazyItemScope {
         fadeOutSpec: FiniteAnimationSpec<Float>? = spring(stiffness = Spring.StiffnessMediumLow),
     ): Modifier = this
 }
+
+/**
+ * Animates the appearance, disappearance and placement of a lazy list item using an
+ * [EnterTransition] and an [ExitTransition].
+ *
+ * This should only be applied to the root content of an item in a lazy layout.
+ */
+// TODO: Move into LazyItemScope as an animateItem overload and make public once the EnterTransition
+// /
+//  ExitTransition based API is ready. Until then it is internal, and demos and tests access it via
+//  Kotlin friend paths. It has a different name because the LazyItemScope.animateItem member would
+//  otherwise shadow it inside item content.
+internal fun Modifier.animateItemWithTransitions(
+    enterTransition: EnterTransition? = fadeIn(),
+    exitTransition: ExitTransition? = fadeOut(),
+    placementSpec: FiniteAnimationSpec<IntOffset>? =
+        spring(
+            stiffness = Spring.StiffnessMediumLow,
+            visibilityThreshold = IntOffset.VisibilityThreshold,
+        ),
+): Modifier = this then LazyLayoutAnimateItemElement(enterTransition, exitTransition, placementSpec)

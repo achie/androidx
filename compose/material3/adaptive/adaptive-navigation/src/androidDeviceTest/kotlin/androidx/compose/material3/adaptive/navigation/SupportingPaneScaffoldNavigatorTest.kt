@@ -17,14 +17,20 @@
 package androidx.compose.material3.adaptive.navigation
 
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.AdaptStrategy
+import androidx.compose.material3.adaptive.layout.DockedEdge
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
+import androidx.compose.material3.adaptive.layout.SupportingPaneScaffoldDefaults
 import androidx.compose.material3.adaptive.layout.SupportingPaneScaffoldRole
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldValue
+import androidx.compose.material3.adaptive.layout.rememberDragToResizeState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
@@ -33,7 +39,6 @@ import kotlin.properties.Delegates
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,8 +47,7 @@ import org.junit.runner.RunWith
 @SmallTest
 @RunWith(AndroidJUnit4::class)
 class SupportingPaneScaffoldNavigatorTest {
-    val testDispatcher = StandardTestDispatcher()
-    @get:Rule val composeRule = createComposeRule(testDispatcher)
+    @get:Rule val composeRule = createComposeRule()
 
     @Test
     fun singlePaneLayout_navigateTo_makeDestinationPaneExpanded() {
@@ -773,9 +777,63 @@ class SupportingPaneScaffoldNavigatorTest {
         }
     }
 
+    @Test
+    fun levitatedExtraPaneAsBottomSheet_stateRestoration_preservesDestinationAndState() {
+        val restorationTester = StateRestorationTester(composeRule)
+        lateinit var scope: CoroutineScope
+        var scaffoldNavigator: ThreePaneScaffoldNavigator<Int>? = null
+
+        restorationTester.setContent {
+            scope = rememberCoroutineScope()
+            val dragToResizeState = rememberDragToResizeState(dockedEdge = DockedEdge.Bottom)
+            scaffoldNavigator =
+                rememberSupportingPaneScaffoldNavigator<Int>(
+                    scaffoldDirective = MockSinglePaneScaffoldDirective,
+                    adaptStrategies =
+                        SupportingPaneScaffoldDefaults.adaptStrategies(
+                            extraPaneAdaptStrategy =
+                                AdaptStrategy.Levitate(
+                                    alignment = Alignment.BottomCenter,
+                                    dragToResizeState = dragToResizeState,
+                                )
+                        ),
+                )
+        }
+
+        scope.runBlockingOnIdle {
+            scaffoldNavigator!!.navigateTo(SupportingPaneScaffoldRole.Extra, 42)
+        }
+
+        composeRule.runOnIdle {
+            val navigator = scaffoldNavigator!!
+            assertThat(navigator.currentDestination?.pane)
+                .isEqualTo(SupportingPaneScaffoldRole.Extra)
+            assertThat(navigator.currentDestination?.contentKey).isEqualTo(42)
+            val extraAdapted = navigator.scaffoldValue[SupportingPaneScaffoldRole.Extra]
+            assertThat(extraAdapted).isInstanceOf(PaneAdaptedValue.Levitated::class.java)
+
+            // Reset local reference to ensure recreation
+            scaffoldNavigator = null
+        }
+
+        // Emulate configuration change / saved state restore
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.runOnIdle {
+            val restoredNavigator = scaffoldNavigator!!
+            assertThat(restoredNavigator.currentDestination?.pane)
+                .isEqualTo(SupportingPaneScaffoldRole.Extra)
+            assertThat(restoredNavigator.currentDestination?.contentKey).isEqualTo(42)
+
+            val extraAdapted = restoredNavigator.scaffoldValue[SupportingPaneScaffoldRole.Extra]
+            assertThat(extraAdapted).isInstanceOf(PaneAdaptedValue.Levitated::class.java)
+            assertThat(restoredNavigator.canNavigateBack()).isTrue()
+        }
+    }
+
     private fun CoroutineScope.runBlockingOnIdle(block: suspend CoroutineScope.() -> Unit) {
         val job = composeRule.runOnIdle { launch(block = block) }
-        testDispatcher.scheduler.runCurrent()
+        composeRule.mainClock.scheduler.runCurrent()
         runBlocking { job.join() }
     }
 }

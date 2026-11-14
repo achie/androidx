@@ -19,6 +19,7 @@ package androidx.appsearch.localstorage.stats;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 import androidx.appsearch.annotation.CanIgnoreReturnValue;
+import androidx.appsearch.annotation.HideInPlatform;
 import androidx.appsearch.app.AppSearchResult;
 import androidx.appsearch.stats.BaseStats;
 import androidx.collection.ArraySet;
@@ -27,6 +28,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -38,9 +40,8 @@ import java.util.Set;
  * <p>Some function calls may have their own detailed stats class like {@link PutDocumentStats}.
  * However, {@link CallStats} can still be used along with the detailed stats class for easy
  * aggregation/analysis with other function calls.
- *
- * <!--@exportToFramework:hide-->
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class CallStats extends BaseStats {
 
@@ -62,10 +63,14 @@ public class CallStats extends BaseStats {
     private final long mCallReceivedTimestampMillis;
     private final int mGetUserInstanceLatencyMillis;
     private final int mPvmBinderLatencyMillis;
-    // The request payload object size in byte.
-    private final long mRequestPayloadSize;
-    // The response payload object size in byte.
-    private final long mResponsePayloadSize;
+    // The size in byte of the request send to IcingSearchEngine
+    private final long mIcingSearchEngineRequestBytes;
+    // The size in byte of the response receive from IcingSearchEngine
+    private final long mIcingSearchEngineResponseBytes;
+    // The size in byte of the request send to AppSearchManagerService
+    private final long mAppSearchRequestBytes;
+    // The size in byte of the response receive from AppSearchManagerService
+    private final long mAppSearchResponseBytes;
     @CallType
     int mLastCallTypeHoldExecutor;
     int mExecutorAcquisitionLatencyMillis;
@@ -87,8 +92,10 @@ public class CallStats extends BaseStats {
         mOnExecutorLatencyMillis = builder.mOnExecutorLatencyMillis;
         mGetUserInstanceLatencyMillis = builder.mGetUserInstanceLatencyMillis;
         mPvmBinderLatencyMillis = builder.mPvmBinderLatencyMillis;
-        mRequestPayloadSize = builder.mRequestPayloadSize;
-        mResponsePayloadSize = builder.mResponsePayloadSize;
+        mIcingSearchEngineRequestBytes = builder.mIcingSearchEngineRequestBytes;
+        mIcingSearchEngineResponseBytes = builder.mIcingSearchEngineResponseBytes;
+        mAppSearchRequestBytes = builder.mAppSearchRequestBytes;
+        mAppSearchResponseBytes = builder.mAppSearchResponseBytes;
     }
 
     /** Returns calling package name. */
@@ -188,14 +195,61 @@ public class CallStats extends BaseStats {
         return mPvmBinderLatencyMillis;
     }
 
-    /** Gets the payload size of the given request object. */
-    public long getRequestPayloadSize() {
-        return mRequestPayloadSize;
+    /** Gets the payload size of the given request send to Icing. */
+    public long getIcingSearchEngineRequestBytes() {
+        return mIcingSearchEngineRequestBytes;
     }
 
-    /** Gets the payload size of the returned response object. */
-    public long getResponsePayloadSize() {
-        return mResponsePayloadSize;
+    /** Gets the payload size of the returned response receive from Icing. */
+    public long getIcingSearchEngineResponseBytes() {
+        return mIcingSearchEngineResponseBytes;
+    }
+
+    /** Gets the payload size of the given request send to AppSearch service. */
+    public long getAppSearchRequestBytes() {
+        return mAppSearchRequestBytes;
+    }
+
+    /** Gets the payload size of the returned response receive from AppSearch service. */
+    public long getAppSearchResponseBytes() {
+        return mAppSearchResponseBytes;
+    }
+
+    /**
+     * Returns a new {@link CallStats} instance accumulating latency, counts, and byte metrics from
+     * {@code rhs} into {@code lhs}.
+     */
+    public static @NonNull CallStats accumulate(@NonNull CallStats lhs, @NonNull CallStats rhs) {
+        Objects.requireNonNull(lhs);
+        Objects.requireNonNull(rhs);
+        return new Builder(lhs)
+                .setStatusCode(rhs.getStatusCode())
+                .setTotalLatencyMillis(lhs.mTotalLatencyMillis + rhs.getTotalLatencyMillis())
+                .setNumOperationsSucceeded(
+                        lhs.mNumOperationsSucceeded + rhs.getNumOperationsSucceeded())
+                .setNumOperationsFailed(
+                        lhs.mNumOperationsFailed + rhs.getNumOperationsFailed())
+                .setExecutorAcquisitionLatencyMillis(
+                        lhs.mExecutorAcquisitionLatencyMillis
+                                + rhs.getExecutorAcquisitionLatencyMillis())
+                .setOnExecutorLatencyMillis(
+                        lhs.mOnExecutorLatencyMillis + rhs.getOnExecutorLatencyMillis())
+                .setEstimatedBinderLatencyMillis(
+                        lhs.mEstimatedBinderLatencyMillis + rhs.getEstimatedBinderLatencyMillis())
+                .setGetUserInstanceLatency(
+                        lhs.mGetUserInstanceLatencyMillis + rhs.getGetUserInstanceLatencyMillis())
+                .setPvmBinderLatency(
+                        lhs.mPvmBinderLatencyMillis + rhs.getPvmBinderLatencyMillis())
+                .addIcingSearchEngineRequestBytes(
+                        (int) rhs.getIcingSearchEngineRequestBytes())
+                .addIcingSearchEngineResponseBytes(
+                        (int) rhs.getIcingSearchEngineResponseBytes())
+                .addAppSearchRequestBytes((int) rhs.getAppSearchRequestBytes())
+                .addAppSearchResponseBytes((int) rhs.getAppSearchResponseBytes())
+                .setUnblockedAppSearchLatencyMillis(
+                        lhs.getUnblockedAppSearchLatencyMillis()
+                                + rhs.getUnblockedAppSearchLatencyMillis())
+                .build();
     }
 
     @NonNull
@@ -217,8 +271,10 @@ public class CallStats extends BaseStats {
                         + "  onExecutorLatencyMillis=%d,\n"
                         + "  getUserInstanceLatencyMillis=%d,\n"
                         + "  pvmBinderLatencyMillis=%d,\n"
-                        + "  requestPayloadSize=%d,\n"
-                        + "  responsePayloadSize=%d,\n"
+                        + "  icingSearchEngineRequestBytes=%d,\n"
+                        + "  icingSearchEngineResponseBytes=%d,\n"
+                        + "  appsearchRequestBytes=%d,\n"
+                        + "  appsearchResponseBytes=%d,\n"
                         // Include BaseStats fields
                         + super.toString()
                         + "}",
@@ -236,8 +292,10 @@ public class CallStats extends BaseStats {
                 mOnExecutorLatencyMillis,
                 mGetUserInstanceLatencyMillis,
                 mPvmBinderLatencyMillis,
-                mRequestPayloadSize,
-                mResponsePayloadSize);
+                mIcingSearchEngineRequestBytes,
+                mIcingSearchEngineResponseBytes,
+                mAppSearchRequestBytes,
+                mAppSearchResponseBytes);
     }
 
     /** Builder for {@link CallStats}. */
@@ -259,8 +317,40 @@ public class CallStats extends BaseStats {
         int mOnExecutorLatencyMillis;
         int mGetUserInstanceLatencyMillis;
         int mPvmBinderLatencyMillis;
-        long mRequestPayloadSize;
-        long mResponsePayloadSize;
+        long mIcingSearchEngineRequestBytes;
+        long mIcingSearchEngineResponseBytes;
+        long mAppSearchRequestBytes;
+        long mAppSearchResponseBytes;
+
+        /** Creates a new {@link CallStats.Builder}. */
+        public Builder() {}
+
+        /**
+         * Copy constructor for {@link CallStats.Builder}.
+         *
+         * @param callStats The {@link CallStats} to copy from.
+         */
+        public Builder(@NonNull CallStats callStats) {
+            super(Objects.requireNonNull(callStats));
+            mPackageName = callStats.getPackageName();
+            mDatabase = callStats.getDatabase();
+            mStatusCode = callStats.getStatusCode();
+            mTotalLatencyMillis = callStats.getTotalLatencyMillis();
+            mCallType = callStats.getCallType();
+            mEstimatedBinderLatencyMillis = callStats.getEstimatedBinderLatencyMillis();
+            mNumOperationsSucceeded = callStats.getNumOperationsSucceeded();
+            mNumOperationsFailed = callStats.getNumOperationsFailed();
+            mCallReceivedTimestampMillis = callStats.getCallReceivedTimestampMillis();
+            mLastCallTypeHoldExecutor = callStats.getLastCallTypeHoldExecutor();
+            mExecutorAcquisitionLatencyMillis = callStats.getExecutorAcquisitionLatencyMillis();
+            mOnExecutorLatencyMillis = callStats.getOnExecutorLatencyMillis();
+            mGetUserInstanceLatencyMillis = callStats.getGetUserInstanceLatencyMillis();
+            mPvmBinderLatencyMillis = callStats.getPvmBinderLatencyMillis();
+            mIcingSearchEngineRequestBytes = callStats.getIcingSearchEngineRequestBytes();
+            mIcingSearchEngineResponseBytes = callStats.getIcingSearchEngineResponseBytes();
+            mAppSearchRequestBytes = callStats.getAppSearchRequestBytes();
+            mAppSearchResponseBytes = callStats.getAppSearchResponseBytes();
+        }
 
         /** Sets the PackageName used by the session. */
         @CanIgnoreReturnValue
@@ -386,17 +476,31 @@ public class CallStats extends BaseStats {
             return this;
         }
 
-        /** Sets the payload size of the given request object. */
+        /** Adds the payload size of the given request send to Icing. */
         @CanIgnoreReturnValue
-        public @NonNull Builder setRequestPayloadSize(int requestPayloadSize) {
-            mRequestPayloadSize = requestPayloadSize;
+        public @NonNull Builder addIcingSearchEngineRequestBytes(int requestBytes) {
+            mIcingSearchEngineRequestBytes += requestBytes;
             return this;
         }
 
-        /** Sets the payload size of the returned response object. */
+        /** Adds the payload size of the returned response receive from Icing. */
         @CanIgnoreReturnValue
-        public @NonNull Builder setResponsePayloadSize(int responsePayloadSize) {
-            mResponsePayloadSize = responsePayloadSize;
+        public @NonNull Builder addIcingSearchEngineResponseBytes(int responseBytes) {
+            mIcingSearchEngineResponseBytes += responseBytes;
+            return this;
+        }
+
+        /** Adds the payload size of the given request send to AppSearch service. */
+        @CanIgnoreReturnValue
+        public @NonNull Builder addAppSearchRequestBytes(int requestBytes) {
+            mAppSearchRequestBytes += requestBytes;
+            return this;
+        }
+
+        /** Adds the payload size of the returned response receive from AppSearch service. */
+        @CanIgnoreReturnValue
+        public @NonNull Builder addAppSearchResponseBytes(int responseBytes) {
+            mAppSearchResponseBytes += responseBytes;
             return this;
         }
 
@@ -494,6 +598,14 @@ public class CallStats extends BaseStats {
                 return INTERNAL_CALL_TYPE_SCHEDULED_FLUSH;
             case INTERNAL_CALL_TYPE_STRING_MANUALLY_SCHEDULE_FLUSH:
                 return CALL_TYPE_MANUALLY_SCHEDULE_FLUSH;
+            case INTERNAL_CALL_TYPE_STRING_MAINTAIN_ANN_INDEX_JOB:
+                return INTERNAL_CALL_TYPE_MAINTAIN_ANN_INDEX_JOB;
+            case CALL_TYPE_STRING_INITIALIZE_TRIVIAL:
+                return CALL_TYPE_INITIALIZE_TRIVIAL;
+            case CALL_TYPE_STRING_INITIALIZE_PENDING:
+                return CALL_TYPE_INITIALIZE_PENDING;
+            case INTERNAL_CALL_TYPE_STRING_HANDLE_EXPIRED_DOCUMENTS_JOB:
+                return INTERNAL_CALL_TYPE_HANDLE_EXPIRED_DOCUMENTS_JOB;
             default:
                 return CALL_TYPE_UNKNOWN;
         }
@@ -540,6 +652,10 @@ public class CallStats extends BaseStats {
                 INTERNAL_CALL_TYPE_ISOLATED_STORAGE_DATA_MIGRATION,
                 INTERNAL_CALL_TYPE_PRUNE_PACKAGE_DATA,
                 INTERNAL_CALL_TYPE_CLOSE,
-                INTERNAL_CALL_TYPE_PERSIST_TO_DISK_JOB));
+                INTERNAL_CALL_TYPE_PERSIST_TO_DISK_JOB,
+                INTERNAL_CALL_TYPE_MAINTAIN_ANN_INDEX_JOB,
+                CALL_TYPE_INITIALIZE_TRIVIAL,
+                CALL_TYPE_INITIALIZE_PENDING,
+                INTERNAL_CALL_TYPE_HANDLE_EXPIRED_DOCUMENTS_JOB));
     }
 }

@@ -25,6 +25,7 @@ import android.util.Log;
 
 import androidx.annotation.OptIn;
 import androidx.annotation.RestrictTo;
+import androidx.appsearch.annotation.HideInPlatform;
 import androidx.appsearch.app.EmbeddingVector;
 import androidx.appsearch.app.ExperimentalAppSearchApi;
 import androidx.appsearch.app.FeatureConstants;
@@ -67,9 +68,8 @@ import java.util.Set;
 
 /**
  * Translates a {@link SearchSpec} into icing search protos.
- *
- * @exportToFramework:hide
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public final class SearchSpecToProtoConverter {
     private static final String TAG = "AppSearchSearchSpecConv";
@@ -282,7 +282,6 @@ public final class SearchSpecToProtoConverter {
         }
     }
 
-
     /**
      * Extracts {@link SearchSpecProto} information from a {@link SearchSpec}.
      *
@@ -298,7 +297,8 @@ public final class SearchSpecToProtoConverter {
                 .addAllNamespaceFilters(mTargetPrefixedNamespaceFilters)
                 .addAllSchemaTypeFilters(mTargetPrefixedSchemaFilters)
                 .setUseReadOnlySearch(mIcingOptionsConfig.getUseReadOnlySearch())
-                .addAllQueryParameterStrings(mSearchSpec.getSearchStringParameters());
+                .addAllQueryParameterStrings(mSearchSpec.getSearchStringParameters())
+                .setEmbeddingQueryNprobe(mSearchSpec.getEmbeddingQueryProbeCount());
 
         List<EmbeddingVector> searchEmbeddings = mSearchSpec.getEmbeddingParameters();
         for (int i = 0; i < searchEmbeddings.size(); i++) {
@@ -380,16 +380,6 @@ public final class SearchSpecToProtoConverter {
                             .build();
 
             protoBuilder.setJoinSpec(joinSpecProto);
-        }
-
-        if (mSearchSpec.isListFilterHasPropertyFunctionEnabled()
-                && !mIcingOptionsConfig.getBuildPropertyExistenceMetadataHits()) {
-            // This condition should never be reached as long as Features.isFeatureSupported() is
-            // consistent with IcingOptionsConfig.
-            throw new UnsupportedOperationException(
-                    FeatureConstants.LIST_FILTER_HAS_PROPERTY_FUNCTION
-                            + " is currently not operational because the building process for the "
-                            + "associated metadata has not yet been turned on.");
         }
 
         // Set enabled search features.

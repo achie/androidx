@@ -79,7 +79,7 @@ internal data class BoxChildSelector(
 )
 
 /**
- * Selector for children of [Row] and [Column].
+ * Selector for children of [androidx.glance.layout.Row] and [androidx.glance.layout.Column].
  *
  * This class is used to select a layout with layout_weight set / unset.
  */
@@ -133,7 +133,7 @@ internal enum class LayoutType {
 }
 
 /** Mapping from layout type to fixed layout (if any). */
-private val LayoutMap =
+private val LayoutMap: Map<LayoutType, Int> =
     mapOf(
         LayoutType.Text to R.layout.glance_text,
         LayoutType.List to R.layout.glance_list,
@@ -240,7 +240,11 @@ internal fun createRootView(
     val layoutId = FirstRootAlias + RootAliasTypeCount * aliasIndex + layoutIdShift
     return RemoteViewsInfo(
         remoteViews = remoteViews(translationContext, layoutId),
-        view = InsertedViewInfo(children = mapOf(0 to mapOf(sizeSelector to R.id.rootStubId))),
+        view =
+            InsertedViewInfo(
+                mainViewId = R.id.rootView,
+                children = mapOf(0 to mapOf(sizeSelector to R.id.rootStubId)),
+            ),
     )
 }
 

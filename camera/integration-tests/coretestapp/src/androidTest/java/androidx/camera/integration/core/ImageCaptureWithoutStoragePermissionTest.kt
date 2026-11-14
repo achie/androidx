@@ -23,19 +23,18 @@ import android.content.pm.PackageManager
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CountdownDeferred
 import androidx.camera.testing.impl.fakes.FakeLifecycleOwner
 import androidx.core.content.ContextCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.LargeTest
+import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -54,14 +53,11 @@ private const val CAPTURE_TIMEOUT = 15_000.toLong() //  15 seconds
 
 @LargeTest
 @RunWith(Parameterized::class)
+@SdkSuppress(maxSdkVersion = 28)
 class ImageCaptureWithoutStoragePermissionTest(
     implName: String,
     private val cameraXConfig: CameraXConfig,
 ) {
-
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
 
     @get:Rule
     val cameraRule =
@@ -72,11 +68,7 @@ class ImageCaptureWithoutStoragePermissionTest(
     companion object {
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                arrayOf(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()))
     }
 
     private val context = ApplicationProvider.getApplicationContext<Context>()

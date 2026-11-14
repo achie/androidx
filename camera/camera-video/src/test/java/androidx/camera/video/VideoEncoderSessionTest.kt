@@ -16,8 +16,10 @@
 
 package androidx.camera.video
 
+import android.graphics.SurfaceTexture
 import android.os.Looper
 import android.util.Size
+import android.view.Surface
 import androidx.camera.core.SurfaceRequest
 import androidx.camera.core.impl.utils.executor.CameraXExecutors
 import androidx.camera.core.impl.utils.executor.CameraXExecutors.mainThreadExecutor
@@ -25,10 +27,10 @@ import androidx.camera.testing.fakes.FakeCamera
 import androidx.camera.testing.impl.fakes.FakeEncoder
 import androidx.camera.testing.impl.fakes.FakeEncoderSurfaceInput
 import androidx.camera.testing.impl.fakes.createFakeVideoEncoderConfig
-import androidx.camera.video.internal.encoder.Encoder
-import androidx.camera.video.internal.encoder.EncoderFactory
+import androidx.camera.video.internal.encoder.FakeVideoEncoderFactory
 import androidx.camera.video.internal.encoder.InvalidConfigException
 import androidx.camera.video.internal.encoder.VideoEncoderConfig
+import androidx.camera.video.internal.encoder.VideoEncoderFactory
 import com.google.common.truth.Truth.assertThat
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
@@ -47,9 +49,11 @@ class VideoEncoderSessionTest {
 
     private lateinit var sequentialExecutor: Executor
     private lateinit var executor: ExecutorService
-    private lateinit var encoderFactory: EncoderFactory
+    private lateinit var encoderFactory: VideoEncoderFactory
     private lateinit var encoder: FakeEncoder
-    private lateinit var encoderInput: Encoder.SurfaceInput
+    private lateinit var surfaceTexture: SurfaceTexture
+    private lateinit var surface: Surface
+    private lateinit var encoderInput: FakeEncoderSurfaceInput
     private lateinit var surfaceRequest: SurfaceRequest
     private lateinit var videoEncoderConfig: VideoEncoderConfig
     private lateinit var fakeCamera: FakeCamera
@@ -60,9 +64,11 @@ class VideoEncoderSessionTest {
     fun setUp() {
         sequentialExecutor = CameraXExecutors.newSequentialExecutor(mainThreadExecutor())
         executor = mainThreadExecutor()
-        encoderInput = FakeEncoderSurfaceInput()
+        surfaceTexture = SurfaceTexture(0)
+        surface = Surface(surfaceTexture)
+        encoderInput = FakeEncoderSurfaceInput(surface)
         encoder = FakeEncoder(encoderInput = encoderInput)
-        encoderFactory = EncoderFactory { _, _, _ -> encoder }
+        encoderFactory = FakeVideoEncoderFactory { _, _ -> encoder }
         videoEncoderConfig = createFakeVideoEncoderConfig()
         fakeCamera = FakeCamera()
         surfaceRequest = SurfaceRequest(Size(640, 480), fakeCamera) {}
@@ -74,7 +80,8 @@ class VideoEncoderSessionTest {
             surfaceRequest2.value.deferrableSurface.close()
         }
         surfaceRequest.deferrableSurface.close()
-        encoderInput.surface.release()
+        surface.release()
+        surfaceTexture.release()
     }
 
     @Test
@@ -97,7 +104,7 @@ class VideoEncoderSessionTest {
     @Test
     fun configure_throwsException_whenEncoderFactoryFails() {
         // Arrange
-        val encoderFactory = EncoderFactory { _, _, _ ->
+        val encoderFactory = FakeVideoEncoderFactory { _, _ ->
             throw InvalidConfigException("Failed in purpose")
         }
         val session = VideoEncoderSession(encoderFactory, sequentialExecutor, executor)
@@ -223,5 +230,30 @@ class VideoEncoderSessionTest {
 
         // Assert
         assertThat(session.activeSurface).isNull()
+        assertThat(session.isReady).isFalse()
+    }
+
+    @Test
+    fun isReady_returnsCorrectState() {
+        // Arrange
+        val session = VideoEncoderSession(encoderFactory, sequentialExecutor, executor)
+
+        // Act & Assert: NOT_INITIALIZED -> false
+        assertThat(session.isReady).isFalse()
+
+        // READY -> true
+        session.configure(surfaceRequest, videoEncoderConfig)
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertThat(session.isReady).isTrue()
+
+        // PENDING_RELEASE -> false
+        session.signalTermination()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertThat(session.isReady).isFalse()
+
+        // RELEASED -> false
+        session.terminateNow()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertThat(session.isReady).isFalse()
     }
 }

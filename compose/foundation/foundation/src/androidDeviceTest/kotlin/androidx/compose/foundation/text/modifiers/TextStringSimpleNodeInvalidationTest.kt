@@ -31,13 +31,19 @@ class TextStringSimpleNodeInvalidationTest : NodeInvalidationTestParent() {
                 maxLines = params.maxLines,
                 softWrap = params.softWrap,
                 fontFamilyResolver = params.fontFamilyResolver,
+                defaultLocaleList = params.defaultLocaleList,
                 overflow = params.overflow,
             )
     }
 
     override fun Any.invalidateAll() {
         this as TextStringSimpleNode
-        doInvalidations(drawChanged = true, textChanged = true, layoutChanged = true)
+        doInvalidations(
+            drawChanged = true,
+            textChanged = true,
+            layoutChanged = true,
+            styleChanged = false,
+        )
     }
 
     override fun createSubject(params: Params): Any {
@@ -45,6 +51,7 @@ class TextStringSimpleNodeInvalidationTest : NodeInvalidationTestParent() {
             params.text,
             params.style,
             params.fontFamilyResolver,
+            params.defaultLocaleList,
             params.overflow,
             params.softWrap,
             params.maxLines,
@@ -57,6 +64,7 @@ class TextStringSimpleNodeInvalidationTest : NodeInvalidationTestParent() {
             params.text,
             params.style,
             params.fontFamilyResolver,
+            params.defaultLocaleList,
             params.overflow,
             params.softWrap,
             params.maxLines,

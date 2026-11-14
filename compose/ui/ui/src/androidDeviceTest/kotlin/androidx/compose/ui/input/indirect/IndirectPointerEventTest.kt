@@ -18,18 +18,20 @@ package androidx.compose.ui.input.indirect
 
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.MotionEvent.ACTION_CANCEL
 import android.view.MotionEvent.ACTION_DOWN
 import android.view.MotionEvent.ACTION_HOVER_ENTER
 import android.view.MotionEvent.ACTION_MOVE
 import android.view.MotionEvent.ACTION_UP
 import android.view.View
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.ExperimentalIndirectPointerApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusTargetModifierNode
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.geometry.Offset
@@ -38,24 +40,22 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.node.DelegatingNode
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.elementFor
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.core.view.InputDeviceCompat.SOURCE_TOUCH_NAVIGATION
 import androidx.test.core.view.MotionEventBuilder
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalIndirectPointerApi::class)
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class IndirectPointerEventTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val initialFocus = FocusRequester()
     private lateinit var rootView: View
@@ -71,262 +71,6 @@ class IndirectPointerEventTest {
     fun before() {
         indirectPointerCancellations = false
         capturedTestIndirectPointerEventInformation.clear()
-    }
-
-    @Test
-    fun convertMotionEventToIndirectPointerEvent_validMotionEventAndNoPrimaryAxis() {
-        val offset = Offset(4f, 6f)
-
-        val motionEvent =
-            MotionEvent.obtain(
-                SystemClock.uptimeMillis(), // downTime,
-                SystemClock.uptimeMillis(), // eventTime,
-                ACTION_DOWN,
-                offset.x,
-                offset.y,
-                0, // metaState
-            )
-        motionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val indirectPointerEvent = IndirectPointerEvent(motionEvent = motionEvent)
-
-        assertThat(indirectPointerEvent).isNotNull()
-        assertThat(indirectPointerEvent.changes.first().position).isEqualTo(offset)
-        assertThat(indirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(motionEvent.eventTime)
-        assertThat(indirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(motionEvent.actionMasked))
-        assertThat(indirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(indirectPointerEvent.changes.first().pressed).isEqualTo(true)
-        // Since we aren't passing previous [MotionEvent]s to test function IndirectPointerEvent(),
-        // previous fields will be the same as original.
-        assertThat(indirectPointerEvent.changes.first().previousPosition).isEqualTo(offset)
-        assertThat(indirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(motionEvent.eventTime)
-        assertThat(indirectPointerEvent.changes.first().previousPressed).isEqualTo(false)
-        assertThat(indirectPointerEvent.nativeEvent).isEqualTo(motionEvent)
-        // Default is None when a device does not specify something different. In this case,
-        // because there is no device mock, it will be none.
-        assertThat(indirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.None)
-    }
-
-    @Test
-    fun convertStreamOfMotionEventsToIndirectPointerEvents_validMotionEventAndIncludePreviousMotionEventHistory() {
-        // --> Down event (no previous history since it is the start of the stream).
-        val downOffset = Offset(4f, 6f)
-        val startOfEventStreamMillis = SystemClock.uptimeMillis()
-        var uptimeMillis = startOfEventStreamMillis
-
-        val downMotionEvent =
-            MotionEvent.obtain(
-                /* downTime = */ startOfEventStreamMillis,
-                /* eventTime = */ uptimeMillis,
-                /* action = */ ACTION_DOWN,
-                /* x = */ downOffset.x,
-                /* y = */ downOffset.y,
-                /* metaState = */ 0,
-            )
-        downMotionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val downIndirectPointerEvent = IndirectPointerEvent(motionEvent = downMotionEvent)
-
-        assertThat(downIndirectPointerEvent).isNotNull()
-        assertThat(downIndirectPointerEvent.changes.first().position).isEqualTo(downOffset)
-        assertThat(downIndirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(downMotionEvent.eventTime)
-        assertThat(downIndirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(downMotionEvent.actionMasked))
-        assertThat(downIndirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(downIndirectPointerEvent.changes.first().pressed).isEqualTo(true)
-        // For a first event in a stream, previous fields are going to equal current (since there is
-        // no previous).
-        assertThat(downIndirectPointerEvent.changes.first().previousPosition).isEqualTo(downOffset)
-        assertThat(downIndirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(downMotionEvent.eventTime)
-        assertThat(downIndirectPointerEvent.changes.first().previousPressed).isEqualTo(false)
-        assertThat(downIndirectPointerEvent.nativeEvent).isEqualTo(downMotionEvent)
-        // Default is None when a device does not specify something different. In this case,
-        // because there is no device mock, it will be none.
-        assertThat(downIndirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.None)
-
-        // --> Move 1 event
-        val move1Offset = Offset(downOffset.x + 5f, downOffset.y + 5f)
-        uptimeMillis += 100
-
-        val move1MotionEvent =
-            MotionEvent.obtain(
-                /* downTime = */ startOfEventStreamMillis,
-                /* eventTime = */ uptimeMillis,
-                /* action = */ ACTION_MOVE,
-                /* x = */ move1Offset.x,
-                /* y = */ move1Offset.y,
-                /* metaState = */ 0,
-            )
-        move1MotionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val move1IndirectPointerEvent =
-            IndirectPointerEvent(
-                motionEvent = move1MotionEvent,
-                // Normally, the Android Compose system caches information from previous
-                // MotionEvents
-                // to create the "previous" fields in IndirectPointerInputChange. Since we are using
-                // the testing IndirectPointerEvent() (which doesn't do that), we need to pass the
-                // previous MotionEvent if we want the proper "previous" values (uptimes, position,
-                // pressed) to show up.
-                previousMotionEvent = downMotionEvent,
-            )
-
-        assertThat(move1IndirectPointerEvent).isNotNull()
-        assertThat(move1IndirectPointerEvent.changes.first().position).isEqualTo(move1Offset)
-        assertThat(move1IndirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(move1MotionEvent.eventTime)
-        assertThat(move1IndirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(move1MotionEvent.actionMasked))
-        assertThat(move1IndirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(move1IndirectPointerEvent.changes.first().pressed).isEqualTo(true)
-        assertThat(move1IndirectPointerEvent.changes.first().previousPosition).isEqualTo(downOffset)
-        assertThat(move1IndirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(downMotionEvent.eventTime)
-        assertThat(move1IndirectPointerEvent.changes.first().previousPressed).isEqualTo(true)
-        assertThat(move1IndirectPointerEvent.nativeEvent).isEqualTo(move1MotionEvent)
-        // Default is None when a device does not specify something different. In this case,
-        // because there is no device mock, it will be none.
-        assertThat(move1IndirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.None)
-
-        // --> Move 2 event2
-        val move2Offset = Offset(move1Offset.x + 5f, move1Offset.y + 5f)
-        uptimeMillis += 100
-
-        val move2MotionEvent =
-            MotionEvent.obtain(
-                /* downTime = */ startOfEventStreamMillis,
-                /* eventTime = */ uptimeMillis,
-                /* action = */ ACTION_MOVE,
-                /* x = */ move2Offset.x,
-                /* y = */ move2Offset.y,
-                /* metaState = */ 0,
-            )
-        move2MotionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val move2IndirectPointerEvent =
-            IndirectPointerEvent(
-                motionEvent = move2MotionEvent,
-                // Normally, the Android Compose system caches information from previous
-                // MotionEvents
-                // to create the "previous" fields in IndirectPointerInputChange. Since we are using
-                // the testing IndirectPointerEvent() (which doesn't do that), we need to pass the
-                // previous MotionEvent if we want the proper "previous" values (uptimes, position,
-                // pressed) to show up.
-                previousMotionEvent = move1MotionEvent,
-            )
-
-        assertThat(move2IndirectPointerEvent).isNotNull()
-        assertThat(move2IndirectPointerEvent.changes.first().position).isEqualTo(move2Offset)
-        assertThat(move2IndirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(move2MotionEvent.eventTime)
-        assertThat(move2IndirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(move2MotionEvent.actionMasked))
-        assertThat(move2IndirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(move2IndirectPointerEvent.changes.first().pressed).isEqualTo(true)
-        assertThat(move2IndirectPointerEvent.changes.first().previousPosition)
-            .isEqualTo(move1Offset)
-        assertThat(move2IndirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(move1MotionEvent.eventTime)
-        assertThat(move2IndirectPointerEvent.changes.first().previousPressed).isEqualTo(true)
-        assertThat(move2IndirectPointerEvent.nativeEvent).isEqualTo(move2MotionEvent)
-        // Default is None when a device does not specify something different. In this case,
-        // because there is no device mock, it will be none.
-        assertThat(move2IndirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.None)
-
-        // Up event
-        val upOffset = Offset(move2Offset.x + 5f, move2Offset.y + 5f)
-        uptimeMillis += 100
-
-        val upMotionEvent =
-            MotionEvent.obtain(
-                /* downTime = */ startOfEventStreamMillis,
-                /* eventTime = */ uptimeMillis,
-                /* action = */ ACTION_UP,
-                /* x = */ upOffset.x,
-                /* y = */ upOffset.y,
-                /* metaState = */ 0,
-            )
-        upMotionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val upIndirectPointerEvent =
-            IndirectPointerEvent(
-                motionEvent = upMotionEvent,
-                // Normally, the Android Compose system caches information from previous
-                // MotionEvents
-                // to create the "previous" fields in IndirectPointerInputChange. Since we are using
-                // the testing IndirectPointerEvent() (which doesn't do that), we need to pass the
-                // previous MotionEvent if we want the proper "previous" values (uptimes, position,
-                // pressed) to show up.
-                previousMotionEvent = move2MotionEvent,
-            )
-
-        assertThat(upIndirectPointerEvent).isNotNull()
-        assertThat(upIndirectPointerEvent.changes.first().position).isEqualTo(upOffset)
-        assertThat(upIndirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(upMotionEvent.eventTime)
-        assertThat(upIndirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(upMotionEvent.actionMasked))
-        assertThat(upIndirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(upIndirectPointerEvent.changes.first().pressed).isEqualTo(false)
-        assertThat(upIndirectPointerEvent.changes.first().previousPosition).isEqualTo(move2Offset)
-        assertThat(upIndirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(move2MotionEvent.eventTime)
-        assertThat(upIndirectPointerEvent.changes.first().previousPressed).isEqualTo(true)
-        assertThat(upIndirectPointerEvent.nativeEvent).isEqualTo(upMotionEvent)
-        // Default is None when a device does not specify something different. In this case,
-        // because there is no device mock, it will be none.
-        assertThat(upIndirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.None)
-    }
-
-    @Test
-    fun convertMotionEventToIndirectPointerEvent_validMotionEventAndPrimaryAxis() {
-        val offset = Offset(4f, 6f)
-
-        val motionEvent =
-            MotionEvent.obtain(
-                SystemClock.uptimeMillis(), // downTime,
-                SystemClock.uptimeMillis(), // eventTime,
-                ACTION_DOWN,
-                offset.x,
-                offset.y,
-                0, // metaState
-            )
-        motionEvent.source = SOURCE_TOUCH_NAVIGATION
-
-        val indirectPointerEvent =
-            IndirectPointerEvent(
-                motionEvent = motionEvent,
-                primaryDirectionalMotionAxis = IndirectPointerEventPrimaryDirectionalMotionAxis.X,
-            )
-
-        assertThat(indirectPointerEvent).isNotNull()
-        assertThat(indirectPointerEvent.changes.first().position).isEqualTo(offset)
-        assertThat(indirectPointerEvent.changes.first().uptimeMillis)
-            .isEqualTo(motionEvent.eventTime)
-        assertThat(indirectPointerEvent.type)
-            .isEqualTo(convertActionToIndirectPointerEventType(motionEvent.actionMasked))
-        assertThat(indirectPointerEvent.changes.first().isConsumed).isEqualTo(false)
-        assertThat(indirectPointerEvent.changes.first().pressed).isEqualTo(true)
-        // Since we aren't passing previous [MotionEvent]s to test function IndirectPointerEvent(),
-        // previous fields will be the same as original.
-        assertThat(indirectPointerEvent.changes.first().previousPosition.x).isEqualTo(offset.x)
-        assertThat(indirectPointerEvent.changes.first().previousPosition.y).isEqualTo(offset.y)
-        assertThat(indirectPointerEvent.changes.first().previousUptimeMillis)
-            .isEqualTo(motionEvent.eventTime)
-        assertThat(indirectPointerEvent.changes.first().previousPressed).isEqualTo(false)
-        assertThat(indirectPointerEvent.nativeEvent).isEqualTo(motionEvent)
-        assertThat(indirectPointerEvent.primaryDirectionalMotionAxis)
-            .isEqualTo(IndirectPointerEventPrimaryDirectionalMotionAxis.X)
     }
 
     @Test
@@ -472,6 +216,89 @@ class IndirectPointerEventTest {
     }
 
     @Test
+    fun androidTouchNavigationEvent_withHistoricalChanges_isProperlyPropagated() {
+        ContentWithInitialFocus {
+            Box(
+                modifier =
+                    @Suppress("DEPRECATION")
+                    Modifier.onIndirectPointerInput(
+                            onEvent = {
+                                indirectPointerEvent: IndirectPointerEvent,
+                                pointerEventPass: PointerEventPass ->
+                                capturedTestIndirectPointerEventInformation.add(
+                                    CapturedTestIndirectPointerEvent(
+                                        timestamp = SystemClock.uptimeMillis(),
+                                        pass = pointerEventPass,
+                                        event = indirectPointerEvent,
+                                    )
+                                )
+                            },
+                            onCancel = { indirectPointerCancellations = true },
+                        )
+                        .focusable(focusRequester = initialFocus, initiallyFocused = true)
+            )
+        }
+
+        rule.runOnIdle {
+            // Build MotionEvent in chronological order to set up correct history batching
+            val motionEvent =
+                MotionEvent.obtain(
+                    0L /* downTime */,
+                    2000L /* eventTime */,
+                    MotionEvent.ACTION_MOVE,
+                    5f /* x */,
+                    5f /* y */,
+                    0, /* metaState */
+                )
+            motionEvent.source = SOURCE_TOUCH_NAVIGATION
+
+            // Add batch at 3000L
+            motionEvent.addBatch(
+                3000L /* eventTime */,
+                8f /* x */,
+                8f /* y */,
+                0.7f /* pressure */,
+                0f /* size */,
+                0, /* metaState */
+            )
+            // Main event at 5000L
+            motionEvent.addBatch(
+                5000L /* eventTime */,
+                10f /* x */,
+                20f /* y */,
+                0.5f /* pressure */,
+                0f /* size */,
+                0, /* metaState */
+            )
+
+            rootView.dispatchGenericMotionEvent(motionEvent)
+        }
+
+        rule.runOnIdle {
+            assertThat(capturedTestIndirectPointerEventInformation).hasSize(3)
+
+            // Initial, Main, Final passes should all receive the event
+            val initialEvent = capturedTestIndirectPointerEventInformation[0].event
+            val mainEvent = capturedTestIndirectPointerEventInformation[1].event
+            val finalEvent = capturedTestIndirectPointerEventInformation[2].event
+
+            for (event in listOf(initialEvent, mainEvent, finalEvent)) {
+                assertThat(event.changes).hasSize(1)
+                val change = event.changes[0]
+                assertThat(change.uptimeMillis).isEqualTo(5000L)
+                assertThat(change.position).isEqualTo(Offset(10f, 20f))
+
+                // Verify history
+                assertThat(change.historical).hasSize(2)
+                assertThat(change.historical[0].uptimeMillis).isEqualTo(2000L)
+                assertThat(change.historical[0].position).isEqualTo(Offset(5f, 5f))
+                assertThat(change.historical[1].uptimeMillis).isEqualTo(3000L)
+                assertThat(change.historical[1].position).isEqualTo(Offset(8f, 8f))
+            }
+        }
+    }
+
+    @Test
     fun androidTouchNavigationEvent_withBadData_doesNotTriggerIndirectPointerEvent() {
         ContentWithInitialFocus {
             Box(
@@ -552,25 +379,23 @@ class IndirectPointerEventTest {
     }
 
     /* Tests how delegates associated with a node will behave with indirect pointer events.
-     * For multiple delegates, only the first node will receive the event for indirect pointer
-     * events because it uses a focused item (not hit testing like pointer input). Pointer input
-     * will send the event to BOTH delegates; see [AndroidPointerInputTest]'s test
-     * delegated_multiple_androidPointerInputEvents_triggersTouchEvent() to see how pointer input
-     * behaves.
+     * Both delegates of the node will receive indirect pointer events.
      */
     @Test
     fun delegated_multiple_androidTouchNavigationEvent_triggersIndirectPointerEvent() {
         var event1: IndirectPointerEvent? = null
         var event2: IndirectPointerEvent? = null
+        val callOrder = mutableListOf<String>()
         val node =
             object : DelegatingNode() {
-                val unused =
+                init {
                     delegate(
                         object : IndirectPointerInputModifierNode, Modifier.Node() {
                             override fun onIndirectPointerEvent(
                                 event: IndirectPointerEvent,
                                 pass: PointerEventPass,
                             ) {
+                                callOrder.add("first:$pass")
                                 if (pass == PointerEventPass.Main) {
                                     event1 = event
                                 }
@@ -581,13 +406,13 @@ class IndirectPointerEventTest {
                             }
                         }
                     )
-                val unused2 =
                     delegate(
                         object : IndirectPointerInputModifierNode, Modifier.Node() {
                             override fun onIndirectPointerEvent(
                                 event: IndirectPointerEvent,
                                 pass: PointerEventPass,
                             ) {
+                                callOrder.add("second:$pass")
                                 if (pass == PointerEventPass.Main) {
                                     event2 = event
                                 }
@@ -598,6 +423,7 @@ class IndirectPointerEventTest {
                             }
                         }
                     )
+                }
             }
         ContentWithInitialFocus {
             Box(
@@ -614,12 +440,358 @@ class IndirectPointerEventTest {
         }
 
         rule.runOnIdle {
-            // Only the first delegate of the node will receive the event for indirect pointer event
-            // because it uses the focused item (not hit testing like pointer input (see test below
-            // for how pointer input behaves).
             assertThat(event1).isNotNull()
-            assertThat(event2).isNull()
+            assertThat(event2).isNotNull()
             assertThat(indirectPointerCancellations).isFalse()
+            assertThat(callOrder)
+                .containsExactly(
+                    "first:Initial",
+                    "second:Initial",
+                    "first:Main",
+                    "second:Main",
+                    "first:Final",
+                    "second:Final",
+                )
+                .inOrder()
+        }
+    }
+
+    @Test
+    fun delegated_multiple_androidTouchNavigationEvent_triggersIndirectPointerCancel() {
+        var cancel1 = false
+        var cancel2 = false
+        val callOrder = mutableListOf<String>()
+        val node =
+            object : DelegatingNode() {
+                init {
+                    delegate(
+                        object : IndirectPointerInputModifierNode, Modifier.Node() {
+                            override fun onIndirectPointerEvent(
+                                event: IndirectPointerEvent,
+                                pass: PointerEventPass,
+                            ) {}
+
+                            override fun onCancelIndirectPointerInput() {
+                                callOrder.add("first:cancel")
+                                cancel1 = true
+                            }
+                        }
+                    )
+                    delegate(
+                        object : IndirectPointerInputModifierNode, Modifier.Node() {
+                            override fun onIndirectPointerEvent(
+                                event: IndirectPointerEvent,
+                                pass: PointerEventPass,
+                            ) {}
+
+                            override fun onCancelIndirectPointerInput() {
+                                callOrder.add("second:cancel")
+                                cancel2 = true
+                            }
+                        }
+                    )
+                }
+            }
+        ContentWithInitialFocus {
+            Box(
+                modifier =
+                    Modifier.elementFor(node)
+                        .focusable(focusRequester = initialFocus, initiallyFocused = true)
+            )
+        }
+
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder()
+                    .setAction(ACTION_CANCEL)
+                    .setSource(SOURCE_TOUCH_NAVIGATION)
+                    .build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(cancel1).isTrue()
+            assertThat(cancel2).isTrue()
+            assertThat(callOrder).containsExactly("first:cancel", "second:cancel").inOrder()
+        }
+    }
+
+    @Test
+    fun afterFocusable_androidTouchNavigationEvent_triggersIndirectPointerEventAndCancel() {
+        var receivedBeforeFocusable: IndirectPointerEvent? = null
+        var receivedAfterFocusable: IndirectPointerEvent? = null
+        var cancelBeforeFocusable = false
+        var cancelAfterFocusable = false
+        val callOrder = mutableListOf<String>()
+
+        ContentWithInitialFocus {
+            Box(
+                modifier =
+                    Modifier.onIndirectPointerInput(
+                            onEvent = { event, pass ->
+                                callOrder.add("before:$pass")
+                                if (pass == PointerEventPass.Main) {
+                                    receivedBeforeFocusable = event
+                                }
+                            },
+                            onCancel = {
+                                callOrder.add("before:cancel")
+                                cancelBeforeFocusable = true
+                            },
+                        )
+                        .focusable(focusRequester = initialFocus, initiallyFocused = true)
+                        .onIndirectPointerInput(
+                            onEvent = { event, pass ->
+                                callOrder.add("after:$pass")
+                                if (pass == PointerEventPass.Main) {
+                                    receivedAfterFocusable = event
+                                }
+                            },
+                            onCancel = {
+                                callOrder.add("after:cancel")
+                                cancelAfterFocusable = true
+                            },
+                        )
+            )
+        }
+
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder().setSource(SOURCE_TOUCH_NAVIGATION).build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(receivedBeforeFocusable).isNotNull()
+            assertThat(receivedAfterFocusable).isNotNull()
+            assertThat(cancelBeforeFocusable).isFalse()
+            assertThat(cancelAfterFocusable).isFalse()
+            assertThat(callOrder)
+                .containsExactly(
+                    "before:Initial",
+                    "after:Initial",
+                    "after:Main",
+                    "before:Main",
+                    "before:Final",
+                    "after:Final",
+                )
+                .inOrder()
+        }
+
+        callOrder.clear()
+
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder()
+                    .setAction(ACTION_CANCEL)
+                    .setSource(SOURCE_TOUCH_NAVIGATION)
+                    .build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(cancelAfterFocusable).isTrue()
+            assertThat(cancelBeforeFocusable).isTrue()
+            assertThat(callOrder).containsExactly("after:cancel", "before:cancel").inOrder()
+        }
+    }
+
+    @Test
+    fun afterFocusable_focusChange_triggersIndirectPointerCancel() {
+        val secondFocus = FocusRequester()
+        var cancelAfterFocusable = 0
+
+        ContentWithInitialFocus {
+            Column {
+                Box(
+                    modifier =
+                        Modifier.focusable(focusRequester = initialFocus, initiallyFocused = true)
+                            .onIndirectPointerInput(
+                                onEvent = { _, _ -> },
+                                onCancel = { cancelAfterFocusable++ },
+                            )
+                )
+                Box(modifier = Modifier.focusRequester(secondFocus).focusTarget())
+            }
+        }
+
+        rule.runOnIdle { assertThat(cancelAfterFocusable).isEqualTo(0) }
+
+        rule.runOnIdle { secondFocus.requestFocus() }
+
+        rule.runOnIdle { assertThat(cancelAfterFocusable).isEqualTo(1) }
+    }
+
+    @Test
+    fun afterFocusable_stopsAtNextFocusTarget() {
+        val secondFocus = FocusRequester()
+        val callOrder = mutableListOf<String>()
+        var cancelBetween = 0
+        var cancelAfterSecond = 0
+
+        ContentWithInitialFocus {
+            Box(
+                modifier =
+                    Modifier.focusable(focusRequester = initialFocus, initiallyFocused = true)
+                        .onIndirectPointerInput(
+                            onEvent = { _, pass -> callOrder.add("between:$pass") },
+                            onCancel = { cancelBetween++ },
+                        )
+                        .focusRequester(secondFocus)
+                        .focusTarget()
+                        .onIndirectPointerInput(
+                            onEvent = { _, pass -> callOrder.add("afterSecond:$pass") },
+                            onCancel = { cancelAfterSecond++ },
+                        )
+            )
+        }
+
+        // When the first focusTarget is focused, only "between" receives events; "afterSecond"
+        // is after the next FocusTarget in the chain and should not receive events.
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder().setSource(SOURCE_TOUCH_NAVIGATION).build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(callOrder)
+                .containsExactly("between:Initial", "between:Main", "between:Final")
+                .inOrder()
+            assertThat(cancelBetween).isEqualTo(0)
+            assertThat(cancelAfterSecond).isEqualTo(0)
+        }
+
+        callOrder.clear()
+
+        // Moving focus to the second focusTarget in the same chain should NOT cancel "between"
+        // (since it is an ancestor of the newly focused target), and now both should receive
+        // events.
+        rule.runOnIdle { secondFocus.requestFocus() }
+
+        rule.runOnIdle {
+            assertThat(cancelBetween).isEqualTo(0)
+            assertThat(cancelAfterSecond).isEqualTo(0)
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder().setSource(SOURCE_TOUCH_NAVIGATION).build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(callOrder)
+                .containsExactly(
+                    "between:Initial",
+                    "afterSecond:Initial",
+                    "afterSecond:Main",
+                    "between:Main",
+                    "between:Final",
+                    "afterSecond:Final",
+                )
+                .inOrder()
+        }
+
+        // Moving focus back to the first focusTarget should cancel "afterSecond", but not
+        // "between".
+        rule.runOnIdle { initialFocus.requestFocus() }
+
+        rule.runOnIdle {
+            assertThat(cancelBetween).isEqualTo(0)
+            assertThat(cancelAfterSecond).isEqualTo(1)
+        }
+    }
+
+    @Test
+    fun delegatingFocusTargetAndMultipleIndirectPointerInputNodes_triggersAllDelegates() {
+        var event1: IndirectPointerEvent? = null
+        var event2: IndirectPointerEvent? = null
+        var cancel1 = 0
+        var cancel2 = 0
+        val callOrder = mutableListOf<String>()
+        val node =
+            object : DelegatingNode() {
+                init {
+                    delegate(FocusTargetModifierNode())
+                    delegate(
+                        object : IndirectPointerInputModifierNode, Modifier.Node() {
+                            override fun onIndirectPointerEvent(
+                                event: IndirectPointerEvent,
+                                pass: PointerEventPass,
+                            ) {
+                                callOrder.add("first:$pass")
+                                if (pass == PointerEventPass.Main) {
+                                    event1 = event
+                                }
+                            }
+
+                            override fun onCancelIndirectPointerInput() {
+                                callOrder.add("first:cancel")
+                                cancel1++
+                            }
+                        }
+                    )
+                    delegate(
+                        object : IndirectPointerInputModifierNode, Modifier.Node() {
+                            override fun onIndirectPointerEvent(
+                                event: IndirectPointerEvent,
+                                pass: PointerEventPass,
+                            ) {
+                                callOrder.add("second:$pass")
+                                if (pass == PointerEventPass.Main) {
+                                    event2 = event
+                                }
+                            }
+
+                            override fun onCancelIndirectPointerInput() {
+                                callOrder.add("second:cancel")
+                                cancel2++
+                            }
+                        }
+                    )
+                }
+            }
+
+        ContentWithInitialFocus {
+            Box(modifier = Modifier.focusRequester(initialFocus).elementFor(node))
+        }
+
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder().setSource(SOURCE_TOUCH_NAVIGATION).build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(event1).isNotNull()
+            assertThat(event2).isNotNull()
+            assertThat(cancel1).isEqualTo(0)
+            assertThat(cancel2).isEqualTo(0)
+            assertThat(callOrder)
+                .containsExactly(
+                    "first:Initial",
+                    "second:Initial",
+                    "first:Main",
+                    "second:Main",
+                    "first:Final",
+                    "second:Final",
+                )
+                .inOrder()
+        }
+
+        callOrder.clear()
+
+        rule.runOnIdle {
+            rootView.dispatchGenericMotionEvent(
+                MotionEventBuilder.newBuilder()
+                    .setAction(ACTION_CANCEL)
+                    .setSource(SOURCE_TOUCH_NAVIGATION)
+                    .build()
+            )
+        }
+
+        rule.runOnIdle {
+            assertThat(cancel1).isEqualTo(1)
+            assertThat(cancel2).isEqualTo(1)
+            assertThat(callOrder).containsExactly("first:cancel", "second:cancel").inOrder()
         }
     }
 

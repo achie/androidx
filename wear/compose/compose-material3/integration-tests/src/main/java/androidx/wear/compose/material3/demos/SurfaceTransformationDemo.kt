@@ -16,10 +16,12 @@
 
 package androidx.wear.compose.material3.demos
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
@@ -39,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppCard
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonGroup
@@ -62,6 +65,33 @@ import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TitleCard
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
+
+@Composable
+@Suppress("PrimitiveInCollection")
+fun BorderColors() {
+    val tlcState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
+
+    val colors = listOf(Color.Red, Color.Green, Color.Blue)
+    TransformingLazyColumn(
+        state = tlcState,
+        contentPadding = PaddingValues(vertical = 50.dp, horizontal = 10.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(20) { index ->
+            TitleCard(
+                onClick = { /* Handle click */ },
+                title = { Text("Title $index") },
+                subtitle = { Text("Secondary text $index") },
+                modifier = Modifier.fillMaxWidth().transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec),
+                border = BorderStroke(10.dp, colors[index % colors.size]),
+            ) {
+                Text("Content for item $index")
+            }
+        }
+    }
+}
 
 @Composable
 fun SurfaceTransformationDemo() {
@@ -181,9 +211,7 @@ fun SurfaceTransformationDemo() {
                 checked = checked,
                 onCheckedChange = { checked = it },
                 toggleContentDescription = "Split Checkbox Button Sample",
-                onContainerClick = {
-                    /* Do something */
-                },
+                onContainerClick = { /* Do something */ },
                 containerClickLabel = "click",
                 enabled = true,
                 transformation = SurfaceTransformation(transformationSpec),
@@ -216,9 +244,7 @@ fun SurfaceTransformationDemo() {
                 selected = selectedButton == 0,
                 onSelectionClick = { selectedButton = 0 },
                 selectionContentDescription = "First",
-                onContainerClick = {
-                    /* Do something */
-                },
+                onContainerClick = { /* Do something */ },
                 containerClickLabel = "click",
                 enabled = true,
                 transformation = SurfaceTransformation(transformationSpec),
@@ -251,9 +277,7 @@ fun SurfaceTransformationDemo() {
                 checked = checked,
                 onCheckedChange = { checked = it },
                 toggleContentDescription = "Split Switch Button Sample",
-                onContainerClick = {
-                    /* Do something */
-                },
+                onContainerClick = { /* Do something */ },
                 enabled = true,
                 transformation = SurfaceTransformation(transformationSpec),
                 modifier = Modifier.transformedHeight(this, transformationSpec),

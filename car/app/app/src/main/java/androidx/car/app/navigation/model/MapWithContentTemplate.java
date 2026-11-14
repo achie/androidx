@@ -20,6 +20,8 @@ import static androidx.car.app.model.constraints.ActionsConstraints.ACTIONS_CONS
 
 import static java.util.Objects.requireNonNull;
 
+import android.annotation.SuppressLint;
+
 import androidx.car.app.annotations.CarProtocol;
 import androidx.car.app.annotations.KeepFields;
 import androidx.car.app.annotations.RequiresCarApi;
@@ -43,7 +45,7 @@ import java.util.Objects;
  *
  * <p>In order to use this template your car app <b>MUST</b> declare that it uses <b>EITHER</b> the
  * {@code androidx.car.app.NAVIGATION_TEMPLATES} permission <b>OR</b> the {@code
- *  androidx.car.app.MAP_TEMPLATES} in the manifest.</p>
+ * androidx.car.app.MAP_TEMPLATES} in the manifest.</p>
  */
 @CarProtocol
 @KeepFields
@@ -168,6 +170,13 @@ public final class MapWithContentTemplate implements Template {
          *     <li>{@code MessageTemplate}
          * </ul>
          *
+         * <p>From Car API 8 onward, the following template type is supported as content in
+         * addition to all previously supported template types:
+         * <ul>
+         *     <li>{@code SectionedItemTemplate} (only {@link androidx.car.app.model.RowSection}
+         *     and {@link androidx.car.app.model.GridSection} are supported within the template)
+         * </ul>
+         *
          *  @throws NullPointerException     if {@code template} is null
          *  @throws IllegalArgumentException if {@code template} does not meet the requirements
          */
@@ -189,13 +198,19 @@ public final class MapWithContentTemplate implements Template {
          * <p>
          * <h4>Requirements</h4>
          * <p>
-         * @throws IllegalArgumentException if the template is not one of the allowed Content types
-         * See {@link Builder#setContentTemplate(Template)} for the list of supported content
-         * templates.
+         *
+         * @throws IllegalArgumentException if the template is not one of the allowed Content types,
+         *                                  or if the content is a
+         *                                  {@link androidx.car.app.model.SectionedItemTemplate}
+         *                                  containing unsupported sections. See
+         *                                  {@link Builder#setContentTemplate(Template)} for the
+         *                                  list of supported content templates and sections.
          */
+        @SuppressLint("UnsafeOptInUsageError")
         public @NonNull MapWithContentTemplate build() {
-            ContentTemplateConstraints.MAP_WITH_CONTENT_TEMPLATE_CONSTRAINTS
+            ContentTemplateConstraints.MAP_WITH_CONTENT_TEMPLATE_CONSTRAINTS_API_8
                     .validateOrThrow(mContentTemplate);
+
             return new MapWithContentTemplate(this);
         }
     }

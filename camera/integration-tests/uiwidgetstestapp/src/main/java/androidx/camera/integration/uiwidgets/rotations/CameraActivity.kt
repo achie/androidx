@@ -18,19 +18,15 @@ package androidx.camera.integration.uiwidgets.rotations
 
 import android.Manifest
 import android.content.ContentValues
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.text.TextUtils
 import android.util.Log
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -106,37 +102,6 @@ open class CameraActivity : AppCompatActivity() {
 
     @OptIn(ExperimentalCameraProviderConfiguration::class)
     private fun setUpCamera() {
-        val newCameraImpl = intent.getStringExtra(KEY_CAMERA_IMPLEMENTATION)
-        Log.d(TAG, "Set up cameraImpl: $newCameraImpl")
-        if (!TextUtils.isEmpty(newCameraImpl) && newCameraImpl != cameraImpl) {
-            try {
-                Log.d(TAG, "ProcessCameraProvider initialize using $newCameraImpl")
-                ProcessCameraProvider.configureInstance(
-                    when (newCameraImpl) {
-                        CAMERA2_IMPLEMENTATION_OPTION -> Camera2Config.defaultConfig()
-                        CAMERA_PIPE_IMPLEMENTATION_OPTION -> CameraPipeConfig.defaultConfig()
-                        else -> Camera2Config.defaultConfig()
-                    }
-                )
-                cameraImpl = newCameraImpl
-            } catch (e: IllegalStateException) {
-                throw IllegalStateException(
-                    "WARNING: CameraX is currently configured to a different implementation " +
-                        "this would have resulted in unexpected behavior.",
-                    e,
-                )
-            }
-        }
-
-        if (intent.getBooleanExtra(KEY_CAMERA_IMPLEMENTATION_NO_HISTORY, false)) {
-            intent =
-                Intent(intent).apply {
-                    removeExtra(KEY_CAMERA_IMPLEMENTATION)
-                    removeExtra(KEY_CAMERA_IMPLEMENTATION_NO_HISTORY)
-                }
-            cameraImpl = null
-        }
-
         val cameraProcessFuture = ProcessCameraProvider.getInstance(this)
         cameraProcessFuture.addListener(
             Runnable {
@@ -187,6 +152,9 @@ open class CameraActivity : AppCompatActivity() {
 
     private fun ImageCapture.setCallback() {
         mBinding.previewView.setOnClickListener {
+            mCaptureResult = null
+            mCaptureError = null
+            mCaptureDone.drainPermits()
             val imageCaptureMode =
                 intent.getIntExtra(KEY_IMAGE_CAPTURE_MODE, IMAGE_CAPTURE_MODE_IN_MEMORY)
             when (imageCaptureMode) {
@@ -210,6 +178,7 @@ open class CameraActivity : AppCompatActivity() {
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    mCaptureError = exception
                     mCaptureDone.release()
                     Log.e(TAG, "InMemory image capture failed", exception)
                 }
@@ -225,12 +194,26 @@ open class CameraActivity : AppCompatActivity() {
             CameraXExecutors.mainThreadExecutor(),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    mCaptureResult = ImageCaptureResult.FileOrOutputStream(imageFile)
-                    mCaptureDone.release()
-                    Log.d(TAG, "File image capture successful")
+                    try {
+                        mCaptureResult = ImageCaptureResult.FileOrOutputStream(imageFile)
+                        Log.d(TAG, "File image capture successful")
+                    } catch (e: Exception) {
+                        imageFile.delete()
+                        mCaptureError =
+                            ImageCaptureException(
+                                ImageCapture.ERROR_FILE_IO,
+                                "Failed to read saved image file",
+                                e,
+                            )
+                        Log.e(TAG, "Failed to read saved image file", e)
+                    } finally {
+                        mCaptureDone.release()
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    imageFile.delete()
+                    mCaptureError = exception
                     mCaptureDone.release()
                     Log.e(TAG, "File image capture failed", exception)
                 }
@@ -247,12 +230,36 @@ open class CameraActivity : AppCompatActivity() {
             CameraXExecutors.mainThreadExecutor(),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    mCaptureResult = ImageCaptureResult.FileOrOutputStream(imageFile)
-                    mCaptureDone.release()
-                    Log.d(TAG, "OutputStream image capture successful")
+                    try {
+                        try {
+                            outputStream.close()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to close output stream", e)
+                        }
+                        mCaptureResult = ImageCaptureResult.FileOrOutputStream(imageFile)
+                        Log.d(TAG, "OutputStream image capture successful")
+                    } catch (e: Exception) {
+                        imageFile.delete()
+                        mCaptureError =
+                            ImageCaptureException(
+                                ImageCapture.ERROR_FILE_IO,
+                                "Failed to read saved output stream file",
+                                e,
+                            )
+                        Log.e(TAG, "Failed to read saved output stream file", e)
+                    } finally {
+                        mCaptureDone.release()
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    try {
+                        outputStream.close()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to close output stream", e)
+                    }
+                    imageFile.delete()
+                    mCaptureError = exception
                     mCaptureDone.release()
                     Log.e(TAG, "OutputStream image capture failed", exception)
                 }
@@ -278,13 +285,32 @@ open class CameraActivity : AppCompatActivity() {
             CameraXExecutors.mainThreadExecutor(),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    mCaptureResult =
-                        ImageCaptureResult.MediaStore(contentResolver, outputFileResults.savedUri!!)
-                    mCaptureDone.release()
-                    Log.d(TAG, "MediaStore image capture successful")
+                    val savedUri = outputFileResults.savedUri
+                    try {
+                        mCaptureResult =
+                            ImageCaptureResult.MediaStore(
+                                contentResolver,
+                                checkNotNull(savedUri) { "Saved MediaStore URI is null" },
+                            )
+                        Log.d(TAG, "MediaStore image capture successful")
+                    } catch (e: Exception) {
+                        if (savedUri != null) {
+                            runCatching { contentResolver.delete(savedUri, null, null) }
+                        }
+                        mCaptureError =
+                            ImageCaptureException(
+                                ImageCapture.ERROR_FILE_IO,
+                                "Failed to read saved MediaStore URI",
+                                e,
+                            )
+                        Log.e(TAG, "Failed to read saved MediaStore URI", e)
+                    } finally {
+                        mCaptureDone.release()
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    mCaptureError = exception
                     mCaptureDone.release()
                     Log.e(TAG, "MediaStore image capture failed", exception)
                 }
@@ -307,7 +333,9 @@ open class CameraActivity : AppCompatActivity() {
 
     @VisibleForTesting val mCaptureDone = Semaphore(0)
 
-    @VisibleForTesting var mCaptureResult: ImageCaptureResult? = null
+    @Volatile @VisibleForTesting var mCaptureResult: ImageCaptureResult? = null
+
+    @Volatile @VisibleForTesting var mCaptureError: ImageCaptureException? = null
 
     @VisibleForTesting
     fun getSensorRotationRelativeToAnalysisTargetRotation(): Int {
@@ -340,10 +368,6 @@ open class CameraActivity : AppCompatActivity() {
     companion object {
         const val KEY_LENS_FACING = "lens-facing"
         const val KEY_IMAGE_CAPTURE_MODE = "image-capture-mode"
-        const val KEY_CAMERA_IMPLEMENTATION = "camera_implementation"
-        const val KEY_CAMERA_IMPLEMENTATION_NO_HISTORY = "camera_implementation_no_history"
-        const val CAMERA2_IMPLEMENTATION_OPTION = "camera2"
-        const val CAMERA_PIPE_IMPLEMENTATION_OPTION = "camera_pipe"
         const val IMAGE_CAPTURE_MODE_IN_MEMORY = 0
         const val IMAGE_CAPTURE_MODE_FILE = 1
         const val IMAGE_CAPTURE_MODE_OUTPUT_STREAM = 2
@@ -353,10 +377,9 @@ open class CameraActivity : AppCompatActivity() {
         private const val REQUEST_CODE_PERMISSIONS = 20
         val PERMISSIONS =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-            // in android 10 or later, we don't actually need WRITE_EXTERNAL_STORAGE to write to
-            // the external storage.
-            arrayOf(Manifest.permission.CAMERA)
+                // in android 10 or later, we don't actually need WRITE_EXTERNAL_STORAGE to write to
+                // the external storage.
+                arrayOf(Manifest.permission.CAMERA)
             else arrayOf(Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        private var cameraImpl: String? = null
     }
 }

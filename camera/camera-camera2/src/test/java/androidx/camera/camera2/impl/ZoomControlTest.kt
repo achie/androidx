@@ -17,17 +17,30 @@
 package androidx.camera.camera2.impl
 
 import androidx.camera.camera2.adapter.RobolectricCameraPipeTestRunner
+import androidx.camera.camera2.internal.IntrinsicZoomCalculator
+import androidx.camera.camera2.pipe.CameraBackendId
+import androidx.camera.camera2.pipe.CameraMetadata
+import androidx.camera.camera2.pipe.testing.FakeCameraDevices
+import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.FakeFrameInfo
+import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
 import androidx.camera.camera2.testing.FakeZoomCompat
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraControl
+import androidx.camera.core.CameraInfo
+import androidx.camera.testing.fakes.FakeCameraCaptureResult
 import androidx.testutils.MainDispatcherRule
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -96,7 +109,7 @@ class ZoomControlTest {
     fun applyDefaultZoomState_compatNotResetAndSetToDefault() {
         // Arrange.
         var zoomRatioToUpdate = 0.0f
-        var resetCalled = false
+        var resetCalled: Boolean
         val zoomCompat =
             object : FakeZoomCompat(1.0f, 5.0f) {
                 override fun applyAsync(
@@ -231,6 +244,186 @@ class ZoomControlTest {
         assertWithMessage("zoomCompat not updated with correct zoom ratio")
             .that(zoomCompat.zoomRatio)
             .isEqualTo(DEFAULT_ZOOM_RATIO)
+    }
+
+    @Test
+    fun activeIntrinsicZoomRatio_isUnknownByDefault() {
+        assertThat(zoomControl.zoomStateLiveData.value?.activeIntrinsicZoomRatio)
+            .isEqualTo(CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+    }
+
+    @Test
+    fun setZoomRatio_preservesActiveIntrinsicZoomRatio() {
+        zoomControl.setZoomRatio(3.0f)[3, TimeUnit.SECONDS]
+
+        assertThat(zoomControl.zoomStateLiveData.value?.zoomRatio).isEqualTo(3.0f)
+        assertThat(zoomControl.zoomStateLiveData.value?.activeIntrinsicZoomRatio)
+            .isEqualTo(CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+    }
+
+    @Test
+    fun setLinearZoom_preservesActiveIntrinsicZoomRatio() {
+        zoomControl.setLinearZoom(0.5f)[3, TimeUnit.SECONDS]
+
+        assertThat(zoomControl.zoomStateLiveData.value?.linearZoom).isEqualTo(0.5f)
+        assertThat(zoomControl.zoomStateLiveData.value?.activeIntrinsicZoomRatio)
+            .isEqualTo(CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+    }
+
+    @Test
+    fun reset_resetsActiveIntrinsicZoomRatioToUnknown() {
+        zoomControl.setZoomRatio(3.0f)[3, TimeUnit.SECONDS]
+        zoomControl.reset()
+
+        assertThat(zoomControl.zoomStateLiveData.value?.activeIntrinsicZoomRatio)
+            .isEqualTo(CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+    }
+
+    @Test
+    @Config(minSdk = 29)
+    fun onFrameCaptured_updatesActiveIntrinsicZoomRatio_whenPhysicalLensSwitches() {
+        val fakeMetadata = FakeCameraMetadata(cameraId = CameraId("tele_id"))
+        val fakeCameraDevices =
+            FakeCameraDevices(
+                defaultCameraBackendId = CameraBackendId("0"),
+                concurrentCameraBackendIds = emptySet(),
+                cameraMetadataMap = mapOf(CameraBackendId("0") to listOf(fakeMetadata)),
+            )
+        val fakeCalculator =
+            object : IntrinsicZoomCalculator {
+                override fun calculateIntrinsicZoomRatio(cameraMetadata: CameraMetadata): Float {
+                    return if (cameraMetadata.camera == CameraId("tele_id")) 2.5f else 1.0f
+                }
+            }
+        val control =
+            ZoomControl(zoomCompat, fakeCameraDevices, fakeCalculator, null, fakeUseCaseThreads)
+        control.activePhysicalCameraIdProvider = { "tele_id" }
+
+        control.onFrameCaptured(FakeCameraCaptureResult())
+
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio).isEqualTo(2.5f)
+    }
+
+    @Test
+    @Config(minSdk = 29)
+    fun setZoomRatioAndLinearZoom_preserveNonDefaultActiveIntrinsicZoomRatio() {
+        val fakeMetadata = FakeCameraMetadata(cameraId = CameraId("tele_id"))
+        val fakeCameraDevices =
+            FakeCameraDevices(
+                defaultCameraBackendId = CameraBackendId("0"),
+                concurrentCameraBackendIds = emptySet(),
+                cameraMetadataMap = mapOf(CameraBackendId("0") to listOf(fakeMetadata)),
+            )
+        val fakeCalculator =
+            object : IntrinsicZoomCalculator {
+                override fun calculateIntrinsicZoomRatio(cameraMetadata: CameraMetadata): Float {
+                    return if (cameraMetadata.camera == CameraId("tele_id")) 2.5f else 1.0f
+                }
+            }
+        val control =
+            ZoomControl(zoomCompat, fakeCameraDevices, fakeCalculator, null, fakeUseCaseThreads)
+                .apply { requestControl = FakeUseCaseCameraRequestControl() }
+        control.activePhysicalCameraIdProvider = { "tele_id" }
+
+        // Switch to physical telephoto lens (2.5x)
+        control.onFrameCaptured(FakeCameraCaptureResult())
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio).isEqualTo(2.5f)
+
+        // Setting zoom ratio should preserve the 2.5x active intrinsic zoom ratio
+        control.setZoomRatio(3.0f)[3, TimeUnit.SECONDS]
+        assertThat(control.zoomStateLiveData.value?.zoomRatio).isEqualTo(3.0f)
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio).isEqualTo(2.5f)
+
+        // Setting linear zoom should also preserve the 2.5x active intrinsic zoom ratio
+        control.setLinearZoom(0.5f)[3, TimeUnit.SECONDS]
+        assertThat(control.zoomStateLiveData.value?.linearZoom).isEqualTo(0.5f)
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio).isEqualTo(2.5f)
+    }
+
+    @Test
+    @Config(maxSdk = 28)
+    fun onFrameCaptured_doesNotUpdateActiveIntrinsicZoomRatio_belowApi29() {
+        val fakeMetadata = FakeCameraMetadata(cameraId = CameraId("tele_id"))
+        val fakeCameraDevices =
+            FakeCameraDevices(
+                defaultCameraBackendId = CameraBackendId("0"),
+                concurrentCameraBackendIds = emptySet(),
+                cameraMetadataMap = mapOf(CameraBackendId("0") to listOf(fakeMetadata)),
+            )
+        val fakeCalculator =
+            object : IntrinsicZoomCalculator {
+                override fun calculateIntrinsicZoomRatio(cameraMetadata: CameraMetadata): Float {
+                    return if (cameraMetadata.camera == CameraId("tele_id")) 2.5f else 1.0f
+                }
+            }
+        val control =
+            ZoomControl(zoomCompat, fakeCameraDevices, fakeCalculator, null, fakeUseCaseThreads)
+        control.activePhysicalCameraIdProvider = { "tele_id" }
+
+        control.onFrameCaptured(FakeCameraCaptureResult())
+
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio)
+            .isEqualTo(CameraInfo.INTRINSIC_ZOOM_RATIO_UNKNOWN)
+    }
+
+    @Test
+    @Config(minSdk = 29)
+    fun cameraCallbackMap_dispatchesToSequentialExecutorOnlyWhenPhysicalCameraIdChanges() {
+        val fakeMetadata = FakeCameraMetadata(cameraId = CameraId("tele_id"))
+        val fakeCameraDevices =
+            FakeCameraDevices(
+                defaultCameraBackendId = CameraBackendId("0"),
+                concurrentCameraBackendIds = emptySet(),
+                cameraMetadataMap = mapOf(CameraBackendId("0") to listOf(fakeMetadata)),
+            )
+        val fakeCalculator =
+            object : IntrinsicZoomCalculator {
+                override fun calculateIntrinsicZoomRatio(cameraMetadata: CameraMetadata): Float {
+                    return if (cameraMetadata.camera == CameraId("tele_id")) 2.5f else 1.0f
+                }
+            }
+        val dispatchCount = AtomicInteger(0)
+        val countingExecutor = Executor { runnable ->
+            dispatchCount.incrementAndGet()
+            runnable.run()
+        }
+        val countingDispatcher = countingExecutor.asCoroutineDispatcher()
+        val countingThreads =
+            UseCaseThreads(
+                CoroutineScope(Job() + countingDispatcher),
+                countingExecutor,
+                countingDispatcher,
+            )
+        val callbackMap = CameraCallbackMap()
+        var currentPhysicalId: String? = "tele_id"
+        val control =
+            ZoomControl(zoomCompat, fakeCameraDevices, fakeCalculator, callbackMap, countingThreads)
+        control.activePhysicalCameraIdProvider = { currentPhysicalId }
+
+        callbackMap.onComplete(
+            FakeRequestMetadata(),
+            CameraFrameNumber(1L),
+            FakeFrameInfo(),
+        )
+        assertThat(dispatchCount.get()).isEqualTo(1)
+        assertThat(control.zoomStateLiveData.value?.activeIntrinsicZoomRatio).isEqualTo(2.5f)
+
+        // Subsequent frames with the same physical camera ID must short-circuit without dispatching
+        callbackMap.onComplete(
+            FakeRequestMetadata(),
+            CameraFrameNumber(2L),
+            FakeFrameInfo(),
+        )
+        assertThat(dispatchCount.get()).isEqualTo(1)
+
+        // Switching to a new physical camera ID dispatches once more
+        currentPhysicalId = "wide_id"
+        callbackMap.onComplete(
+            FakeRequestMetadata(),
+            CameraFrameNumber(3L),
+            FakeFrameInfo(),
+        )
+        assertThat(dispatchCount.get()).isEqualTo(2)
     }
 
     // TODO: port tests from camera-camera2

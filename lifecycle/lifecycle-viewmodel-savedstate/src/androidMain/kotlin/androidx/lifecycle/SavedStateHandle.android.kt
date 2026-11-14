@@ -19,19 +19,26 @@ import android.os.Parcelable
 import androidx.annotation.MainThread
 import androidx.annotation.RestrictTo
 import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.internal.LiveDataSavedStateValue
 import androidx.lifecycle.internal.SavedStateHandleImpl
+import androidx.lifecycle.internal.SimpleSavedStateValue
+import androidx.lifecycle.internal.StateFlowSavedStateValue
 import androidx.lifecycle.internal.isAcceptableType
 import androidx.savedstate.SavedState
+import androidx.savedstate.SavedStateContainer
 import androidx.savedstate.SavedStateRegistry.SavedStateProvider
+import androidx.savedstate.SavedStateValue
 import androidx.savedstate.read
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 public actual class SavedStateHandle {
 
-    private val liveDatas = mutableMapOf<String, SavingStateLiveData<*>>()
     private var impl: SavedStateHandleImpl
+
+    internal actual constructor(container: SavedStateContainer) {
+        impl = SavedStateHandleImpl(container)
+    }
 
     @VisibleForTesting
     public actual constructor(initialState: Map<String, Any?>) {
@@ -43,15 +50,22 @@ public actual class SavedStateHandle {
         impl = SavedStateHandleImpl()
     }
 
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-    public actual fun savedStateProvider(): SavedStateProvider = impl.savedStateProvider
-
-    @MainThread public actual operator fun contains(key: String): Boolean = key in impl
+    @MainThread
+    public actual operator fun contains(key: String): Boolean {
+        if (key !in impl) return false
+        // Calling getLiveData without an initial value puts an uninitialized
+        // LiveDataSavedStateValue into the container immediately. To preserve the behavior where
+        // contains returns false until a value is set on the LiveData, we check whether the
+        // underlying LiveData is initialized.
+        val savedStateValue = impl.container.getSavedStateValue<Any?, SavedStateValue<Any?>>(key)
+        return savedStateValue !is LiveDataSavedStateValue<*> ||
+            savedStateValue.liveData.isInitialized
+    }
 
     /**
-     * Returns a [androidx.lifecycle.LiveData] that access data associated with the given key.
+     * Returns a [LiveData] that accesses data associated with the given [key].
      *
-     * @param key The identifier for the value
+     * @param key identifier of the value
      * @see getLiveData
      */
     @MainThread
@@ -62,45 +76,43 @@ public actual class SavedStateHandle {
     }
 
     /**
-     * Returns a [androidx.lifecycle.LiveData] that access data associated with the given key.
+     * Returns a [LiveData] that accesses data associated with the given [key].
      *
-     * ```
-     * `LiveData<String> liveData = savedStateHandle.get(KEY, "defaultValue");`
+     * ```kotlin
+     * val liveData = savedStateHandle.getLiveData(KEY, "defaultValue")
      * ```
      *
-     * Keep in mind that [LiveData] can have `null` as a valid value. If the `initialValue` is
-     * `null` and the data does not already exist in the [SavedStateHandle], the value of the
-     * returned [LiveData] will be set to `null` and observers will be notified. You can call
-     * [getLiveData] if you want to avoid dispatching `null` to observers.
+     * Note that [LiveData] can have `null` as a valid value. If the [initialValue] is `null` and
+     * the data does not already exist in the [SavedStateHandle], the value of the returned
+     * [LiveData] will be set to `null` and observers will be notified. You can call [getLiveData]
+     * to avoid dispatching `null` to observers.
      *
-     * ```
-     * `String defaultValue = ...; // nullable
-     * LiveData<String> liveData;
-     * if (defaultValue != null) {
-     *     liveData = savedStateHandle.getLiveData(KEY, defaultValue);
+     * ```kotlin
+     * val defaultValue = ... // nullable
+     * val liveData = if (defaultValue != null) {
+     *     savedStateHandle.getLiveData(KEY, defaultValue)
      * } else {
-     *     liveData = savedStateHandle.getLiveData(KEY);
-     * }`
-     * ```
-     *
-     * Note: If [T] is an [Array] of [Parcelable] classes, note that you should always use
-     * `Array<Parcelable>` and create a typed array from the result as going through process death
-     * and recreation (or using the `Don't keep activities` developer option) will result in the
-     * type information being lost, thus resulting in a `ClassCastException` if you directly try to
-     * observe the result as an `Array<CustomParcelable>`.
-     *
-     * ```
-     * val typedArrayLiveData = savedStateHandle.getLiveData<Array<Parcelable>>(
-     *   "KEY"
-     * ).map { array ->
-     *   // Convert the Array<Parcelable> to an Array<CustomParcelable>
-     *   array.map { it as CustomParcelable }.toTypedArray()
+     *     savedStateHandle.getLiveData(KEY)
      * }
      * ```
      *
-     * @param key The identifier for the value
-     * @param initialValue If no value exists with the given `key`, a new one is created with the
-     *   given `initialValue`. Note that passing `null` will create a [LiveData] with `null` value.
+     * If [T] is an [Array] of [Parcelable] classes, you should always use `Array<Parcelable>` and
+     * create a typed array from the result. Going through process death and recreation (or using
+     * the "Don't keep activities" developer option) will result in the type information being lost,
+     * causing a `ClassCastException` if you directly try to observe the result as
+     * `Array<CustomParcelable>`.
+     *
+     * ```kotlin
+     * val typedArrayLiveData = savedStateHandle.getLiveData<Array<Parcelable>>(
+     *     "KEY"
+     * ).map { array ->
+     *     // Convert the Array<Parcelable> to an Array<CustomParcelable>
+     *     array.map { it as CustomParcelable }.toTypedArray()
+     * }
+     * ```
+     *
+     * @param key identifier of the value
+     * @param initialValue value to use if no value is associated with [key]
      */
     @MainThread
     public fun <T> getLiveData(key: String, initialValue: T): MutableLiveData<T> {
@@ -112,41 +124,55 @@ public actual class SavedStateHandle {
         hasInitialValue: Boolean,
         initialValue: T,
     ): MutableLiveData<T> {
-        require(key !in impl.mutableFlows) { createMutuallyExclusiveErrorMessage(key) }
+        val existing = impl.container.getSavedStateValue<T, SavedStateValue<T>>(key)
+        require(existing !is StateFlowSavedStateValue<*>) {
+            createMutuallyExclusiveErrorMessage(key)
+        }
 
-        val liveData =
-            liveDatas.getOrPut(key) {
-                when {
-                    key in impl.regular ->
-                        SavingStateLiveData(handle = this, key, impl.regular[key])
-                    hasInitialValue -> {
-                        impl.regular[key] = initialValue
-                        SavingStateLiveData(handle = this, key, initialValue)
+        val liveDataSavedStateValue =
+            when (existing) {
+                is LiveDataSavedStateValue<T> -> existing
+                is SimpleSavedStateValue<T> -> {
+                    val liveData = MutableLiveData(existing.value)
+                    LiveDataSavedStateValue(liveData).also {
+                        impl.container.putSavedStateValue(key, it)
                     }
-                    else -> SavingStateLiveData(handle = this, key)
                 }
+                null -> {
+                    val liveData =
+                        if (hasInitialValue) {
+                            MutableLiveData(initialValue)
+                        } else {
+                            MutableLiveData()
+                        }
+                    LiveDataSavedStateValue(liveData).also {
+                        impl.container.putSavedStateValue(key, it)
+                    }
+                }
+                else -> throw IllegalArgumentException(createMutuallyExclusiveErrorMessage(key))
             }
-        @Suppress("UNCHECKED_CAST")
-        return liveData as MutableLiveData<T>
+        return liveDataSavedStateValue.liveData
     }
 
     @MainThread
     public actual fun <T> getStateFlow(key: String, initialValue: T): StateFlow<T> {
-        return if (key in impl.mutableFlows) {
-            // Return existing 'MutableStateFlow' as 'StateFlow' to keep values synchronized.
-            impl.getMutableStateFlow(key, initialValue).asStateFlow()
-        } else {
-            impl.getStateFlow(key, initialValue)
+        val existing = impl.container.getSavedStateValue<T, SavedStateValue<T>>(key)
+        require(existing !is LiveDataSavedStateValue<*>) {
+            createMutuallyExclusiveErrorMessage(key)
         }
+        return impl.getStateFlow(key, initialValue)
     }
 
     @MainThread
     public actual fun <T> getMutableStateFlow(key: String, initialValue: T): MutableStateFlow<T> {
-        require(key !in liveDatas) { createMutuallyExclusiveErrorMessage(key) }
+        val existing = impl.container.getSavedStateValue<T, SavedStateValue<T>>(key)
+        require(existing !is LiveDataSavedStateValue<*>) {
+            createMutuallyExclusiveErrorMessage(key)
+        }
         return impl.getMutableStateFlow(key, initialValue)
     }
 
-    @MainThread public actual fun keys(): Set<String> = impl.keys() + liveDatas.keys
+    @MainThread public actual fun keys(): Set<String> = impl.keys()
 
     @MainThread public actual operator fun <T> get(key: String): T? = impl[key]
 
@@ -155,14 +181,20 @@ public actual class SavedStateHandle {
         require(validateValue(value)) {
             "Can't put value with type ${value!!::class.java} into saved state"
         }
-        @Suppress("UNCHECKED_CAST") val mutableLiveData = liveDatas[key] as? MutableLiveData<T?>?
-        mutableLiveData?.setValue(value)
-        impl[key] = value
+        val existing = impl.container.getSavedStateValue<T?, SavedStateValue<T?>>(key)
+        if (existing is LiveDataSavedStateValue<T?>) {
+            existing.value = value
+        } else {
+            impl[key] = value
+        }
     }
 
     @MainThread
-    public actual fun <T> remove(key: String): T? =
-        impl.remove<T?>(key).also { liveDatas.remove(key)?.detach() }
+    public actual fun <T> remove(key: String): T? {
+        val latestValue = get<T>(key)
+        impl.remove<T>(key)
+        return latestValue
+    }
 
     @MainThread
     public actual fun setSavedStateProvider(key: String, provider: SavedStateProvider) {
@@ -174,29 +206,15 @@ public actual class SavedStateHandle {
         impl.clearSavedStateProvider(key)
     }
 
-    internal class SavingStateLiveData<T> : MutableLiveData<T> {
-        private var key: String
-        private var handle: SavedStateHandle?
+    @MainThread public actual fun asContainer(): SavedStateContainer = impl.asContainer()
 
-        constructor(handle: SavedStateHandle?, key: String, value: T) : super(value) {
-            this.key = key
-            this.handle = handle
-        }
+    @MainThread
+    public actual fun getOrCreateContainer(key: String): SavedStateContainer =
+        impl.getOrCreateContainer(key)
 
-        constructor(handle: SavedStateHandle?, key: String) : super() {
-            this.key = key
-            this.handle = handle
-        }
-
-        override fun setValue(value: T) {
-            handle?.impl?.set(key, value)
-            super.setValue(value)
-        }
-
-        fun detach() {
-            handle = null
-        }
-    }
+    @MainThread
+    public actual fun getOrCreateSavedStateHandle(key: String): SavedStateHandle =
+        SavedStateHandle(impl.getOrCreateContainer(key))
 
     public actual companion object {
 

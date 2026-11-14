@@ -29,8 +29,9 @@ import kotlin.test.assertFailsWith
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
-import org.junit.Before
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 
@@ -41,14 +42,6 @@ class BaselineProfileRuleTest {
 
     /** Handle to service running in separate process, does nothing unless connect is called */
     private val trivialServiceHandle = TrivialServiceHandle()
-
-    @Before
-    fun setup() {
-        // Mokey devices seem to behave differently (b/319515652) and the generated profile
-        // doesn't output the class symbol line. This makes the test fail. While we investigate
-        // the scope of the failure, suppress the test on this device
-        // assumeFalse(isMokeyDevice())
-    }
 
     @After
     fun teardown() {
@@ -185,6 +178,9 @@ class BaselineProfileRuleTest {
     }
 
     @Test
+    @Ignore(
+        "ART is making a change to the way profiles work. Classes loaded in the background are no longer added to the profile. The goal is reduce the size of the app image (helps with memory). [b/502168386]"
+    )
     fun captureRulesRemoteProcess() {
         val result =
             baselineRule.collectWithResults(TrivialServiceHandle.TARGET, maxIterations = 1) {
@@ -215,6 +211,39 @@ class BaselineProfileRuleTest {
             )
     }
 
+    @Test
+    @SdkSuppress(minSdkVersion = 31)
+    fun captureLoadOrder() {
+        // Don't run tests on Cuttlefish.
+        // Hardware perf_events in simpleperf fail in Cuttlefish because Cuttlefish runs as a
+        // virtual machine where the hypervisor (KVM / crosvm) does not virtualize or pass through
+        // the host CPU's hardware Performance Monitoring Unit (PMU).
+        assumeFalse(Build.MODEL.contains("Cuttlefish"))
+        val config =
+            BaselineProfileConfig.Builder(
+                    packageName = Arguments.getTargetPackageNameOrThrow(),
+                    profileBlock = {
+                        startActivityAndWait(Intent(ACTION))
+                        device.waitForIdle()
+                    },
+                )
+                .setMaxIterations(1)
+                .setIncludeInStartupProfile(true)
+                .setMaxLoadOrderIterations(1)
+                .setRestrictLoadOrderToDataDirectory(false)
+                .build()
+
+        val result = baselineRule.collectWithResults(config = config)
+        assertTrue(
+            /* message = */ "Load order files should exist",
+            /* condition = */ result.loadOrderFiles.isNotEmpty(),
+        )
+        assertTrue(
+            /* message = */ "Load order files should exist on disk",
+            /* condition = */ result.loadOrderFiles.all { File(it).exists() },
+        )
+    }
+
     companion object {
         private const val ACTION =
             "androidx.benchmark.integration.macrobenchmark.target.EMPTY_ACTIVITY"
@@ -225,7 +254,9 @@ class BaselineProfileRuleTest {
 
     private fun List<String>.assertInOrder(
         @Suppress("SameParameterValue") vararg toFind: String,
-        predicate: (String, String) -> (Boolean) = { line, nextToFind -> line.endsWith(nextToFind) },
+        predicate: (String, String) -> (Boolean) = { line, nextToFind ->
+            line.endsWith(nextToFind)
+        },
     ) {
         val remaining = toFind.filter { it.isNotBlank() }.toMutableList()
         for (line in this) {
@@ -233,7 +264,7 @@ class BaselineProfileRuleTest {
             if (predicate(line, next)) remaining.removeAt(0)
         }
 
-        if (remaining.size > 0) {
+        if (remaining.isNotEmpty()) {
             fail(
                 """
                 The following lines were not found in order:
@@ -246,6 +277,4 @@ class BaselineProfileRuleTest {
             )
         }
     }
-
-    private fun isMokeyDevice() = Build.DEVICE.contains("mokey")
 }

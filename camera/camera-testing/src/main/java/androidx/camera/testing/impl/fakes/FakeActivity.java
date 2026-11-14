@@ -17,9 +17,18 @@
 package androidx.camera.testing.impl.fakes;
 
 import android.app.Activity;
+import android.os.Bundle;
 
+import androidx.camera.testing.impl.ActivityScreenUtil;
 import androidx.core.app.ComponentActivity;
+
+import org.jspecify.annotations.Nullable;
 
 /** A fake {@link Activity} that can be used in tests. */
 public class FakeActivity extends ComponentActivity {
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        ActivityScreenUtil.turnScreenOnAndShowWhenLocked(this);
+    }
 }

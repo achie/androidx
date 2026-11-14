@@ -17,17 +17,16 @@
 package androidx.camera.view
 
 import android.content.Context
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.PreTestCameraIdList
 import androidx.camera.testing.impl.CoreAppTestUtil
 import androidx.camera.testing.impl.ParameterizedTestConfigUtil
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.testing.impl.fakes.FakeActivity
 import androidx.camera.testing.impl.fakes.FakeLifecycleOwner
 import androidx.camera.testing.impl.testrule.CameraTestActivityScenarioRule
@@ -43,7 +42,6 @@ import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assume
 import org.junit.Before
-import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,26 +60,24 @@ class PreviewViewStreamStateTest(
     private lateinit var lifecycle: FakeLifecycleOwner
     private lateinit var cameraProvider: ProcessCameraProvider
 
-    @get:Rule
+    @get:Rule(order = 0)
+    val requireForegroundRule = RequireForegroundRule {
+        defaultCameraSelector = CameraUtil.assumeFirstAvailableCameraSelector()
+        CoreAppTestUtil.assumeCompatibleDevice()
+    }
+
+    @get:Rule(order = 1)
     val useCamera =
         CameraUtil.grantCameraPermissionAndPreTestAndPostTest(PreTestCameraIdList(cameraConfig))
 
-    @get:Rule
+    @get:Rule(order = 2)
     val activityRule: CameraTestActivityScenarioRule<FakeActivity> =
         CameraTestActivityScenarioRule(FakeActivity::class.java)
-
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
 
     private lateinit var defaultCameraSelector: CameraSelector
 
     @Before
     fun setUp() {
-        defaultCameraSelector = CameraUtil.assumeFirstAvailableCameraSelector()
-
-        CoreAppTestUtil.assumeCompatibleDevice()
-
         val context = ApplicationProvider.getApplicationContext<Context>()
 
         instrumentation.runOnMainSync {
@@ -216,12 +212,6 @@ class PreviewViewStreamStateTest(
                 ),
                 inLabTestRequired = true,
             )
-
-        @BeforeClass
-        @JvmStatic
-        fun classSetUp() {
-            CoreAppTestUtil.prepareDeviceUI(InstrumentationRegistry.getInstrumentation())
-        }
 
         const val TIMEOUT_SECONDS = 10L
     }

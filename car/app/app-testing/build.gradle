@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.SoftwareType
@@ -32,8 +31,8 @@ dependencies {
     api(libs.jspecify)
     api(project(":car:app:app"))
 
-    implementation "androidx.lifecycle:lifecycle-runtime:2.2.0"
-    implementation "androidx.lifecycle:lifecycle-common-java8:2.2.0"
+    implementation "androidx.lifecycle:lifecycle-runtime:2.10.0"
+    implementation "androidx.lifecycle:lifecycle-common-java8:2.10.0"
     implementation("androidx.annotation:annotation:1.1.0")
     implementation(libs.robolectric)
     implementation("androidx.annotation:annotation-experimental:1.4.1")
@@ -47,6 +46,17 @@ dependencies {
     testImplementation(libs.truth)
 
     annotationProcessor(libs.nullaway)
+}
+
+dependencies {
+    constraints {
+        implementation("org.bouncycastle:bcprov-jdk18on:1.86") {
+            because("b/505222436 - upgrading to fix vulns")
+        }
+        implementation(libs.guavaAndroid) {
+            because("b/578789391 - upgrading to fix vulns")
+        }
+    }
 }
 
 android {

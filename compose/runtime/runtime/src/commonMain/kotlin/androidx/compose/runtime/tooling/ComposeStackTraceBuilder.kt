@@ -15,15 +15,16 @@
  */
 package androidx.compose.runtime.tooling
 
+import androidx.compose.runtime.Anchor
 import androidx.compose.runtime.Composer
 import androidx.compose.runtime.CompositionContext
 import androidx.compose.runtime.GapComposer.CompositionContextHolder
 import androidx.compose.runtime.RememberObserverHolder
-import androidx.compose.runtime.composer.gapbuffer.Anchor
-import androidx.compose.runtime.composer.gapbuffer.GroupSourceInformation
+import androidx.compose.runtime.composer.GroupSourceInformation
 import androidx.compose.runtime.composer.gapbuffer.SlotReader
 import androidx.compose.runtime.composer.gapbuffer.SlotTable
 import androidx.compose.runtime.composer.gapbuffer.SlotWriter
+import androidx.compose.runtime.composer.gapbuffer.asGapAnchor
 import androidx.compose.runtime.defaultsKey
 import androidx.compose.runtime.reference
 import androidx.compose.runtime.referenceKey
@@ -31,16 +32,18 @@ import androidx.compose.runtime.snapshots.fastForEach
 
 internal class WriterTraceBuilder(private val writer: SlotWriter) : ComposeStackTraceBuilder() {
     override fun sourceInformationOf(anchor: Anchor): GroupSourceInformation? =
-        writer.sourceInformationOf(writer.anchorIndex(anchor))
+        writer.sourceInformationOf(writer.anchorIndex(anchor.asGapAnchor()))
 
-    override fun groupKeyOf(anchor: Anchor): Int = writer.groupKey(writer.anchorIndex(anchor))
+    override fun groupKeyOf(anchor: Anchor): Int =
+        writer.groupKey(writer.anchorIndex(anchor.asGapAnchor()))
 }
 
 internal class ReaderTraceBuilder(private val reader: SlotReader) : ComposeStackTraceBuilder() {
     override fun sourceInformationOf(anchor: Anchor): GroupSourceInformation? =
-        reader.table.sourceInformationOf(reader.table.anchorIndex(anchor))
+        reader.table.sourceInformationOf(reader.table.anchorIndex(anchor.asGapAnchor()))
 
-    override fun groupKeyOf(anchor: Anchor): Int = reader.groupKey(reader.table.anchorIndex(anchor))
+    override fun groupKeyOf(anchor: Anchor): Int =
+        reader.groupKey(reader.table.anchorIndex(anchor.asGapAnchor()))
 }
 
 internal abstract class ComposeStackTraceBuilder {

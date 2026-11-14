@@ -22,20 +22,22 @@ import android.util.Size
 import android.util.SizeF
 import android.view.Surface
 import android.view.TextureView
+import androidx.camera.viewfinder.core.ImplementationMode
 import androidx.camera.viewfinder.core.ScaleType
 import androidx.camera.viewfinder.core.TransformationInfo
+import androidx.camera.viewfinder.core.TransformationMode
 
 // Normalized space (-1, -1) - (1, 1).
 private val NORMALIZED_RECT = RectF(-1f, -1f, 1f, 1f)
 
-object Transformations {
+public object Transformations {
     /**
      * Creates a matrix that makes [TextureView]'s rotation matches the display rotation.
      *
      * The value should be applied by calling [TextureView.setTransform].
      */
     @JvmStatic
-    fun getTextureViewCorrectionMatrix(
+    public fun getTextureViewCorrectionMatrix(
         displayRotationDegrees: Int,
         width: Int,
         height: Int,
@@ -44,9 +46,57 @@ object Transformations {
         return getRectToRect(surfaceRect, surfaceRect, -displayRotationDegrees)
     }
 
+    /**
+     * Returns the clockwise rotation in degrees that the viewfinder must apply to the content of
+     * its surface, so that the content matches the mapping returned by
+     * [getSurfaceToViewfinderMatrix].
+     *
+     * [getSurfaceToViewfinderMatrix] treats the surface content like a `SurfaceView` displaying a
+     * [TransformationMode.DEFERRED] source: the display system has applied the transform associated
+     * with the buffers, including the display rotation. The content therefore needs:
+     * - For [TransformationMode.PRE_APPLIED] sources, whose buffers carry no transform: the
+     *   remaining [TransformationInfo.sourceRotation], for both implementations.
+     * - For [TransformationMode.DEFERRED] sources displayed by [ImplementationMode.EMBEDDED] (a
+     *   [TextureView], which applies the buffer transform but not the display rotation): the
+     *   display rotation undone.
+     * - For [TransformationMode.DEFERRED] sources displayed by [ImplementationMode.EXTERNAL] (a
+     *   `SurfaceView`): no rotation.
+     *
+     * @param transformationInfo The transformation of the source.
+     * @param displayRotation The rotation of the display, as one of [Surface.ROTATION_0],
+     *   [Surface.ROTATION_90], [Surface.ROTATION_180] or [Surface.ROTATION_270].
+     * @param implementationMode The implementation displaying the surface.
+     * @return The clockwise rotation in degrees, in `[0, 360)`.
+     */
+    @JvmStatic
+    public fun getContentRotationDegrees(
+        transformationInfo: TransformationInfo,
+        @RotationValue displayRotation: Int,
+        implementationMode: ImplementationMode,
+    ): Int {
+        val degrees =
+            when {
+                transformationInfo.transformationMode == TransformationMode.PRE_APPLIED ->
+                    transformationInfo.sourceRotation
+                implementationMode == ImplementationMode.EXTERNAL -> 0
+                else -> -surfaceRotationToRotationDegrees(displayRotation)
+            }
+        return degrees.mod(360)
+    }
+
+    /**
+     * Creates a matrix that rotates the content of a [TextureView] clockwise by [rotationDegrees],
+     * scaled to fit the original bounds, as returned by [getContentRotationDegrees].
+     *
+     * The value should be applied by calling [TextureView.setTransform].
+     */
+    @JvmStatic
+    public fun getContentRotationMatrix(rotationDegrees: Int, width: Int, height: Int): Matrix =
+        getTextureViewCorrectionMatrix(-rotationDegrees, width, height)
+
     /** Converts [Surface] rotation to rotation degrees: 90, 180, 270 or 0. */
     @JvmStatic
-    fun surfaceRotationToRotationDegrees(@RotationValue rotationValue: Int): Int =
+    public fun surfaceRotationToRotationDegrees(@RotationValue rotationValue: Int): Int =
         when (rotationValue) {
             Surface.ROTATION_0 -> 0
             Surface.ROTATION_90 -> 90
@@ -57,13 +107,13 @@ object Transformations {
         }
 
     @JvmStatic
-    fun getSurfaceToViewfinderMatrix(
+    public fun getSurfaceToViewfinderMatrix(
         viewfinderSize: Size,
         surfaceResolution: Size,
         transformationInfo: TransformationInfo,
         layoutDirection: Int,
         scaleType: ScaleType,
-    ) =
+    ): Matrix =
         getSurfaceToViewfinderMatrix(
             viewfinderSize = viewfinderSize,
             surfaceResolution = surfaceResolution,
@@ -74,7 +124,7 @@ object Transformations {
         )
 
     @JvmStatic
-    fun getSurfaceToViewfinderMatrix(
+    public fun getSurfaceToViewfinderMatrix(
         viewfinderSize: Size,
         surfaceResolution: Size,
         transformationInfo: TransformationInfo,
@@ -107,12 +157,30 @@ object Transformations {
         val matrix =
             getRectToRect(surfaceCropRect, viewfinderCropRect, transformationInfo.sourceRotation)
 
-        if (transformationInfo.isSourceMirroredHorizontally) {
-            matrix.preScale(-1f, 1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+        // PRE_APPLIED sources have any mirroring baked into the buffers upstream.
+        if (transformationInfo.transformationMode == TransformationMode.PRE_APPLIED) {
+            return matrix
         }
 
+        // For horizontal mirroring: if the rotation is 90 or 270 degrees, a horizontal mirror at
+        // the output actually requires a vertical flip of the original coordinates
+        // (x, y) -> (x, -y); for other angles, it's a standard horizontal flip (x, y) -> (-x, y).
+        if (transformationInfo.isSourceMirroredHorizontally) {
+            if (is90or270(transformationInfo.sourceRotation)) {
+                matrix.preScale(1f, -1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+            } else {
+                matrix.preScale(-1f, 1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+            }
+        }
+
+        // For vertical mirroring: similarly, at 90 or 270 degrees, it needs a horizontal flip
+        // (x, y) -> (-x, y); for others, it's a standard vertical flip (x, y) -> (x, -y).
         if (transformationInfo.isSourceMirroredVertically) {
-            matrix.preScale(1f, -1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+            if (is90or270(transformationInfo.sourceRotation)) {
+                matrix.preScale(-1f, 1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+            } else {
+                matrix.preScale(1f, -1f, surfaceCropRect.centerX(), surfaceCropRect.centerY())
+            }
         }
         return matrix
     }
@@ -167,15 +235,11 @@ object Transformations {
             postConcat(getNormalizedToBuffer(target))
         }
 
-    /** Returns true if the rotation degrees is 90 or 270. */
-    private fun is90or270(rotationDegrees: Int) =
-        when (rotationDegrees) {
-            90,
-            270 -> true
-            0,
-            180 -> false
-            else -> throw IllegalArgumentException("Invalid rotation degrees: $rotationDegrees")
-        }
+    /** Returns true if the rotation degrees is congruent to 90 or 270 modulo 360. */
+    private fun is90or270(rotationDegrees: Int): Boolean {
+        require(rotationDegrees % 90 == 0) { "Invalid rotation degrees: $rotationDegrees" }
+        return rotationDegrees.mod(180) == 90
+    }
 
     private fun Matrix.setTransform(
         source: SizeF,
@@ -274,8 +338,8 @@ object Transformations {
  * Modeled after Compose's `ContentScale` class, but using Android classes since this module does
  * not depend on Compose.
  */
-interface ContentScale {
-    fun computeScaleFactor(srcSize: SizeF, dstSize: SizeF): ScaleFactorF
+public interface ContentScale {
+    public fun computeScaleFactor(srcSize: SizeF, dstSize: SizeF): ScaleFactorF
 }
 
 /**
@@ -285,29 +349,30 @@ interface ContentScale {
  * depend on Compose. This also uses float types rather than integer types in order to allow for
  * sub-pixel placement.
  */
-interface Alignment {
-    fun align(size: SizeF, space: SizeF, layoutDirection: Int): OffsetF
+public interface Alignment {
+    public fun align(size: SizeF, space: SizeF, layoutDirection: Int): OffsetF
 }
 
-fun ScaleFactorF(scaleX: Float, scaleY: Float) = ScaleFactorF(packFloats(scaleX, scaleY))
+public fun ScaleFactorF(scaleX: Float, scaleY: Float): ScaleFactorF =
+    ScaleFactorF(packFloats(scaleX, scaleY))
 
 @JvmInline
-value class ScaleFactorF(private val packedScales: Long) {
-    val scaleX: Float
+public value class ScaleFactorF(private val packedScales: Long) {
+    public val scaleX: Float
         get() = unpackFloat1(packedScales)
 
-    val scaleY: Float
+    public val scaleY: Float
         get() = unpackFloat2(packedScales)
 }
 
-fun OffsetF(x: Float, y: Float) = OffsetF(packFloats(x, y))
+public fun OffsetF(x: Float, y: Float): OffsetF = OffsetF(packFloats(x, y))
 
 @JvmInline
-value class OffsetF(private val packedOffsets: Long) {
-    val x: Float
+public value class OffsetF(private val packedOffsets: Long) {
+    public val x: Float
         get() = unpackFloat1(packedOffsets)
 
-    val y: Float
+    public val y: Float
         get() = unpackFloat2(packedOffsets)
 }
 

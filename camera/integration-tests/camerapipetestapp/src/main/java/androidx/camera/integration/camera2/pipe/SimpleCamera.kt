@@ -31,7 +31,6 @@ import android.util.Size
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.CameraStream.Config
@@ -40,6 +39,7 @@ import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestTemplate
 import androidx.camera.camera2.pipe.StreamFormat
 import androidx.camera.camera2.pipe.core.Debug
+import androidx.camera.common.CameraId
 import kotlin.math.absoluteValue
 
 private const val defaultWidth = 960
@@ -104,8 +104,9 @@ class SimpleCamera(
             val closestAspectRatioSize =
                 yuvSizes.minByOrNull { (it.aspectRatio() - defaultAspectRatio).absoluteValue }!!
             val closestAspectRatio = closestAspectRatioSize.aspectRatio()
-            yuvSizes =
-                yuvSizes.filterIf { (it.aspectRatio() - closestAspectRatio).absoluteValue < 0.01 }
+            yuvSizes = yuvSizes.filterIf {
+                (it.aspectRatio() - closestAspectRatio).absoluteValue < 0.01
+            }
 
             // Find the size that is the least different
             val yuvSize = yuvSizes.minByOrNull { (it.area() - defaultArea).absoluteValue }!!
@@ -122,10 +123,9 @@ class SimpleCamera(
                     (it.aspectRatio() - highSpeedAspectRatio).absoluteValue
                 }!!
             val closestHighSpeedAspectRatio = closestHighSpeedAspectRatioSize.aspectRatio()
-            privateOutputSizes =
-                privateOutputSizes.filterIf {
-                    (it.aspectRatio() - closestHighSpeedAspectRatio).absoluteValue < 0.01
-                }
+            privateOutputSizes = privateOutputSizes.filterIf {
+                (it.aspectRatio() - closestHighSpeedAspectRatio).absoluteValue < 0.01
+            }
 
             // Find the size that is the least different
             val privateOutputSize =
@@ -224,8 +224,9 @@ class SimpleCamera(
             val closestAspectRatioSize =
                 yuvSizes.minByOrNull { (it.aspectRatio() - defaultAspectRatio).absoluteValue }!!
             val closestAspectRatio = closestAspectRatioSize.aspectRatio()
-            yuvSizes =
-                yuvSizes.filterIf { (it.aspectRatio() - closestAspectRatio).absoluteValue < 0.01 }
+            yuvSizes = yuvSizes.filterIf {
+                (it.aspectRatio() - closestAspectRatio).absoluteValue < 0.01
+            }
 
             // Find the size that is the least different
             val yuvSize = yuvSizes.minByOrNull { (it.area() - defaultArea).absoluteValue }!!
@@ -293,21 +294,19 @@ class SimpleCamera(
             check(cameraIds.size == sizes.size)
 
             Log.i("CXCP-App", "Selected $cameraIds to open.")
-            val cameraMetadatas =
-                cameraIds.map { cameraId ->
-                    val cameraMetadata = cameraPipe.cameras().awaitCameraMetadata(cameraId)
-                    checkNotNull(cameraMetadata) { "Failed to load CameraMetadata for $cameraId" }
-                    cameraMetadata
-                }
+            val cameraMetadatas = cameraIds.map { cameraId ->
+                val cameraMetadata = cameraPipe.cameras().awaitCameraMetadata(cameraId)
+                checkNotNull(cameraMetadata) { "Failed to load CameraMetadata for $cameraId" }
+                cameraMetadata
+            }
 
-            val viewfinderSteamConfigs =
-                sizes.map { size ->
-                    Config.create(
-                        size,
-                        StreamFormat.PRIVATE,
-                        outputType = OutputStream.OutputType.SURFACE_VIEW,
-                    )
-                }
+            val viewfinderSteamConfigs = sizes.map { size ->
+                Config.create(
+                    size,
+                    StreamFormat.PRIVATE,
+                    outputType = OutputStream.OutputType.SURFACE_VIEW,
+                )
+            }
 
             val configs =
                 cameraIds.zip(viewfinderSteamConfigs).map { (cameraId, viewfinderStreamConfig) ->

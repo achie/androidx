@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// TODO(b/502276582): Remove Suppression once the rest of aosp/4029203 are submitted
+@file:Suppress("DEPRECATION")
 
 package androidx.xr.compose.platform
 
@@ -25,9 +27,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.xr.compose.testing.SubspaceTestingActivity
 import androidx.xr.compose.testing.configureFakeSession
 import androidx.xr.compose.unit.DpVolumeSize
+import androidx.xr.runtime.math.Pose
+import androidx.xr.runtime.math.Quaternion
+import androidx.xr.runtime.math.Vector3
+import androidx.xr.scenecore.Entity
+import androidx.xr.scenecore.Space
 import androidx.xr.scenecore.scene
+import androidx.xr.scenecore.testing.FakeSceneRuntime
 import com.google.common.truth.Truth.assertThat
-import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,7 +43,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SpatialConfigurationTest {
 
-    @get:Rule val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
+    // Migrate to `androidx.compose.ui.test.junit4.v2.createAndroidComposeRule`,
+    // available starting with v1.11.0.
+    // See API docs for details.
+    @Suppress("DEPRECATION")
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
 
     private val hasXrSpatialFeatureText = "Has XR Spatial Feature"
 
@@ -53,49 +66,7 @@ class SpatialConfigurationTest {
     }
 
     @Test
-    fun requestFullSpaceMode_nonXr_throwsException() {
-        composeTestRule.activity.disableXr()
-
-        composeTestRule.setContent {
-            assertFailsWith<UnsupportedOperationException> {
-                LocalSpatialConfiguration.current.requestFullSpaceMode()
-            }
-        }
-    }
-
-    @Test
-    fun requestHomeSpaceMode_nonXr_throwsException() {
-        composeTestRule.activity.disableXr()
-
-        composeTestRule.setContent {
-            assertFailsWith<UnsupportedOperationException> {
-                LocalSpatialConfiguration.current.requestHomeSpaceMode()
-            }
-        }
-    }
-
-    @Test
-    fun requestModeChange_changesBounds() {
-        var configuration: SpatialConfiguration? = null
-
-        composeTestRule.setContent {
-            configuration = LocalSpatialConfiguration.current
-            if (configuration.bounds == DpVolumeSize(Dp.Infinity, Dp.Infinity, Dp.Infinity)) {
-                Text("Full")
-            } else {
-                Text("Home")
-            }
-        }
-
-        composeTestRule.onNodeWithText("Full").assertExists()
-        composeTestRule.runOnIdle { configuration?.requestHomeSpaceMode() }
-        composeTestRule.onNodeWithText("Home").assertExists()
-        composeTestRule.runOnIdle { configuration?.requestFullSpaceMode() }
-        composeTestRule.onNodeWithText("Full").assertExists()
-    }
-
-    @Test
-    fun hasXrSpatialFeature_fullSpaceMode_returnsTrue() {
+    fun hasXrSpatialFeature_fullSpace_returnsTrue() {
         composeTestRule.setContent {
             if (LocalSpatialConfiguration.current.hasXrSpatialFeature) {
                 Text(hasXrSpatialFeatureText)
@@ -106,8 +77,8 @@ class SpatialConfigurationTest {
     }
 
     @Test
-    fun hasXrSpatialFeature_homeSpaceMode_returnsTrue() {
-        composeTestRule.configureFakeSession().scene.requestHomeSpaceMode()
+    fun hasXrSpatialFeature_homeSpace_returnsTrue() {
+        composeTestRule.configureFakeSession().scene.requestHomeSpace()
 
         composeTestRule.setContent {
             if (LocalSpatialConfiguration.current.hasXrSpatialFeature) {
@@ -119,8 +90,8 @@ class SpatialConfigurationTest {
     }
 
     @Test
-    fun bounds_homeSpaceMode_isPositiveAndNotMax() {
-        composeTestRule.configureFakeSession().scene.requestHomeSpaceMode()
+    fun bounds_homeSpace_isPositiveAndNotMax() {
+        composeTestRule.configureFakeSession().scene.requestHomeSpace()
 
         var bounds: DpVolumeSize? = null
         composeTestRule.setContent { bounds = LocalSpatialConfiguration.current.bounds }
@@ -136,7 +107,7 @@ class SpatialConfigurationTest {
     }
 
     @Test
-    fun bounds_fullSpaceMode_isMax() {
+    fun bounds_fullSpace_isMax() {
         var bounds: DpVolumeSize? = null
         composeTestRule.setContent { bounds = LocalSpatialConfiguration.current.bounds }
         composeTestRule.waitForIdle()
@@ -160,5 +131,58 @@ class SpatialConfigurationTest {
         assertThat(bounds1.width).isEqualTo(320.dp)
         assertThat(bounds1.height).isEqualTo(470.dp)
         assertThat(bounds1.depth).isEqualTo(0.dp)
+    }
+
+    @Test
+    fun recommendedPoseAndScale_whenSpatialModeChanges_updatesReactively() {
+        val session = composeTestRule.configureFakeSession()
+        val fakeSceneRuntime = session.runtimes.filterIsInstance<FakeSceneRuntime>().first()
+
+        val expectedPose = Pose(Vector3(1f, 2f, 3f), Quaternion.Identity)
+        val expectedScale = 2.5f
+
+        var actualPose: Pose? = null
+        var actualScale: Float? = null
+
+        composeTestRule.setContent {
+            val config =
+                assertNotNull(LocalSpatialConfiguration.current as? SessionSpatialConfiguration)
+            actualPose = config.recommendedPose
+            actualScale = config.recommendedScale
+        }
+
+        composeTestRule.runOnIdle {
+            fakeSceneRuntime.spatialModeChangeListener?.onSpatialModeChanged(
+                recommendedPose = expectedPose,
+                recommendedScale = Vector3(expectedScale, expectedScale, expectedScale),
+            )
+        }
+
+        composeTestRule.waitForIdle()
+
+        assertThat(actualPose).isEqualTo(expectedPose)
+        assertThat(actualScale).isEqualTo(expectedScale)
+    }
+
+    @Test
+    fun sessionSpatialConfiguration_whenSpatialModeChanges_updatesSubspaceRootNodePose() {
+        val session = composeTestRule.configureFakeSession()
+        val fakeSceneRuntime = session.runtimes.filterIsInstance<FakeSceneRuntime>().first()
+        val subspaceRootNode =
+            Entity.create(session, "subspaceRootNode", parent = session.scene.activitySpace)
+
+        SessionSpatialConfiguration(session, subspaceRootNode)
+
+        val recommendedPose =
+            Pose(translation = Vector3(x = 10f, y = 20f, z = 30f), rotation = Quaternion.Identity)
+        composeTestRule.runOnIdle {
+            fakeSceneRuntime.spatialModeChangeListener?.onSpatialModeChanged(
+                recommendedPose = recommendedPose,
+                recommendedScale = Vector3(x = 1f, y = 1f, z = 1f),
+            )
+        }
+        composeTestRule.waitForIdle()
+
+        assertThat(subspaceRootNode.getPose(Space.ACTIVITY)).isEqualTo(recommendedPose)
     }
 }

@@ -17,8 +17,10 @@
 package androidx.car.app.testing.navigation;
 
 import androidx.car.app.HostDispatcher;
+import androidx.car.app.annotations.RequiresCarApi;
 import androidx.car.app.navigation.NavigationManager;
 import androidx.car.app.navigation.NavigationManagerCallback;
+import androidx.car.app.navigation.model.NavigationVoiceAssistantCapabilities;
 import androidx.car.app.navigation.model.Trip;
 import androidx.car.app.testing.TestCarContext;
 import androidx.car.app.utils.CollectionUtils;
@@ -38,6 +40,8 @@ import java.util.concurrent.Executor;
  *
  * <ul>
  *   <li>All the {@link Trip}s sent via {@link NavigationManager#updateTrip}.
+ *   <li>All the {@link NavigationVoiceAssistantCapabilities} sent via
+ *   {@link NavigationManager#setVoiceAssistantCapabilities}.
  *   <li>All the {@link NavigationManagerCallback}s set via
  *   {@link NavigationManager#setNavigationManagerCallback}.
  *   <li>Count of times that the navigation was started via {@link
@@ -47,6 +51,7 @@ import java.util.concurrent.Executor;
  */
 public class TestNavigationManager extends NavigationManager {
     private final List<Trip> mTripsSent = new ArrayList<>();
+    private final List<NavigationVoiceAssistantCapabilities> mCapabilitiesSent = new ArrayList<>();
     private @Nullable NavigationManagerCallback mCallback;
     private int mNavigationStartedCount;
     private int mNavigationEndedCount;
@@ -54,6 +59,7 @@ public class TestNavigationManager extends NavigationManager {
     /** Resets the values tracked by this {@link TestNavigationManager}. */
     public void reset() {
         mTripsSent.clear();
+        mCapabilitiesSent.clear();
         mCallback = null;
         mNavigationStartedCount = 0;
         mNavigationEndedCount = 0;
@@ -69,6 +75,20 @@ public class TestNavigationManager extends NavigationManager {
      */
     public @NonNull List<Trip> getTripsSent() {
         return CollectionUtils.unmodifiableCopy(mTripsSent);
+    }
+
+    /**
+     * Returns all the {@link NavigationVoiceAssistantCapabilities} sent via
+     * {@link NavigationManager#setVoiceAssistantCapabilities}.
+     *
+     * <p>The capabilities are stored in the order in which they were sent, where the first in the
+     * list, is the first capabilities sent.
+     *
+     * <p>The capabilities will be stored until {@link #reset} is called.
+     */
+    @RequiresCarApi(9)
+    public @NonNull List<NavigationVoiceAssistantCapabilities> getVoiceAssistantCapabilitiesSent() {
+        return CollectionUtils.unmodifiableCopy(mCapabilitiesSent);
     }
 
     /**
@@ -101,6 +121,14 @@ public class TestNavigationManager extends NavigationManager {
     public void updateTrip(@NonNull Trip trip) {
         mTripsSent.add(trip);
         super.updateTrip(trip);
+    }
+
+    @Override
+    @RequiresCarApi(9)
+    public void setVoiceAssistantCapabilities(
+            @NonNull NavigationVoiceAssistantCapabilities capabilities) {
+        mCapabilitiesSent.add(capabilities);
+        super.setVoiceAssistantCapabilities(capabilities);
     }
 
     @Override

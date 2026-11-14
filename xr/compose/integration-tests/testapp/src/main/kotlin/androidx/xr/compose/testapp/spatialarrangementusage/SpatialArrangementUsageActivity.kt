@@ -19,7 +19,6 @@ package androidx.xr.compose.testapp.spatialarrangementusage
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -33,9 +32,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -59,6 +62,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.xr.compose.spatial.Subspace
 import androidx.xr.compose.subspace.SpatialBox
 import androidx.xr.compose.subspace.SpatialColumn
@@ -128,7 +132,7 @@ class SpatialArrangementUsageActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        WindowCompat.enableEdgeToEdge(window)
         setContent { IntegrationTestsAppTheme { SpatialArrangementUsageApp() } }
     }
 
@@ -171,24 +175,22 @@ class SpatialArrangementUsageActivity : ComponentActivity() {
             onClickBackArrow = { this@SpatialArrangementUsageActivity.finish() },
             onClickRecreate = { this@SpatialArrangementUsageActivity.recreate() },
         ) { padding ->
-            @Suppress("COMPOSE_APPLIER_CALL_MISMATCH") // b/446706254
+            @Suppress("COMPOSE_APPLIER_CALL_MISMATCH") // b/481422057
             Column(
                 modifier =
                     Modifier.fillMaxSize().background(Color.White).padding(padding).padding(20.dp)
             ) {
                 MyRow {
-                    var mainAxisTextFieldValue by remember { mutableStateOf(uiState.mainAxis) }
+                    val mainAxisTextFieldState = rememberTextFieldState(uiState.mainAxis)
                     MyTextBox(text = "Main Axis:    ")
-                    TextField(
-                        value = mainAxisTextFieldValue,
-                        onValueChange = { mainAxisTextFieldValue = it },
-                    )
+                    TextField(state = mainAxisTextFieldState)
                     Button(
                         onClick = {
-                            if (mainAxisTextFieldValue.isEmpty() || mainAxisTextFieldValue == "0") {
-                                mainAxisTextFieldValue = uiState.mainAxis
+                            val mainAxisText = mainAxisTextFieldState.text.toString()
+                            if (mainAxisText.isEmpty() || mainAxisText == "0") {
+                                mainAxisTextFieldState.setTextAndPlaceCursorAtEnd(uiState.mainAxis)
                             } else {
-                                onUiStateChange(uiState.copy(mainAxis = mainAxisTextFieldValue))
+                                onUiStateChange(uiState.copy(mainAxis = mainAxisText))
                             }
                         }
                     ) {
@@ -196,20 +198,18 @@ class SpatialArrangementUsageActivity : ComponentActivity() {
                     }
                 }
                 MyRow {
-                    var crossAxisTextFieldValue by remember { mutableStateOf(uiState.crossAxis) }
+                    val crossAxisTextFieldState = rememberTextFieldState(uiState.crossAxis)
                     MyTextBox(text = "Cross Axis:    ")
-                    TextField(
-                        value = crossAxisTextFieldValue,
-                        onValueChange = { crossAxisTextFieldValue = it },
-                    )
+                    TextField(state = crossAxisTextFieldState)
                     Button(
                         onClick = {
-                            if (
-                                crossAxisTextFieldValue.isEmpty() || crossAxisTextFieldValue == "0"
-                            ) {
-                                crossAxisTextFieldValue = uiState.crossAxis
+                            val crossAxisText = crossAxisTextFieldState.text.toString()
+                            if (crossAxisText.isEmpty() || crossAxisText == "0") {
+                                crossAxisTextFieldState.setTextAndPlaceCursorAtEnd(
+                                    uiState.crossAxis
+                                )
                             } else {
-                                onUiStateChange(uiState.copy(crossAxis = crossAxisTextFieldValue))
+                                onUiStateChange(uiState.copy(crossAxis = crossAxisText))
                             }
                         }
                     ) {
@@ -306,6 +306,7 @@ class SpatialArrangementUsageActivity : ComponentActivity() {
         onValueSelected: (T) -> Unit,
     ) {
         var expanded by remember { mutableStateOf(false) }
+        val state = remember(selectedValue) { TextFieldState(selectedValue.toString()) }
         MyRow {
             MyTextBox(text = label)
             Box {
@@ -320,8 +321,7 @@ class SpatialArrangementUsageActivity : ComponentActivity() {
                                 true,
                             ),
                         readOnly = true,
-                        value = selectedValue.toString(),
-                        onValueChange = {},
+                        state = state,
                         label = { Text("Select") },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)

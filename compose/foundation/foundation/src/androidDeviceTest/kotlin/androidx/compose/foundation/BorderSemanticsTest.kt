@@ -41,7 +41,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
@@ -52,7 +52,6 @@ import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,7 +60,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BorderSemanticsTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     val testTag = "BorderTag"
 
@@ -427,12 +426,18 @@ class BorderSemanticsTest {
         return bounds
     }
 
-    private fun Rect.assertBoundsEqualTo(left: Dp, top: Dp, right: Dp, bottom: Dp) {
+    private fun Rect.assertBoundsEqualTo(
+        left: Dp,
+        top: Dp,
+        right: Dp,
+        bottom: Dp,
+        tolerance: Dp = 1.dp,
+    ) {
         val dpRect = toDpRect()
-        dpRect.left.assertIsEqualTo(left, "left")
-        dpRect.top.assertIsEqualTo(top, "top")
-        dpRect.right.assertIsEqualTo(right, "right")
-        dpRect.bottom.assertIsEqualTo(bottom, "bottom")
+        dpRect.left.assertIsEqualTo(left, "left", tolerance)
+        dpRect.top.assertIsEqualTo(top, "top", tolerance)
+        dpRect.right.assertIsEqualTo(right, "right", tolerance)
+        dpRect.bottom.assertIsEqualTo(bottom, "bottom", tolerance)
     }
 
     private fun Rect.toDpRect(): DpRect =

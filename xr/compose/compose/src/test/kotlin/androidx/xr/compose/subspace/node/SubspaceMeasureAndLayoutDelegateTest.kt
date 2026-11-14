@@ -36,7 +36,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SubspaceMeasureAndLayoutDelegateTest {
 
-    @get:Rule val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
+    // Migrate to `androidx.compose.ui.test.junit4.v2.createAndroidComposeRule`,
+    // available starting with v1.11.0.
+    // See API docs for details.
+    @Suppress("DEPRECATION")
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
 
     @Test
     fun requestMeasure_alwaysReturnsTrue() {
@@ -688,5 +693,113 @@ class SubspaceMeasureAndLayoutDelegateTest {
         // Verify that the hierarchy was updated correctly.
         assertThat(child.parent).isEqualTo(intermediate)
         assertThat(child.depth).isEqualTo(2)
+    }
+
+    @Test
+    fun requestEntityUpdate_isCalledOnAttach() {
+        val owner = AndroidComposeSpatialElement()
+        val rootNode = owner.root
+        SubspaceMeasureAndLayoutDelegate(rootNode)
+
+        assertTrue(rootNode.entityUpdatePending)
+    }
+
+    @Test
+    fun requestEntityUpdate_changesEntityUpdatePendingFlagToTrue() {
+        val owner = AndroidComposeSpatialElement()
+        val rootNode = owner.root
+        val childNode = SubspaceLayoutNode()
+        val delegate = SubspaceMeasureAndLayoutDelegate(rootNode)
+        rootNode.insertAt(0, childNode)
+
+        delegate.requestEntityUpdate(rootNode)
+        delegate.requestEntityUpdate(childNode)
+
+        assertThat(rootNode.entityUpdatePending).isTrue()
+        assertThat(childNode.entityUpdatePending).isTrue()
+    }
+
+    @Test
+    fun requestEntityUpdate_doesNotTriggerMeasureOrLayout() {
+        val owner = AndroidComposeSpatialElement()
+        val rootNode = owner.root
+        val delegate = SubspaceMeasureAndLayoutDelegate(rootNode)
+
+        rootNode.measurePending = false
+        rootNode.layoutPending = false
+
+        delegate.requestEntityUpdate(rootNode)
+
+        assertThat(rootNode.measurePending).isFalse()
+        assertThat(rootNode.layoutPending).isFalse()
+        assertThat(rootNode.entityUpdatePending).isTrue()
+    }
+
+    @Test
+    fun measureAndLayout_processesEntityUpdatesWithoutMeasuring() {
+        val owner = AndroidComposeSpatialElement()
+        val root = owner.root
+        val delegate = SubspaceMeasureAndLayoutDelegate(root)
+        val child = SubspaceLayoutNode()
+
+        root.insertAt(0, child)
+
+        var childMeasureCount = 0
+        child.measurePolicy = SubspaceMeasurePolicy { _, _ ->
+            childMeasureCount++
+            layout(1, 1, 1) {}
+        }
+
+        root.measurePolicy = SubspaceMeasurePolicy { measurables, constraints ->
+            val placeables = measurables.map { it.measure(constraints) }
+            layout(10, 10, 10) { placeables.forEach { it.place(Pose.Identity) } }
+        }
+
+        delegate.requestMeasure(root)
+        delegate.measureAndLayout()
+
+        assertThat(childMeasureCount).isEqualTo(1)
+
+        child.entityUpdatePending = false
+
+        delegate.requestEntityUpdate(child)
+        assertThat(child.entityUpdatePending).isTrue()
+
+        delegate.measureAndLayout()
+
+        assertThat(child.entityUpdatePending).isFalse()
+        assertThat(childMeasureCount).isEqualTo(1)
+    }
+
+    @Test
+    fun requestEntityUpdate_whileMeasuringOrLayingOut_queuesButReturnsFalse() {
+        val owner = AndroidComposeSpatialElement()
+        val root = owner.root
+        val delegate = SubspaceMeasureAndLayoutDelegate(root)
+        val child = SubspaceLayoutNode()
+
+        root.insertAt(0, child)
+
+        var requestResultDuringMeasure = true
+        var pendingFlagDuringMeasure = false
+
+        child.measurePolicy = SubspaceMeasurePolicy { _, _ ->
+            // Request an update while the layout pass is actively running
+            requestResultDuringMeasure = delegate.requestEntityUpdate(child)
+            pendingFlagDuringMeasure = child.entityUpdatePending
+            layout(1, 1, 1) {}
+        }
+
+        root.measurePolicy = SubspaceMeasurePolicy { measurables, constraints ->
+            val placeables = measurables.map { it.measure(constraints) }
+            layout(10, 10, 10) { placeables.forEach { it.place(Pose.Identity) } }
+        }
+
+        delegate.requestMeasure(root)
+        delegate.measureAndLayout()
+
+        assertThat(requestResultDuringMeasure).isFalse()
+
+        assertThat(pendingFlagDuringMeasure).isTrue()
     }
 }

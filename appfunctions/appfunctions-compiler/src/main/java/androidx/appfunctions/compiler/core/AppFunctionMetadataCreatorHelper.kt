@@ -17,6 +17,8 @@
 package androidx.appfunctions.compiler.core
 
 import androidx.appfunctions.compiler.core.AnnotatedAppFunctionSerializableProxy.ResolvedAnnotatedSerializableProxies
+import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.PARCELABLE_LIST
+import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.PARCELABLE_SINGULAR
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.PRIMITIVE_ARRAY
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.PRIMITIVE_LIST
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.PRIMITIVE_SINGULAR
@@ -26,12 +28,17 @@ import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionS
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.SERIALIZABLE_PROXY_LIST
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.SERIALIZABLE_PROXY_SINGULAR
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.SERIALIZABLE_SINGULAR
+import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.URI_LIST
+import androidx.appfunctions.compiler.core.AppFunctionTypeReference.AppFunctionSupportedTypeCategory.URI_SINGULAR
 import androidx.appfunctions.compiler.core.AppFunctionTypeReference.Companion.toAppFunctionDatatype
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionAccessLevelAnnotation
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionAccessLevelClass
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionAnnotation
-import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionContextClass
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionBehaviorHintsAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSchemaDefinitionAnnotation
 import androidx.appfunctions.compiler.core.metadata.AppFunctionAllOfTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionArrayTypeMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionBehaviorHintsMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionBooleanTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionBytesTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionDataTypeMetadata
@@ -42,9 +49,10 @@ import androidx.appfunctions.compiler.core.metadata.AppFunctionLongTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionObjectTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionOneOfTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionParameterMetadata
-import androidx.appfunctions.compiler.core.metadata.AppFunctionPendingIntentTypeMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionParcelableTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionReferenceTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionSchemaMetadata
+import androidx.appfunctions.compiler.core.metadata.AppFunctionStringPatternMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionStringTypeMetadata
 import androidx.appfunctions.compiler.core.metadata.AppFunctionUnitTypeMetadata
 import com.google.devtools.ksp.getDeclaredProperties
@@ -52,6 +60,7 @@ import com.google.devtools.ksp.symbol.KSAnnotation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSTypeReference
 import com.google.devtools.ksp.symbol.KSValueParameter
+import java.util.ArrayList
 
 /**
  * A helper class that provides methods to construct
@@ -65,7 +74,8 @@ class AppFunctionMetadataCreatorHelper(
      * Computes [AppFunctionAnnotationProperties] from [appFunctionAnnotation] and
      * [schemaDefinitionAnnotation].
      *
-     * @param appFunctionAnnotation The @AppFunction annotation on the function declaration.
+     * @param appFunctionAnnotation The @AppFunctionDeclaration annotation on the function
+     *   declaration.
      * @param schemaDefinitionAnnotation The @AppFunctionSchemaDefinition annotation on the schema
      *   interface declaration.
      * @return [AppFunctionAnnotationProperties] contains the properties from annotations.
@@ -73,13 +83,15 @@ class AppFunctionMetadataCreatorHelper(
     fun computeAppFunctionAnnotationProperties(
         appFunctionAnnotation: KSAnnotation? = null,
         schemaDefinitionAnnotation: KSAnnotation? = null,
+        accessLevelAnnotation: KSAnnotation? = null,
+        behaviorHintsAnnotation: KSAnnotation? = null,
     ): AppFunctionAnnotationProperties {
         val enabled =
             appFunctionAnnotation?.requirePropertyValueOfType(
                 AppFunctionAnnotation.PROPERTY_IS_ENABLED,
                 Boolean::class,
             )
-        val isDescribedByKdoc =
+        val isDescribedByKDoc =
             appFunctionAnnotation?.requirePropertyValueOfType(
                 AppFunctionAnnotation.PROPERTY_IS_DESCRIBED_BY_KDOC,
                 Boolean::class,
@@ -101,13 +113,65 @@ class AppFunctionMetadataCreatorHelper(
                     Int::class,
                 )
                 ?.toLong()
+        val accessLevelInt =
+            accessLevelAnnotation?.requirePropertyValueOfType(
+                AppFunctionAccessLevelAnnotation.PROPERTY_LEVEL,
+                Int::class,
+            )
+        val accessLevel =
+            when (accessLevelInt) {
+                null -> null
+                AppFunctionAccessLevelClass.SELF,
+                AppFunctionAccessLevelClass.SYSTEM,
+                AppFunctionAccessLevelClass.ANDROID_TRUSTED -> accessLevelInt
+                else ->
+                    throw ProcessingException(
+                        "Unsupported access level: $accessLevelInt",
+                        accessLevelAnnotation,
+                    )
+            }
+        val isCompatEnforcementEnabled =
+            accessLevelAnnotation?.requirePropertyValueOfType(
+                AppFunctionAccessLevelAnnotation.PROPERTY_IS_COMPAT_ENFORCEMENT_ENABLED,
+                Boolean::class,
+            )
+        val behaviorHints =
+            if (behaviorHintsAnnotation != null) {
+                AppFunctionBehaviorHintsMetadata(
+                    isReadOnly =
+                        behaviorHintsAnnotation.requirePropertyValueOfType(
+                            AppFunctionBehaviorHintsAnnotation.PROPERTY_IS_READ_ONLY,
+                            Boolean::class,
+                        ),
+                    isDestructive =
+                        behaviorHintsAnnotation.requirePropertyValueOfType(
+                            AppFunctionBehaviorHintsAnnotation.PROPERTY_IS_DESTRUCTIVE,
+                            Boolean::class,
+                        ),
+                    isIdempotent =
+                        behaviorHintsAnnotation.requirePropertyValueOfType(
+                            AppFunctionBehaviorHintsAnnotation.PROPERTY_IS_IDEMPOTENT,
+                            Boolean::class,
+                        ),
+                    isOpenWorld =
+                        behaviorHintsAnnotation.requirePropertyValueOfType(
+                            AppFunctionBehaviorHintsAnnotation.PROPERTY_IS_OPEN_WORLD,
+                            Boolean::class,
+                        ),
+                )
+            } else {
+                null
+            }
 
         return AppFunctionAnnotationProperties(
             enabled,
-            isDescribedByKdoc,
+            isDescribedByKDoc,
             schemaName,
             schemaVersion,
             schemaCategory,
+            accessLevel,
+            isCompatEnforcementEnabled,
+            behaviorHints,
         )
     }
 
@@ -126,7 +190,7 @@ class AppFunctionMetadataCreatorHelper(
      *   interface types. The @AppFunctionSerializableInterface should only be considered as a
      *   supported type when processing schema definitions.
      * @param parameterDescriptionMap a mapping of the function's parameter names to their
-     *   descriptions.
+     *   descriptions from KDoc.
      * @return A list of [AppFunctionParameterMetadata].
      */
     fun buildParameterTypeMetadataList(
@@ -138,11 +202,6 @@ class AppFunctionMetadataCreatorHelper(
         parameterDescriptionMap: Map<String, String> = mapOf(),
     ): List<AppFunctionParameterMetadata> = buildList {
         for (parameter in parameters) {
-            if (parameter.type.isOfType(AppFunctionContextClass.CLASS_NAME)) {
-                // Skip the first parameter which is always the `AppFunctionContext`.
-                continue
-            }
-
             val dataTypeMetadata =
                 parameter.type
                     .resolveSelfOrUpperBoundType()
@@ -157,12 +216,22 @@ class AppFunctionMetadataCreatorHelper(
                         parameter.annotations,
                     )
 
+            val overrideInstruction =
+                parameter.annotations
+                    .findAnnotation(IntrospectionHelper.AppFunctionInstructionAnnotation.CLASS_NAME)
+                    ?.requirePropertyValueOfType(
+                        IntrospectionHelper.AppFunctionInstructionAnnotation.PROPERTY_INSTRUCTION,
+                        String::class,
+                    )
+
             add(
                 AppFunctionParameterMetadata(
                     name = checkNotNull(parameter.name).asString(),
                     isRequired = !parameter.isEffectivelyOptional(),
                     dataType = dataTypeMetadata,
-                    description = parameterDescriptionMap[parameter.name?.asString()].orEmpty(),
+                    description =
+                        overrideInstruction
+                            ?: parameterDescriptionMap[parameter.name?.asString()].orEmpty(),
                 )
             )
         }
@@ -375,6 +444,52 @@ class AppFunctionMetadataCreatorHelper(
                     description = description,
                 )
             }
+            URI_SINGULAR ->
+                buildUriObjectTypeMetadata(
+                    annotations,
+                    isNullable = appFunctionTypeReference.isNullable,
+                    description = description,
+                )
+            URI_LIST ->
+                AppFunctionArrayTypeMetadata(
+                    itemType =
+                        buildUriObjectTypeMetadata(
+                            annotations,
+                            isNullable =
+                                AppFunctionTypeReference(appFunctionTypeReference.itemTypeReference)
+                                    .isNullable,
+                            description = "",
+                        ),
+                    isNullable = appFunctionTypeReference.isNullable,
+                    description = description,
+                )
+            PARCELABLE_SINGULAR ->
+                AppFunctionParcelableTypeMetadata(
+                    qualifiedName =
+                        appFunctionTypeReference.selfTypeReference
+                            .toTypeName()
+                            .ignoreNullable()
+                            .toString(),
+                    isNullable = appFunctionTypeReference.isNullable,
+                    description = description,
+                )
+            PARCELABLE_LIST ->
+                AppFunctionArrayTypeMetadata(
+                    itemType =
+                        AppFunctionParcelableTypeMetadata(
+                            qualifiedName =
+                                appFunctionTypeReference.itemTypeReference
+                                    .toTypeName()
+                                    .ignoreNullable()
+                                    .toString(),
+                            isNullable =
+                                AppFunctionTypeReference(appFunctionTypeReference.itemTypeReference)
+                                    .isNullable,
+                            description = "",
+                        ),
+                    isNullable = appFunctionTypeReference.isNullable,
+                    description = description,
+                )
         }
     }
 
@@ -445,6 +560,47 @@ class AppFunctionMetadataCreatorHelper(
             )
     }
 
+    private fun buildUriObjectTypeMetadata(
+        annotations: Sequence<KSAnnotation>,
+        isNullable: Boolean,
+        description: String,
+    ): AppFunctionObjectTypeMetadata {
+        val uriConstraint =
+            annotations.findAnnotation(
+                IntrospectionHelper.AppFunctionUriValueConstraintAnnotation.CLASS_NAME
+            )
+        val allowedSchemes =
+            uriConstraint
+                ?.requirePropertyValueOfType(
+                    IntrospectionHelper.AppFunctionUriValueConstraintAnnotation
+                        .PROPERTY_ALLOWED_SCHEMES,
+                    ArrayList::class,
+                )
+                ?.filterIsInstance<String>() ?: emptyList()
+
+        val patterns = allowedSchemes.map { scheme ->
+            AppFunctionStringPatternMetadata(
+                value = "$scheme:",
+                type = AppFunctionStringPatternMetadata.PREFIX,
+            )
+        }
+
+        val uriStringMetadata =
+            AppFunctionStringTypeMetadata(
+                isNullable = false,
+                description = "",
+                patterns = patterns,
+                format = AppFunctionStringTypeMetadata.FORMAT_URI,
+            )
+        return AppFunctionObjectTypeMetadata(
+            properties = mapOf(IntrospectionHelper.UriClass.PROPERTY_URI_NAME to uriStringMetadata),
+            required = listOf(IntrospectionHelper.UriClass.PROPERTY_URI_NAME),
+            qualifiedName = IntrospectionHelper.UriClass.URI_CLASS_NAME.canonicalName,
+            isNullable = isNullable,
+            description = description,
+        )
+    }
+
     /**
      * Adds the [AppFunctionDataTypeMetadata] for a serializable/capability type to the shared data
      * type map.
@@ -490,6 +646,7 @@ class AppFunctionMetadataCreatorHelper(
             } else {
                 annotatedSerializable.jvmQualifiedName
             }
+
         // This type has already been added to the sharedDataMap.
         if (seenDataTypeQualifiers.contains(serializableTypeQualifiedName)) {
             return
@@ -524,7 +681,6 @@ class AppFunctionMetadataCreatorHelper(
             // serializable to match.
             val matchAllSuperTypesList: List<AppFunctionDataTypeMetadata> = buildList {
                 for (serializableSuperType in superTypesWithSerializableAnnotation) {
-
                     addSerializableTypeMetadataToSharedDataTypeMap(
                         AnnotatedAppFunctionSerializable(serializableSuperType),
                         unvisitedSerializableProperties,
@@ -555,9 +711,9 @@ class AppFunctionMetadataCreatorHelper(
                             capabilitySuperType
                                 .getDeclaredProperties()
                                 .map {
-                                    AppFunctionPropertyDeclaration(
+                                    AppFunctionPropertyDeclaration.create(
                                         property = it,
-                                        isDescribedByKdoc = false,
+                                        isDescribedByKDoc = false,
                                         // Property from interface is always required as there is
                                         // no existing API to tell if the interface property has
                                         // default value or not.
@@ -689,10 +845,7 @@ class AppFunctionMetadataCreatorHelper(
                             seenDataTypeQualifiers,
                             resolvedAnnotatedSerializableProxies,
                             allowSerializableInterfaceTypes,
-                            // Remove type parameter in case of generic type.
-                            sharedDataTypeDescriptionMap[
-                                "${serializableTypeQualifiedName.substringBefore("<")}#${property.name}"]
-                                ?: "",
+                            description = property.description,
                             annotations = property.propertyAnnotations,
                         )
                     put(property.name, innerAppFunctionDataTypeMetadata)
@@ -716,28 +869,36 @@ class AppFunctionMetadataCreatorHelper(
     private fun AppFunctionTypeReference.toAppFunctionDataType(): Int {
         return when (this.typeCategory) {
             PRIMITIVE_SINGULAR -> selfTypeReference.toAppFunctionDatatype()
+            URI_SINGULAR,
             SERIALIZABLE_INTERFACE_SINGULAR,
             SERIALIZABLE_PROXY_SINGULAR,
             SERIALIZABLE_SINGULAR -> AppFunctionObjectTypeMetadata.TYPE
             PRIMITIVE_ARRAY,
             PRIMITIVE_LIST,
+            URI_LIST,
             SERIALIZABLE_INTERFACE_LIST,
             SERIALIZABLE_PROXY_LIST,
             SERIALIZABLE_LIST -> AppFunctionArrayTypeMetadata.TYPE
+            PARCELABLE_SINGULAR,
+            PARCELABLE_LIST -> AppFunctionParcelableTypeMetadata.TYPE
         }
     }
 
     private fun AppFunctionTypeReference.determineArrayItemType(): Int {
         return when (this.typeCategory) {
             SERIALIZABLE_INTERFACE_LIST,
-            SERIALIZABLE_LIST -> AppFunctionObjectTypeMetadata.TYPE
+            SERIALIZABLE_PROXY_LIST,
+            SERIALIZABLE_LIST,
+            URI_LIST -> AppFunctionObjectTypeMetadata.TYPE
             PRIMITIVE_ARRAY -> selfTypeReference.toAppFunctionDatatype()
             PRIMITIVE_LIST -> itemTypeReference.toAppFunctionDatatype()
-            SERIALIZABLE_PROXY_LIST -> itemTypeReference.toAppFunctionDatatype()
+            PARCELABLE_LIST -> AppFunctionParcelableTypeMetadata.TYPE
             PRIMITIVE_SINGULAR,
+            URI_SINGULAR,
             SERIALIZABLE_INTERFACE_SINGULAR,
             SERIALIZABLE_PROXY_SINGULAR,
-            SERIALIZABLE_SINGULAR ->
+            SERIALIZABLE_SINGULAR,
+            PARCELABLE_SINGULAR ->
                 throw ProcessingException(
                     "Not a supported array type " +
                         selfTypeReference.ensureQualifiedTypeName().asString(),
@@ -806,27 +967,23 @@ class AppFunctionMetadataCreatorHelper(
                     description = description,
                     annotations,
                 )
-
-            AppFunctionDataTypeMetadata.TYPE_PENDING_INTENT ->
-                AppFunctionPendingIntentTypeMetadata(
-                    isNullable = isNullable,
-                    description = description,
-                )
-
             else -> throw IllegalStateException("Unsupported primitive type: $primitiveType")
         }
     }
 
     /**
-     * A data class contains the properties from @AppFunction and @AppFunctionSchemaDefinition
-     * annotations.
+     * A data class contains the properties from @AppFunctionDeclaration
+     * and @AppFunctionSchemaDefinition annotations.
      */
     data class AppFunctionAnnotationProperties(
         val isEnabledByDefault: Boolean?,
-        val isDescribedByKdoc: Boolean?,
+        val isDescribedByKDoc: Boolean?,
         val schemaName: String?,
         val schemaVersion: Long?,
         val schemaCategory: String?,
+        val accessLevel: Int? = null,
+        val isCompatEnforcementEnabled: Boolean? = null,
+        val behaviorHints: AppFunctionBehaviorHintsMetadata? = null,
     ) {
         /** Gets [AppFunctionSchemaMetadata] from [AppFunctionAnnotationProperties]. */
         fun getAppFunctionSchemaMetadata(): AppFunctionSchemaMetadata? {

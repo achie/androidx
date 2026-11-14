@@ -20,6 +20,7 @@
 package androidx.wear.compose.foundation
 
 import androidx.annotation.FloatRange
+import androidx.annotation.VisibleForTesting
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.AnimationSpec
@@ -77,10 +78,13 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.util.Predicate
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -421,15 +425,26 @@ internal constructor(
      * yet. In [RevealValue.RightRevealed], the action has been performed and it will not be reset.
      */
     private suspend fun resetLastState(currentState: RevealState) {
-        val oldState = SingleSwipeCoordinator.lastUpdatedState.getAndSet(currentState)
-        if (currentState != oldState && oldState?.currentValue == RevealValue.RightRevealing) {
-            oldState.animateTo(RevealValue.Covered)
+        if (SingleSwipeCoordinator.lastUpdatedState.get()?.get() === currentState) return
+        val oldState =
+            SingleSwipeCoordinator.lastUpdatedState.getAndSet(WeakReference(currentState))?.get()
+        if (oldState !== currentState && oldState?.currentValue == RevealValue.RightRevealing) {
+            if (oldState.coroutineScope.isActive) {
+                oldState.coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    oldState.animateTo(RevealValue.Covered)
+                }
+            } else {
+                oldState.snapTo(RevealValue.Covered)
+            }
         }
     }
 
     /** A singleton instance to keep track of the [RevealState] which was modified the last time. */
-    private object SingleSwipeCoordinator {
-        var lastUpdatedState: AtomicReference<RevealState?> = AtomicReference(null)
+    @VisibleForTesting
+    internal object SingleSwipeCoordinator {
+        // Weak, so that the last revealed item (and the composition it belongs to) can be
+        // garbage collected once it leaves the composition.
+        val lastUpdatedState: AtomicReference<WeakReference<RevealState>?> = AtomicReference(null)
     }
 }
 
@@ -513,7 +528,7 @@ public fun rememberRevealState(
  *   threshold config of the swipeable modifier which is applied.
  * @param secondaryAction An optional action that can be added to the component. We strongly
  *   recommend triggering the action when it is clicked.
- * @param undoAction The optional undo action that will be applied to the component once the the
+ * @param undoAction The optional undo action that will be applied to the component once the
  *   [RevealState.currentValue] becomes [RevealValue.RightRevealed].
  * @param gestureInclusion Provides fine-grained control so that touch gestures can be excluded when
  *   they start in a certain region. An instance of [GestureInclusion] can be passed in here which
@@ -521,8 +536,8 @@ public fun rememberRevealState(
  *   not. By default, [gestureInclusion] allows gestures everywhere except a zone on the left edge,
  *   which is used for swipe-to-dismiss (see [SwipeToRevealDefaults.gestureInclusion]).
  * @param content The content that will be initially displayed over the other actions provided.
- *   Custom accessibility actions should always be added to the content using [Modifier.semantics] -
- *   examples are shown in the code samples.
+ *   Custom accessibility actions should always be added to the content using
+ *   [androidx.compose.ui.semantics.semantics] - examples are shown in the code samples.
  */
 @Deprecated(
     message =

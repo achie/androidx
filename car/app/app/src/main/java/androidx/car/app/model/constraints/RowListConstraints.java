@@ -26,6 +26,7 @@ import static java.util.Objects.requireNonNull;
 import androidx.annotation.RestrictTo;
 import androidx.car.app.messaging.model.ConversationItem;
 import androidx.car.app.model.Action;
+import androidx.car.app.model.Banner;
 import androidx.car.app.model.Item;
 import androidx.car.app.model.ItemList;
 import androidx.car.app.model.Pane;
@@ -174,6 +175,8 @@ public final class RowListConstraints {
                 mRowConstraints.validateOrThrow((Row) rowObj);
             } else if (rowObj instanceof ConversationItem) {
                 // ExperimentalCarApi -- unrestricted for now
+            } else if (rowObj instanceof Banner) {
+                // Needed for the search template
             } else {
                 throw new IllegalArgumentException(String.format(
                         "Unsupported item type: %s",

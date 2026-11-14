@@ -80,9 +80,9 @@ import androidx.compose.ui.unit.TextUnit
  * @param lineHeight Line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
@@ -95,7 +95,7 @@ import androidx.compose.ui.unit.TextUnit
  * @param style Style configuration for the text such as color, font, line height etc.
  */
 @Composable
-fun Text(
+public fun Text(
     text: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -170,7 +170,7 @@ fun Text(
     level = DeprecationLevel.HIDDEN,
 )
 @Composable
-fun Text(
+public fun Text(
     text: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -250,9 +250,9 @@ fun Text(
  * @param lineHeight Line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. It is required that 1 <= [minLines] <= [maxLines].
@@ -267,7 +267,7 @@ fun Text(
  * @param style Style configuration for the text such as color, font, line height etc.
  */
 @Composable
-fun Text(
+public fun Text(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -348,7 +348,7 @@ fun Text(
     level = DeprecationLevel.HIDDEN,
 )
 @Composable
-fun Text(
+public fun Text(
     text: AnnotatedString,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
@@ -396,7 +396,8 @@ fun Text(
  *
  * @see ProvideTextStyle
  */
-val LocalTextStyle = compositionLocalOf(structuralEqualityPolicy()) { DefaultTextStyle }
+public val LocalTextStyle: androidx.compose.runtime.ProvidableCompositionLocal<TextStyle> =
+    compositionLocalOf(structuralEqualityPolicy()) { DefaultTextStyle }
 
 // TODO: b/156598010 remove this and replace with fold definition on the backing CompositionLocal
 /**
@@ -407,7 +408,7 @@ val LocalTextStyle = compositionLocalOf(structuralEqualityPolicy()) { DefaultTex
  * @see LocalTextStyle
  */
 @Composable
-fun ProvideTextStyle(value: TextStyle, content: @Composable () -> Unit) {
+public fun ProvideTextStyle(value: TextStyle, content: @Composable () -> Unit) {
     val mergedStyle = LocalTextStyle.current.merge(value)
     CompositionLocalProvider(LocalTextStyle provides mergedStyle, content = content)
 }
@@ -416,17 +417,16 @@ fun ProvideTextStyle(value: TextStyle, content: @Composable () -> Unit) {
 private fun createTextWithLinkStyles(
     text: AnnotatedString,
     linkStyles: TextLinkStyles,
-): AnnotatedString =
-    text.mapAnnotations { range ->
-        val link = range.item
-        when {
-            link is LinkAnnotation.Url && link.styles == null ->
-                (range as Range<LinkAnnotation.Url>).copy(link.copy(styles = linkStyles))
-            link is LinkAnnotation.Clickable && link.styles == null ->
-                (range as Range<LinkAnnotation.Clickable>).copy(link.copy(styles = linkStyles))
-            else -> range
-        }
+): AnnotatedString = text.mapAnnotations { range ->
+    val link = range.item
+    when {
+        link is LinkAnnotation.Url && link.styles == null ->
+            (range as Range<LinkAnnotation.Url>).copy(link.copy(styles = linkStyles))
+        link is LinkAnnotation.Clickable && link.styles == null ->
+            (range as Range<LinkAnnotation.Clickable>).copy(link.copy(styles = linkStyles))
+        else -> range
     }
+}
 
 @Composable
 private fun rememberTextLinkStyles(): TextLinkStyles {

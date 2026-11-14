@@ -36,13 +36,13 @@ import androidx.compose.ui.semantics.SemanticsNode
  *
  * @sample androidx.compose.ui.test.samples.useUnmergedTree
  */
-class SemanticsNodeInteraction
+public class SemanticsNodeInteraction
 constructor(
     internal val testContext: TestContext,
     internal val useUnmergedTree: Boolean,
     internal val selector: SemanticsSelector,
 ) {
-    constructor(
+    public constructor(
         testContext: TestContext,
         useUnmergedTree: Boolean,
         matcher: SemanticsMatcher,
@@ -50,11 +50,12 @@ constructor(
 
     /**
      * Anytime we refresh semantics we capture it here. This is then presented to the user in case
-     * their tests fails deu to a missing node. This helps to see what was the last state of the
-     * node before it disappeared. We dump it to string because trying to dump the node later can
-     * result in failure as it gets detached from its layout.
+     * their tests fails due to a missing node. This helps to see what was the last state of the
+     * node before it disappeared. We take a [SemanticsNodeSnapshot] because trying to dump the node
+     * later can result in failure as it gets detached from its layout. The snapshot is only printed
+     * if the node goes missing.
      */
-    private var lastSeenSemantics: String? = null
+    private var lastSeenSemantics: SemanticsNodeSnapshot? = null
 
     internal fun fetchSemanticsNodes(
         atLeastOneRootRequired: Boolean,
@@ -80,7 +81,7 @@ constructor(
      *
      * @throws AssertionError if 0 or multiple nodes found.
      */
-    fun fetchSemanticsNode(errorMessageOnFail: String? = null): SemanticsNode {
+    public fun fetchSemanticsNode(errorMessageOnFail: String? = null): SemanticsNode {
         return fetchOneOrThrow(errorMessageOnFail)
     }
 
@@ -91,7 +92,7 @@ constructor(
      *
      * @throws [AssertionError] if the assert fails.
      */
-    fun assertDoesNotExist() {
+    public fun assertDoesNotExist() {
         val result =
             fetchSemanticsNodes(
                 atLeastOneRootRequired = false,
@@ -121,7 +122,7 @@ constructor(
      *   prefix could be: "Failed to perform doOnClick.".
      * @throws [AssertionError] if the assert fails.
      */
-    fun assertExists(errorMessageOnFail: String? = null): SemanticsNodeInteraction {
+    public fun assertExists(errorMessageOnFail: String? = null): SemanticsNodeInteraction {
         fetchOneOrThrow(errorMessageOnFail)
         return this
     }
@@ -134,7 +135,7 @@ constructor(
      *
      * @throws [AssertionError] if the assert fails.
      */
-    fun assertIsDeactivated(errorMessageOnFail: String? = null) {
+    public fun assertIsDeactivated(errorMessageOnFail: String? = null) {
         val node = fetchOneOrThrow(skipDeactivatedNodes = false)
         if (!node.layoutInfo.isDeactivated) {
             throw AssertionError(
@@ -166,7 +167,7 @@ constructor(
                     buildErrorMessageForNodeMissingInTree(
                         errorMessage = finalErrorMessage,
                         selector = selector,
-                        lastSeenSemantics = lastSeenSemantics!!,
+                        lastSeenSemantics = lastSeenSemantics!!.printToString(),
                     )
                 )
             }
@@ -186,7 +187,7 @@ constructor(
             )
         }
 
-        lastSeenSemantics = result.selectedNodes.first().printToString()
+        lastSeenSemantics = SemanticsNodeSnapshot(result.selectedNodes.first(), maxDepth = 0)
         return result.selectedNodes.first()
     }
 
@@ -218,13 +219,13 @@ constructor(
  *
  * @sample androidx.compose.ui.test.samples.verifyTwoClickableNodes
  */
-class SemanticsNodeInteractionCollection
+public class SemanticsNodeInteractionCollection
 constructor(
     internal val testContext: TestContext,
     internal val useUnmergedTree: Boolean,
     internal val selector: SemanticsSelector,
 ) {
-    constructor(
+    public constructor(
         testContext: TestContext,
         useUnmergedTree: Boolean,
         matcher: SemanticsMatcher,
@@ -242,7 +243,7 @@ constructor(
      * @param errorMessageOnFail Custom error message to append when this fails to retrieve the
      *   nodes.
      */
-    fun fetchSemanticsNodes(
+    public fun fetchSemanticsNodes(
         atLeastOneRootRequired: Boolean = true,
         errorMessageOnFail: String? = null,
     ): List<SemanticsNode> {
@@ -258,7 +259,7 @@ constructor(
      * [SemanticsNodeInteraction.assertDoesNotExist] is used) and will throw [AssertionError] if
      * none or more than one element is found.
      */
-    operator fun get(index: Int): SemanticsNodeInteraction {
+    public operator fun get(index: Int): SemanticsNodeInteraction {
         return SemanticsNodeInteraction(
             testContext,
             useUnmergedTree,

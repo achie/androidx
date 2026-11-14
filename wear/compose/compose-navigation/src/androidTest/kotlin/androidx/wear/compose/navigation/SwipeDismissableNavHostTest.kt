@@ -39,7 +39,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.testutils.WithTouchSlop
 import androidx.compose.testutils.assertContainsColor
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,7 +51,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -73,13 +72,12 @@ import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.ToggleButton
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 class SwipeDismissableNavHostTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var backPressedDispatcher: OnBackPressedDispatcher
 
@@ -185,9 +183,7 @@ class SwipeDismissableNavHostTest {
     @ExperimentalTestApi
     @Test
     fun displays_previous_screen_during_swipe_gesture() {
-        rule.setContentWithBackPressedDispatcher {
-            WithTouchSlop(0f) { SwipeDismissWithNavigation() }
-        }
+        rule.setContentWithBackPressedDispatcher { SwipeDismissWithNavigation() }
 
         // Click to move to next destination.
         rule.onNodeWithText(START).performClick()
@@ -572,7 +568,7 @@ class SwipeDismissableNavHostTest {
     }
 
     /**
-     * Dragss without releasing the finger.
+     * Drags without releasing the finger.
      *
      * Depending on API level, either drags right on the view with TEST_TAG, or emulates
      * system-level drag using backPressedDispatcher

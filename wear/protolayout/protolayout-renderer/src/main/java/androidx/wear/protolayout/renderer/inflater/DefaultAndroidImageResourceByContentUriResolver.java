@@ -19,10 +19,12 @@ package androidx.wear.protolayout.renderer.inflater;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Build.VERSION;
 
 import androidx.concurrent.futures.ResolvableFuture;
 import androidx.wear.protolayout.proto.ResourceProto.AndroidImageResourceByContentUri;
@@ -68,13 +70,27 @@ public class DefaultAndroidImageResourceByContentUriResolver
                     "Provided content URI " + resource.getContentUri() + " cannot be opened");
         }
 
+        if (VERSION.SDK_INT >= 28) {
+            try {
+                return ConstrainedImageDecoder.decodeDrawable(mContentResolver, resourceUri);
+            } catch (IOException ex) {
+                throw new ResourceAccessException(
+                        "Error while reading URI " + resource.getContentUri(), ex);
+            }
+        }
+
         try (InputStream inStream = mContentResolver.openInputStream(resourceUri)) {
             // Can happen if the content provider recently crashed...
             if (inStream == null) {
                 throw new ResourceAccessException(
                         "Cannot read from URI " + resource.getContentUri());
             }
-            return new BitmapDrawable(mPackageResources, BitmapFactory.decodeStream(inStream));
+            Bitmap bitmap = BitmapFactory.decodeStream(inStream);
+            if (bitmap == null) {
+                throw new ResourceAccessException(
+                        "Failed to decode image from URI " + resource.getContentUri());
+            }
+            return new BitmapDrawable(mPackageResources, bitmap);
         } catch (FileNotFoundException ex) {
             throw new ResourceAccessException(
                     "Cannot open file for URI " + resource.getContentUri(), ex);

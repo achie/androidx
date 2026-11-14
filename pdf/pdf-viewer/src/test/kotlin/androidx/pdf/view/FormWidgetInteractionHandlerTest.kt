@@ -16,14 +16,16 @@
 
 package androidx.pdf.view
 
-import android.content.Context
-import android.graphics.Point
 import android.graphics.PointF
 import android.graphics.Rect
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import androidx.activity.ComponentActivity
 import androidx.pdf.PdfPoint
+import androidx.pdf.autofill.FakeFormWidgetInteractionListener
+import androidx.pdf.autofill.getVirtualFormWidgetId
 import androidx.pdf.models.FormEditInfo
 import androidx.pdf.models.FormWidgetInfo
-import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -36,7 +38,9 @@ import kotlinx.coroutines.test.setMain
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowLooper
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -46,17 +50,30 @@ class FormWidgetInteractionHandlerTest {
     private val testDispatcher = UnconfinedTestDispatcher()
     private val testScope: TestScope = TestScope(testDispatcher)
 
-    private var formEditTextPlaced: Boolean = false
+    private var capturedEditText: FormFillingEditText? = null
+    private val testInteractionListener = FakeFormWidgetInteractionListener()
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
-        val applicationContext = ApplicationProvider.getApplicationContext<Context>()
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+
         handler =
-            FormWidgetInteractionHandler(applicationContext, testScope) {
-                formEditTextPlaced = true
+            FormWidgetInteractionHandler(activity, testScope) { formEditText ->
+                if (capturedEditText != null) {
+                    activity
+                        .findViewById<ViewGroup>(android.R.id.content)
+                        .removeView(capturedEditText!!.editText)
+                }
+                capturedEditText = formEditText
+                if (formEditText != null) {
+                    activity
+                        .findViewById<ViewGroup>(android.R.id.content)
+                        .addView(formEditText.editText)
+                }
             }
-        formEditTextPlaced = false
+        handler.interactionListener = testInteractionListener
+        capturedEditText = null
     }
 
     @Test
@@ -71,20 +88,23 @@ class FormWidgetInteractionHandlerTest {
         val touchPoint = PdfPoint(pageNum, pdfCoordinates)
         val widgetIndex = 0
         val formWidgetInfo =
-            FormWidgetInfo(
-                widgetType = FormWidgetInfo.WIDGET_TYPE_CHECKBOX,
+            FormWidgetInfo.createCheckbox(
                 widgetIndex = widgetIndex,
                 widgetRect = Rect(10, 10, 20, 20),
                 textValue = "Hello",
                 accessibilityLabel = "accessible",
-                readOnly = false,
+                isReadOnly = false,
             )
 
         val expectedEditRecord =
-            FormEditInfo(
-                pageNumber = pageNum,
+            FormEditInfo.createClick(
                 widgetIndex = widgetIndex,
-                clickPoint = Point(pdfCoordinates.x.toInt(), pdfCoordinates.y.toInt()),
+                clickPoint =
+                    PdfPoint(
+                        pageNum,
+                        formWidgetInfo.widgetRect.centerX().toFloat(),
+                        formWidgetInfo.widgetRect.centerY().toFloat(),
+                    ),
             )
 
         handler.handleInteraction(touchPoint, formWidgetInfo)
@@ -103,19 +123,22 @@ class FormWidgetInteractionHandlerTest {
 
         val widgetIndex = 0
         val formWidgetInfo =
-            FormWidgetInfo(
-                widgetType = FormWidgetInfo.WIDGET_TYPE_RADIOBUTTON,
+            FormWidgetInfo.createRadioButton(
                 widgetIndex = widgetIndex,
                 widgetRect = Rect(10, 10, 20, 20),
                 textValue = "Radio",
                 accessibilityLabel = "accessible",
-                readOnly = false,
+                isReadOnly = false,
             )
         val expectedEditRecord =
-            FormEditInfo(
-                pageNumber = pageNum,
+            FormEditInfo.createClick(
                 widgetIndex = widgetIndex,
-                clickPoint = Point(pdfCoordinates.x.toInt(), pdfCoordinates.y.toInt()),
+                clickPoint =
+                    PdfPoint(
+                        pageNum,
+                        formWidgetInfo.widgetRect.centerX().toFloat(),
+                        formWidgetInfo.widgetRect.centerY().toFloat(),
+                    ),
             )
 
         handler.handleInteraction(touchPoint, formWidgetInfo)
@@ -133,19 +156,22 @@ class FormWidgetInteractionHandlerTest {
         val touchPoint = PdfPoint(pageNum, pdfCoordinates)
         val widgetIndex = 0
         val formWidgetInfo =
-            FormWidgetInfo(
-                widgetType = FormWidgetInfo.WIDGET_TYPE_PUSHBUTTON,
+            FormWidgetInfo.createPushButton(
                 widgetIndex = widgetIndex,
                 widgetRect = Rect(10, 10, 20, 20),
                 textValue = "Push",
                 accessibilityLabel = "accessible",
-                readOnly = false,
+                isReadOnly = false,
             )
         val expectedEditRecord =
-            FormEditInfo(
-                pageNumber = pageNum,
+            FormEditInfo.createClick(
                 widgetIndex = widgetIndex,
-                clickPoint = Point(pdfCoordinates.x.toInt(), pdfCoordinates.y.toInt()),
+                clickPoint =
+                    PdfPoint(
+                        pageNum,
+                        formWidgetInfo.widgetRect.centerX().toFloat(),
+                        formWidgetInfo.widgetRect.centerY().toFloat(),
+                    ),
             )
 
         handler.handleInteraction(touchPoint, formWidgetInfo)
@@ -155,23 +181,89 @@ class FormWidgetInteractionHandlerTest {
     }
 
     @Test
-    fun handleInteraction_textFieldWidget() = runTest {
-        val formEditInfos = mutableListOf<FormEditInfo>()
-        backgroundScope.launch(testDispatcher) { handler.formWidgetUpdates.toList(formEditInfos) }
+    fun handleInteraction_textFieldWidget_notifiesInteractionStarted() = runTest {
         val pageNum = 0
         val pdfCoordinates = PointF(10f, 20f)
         val touchPoint = PdfPoint(pageNum, pdfCoordinates)
         val widgetIndex = 0
         val formWidgetInfo =
-            FormWidgetInfo(
-                widgetType = FormWidgetInfo.WIDGET_TYPE_TEXTFIELD,
+            FormWidgetInfo.createTextField(
                 widgetIndex = widgetIndex,
                 widgetRect = Rect(10, 10, 20, 20),
                 textValue = "Push",
                 accessibilityLabel = "accessible",
-                readOnly = false,
+                isReadOnly = false,
+                isEditableText = true,
+                isMultiLineText = false,
+                maxLength = 10,
+                fontSize = 10f,
             )
         handler.handleInteraction(touchPoint, formWidgetInfo)
-        assertThat(formEditTextPlaced).isTrue()
+        assertThat(capturedEditText).isNotNull()
+
+        ShadowLooper.idleMainLooper()
+
+        assertThat(testInteractionListener.startEvent).isNotNull()
+        assertThat(testInteractionListener.startEvent!!.id)
+            .isEqualTo(getVirtualFormWidgetId(pageNum, widgetIndex))
+    }
+
+    @Test
+    fun handleInteraction_textFieldWidget_notifiesValueChanged() = runTest {
+        val pageNum = 0
+        val pdfCoordinates = PointF(10f, 20f)
+        val touchPoint = PdfPoint(pageNum, pdfCoordinates)
+        val widgetIndex = 0
+        val formWidgetInfo =
+            FormWidgetInfo.createTextField(
+                widgetIndex = widgetIndex,
+                widgetRect = Rect(10, 10, 20, 20),
+                textValue = "Original",
+                accessibilityLabel = "accessible",
+                isReadOnly = false,
+                isEditableText = true,
+                isMultiLineText = false,
+                maxLength = 10,
+                fontSize = 10f,
+            )
+        handler.handleInteraction(touchPoint, formWidgetInfo)
+
+        val newText = "New Value"
+        capturedEditText?.editText?.setText(newText)
+        val formEditInfo = FormEditInfo.createSetText(pageNum, widgetIndex, newText)
+        ShadowLooper.idleMainLooper()
+
+        assertThat(testInteractionListener.changeEvent).isNotNull()
+        assertThat(testInteractionListener.changeEvent!!.id)
+            .isEqualTo(getVirtualFormWidgetId(pageNum, widgetIndex))
+        assertThat(testInteractionListener.changeEvent!!.formEditInfo).isEqualTo(formEditInfo)
+    }
+
+    @Test
+    fun handleInteraction_textFieldWidget_notifiesFinishedOnActionDone() = runTest {
+        val pageNum = 0
+        val pdfCoordinates = PointF(10f, 20f)
+        val touchPoint = PdfPoint(pageNum, pdfCoordinates)
+        val widgetIndex = 0
+        val formWidgetInfo =
+            FormWidgetInfo.createTextField(
+                widgetIndex = widgetIndex,
+                widgetRect = Rect(10, 10, 20, 20),
+                textValue = "Original",
+                accessibilityLabel = "accessible",
+                isReadOnly = false,
+                isEditableText = true,
+                isMultiLineText = false,
+                maxLength = 10,
+                fontSize = 10f,
+            )
+        handler.handleInteraction(touchPoint, formWidgetInfo)
+        ShadowLooper.idleMainLooper()
+
+        capturedEditText?.editText?.onEditorAction(EditorInfo.IME_ACTION_DONE)
+
+        assertThat(testInteractionListener.finishEvent).isNotNull()
+        assertThat(testInteractionListener.finishEvent!!.id)
+            .isEqualTo(getVirtualFormWidgetId(pageNum, widgetIndex))
     }
 }

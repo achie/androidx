@@ -48,7 +48,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -62,12 +62,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 class BasicTextContextMenuProviderTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun whenDefault_expectedItemsAppear() = runProviderTest {
@@ -346,7 +345,8 @@ private fun InnerBox() {
 private fun ProvideTestBasicTextContextMenu(
     onContextMenuComposition:
         (
-            session: TextContextMenuSession?, anchorLayoutCoordinates: () -> LayoutCoordinates,
+            session: TextContextMenuSession?,
+            anchorLayoutCoordinates: () -> LayoutCoordinates,
         ) -> Unit,
     content: @Composable () -> Unit,
 ) {

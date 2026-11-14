@@ -100,19 +100,18 @@ fun KSDeclaration.ensureQualifiedName(): String {
  */
 fun KSDeclaration.toClassName(): ClassName {
     val packageName = this.packageName.asString()
-    val simpleNames =
-        buildList {
-                var currentDeclaration: KSDeclaration? = this@toClassName
-                while (currentDeclaration != null) {
-                    add(currentDeclaration.simpleName.asString())
-                    val parent = currentDeclaration.parentDeclaration
-                    if (parent == null || parent is KSFile) {
-                        break
-                    }
-                    currentDeclaration = parent
-                }
+    val simpleNames = buildList {
+        var currentDeclaration: KSDeclaration? = this@toClassName
+        while (currentDeclaration != null) {
+            add(currentDeclaration.simpleName.asString())
+            val parent = currentDeclaration.parentDeclaration
+            if (parent == null || parent is KSFile) {
+                break
             }
-            .reversed()
+            currentDeclaration = parent
+        }
+    }
+        .reversed()
     return ClassName(packageName, simpleNames)
 }
 
@@ -150,6 +149,11 @@ fun KSDeclaration.getJvmQualifiedName(): String {
  */
 fun KSDeclaration.getJvmClassName(): String {
     return toClassName().reflectionName().substringAfterLast('.')
+}
+
+/** Checks if [KSTypeReference] is parameterized */
+fun KSTypeReference.isParametrized(): Boolean {
+    return resolve().arguments.isNotEmpty()
 }
 
 /**
@@ -217,7 +221,14 @@ fun <T : Any> KSAnnotation.requirePropertyValueOfType(
     val propertyValue =
         this.arguments.singleOrNull { it.name?.asString() == propertyName }?.value
             ?: throw ProcessingException("Unable to find property with name: $propertyName", this)
-    return expectedType.cast(propertyValue)
+    return try {
+        expectedType.cast(propertyValue)
+    } catch (e: ClassCastException) {
+        throw ProcessingException(
+            "Property $propertyName is not of expected type ${expectedType.simpleName}",
+            this,
+        )
+    }
 }
 
 // TODO: Import KotlinPoet KSP to replace these KSPUtils.
@@ -314,3 +325,50 @@ private fun ClassName.withTypeArguments(arguments: List<TypeName>): TypeName {
 }
 
 fun KClass<*>.ensureQualifiedName(): String = checkNotNull(qualifiedName)
+
+/**
+ * Checks whether this class references a declaration annotated with [annotationClass].
+ *
+ * Returns `true` if the class itself, any of its supertypes, or the type of any of its properties
+ * (including type arguments) is annotated with [annotationClass].
+ *
+ * @param annotationClass the annotation class to look for
+ */
+fun KSClassDeclaration.referencesAnnotation(annotationClass: ClassName): Boolean {
+    val visited = mutableSetOf<KSClassDeclaration>()
+    if (isAnnotatedOrHasAnnotatedSuperType(annotationClass, visited)) {
+        return true
+    }
+    return getAllProperties().any {
+        it.type.resolve().referencesAnnotation(annotationClass, visited)
+    }
+}
+
+private fun KSClassDeclaration.isAnnotatedOrHasAnnotatedSuperType(
+    annotationClass: ClassName,
+    visited: MutableSet<KSClassDeclaration>,
+): Boolean {
+    if (!visited.add(this)) {
+        return false
+    }
+    if (annotations.findAnnotation(annotationClass) != null) {
+        return true
+    }
+    return superTypes.any {
+        val superDeclaration = it.resolve().declaration as? KSClassDeclaration
+        superDeclaration?.isAnnotatedOrHasAnnotatedSuperType(annotationClass, visited) ?: false
+    }
+}
+
+private fun KSType.referencesAnnotation(
+    annotationClass: ClassName,
+    visited: MutableSet<KSClassDeclaration>,
+): Boolean {
+    val classDeclaration = declaration as? KSClassDeclaration
+    if (classDeclaration?.isAnnotatedOrHasAnnotatedSuperType(annotationClass, visited) == true) {
+        return true
+    }
+    return arguments.any {
+        it.type?.resolve()?.referencesAnnotation(annotationClass, visited) ?: false
+    }
+}

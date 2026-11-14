@@ -1,0 +1,97 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.text.vertical.compose
+
+import android.graphics.Typeface
+import android.os.LocaleList
+import android.text.TextPaint
+import androidx.annotation.RestrictTo
+import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
+
+/**
+ * Converts this [TextStyle] into a [VerticalTextStyle].
+ *
+ * Copies [TextStyle.color], [TextStyle.fontSize], [TextStyle.fontWeight], [TextStyle.fontStyle],
+ * [TextStyle.fontSynthesis], [TextStyle.fontFamily], [TextStyle.fontFeatureSettings],
+ * [TextStyle.background], and [TextStyle.localeList]. Ignores unsupported properties such as
+ * [TextStyle.brush], [TextStyle.textDecoration], [TextStyle.shadow], [TextStyle.letterSpacing], and
+ * paragraph styles.
+ *
+ * @return a [VerticalTextStyle] with the supported properties from this [TextStyle]
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+// TODO(b/571750156): Remove @RestrictTo in 1.1.0-alpha01
+public fun TextStyle.toVerticalTextStyle(): VerticalTextStyle =
+    VerticalTextStyle(
+        color = color,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        fontStyle = fontStyle,
+        fontSynthesis = fontSynthesis,
+        fontFamily = fontFamily,
+        fontFeatureSettings = fontFeatureSettings,
+        background = background,
+        localeList = localeList,
+    )
+
+/**
+ * Resets [out] and applies [style] and [typeface] to it using [density].
+ *
+ * When [VerticalTextStyle.fontSize] is in `em`, it scales [DefaultFontSize]. When
+ * [VerticalTextStyle.fontSize] is unspecified, it uses [DefaultFontSize].
+ */
+internal fun setStyleToPaint(
+    style: VerticalTextStyle,
+    typeface: Typeface,
+    density: Density,
+    out: TextPaint,
+) {
+    out.reset()
+    with(density) {
+        out.textSize =
+            when {
+                style.fontSize.isSp -> style.fontSize.toPx()
+                style.fontSize.isEm -> DefaultFontSize.toPx() * style.fontSize.value
+                else -> DefaultFontSize.toPx()
+            }
+        out.typeface = typeface
+        out.fontFeatureSettings = style.fontFeatureSettings
+        if (style.color.isSpecified) {
+            out.color = style.color.toArgb()
+        }
+        // Paint.reset() does not reset the fields that TextPaint adds, such as bgColor. Assign each
+        // TextPaint field that this function sets every time, so a reused TextPaint never keeps a
+        // stale value when the style does not specify one.
+        out.bgColor =
+            if (style.background.isSpecified) {
+                style.background.toArgb()
+            } else {
+                android.graphics.Color.TRANSPARENT
+            }
+        style.localeList
+            ?.map { it.platformLocale }
+            ?.toTypedArray()
+            ?.let { out.textLocales = LocaleList(*it) }
+    }
+}
+
+/** Default font size used when [VerticalTextStyle.fontSize] is unspecified or in `em`. */
+internal val DefaultFontSize = 16.sp

@@ -71,10 +71,11 @@ import android.os.RemoteException;
 import android.util.Log;
 import android.util.SparseArray;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.mediarouter.media.MediaRouteProvider.DynamicGroupRouteController.DynamicRouteDescriptor;
 import androidx.mediarouter.media.MediaRouter.ControlRequestCallback;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -89,7 +90,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
     static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
     private final ComponentName mComponentName;
-    final PrivateHandler mPrivateHandler;
+    private final PrivateHandler mPrivateHandler;
     private final ArrayList<ControllerConnection> mControllerConnections = new ArrayList<>();
 
     private boolean mStarted;
@@ -180,9 +181,8 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         disconnect();
     }
 
-    @NonNull
     @Override
-    public String toString() {
+    public @NonNull String toString() {
         return "Service connection " + mComponentName.flattenToShortString();
     }
 
@@ -338,7 +338,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         return null;
     }
 
-    void onConnectionReady(Connection connection) {
+    private void onConnectionReady(Connection connection) {
         if (mActiveConnection == connection) {
             mConnectionReady = true;
             attachControllersToConnection();
@@ -350,7 +350,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
     }
 
-    void onConnectionDied(Connection connection) {
+    private void onConnectionDied(Connection connection) {
         if (mActiveConnection == connection) {
             if (DEBUG) {
                 Log.d(TAG, this + ": Service connection died");
@@ -359,7 +359,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
     }
 
-    void onConnectionError(Connection connection, String error) {
+    private void onConnectionError(Connection connection, String error) {
         if (mActiveConnection == connection) {
             if (DEBUG) {
                 Log.d(TAG, this + ": Service connection error - " + error);
@@ -368,7 +368,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
     }
 
-    void onConnectionDescriptorChanged(Connection connection,
+    private void onConnectionDescriptorChanged(Connection connection,
             MediaRouteProviderDescriptor descriptor) {
         if (mActiveConnection == connection) {
             if (DEBUG) {
@@ -378,7 +378,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
     }
 
-    void onDynamicRouteDescriptorChanged(Connection connection, int controllerId,
+    private void onDynamicRouteDescriptorChanged(Connection connection, int controllerId,
             MediaRouteDescriptor groupRouteDescriptor,
             List<DynamicRouteDescriptor> descriptors) {
         if (mActiveConnection == connection) {
@@ -393,7 +393,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
     }
 
-    void onConnectionControllerReleasedByProvider(Connection connection, int controllerId) {
+    private void onConnectionControllerReleasedByProvider(Connection connection, int controllerId) {
         if (mActiveConnection == connection) {
             ControllerConnection controller = findControllerById(controllerId);
             if (mControllerCallback != null && controller instanceof RouteController) {
@@ -446,6 +446,7 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
 
     interface ControllerConnection {
         int getControllerId();
+        @SuppressWarnings("ExposedPrivateType")
         void attachConnection(Connection connection);
         void detachConnection();
     }
@@ -816,9 +817,8 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
         }
 
         public boolean onDynamicRouteDescriptorsChanged(
-                int controllerId, Bundle descriptorsBundle) {
-            if (mServiceVersion != 0) {
-                //descriptorsBundle.setClassLoader(ParcelImpl.class.getClassLoader());
+                int controllerId, @Nullable Bundle descriptorsBundle) {
+            if (mServiceVersion != 0 && descriptorsBundle != null) {
                 MediaRouteDescriptor groupRoute = null;
                 Bundle groupBundle = descriptorsBundle.getParcelable(
                         DATA_KEY_GROUP_ROUTE_DESCRIPTOR);
@@ -827,6 +827,9 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
                 }
                 ArrayList<Bundle> bundles = descriptorsBundle.getParcelableArrayList(
                         DATA_KEY_DYNAMIC_ROUTE_DESCRIPTORS);
+                if (bundles == null) {
+                    return false;
+                }
                 List<DynamicRouteDescriptor> descriptors = new ArrayList<>();
                 for (Bundle bundle: bundles) {
                     descriptors.add(DynamicRouteDescriptor.fromBundle(bundle));
@@ -857,10 +860,13 @@ final class RegisteredMediaRouteProvider extends MediaRouteProvider
             return false;
         }
 
-        public void onDynamicGroupRouteControllerCreated(int requestId, Bundle data) {
+        public void onDynamicGroupRouteControllerCreated(int requestId, @Nullable Bundle data) {
             ControlRequestCallback callback = mPendingCallbacks.get(requestId);
+            if (callback == null) {
+                return;
+            }
+            mPendingCallbacks.remove(requestId);
             if (data != null && data.containsKey(CLIENT_DATA_ROUTE_ID)) {
-                mPendingCallbacks.remove(requestId);
                 callback.onResult(data);
             } else {
                 callback.onError("DynamicGroupRouteController is created without valid route id.",

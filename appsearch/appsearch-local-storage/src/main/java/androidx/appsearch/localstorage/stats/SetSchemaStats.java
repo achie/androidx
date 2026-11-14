@@ -21,6 +21,7 @@ import static androidx.appsearch.stats.SchemaMigrationStats.SECOND_CALL_APPLY_NE
 
 import androidx.annotation.RestrictTo;
 import androidx.appsearch.annotation.CanIgnoreReturnValue;
+import androidx.appsearch.annotation.HideInPlatform;
 import androidx.appsearch.app.AppSearchResult;
 import androidx.appsearch.stats.BaseStats;
 import androidx.appsearch.stats.SchemaMigrationStats;
@@ -31,9 +32,8 @@ import org.jspecify.annotations.NonNull;
 /**
  * Class holds detailed stats for
  * {@link androidx.appsearch.app.AppSearchSession#setSchemaAsync}.
- *
- * @exportToFramework:hide
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public final class SetSchemaStats extends BaseStats {
 
@@ -51,6 +51,7 @@ public final class SetSchemaStats extends BaseStats {
     private final int mJoinIndexIncompatibleTypeChangeCount;
     private final int mScorablePropertyIncompatibleTypeChangeCount;
     private final int mBackwardsIncompatibleTypeChangeCount;
+    private final int mPccToNonPccTypesCount;
     private final int mDeletedDocumentCount;
     private final boolean mIsTermIndexRestored;
     private final boolean mIsIntegerIndexRestored;
@@ -66,6 +67,7 @@ public final class SetSchemaStats extends BaseStats {
     private final int mNativeDocumentStoreOptimizedUpdateSchemaLatencyMillis;
     private final int mNativeIndexRestorationLatencyMillis;
     private final int mNativeScorablePropertyCacheRegenerationLatencyMillis;
+    private final int mNativeSchemaStoreReinitializationLatencyMillis;
     private final int mVisibilitySettingLatencyMillis;
     private final int mConvertToResponseLatencyMillis;
     private final int mDispatchChangeNotificationsLatencyMillis;
@@ -74,9 +76,11 @@ public final class SetSchemaStats extends BaseStats {
     private final int mGetOldSchemaLatencyMillis;
     private final int mGetObserverLatencyMillis;
     private final int mPreparingChangeNotificationLatencyMillis;
+    private final int mPccSchemaDowngradeWipeLatencyMillis;
     @SchemaMigrationStats.SchemaMigrationCallType
     private final int mSchemaMigrationCallType;
     private final boolean mSkippedIcingInteraction;
+    private final long mNativeSchemaProtoByteSize;
 
     SetSchemaStats(@NonNull Builder builder) {
         super(builder);
@@ -92,6 +96,7 @@ public final class SetSchemaStats extends BaseStats {
         mScorablePropertyIncompatibleTypeChangeCount =
                 builder.mScorablePropertyIncompatibleTypeChangeCount;
         mBackwardsIncompatibleTypeChangeCount = builder.mBackwardsIncompatibleTypeChangeCount;
+        mPccToNonPccTypesCount = builder.mPccToNonPccTypesCount;
         mDeletedDocumentCount = builder.mDeletedDocumentCount;
         mIsTermIndexRestored = builder.mIsTermIndexRestored;
         mIsIntegerIndexRestored = builder.mIsIntegerIndexRestored;
@@ -110,6 +115,8 @@ public final class SetSchemaStats extends BaseStats {
         mNativeIndexRestorationLatencyMillis = builder.mNativeIndexRestorationLatencyMillis;
         mNativeScorablePropertyCacheRegenerationLatencyMillis =
                 builder.mNativeScorablePropertyCacheRegenerationLatencyMillis;
+        mNativeSchemaStoreReinitializationLatencyMillis =
+                builder.mNativeSchemaStoreReinitializationLatencyMillis;
         mVisibilitySettingLatencyMillis = builder.mVisibilitySettingLatencyMillis;
         mConvertToResponseLatencyMillis = builder.mConvertToResponseLatencyMillis;
         mDispatchChangeNotificationsLatencyMillis =
@@ -120,8 +127,10 @@ public final class SetSchemaStats extends BaseStats {
         mGetObserverLatencyMillis = builder.mGetObserverLatencyMillis;
         mPreparingChangeNotificationLatencyMillis =
                 builder.mPreparingChangeNotificationLatencyMillis;
+        mPccSchemaDowngradeWipeLatencyMillis = builder.mPccSchemaDowngradeWipeLatencyMillis;
         mSchemaMigrationCallType = builder.mSchemaMigrationCallType;
         mSkippedIcingInteraction = builder.mSkippedIcingInteraction;
+        mNativeSchemaProtoByteSize = builder.mNativeSchemaProtoByteSize;
     }
 
     /** Returns calling package name. */
@@ -203,6 +212,14 @@ public final class SetSchemaStats extends BaseStats {
     }
 
     /**
+     * Returns number of schema types that were previously written by a Private Compute Core (PCC)
+     * UID and modified by a non-PCC caller.
+     */
+    public int getPccToNonPccTypesCount() {
+        return mPccToNonPccTypesCount;
+    }
+
+    /**
      * Returns number of documents deleted due to an incompatible schema change made using
      * force-override.
      */
@@ -280,6 +297,11 @@ public final class SetSchemaStats extends BaseStats {
         return mNativeScorablePropertyCacheRegenerationLatencyMillis;
     }
 
+    /** Gets latency for native schema store reinitialization in milliseconds. */
+    public int getNativeSchemaStoreReinitializationLatencyMillis() {
+        return mNativeSchemaStoreReinitializationLatencyMillis;
+    }
+
     /** Gets latency for the dispatch change notification action in milliseconds. */
     public int getDispatchChangeNotificationsLatencyMillis() {
         return mDispatchChangeNotificationsLatencyMillis;
@@ -320,6 +342,14 @@ public final class SetSchemaStats extends BaseStats {
         return mPreparingChangeNotificationLatencyMillis;
     }
 
+    /**
+     * Gets latency for wiping existing documents of PCC schemas downgraded to non-PCC in
+     * milliseconds.
+     */
+    public int getPccSchemaDowngradeWipeLatencyMillis() {
+        return mPccSchemaDowngradeWipeLatencyMillis;
+    }
+
     /** Gets the type indicate how this set schema call relative to schema migration cases */
     @SchemaMigrationStats.SchemaMigrationCallType
     public int getSchemaMigrationCallType() {
@@ -329,6 +359,11 @@ public final class SetSchemaStats extends BaseStats {
     /** Whether or not AppSearch skipped sending the schema to Icing because it didn't change. */
     public boolean getSkippedIcingInteraction() {
         return mSkippedIcingInteraction;
+    }
+
+    /** Gets byte size of the stored schema proto written by this SetSchema call. */
+    public long getNativeSchemaProtoByteSize() {
+        return mNativeSchemaProtoByteSize;
     }
 
     @NonNull
@@ -347,6 +382,7 @@ public final class SetSchemaStats extends BaseStats {
                         + "  joinIndexIncompatibleTypeChangeCount=%d,\n"
                         + "  scorablePropertyIncompatibleTypeChangeCount=%d,\n"
                         + "  backwardsIncompatibleTypeChangeCount=%d,\n"
+                        + "  pccToNonPccTypesCount=%d,\n"
                         + "  deletedDocumentCount=%d,\n"
                         + "  isTermIndexRestored=%b,\n"
                         + "  isIntegerIndexRestored=%b,\n"
@@ -362,6 +398,7 @@ public final class SetSchemaStats extends BaseStats {
                         + "  nativeDocumentStoreOptimizedUpdateSchemaLatencyMillis=%d,\n"
                         + "  nativeIndexRestorationLatencyMillis=%d,\n"
                         + "  nativeScorablePropertyCacheRegenerationLatencyMillis=%d,\n"
+                        + "  nativeSchemaStoreReinitializationLatencyMillis=%d,\n"
                         + "  visibilitySettingLatencyMillis=%d,\n"
                         + "  convertToResponseLatencyMillis=%d,\n"
                         + "  dispatchChangeNotificationsLatencyMillis=%d,\n"
@@ -370,8 +407,10 @@ public final class SetSchemaStats extends BaseStats {
                         + "  getOldSchemaLatencyMillis=%d,\n"
                         + "  getObserverLatencyMillis=%d,\n"
                         + "  preparingChangeNotificationLatencyMillis=%d,\n"
+                        + "  pccSchemaDowngradeWipeLatencyMillis=%d,\n"
                         + "  schemaMigrationCallType=%d,\n"
                         + "  skippedIcingInteraction=%b,\n"
+                        + "  nativeSchemaProtoByteSize=%d,\n"
                         // Include BaseStats fields
                         + super.toString()
                         + "}",
@@ -386,6 +425,7 @@ public final class SetSchemaStats extends BaseStats {
                 mJoinIndexIncompatibleTypeChangeCount,
                 mScorablePropertyIncompatibleTypeChangeCount,
                 mBackwardsIncompatibleTypeChangeCount,
+                mPccToNonPccTypesCount,
                 mDeletedDocumentCount,
                 mIsTermIndexRestored,
                 mIsIntegerIndexRestored,
@@ -401,6 +441,7 @@ public final class SetSchemaStats extends BaseStats {
                 mNativeDocumentStoreOptimizedUpdateSchemaLatencyMillis,
                 mNativeIndexRestorationLatencyMillis,
                 mNativeScorablePropertyCacheRegenerationLatencyMillis,
+                mNativeSchemaStoreReinitializationLatencyMillis,
                 mVisibilitySettingLatencyMillis,
                 mConvertToResponseLatencyMillis,
                 mDispatchChangeNotificationsLatencyMillis,
@@ -409,8 +450,10 @@ public final class SetSchemaStats extends BaseStats {
                 mGetOldSchemaLatencyMillis,
                 mGetObserverLatencyMillis,
                 mPreparingChangeNotificationLatencyMillis,
+                mPccSchemaDowngradeWipeLatencyMillis,
                 mSchemaMigrationCallType,
-                mSkippedIcingInteraction);
+                mSkippedIcingInteraction,
+                mNativeSchemaProtoByteSize);
     }
 
     /** Builder for {@link SetSchemaStats}. */
@@ -427,6 +470,7 @@ public final class SetSchemaStats extends BaseStats {
         int mJoinIndexIncompatibleTypeChangeCount;
         int mScorablePropertyIncompatibleTypeChangeCount;
         int mBackwardsIncompatibleTypeChangeCount;
+        int mPccToNonPccTypesCount;
         int mDeletedDocumentCount;
         boolean mIsTermIndexRestored;
         boolean mIsIntegerIndexRestored;
@@ -442,6 +486,7 @@ public final class SetSchemaStats extends BaseStats {
         int mNativeDocumentStoreOptimizedUpdateSchemaLatencyMillis;
         int mNativeIndexRestorationLatencyMillis;
         int mNativeScorablePropertyCacheRegenerationLatencyMillis;
+        int mNativeSchemaStoreReinitializationLatencyMillis;
         int mVisibilitySettingLatencyMillis;
         int mConvertToResponseLatencyMillis;
         int mDispatchChangeNotificationsLatencyMillis;
@@ -450,9 +495,11 @@ public final class SetSchemaStats extends BaseStats {
         int mGetOldSchemaLatencyMillis;
         int mGetObserverLatencyMillis;
         int mPreparingChangeNotificationLatencyMillis;
+        int mPccSchemaDowngradeWipeLatencyMillis;
         @SchemaMigrationStats.SchemaMigrationCallType
         int mSchemaMigrationCallType;
         boolean mSkippedIcingInteraction;
+        long mNativeSchemaProtoByteSize;
 
         /** Constructor for the {@link Builder}. */
         public Builder(@NonNull String packageName, @NonNull String database) {
@@ -525,6 +572,16 @@ public final class SetSchemaStats extends BaseStats {
         public @NonNull Builder setBackwardsIncompatibleTypeChangeCount(
                 int backwardsIncompatibleTypeChangeCount) {
             mBackwardsIncompatibleTypeChangeCount = backwardsIncompatibleTypeChangeCount;
+            return this;
+        }
+
+        /**
+         * Sets number of schema types that were previously written by a Private Compute Core (PCC)
+         * UID and modified by a non-PCC caller.
+         */
+        @CanIgnoreReturnValue
+        public @NonNull Builder setPccToNonPccTypesCount(int pccToNonPccTypesCount) {
+            mPccToNonPccTypesCount = pccToNonPccTypesCount;
             return this;
         }
 
@@ -648,6 +705,15 @@ public final class SetSchemaStats extends BaseStats {
             return this;
         }
 
+        /** Sets latency for native schema store reinitialization in milliseconds. */
+        @CanIgnoreReturnValue
+        public @NonNull Builder setNativeSchemaStoreReinitializationLatencyMillis(
+                int nativeSchemaStoreReinitializationLatencyMillis) {
+            mNativeSchemaStoreReinitializationLatencyMillis =
+                    nativeSchemaStoreReinitializationLatencyMillis;
+            return this;
+        }
+
         /** Sets latency for the apply visibility settings action in milliseconds. */
         @CanIgnoreReturnValue
         public @NonNull Builder setVisibilitySettingLatencyMillis(
@@ -708,6 +774,17 @@ public final class SetSchemaStats extends BaseStats {
             return this;
         }
 
+        /**
+         * Sets latency for wiping existing documents of PCC schemas downgraded to non-PCC in
+         * milliseconds.
+         */
+        @CanIgnoreReturnValue
+        public @NonNull Builder setPccSchemaDowngradeWipeLatencyMillis(
+                int pccSchemaDowngradeWipeLatencyMillis) {
+            mPccSchemaDowngradeWipeLatencyMillis = pccSchemaDowngradeWipeLatencyMillis;
+            return this;
+        }
+
         /** Sets the type indicate how this set schema call relative to schema migration cases */
         @CanIgnoreReturnValue
         public @NonNull Builder setSchemaMigrationCallType(
@@ -721,6 +798,13 @@ public final class SetSchemaStats extends BaseStats {
         @CanIgnoreReturnValue
         public @NonNull Builder setSkippedIcingInteraction(boolean skippedIcingInteraction) {
             mSkippedIcingInteraction = skippedIcingInteraction;
+            return this;
+        }
+
+        /** Sets the byte size of the stored schema proto written by this setSchema call */
+        @CanIgnoreReturnValue
+        public @NonNull Builder setNativeSchemaProtoByteSize(long nativeSchemaProtoByteSize) {
+            mNativeSchemaProtoByteSize = nativeSchemaProtoByteSize;
             return this;
         }
 

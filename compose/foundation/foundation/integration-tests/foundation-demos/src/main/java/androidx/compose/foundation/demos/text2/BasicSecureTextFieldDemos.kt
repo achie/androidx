@@ -62,6 +62,13 @@ fun BasicSecureTextFieldDemos() {
             Text("Copy surrogate pair \"\uD801\uDC37\"")
         }
 
+        Button(
+            onClick = {
+                clipboardManager.setText(AnnotatedString("\ud83c\udff3\ufe0f\u200d\ud83c\udf08"))
+            }
+        ) {
+            Text("Copy complex emoji \ud83c\udff3\ufe0f\u200d\ud83c\udf08")
+        }
         TagLine(tag = "Visible")
         BasicSecureTextFieldDemo(TextObfuscationMode.Visible)
 
@@ -156,11 +163,17 @@ fun PasswordToggleVisibilityDemo() {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         BasicSecureTextField(
             state = state,
+            keyboardOptions =
+                KeyboardOptions(
+                    autoCorrectEnabled = false,
+                    keyboardType =
+                        if (visible) KeyboardType.PasswordVisible else KeyboardType.Password,
+                ),
             textObfuscationMode =
                 if (visible) {
                     TextObfuscationMode.Visible
                 } else {
-                    TextObfuscationMode.RevealLastTyped
+                    TextObfuscationMode.System
                 },
             modifier =
                 Modifier.weight(1f)

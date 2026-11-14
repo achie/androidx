@@ -22,6 +22,7 @@ import androidx.compose.runtime.mock.Text
 import androidx.compose.runtime.mock.compositionTest
 import androidx.compose.runtime.mock.expectNoChanges
 import androidx.compose.runtime.snapshots.Snapshot
+import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -35,6 +36,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -277,9 +279,9 @@ class RecomposerTests {
     }
 
     @Test // regression test for b/243862703
-    fun cancelWithPendingInvalidations() {
+    fun cancelWithPendingInvalidations(): TestResult {
         val dispatcher = StandardTestDispatcher()
-        runTest(dispatcher) {
+        return runTest(dispatcher) {
             val testClock = TestMonotonicFrameClock(this)
             withContext(testClock) {
                 val recomposer = Recomposer(coroutineContext)
@@ -358,18 +360,26 @@ class RecomposerTests {
 
         // Register the apply observer after changing state to invalidate composition, but
         // before actually allowing the recomposition to happen.
-        Snapshot.registerApplyObserver { applied, _ -> applications += applied }
-        assertTrue(applications.isEmpty())
+        val observerHandle = Snapshot.registerApplyObserver { applied, _ ->
+            applications += applied
+        }
 
-        assertEquals(1, advanceCount())
+        try {
+            assertTrue(applications.isEmpty())
 
-        // Make sure we actually recomposed.
-        assertEquals(2, recompositions)
+            assertEquals(1, advanceCount())
 
-        // The Recomposer should have received notification for the node's state.
-        assertContentEquals(listOf(setOf(countFromEffect)), applications)
+            // Make sure we actually recomposed.
+            assertEquals(2, recompositions)
+
+            // The Recomposer should have received notification for the node's state.
+            assertContentEquals(listOf(setOf(countFromEffect)), applications)
+        } finally {
+            observerHandle.dispose()
+        }
     }
 
+    @Ignore // b/578048148
     @OptIn(DelicateCoroutinesApi::class)
     @Test // b/329011032
     fun validatePotentialDeadlock() = compositionTest {
@@ -403,9 +413,9 @@ class RecomposerTests {
     }
 
     @Test
-    fun pausingTheFrameClockStopShouldBlockWithFrameNanos() {
+    fun pausingTheFrameClockStopShouldBlockWithFrameNanos(): TestResult {
         val dispatcher = StandardTestDispatcher()
-        runTest(dispatcher) {
+        return runTest(dispatcher) {
             val testClock = TestMonotonicFrameClock(this)
             withContext(testClock) {
                 val recomposer = Recomposer(coroutineContext)

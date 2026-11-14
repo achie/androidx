@@ -24,6 +24,7 @@ import android.os.Bundle
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.telecom.VideoProfile
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -33,6 +34,22 @@ import androidx.core.telecom.CallsManager
 internal class Utils {
     companion object {
         private val TAG = Utils.Companion::class.java.simpleName
+
+        /**
+         * Local constant to mirror the platform's
+         * PhoneAccount.CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK.
+         *
+         * This is a temporary measure because the platform API will not be public until the 26Q2
+         * release. Using a local constant allows us to implement the opt-out feature in this
+         * mainline module without creating a dependency on the yet-to-be-released public API.
+         *
+         * Once the platform API is public, this local constant should be removed and replaced with
+         * the official PhoneAccount.CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK.
+         *
+         * For more details, see b/447631226.
+         */
+        // TODO - b/468165661: Replace local constant with API on availability
+        internal const val PLATFORM_CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK = 0x200000
 
         private val defaultBuildAdapter =
             object : BuildVersionAdapter {
@@ -113,6 +130,7 @@ internal class Utils {
             }
         }
 
+        @Suppress("DEPRECATION")
         @RequiresApi(VERSION_CODES.O)
         fun remapJetpackCapsToPlatformCaps(
             @CallsManager.Companion.Capability clientBitmapSelection: Int,
@@ -138,6 +156,11 @@ internal class Utils {
                     PhoneAccount.CAPABILITY_SUPPORTS_CALL_STREAMING or platformCapabilities
             }
 
+            if (hasJetpackOptOutCapability(clientBitmapSelection)) {
+                platformCapabilities =
+                    PLATFORM_CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK or platformCapabilities
+            }
+
             return platformCapabilities
         }
 
@@ -155,19 +178,87 @@ internal class Utils {
             return hasCapability(CallsManager.CAPABILITY_SUPPORTS_CALL_STREAMING, bitMap)
         }
 
+        @RequiresApi(VERSION_CODES.O)
+        private fun hasJetpackOptOutCapability(bitMap: Int): Boolean {
+            return hasCapability(CallsManager.CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK, bitMap)
+        }
+
         fun getBundleWithPhoneAccountHandle(
             callAttributes: CallAttributesCompat,
             handle: PhoneAccountHandle,
         ): Bundle {
             val extras = Bundle()
             extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
-            if (!callAttributes.isOutgoingCall()) {
+            val platformVideoState = toVideoProfileState(callAttributes.callType)
+            if (callAttributes.isOutgoingCall()) {
+                extras.putInt(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, platformVideoState)
+            } else {
                 extras.putParcelable(
                     TelecomManager.EXTRA_INCOMING_CALL_ADDRESS,
                     callAttributes.address,
                 )
+                extras.putInt(TelecomManager.EXTRA_INCOMING_VIDEO_STATE, platformVideoState)
             }
             return extras
+        }
+
+        fun toVideoProfileState(callType: Int): Int {
+            return when (callType) {
+                CallAttributesCompat.CALL_TYPE_AUDIO_CALL -> {
+                    Log.i(TAG, "toVideoProfileState: AUDIO_CALL -> VideoProfile.STATE_AUDIO_ONLY")
+                    VideoProfile.STATE_AUDIO_ONLY
+                }
+                CallAttributesCompat.CALL_TYPE_VIDEO_CALL -> {
+                    Log.i(
+                        TAG,
+                        "toVideoProfileState: VIDEO_CALL -> VideoProfile.STATE_BIDIRECTIONAL",
+                    )
+                    VideoProfile.STATE_BIDIRECTIONAL
+                }
+                else -> {
+                    Log.w(
+                        TAG,
+                        "toVideoProfileState: Unknown callType=[$callType], defaulting to audio.",
+                    )
+                    VideoProfile.STATE_AUDIO_ONLY
+                }
+            }
+        }
+
+        fun toCallTypeCompat(videoState: Int): Int {
+            return when (videoState) {
+                // Unfixed platform VideoProfile constants
+                VideoProfile.STATE_AUDIO_ONLY -> {
+                    Log.i(
+                        TAG,
+                        "toCallTypeCompat: VideoProfile.STATE_AUDIO_ONLY (0) -> AUDIO_CALL (1)",
+                    )
+                    CallAttributesCompat.CALL_TYPE_AUDIO_CALL
+                }
+                VideoProfile.STATE_BIDIRECTIONAL -> {
+                    Log.i(
+                        TAG,
+                        "toCallTypeCompat: VideoProfile.STATE_BIDIRECTIONAL (3) -> VIDEO_CALL (2)",
+                    )
+                    CallAttributesCompat.CALL_TYPE_VIDEO_CALL
+                }
+                // Fixed platform CallAttributes constants
+                CallAttributesCompat.CALL_TYPE_AUDIO_CALL -> {
+                    Log.i(TAG, "toCallTypeCompat: Already Jetpack AUDIO_CALL (1)")
+                    CallAttributesCompat.CALL_TYPE_AUDIO_CALL
+                }
+                CallAttributesCompat.CALL_TYPE_VIDEO_CALL -> {
+                    Log.i(TAG, "toCallTypeCompat: Already Jetpack VIDEO_CALL (2)")
+                    CallAttributesCompat.CALL_TYPE_VIDEO_CALL
+                }
+                else -> {
+                    Log.w(
+                        TAG,
+                        "toCallTypeCompat: Unknown videoState=[$videoState], defaulting to audio.",
+                    )
+                    CallAttributesCompat.CALL_TYPE_AUDIO_CALL
+                }
+            }
         }
     }
 }

@@ -41,7 +41,10 @@ class ComposeIssueRegistry : IssueRegistry() {
                 LambdaStructuralEqualityDetector.ISSUE,
                 ModifierNodeElementDataClassWithLambdaDetector.ISSUE,
                 ComposableLambdaInMeasurePolicyDetector.ISSUE,
-                ComposeTestRuleDispatcherDetector.ISSUE,
+                FeatureFlagDetector.ISSUE,
+                SnapshotStateListFastIterableDetector.ISSUE,
+                LazyDelegateDetector.ISSUE,
+                BanRestrictToDetector.ISSUE,
             )
         }
 

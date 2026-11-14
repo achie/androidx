@@ -41,8 +41,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,11 +68,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.wear.compose.material3.internal.Strings
+import androidx.wear.compose.material3.internal.getString
 import androidx.wear.compose.material3.tokens.CheckboxButtonTokens
-import androidx.wear.compose.material3.tokens.ShapeTokens
 import androidx.wear.compose.material3.tokens.SplitCheckboxButtonTokens
 import androidx.wear.compose.materialcore.SelectionStage
 import androidx.wear.compose.materialcore.animateSelectionColor
@@ -89,6 +93,9 @@ import androidx.wear.compose.materialcore.isLayoutDirectionRtl
  * Samples: Example of a CheckboxButton:
  *
  * @sample androidx.wear.compose.material3.samples.CheckboxButtonSample
+ *
+ * ![CheckboxButtonSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_CheckboxButtonSample_CompositeImage.png)
  *
  * [CheckboxButton] can be enabled or disabled. A disabled button will not respond to click events.
  *
@@ -135,79 +142,99 @@ public fun CheckboxButton(
     label: @Composable RowScope.() -> Unit,
 ) {
     val hapticFeedback = LocalHapticFeedback.current
+    val currentStateDescription =
+        if (checked) {
+            getString(Strings.CheckedStateDescription)
+        } else {
+            getString(Strings.NotCheckedStateDescription)
+        }
+    val contentColor = colors.contentColor(enabled = enabled, checked = checked).value
 
-    androidx.wear.compose.materialcore.ToggleButton(
-        checked = checked,
-        onCheckedChange = {
-            hapticFeedback.performHapticFeedback(
-                if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff
-            )
-            onCheckedChange(it)
-        },
-        label =
-            provideScopeContent(
-                contentColor = colors.contentColor(enabled = enabled, checked),
-                textStyle = CheckboxButtonTokens.LabelFont.value,
-                textConfiguration =
-                    TextConfiguration(
-                        textAlign = TextAlign.Start,
-                        overflow = TextOverflow.Ellipsis,
-                        maxLines = 3,
-                    ),
-                content = label,
-            ),
-        toggleControl = {
-            Checkbox(
-                checked = checked,
-                enabled = enabled,
-                boxColor = { enabled, checked ->
-                    colors.boxColor(enabled = enabled, checked = checked)
+    val hasInsetFocusRing = LocalRippleThemeConfiguration.current.insetFocusRing != null
+    val actualInteractionSource =
+        if (hasInsetFocusRing) {
+            interactionSource ?: remember { MutableInteractionSource() }
+        } else {
+            interactionSource
+        }
+    CompositionLocalProvider(LocalContentColor provides contentColor) {
+        androidx.wear.compose.materialcore.ToggleButton(
+            checked = checked,
+            onCheckedChange = {
+                hapticFeedback.performHapticFeedback(
+                    if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff
+                )
+                onCheckedChange(it)
+            },
+            label =
+                provideScopeContent(
+                    contentColor = colors.contentColor(enabled = enabled, checked),
+                    textStyle = CheckboxButtonTokens.LabelFont.value,
+                    textConfiguration =
+                        TextConfiguration(
+                            textAlign = TextAlign.Start,
+                            overflow = TextOverflow.Ellipsis,
+                            maxLines = 3,
+                        ),
+                    content = label,
+                ),
+            toggleControl = {
+                Checkbox(
+                    checked = checked,
+                    enabled = enabled,
+                    boxColor = { enabled, checked ->
+                        colors.boxColor(enabled = enabled, checked = checked)
+                    },
+                    checkmarkColor = { enabled, checked ->
+                        colors.checkmarkColor(enabled = enabled, checked = checked)
+                    },
+                )
+            },
+            selectionControl = null,
+            modifier =
+                modifier.defaultMinSize(minHeight = MIN_HEIGHT).semantics {
+                    stateDescription = currentStateDescription
                 },
-                checkmarkColor = { enabled, checked ->
-                    colors.checkmarkColor(enabled = enabled, checked = checked)
-                },
-            )
-        },
-        selectionControl = null,
-        modifier = modifier.defaultMinSize(minHeight = MIN_HEIGHT),
-        icon =
-            provideNullableScopeContent(
-                contentColor = colors.iconColor(enabled = enabled, checked),
-                content = icon,
-            ),
-        secondaryLabel =
-            provideNullableScopeContent(
-                contentColor = colors.secondaryContentColor(enabled = enabled, checked),
-                textStyle = CheckboxButtonTokens.SecondaryLabelFont.value,
-                textConfiguration =
-                    TextConfiguration(
-                        textAlign = TextAlign.Start,
-                        overflow = TextOverflow.Ellipsis,
-                        maxLines = 2,
-                    ),
-                content = secondaryLabel,
-            ),
-        background = { isEnabled, isChecked ->
-            val backgroundColor =
-                colors.containerColor(enabled = isEnabled, checked = isChecked).value
+            icon =
+                provideNullableScopeContent(
+                    contentColor = colors.iconColor(enabled = enabled, checked),
+                    content = icon,
+                ),
+            secondaryLabel =
+                provideNullableScopeContent(
+                    contentColor = colors.secondaryContentColor(enabled = enabled, checked),
+                    textStyle = CheckboxButtonTokens.SecondaryLabelFont.value,
+                    textConfiguration =
+                        TextConfiguration(
+                            textAlign = TextAlign.Start,
+                            overflow = TextOverflow.Ellipsis,
+                            maxLines = 2,
+                        ),
+                    content = secondaryLabel,
+                ),
+            background = { isEnabled, isChecked ->
+                val backgroundColor =
+                    colors.containerColor(enabled = isEnabled, checked = isChecked).value
 
-            Modifier.surface(
-                transformation = transformation,
-                painter = ColorPainter(backgroundColor),
-                shape = shape,
-            )
-        },
-        enabled = enabled,
-        interactionSource = interactionSource,
-        contentPadding = contentPadding,
-        shape = shape,
-        toggleControlWidth = CHECKBOX_WIDTH,
-        toggleControlHeight = CHECKBOX_HEIGHT,
-        labelSpacerSize = CheckboxButtonDefaults.LabelSpacerSize,
-        toggleControlSpacing = TOGGLE_CONTROL_SPACING,
-        iconSpacing = ICON_SPACING,
-        ripple = ripple(),
-    )
+                Modifier.insetFocusRing(interactionSource = actualInteractionSource, shape = shape)
+                    .surface(
+                        transformation = transformation,
+                        painter = ColorPainter(backgroundColor),
+                        shape = shape,
+                    )
+            },
+            enabled = enabled,
+            interactionSource = actualInteractionSource,
+            contentPadding = contentPadding,
+            shape = shape,
+            toggleControlWidth = CHECKBOX_WIDTH,
+            toggleControlHeight = CHECKBOX_HEIGHT,
+            labelSpacerSize = CheckboxButtonDefaults.LabelSpacerSize,
+            toggleControlSpacing = TOGGLE_CONTROL_SPACING,
+            iconSpacing = ICON_SPACING,
+            ripple = ripple(enableFocusIndication = !hasInsetFocusRing),
+        )
+    }
 }
 
 /**
@@ -228,6 +255,9 @@ public fun CheckboxButton(
  *
  * @sample androidx.wear.compose.material3.samples.SplitCheckboxButtonSample
  *
+ * ![SplitCheckboxButtonSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_SplitCheckboxButtonSample_CompositeImage.png)
+ *
  * For a SplitCheckboxButton the background of the tappable background area behind the toggle
  * control will have a visual effect applied to provide a "divider" between the two tappable areas.
  *
@@ -238,12 +268,13 @@ public fun CheckboxButton(
  * events.
  *
  * @param checked Boolean flag indicating whether this button is currently checked.
- * @param onCheckedChange Callback to be invoked when this buttons checked status is changed.
+ * @param onCheckedChange Callback to be invoked when this button's checked status is changed.
  * @param toggleContentDescription The content description for the checkbox control part of the
  *   component.
  * @param onContainerClick Click listener called when the user clicks the main body of the button,
  *   the area behind the labels.
- * @param modifier Modifier to be applied to the button.
+ * @param modifier Modifier to be applied to the button. Any custom accessibility actions will be
+ *   applied to the main body of the [SplitCheckboxButton].
  * @param enabled Controls the enabled state of the button. When `false`, this button will not be
  *   clickable.
  * @param shape Defines the button's shape. It is strongly recommended to use the default as this
@@ -287,116 +318,134 @@ public fun SplitCheckboxButton(
     label: @Composable RowScope.() -> Unit,
 ) {
     val containerColorState = colors.containerColor(enabled, checked)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            modifier
-                .defaultMinSize(minHeight = MIN_HEIGHT)
-                .height(IntrinsicSize.Min)
-                .width(IntrinsicSize.Max)
-                .graphicsLayer {
-                    clip = true
-                    this.shape = shape
-
-                    val transformation = transformation ?: return@graphicsLayer
-                    with(transformation) { applyContainerTransformation() }
-                },
-    ) {
-        Row(
-            modifier =
-                Modifier.clickable(
-                        enabled = enabled,
-                        onClick = onContainerClick,
-                        indication = ripple(),
-                        interactionSource = containerInteractionSource,
-                        onClickLabel = containerClickLabel,
-                    )
-                    .semantics { role = Role.Button }
-                    .fillMaxHeight()
-                    .clip(SPLIT_SECTIONS_SHAPE)
-                    .drawBehind { drawRect(containerColorState.value) }
-                    .padding(contentPadding)
-                    .weight(1.0f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Labels(
-                label =
-                    provideScopeContent(
-                        contentColor = colors.contentColor(enabled = enabled, checked = checked),
-                        textStyle = SplitCheckboxButtonTokens.LabelFont.value,
-                        textConfiguration =
-                            TextConfiguration(
-                                textAlign = TextAlign.Start,
-                                overflow = TextOverflow.Ellipsis,
-                                maxLines = 3,
-                            ),
-                        content = label,
-                    ),
-                secondaryLabel =
-                    provideNullableScopeContent(
-                        contentColor =
-                            colors.secondaryContentColor(enabled = enabled, checked = checked),
-                        textStyle = SplitCheckboxButtonTokens.SecondaryLabelFont.value,
-                        textConfiguration =
-                            TextConfiguration(
-                                overflow = TextOverflow.Ellipsis,
-                                maxLines = 2,
-                                textAlign = TextAlign.Start,
-                            ),
-                        content = secondaryLabel,
-                    ),
-            )
+    val currentStateDescription =
+        if (checked) {
+            getString(Strings.CheckedStateDescription)
+        } else {
+            getString(Strings.NotCheckedStateDescription)
         }
+    val contentColor = colors.contentColor(enabled = enabled, checked = checked).value
+    val (outerModifier, customActionsModifier) = modifier.extractCustomActions()
 
-        Spacer(modifier = Modifier.size(2.dp))
-
-        val splitBackgroundOverlayState = colors.splitContainerColor(enabled, checked)
-        val hapticFeedback = LocalHapticFeedback.current
-        Box(
-            contentAlignment = Alignment.Center,
+    CompositionLocalProvider(LocalContentColor provides contentColor) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier =
-                Modifier.toggleable(
-                        enabled = enabled,
-                        value = checked,
-                        onValueChange = {
-                            hapticFeedback.performHapticFeedback(
-                                if (it) HapticFeedbackType.ToggleOn
-                                else HapticFeedbackType.ToggleOff
-                            )
-                            onCheckedChange(it)
-                        },
-                        indication = ripple(),
-                        interactionSource = toggleInteractionSource,
-                    )
-                    .fillMaxHeight()
-                    .clip(SPLIT_SECTIONS_SHAPE)
-                    .drawBehind {
-                        drawRect(
-                            splitBackgroundOverlayState.value.compositeOver(
-                                if (enabled) containerColorState.value else Color.Black
-                            )
-                        )
-                    }
-                    .defaultMinSize(minWidth = SPLIT_MIN_WIDTH)
-                    .wrapContentHeight(align = Alignment.CenterVertically)
-                    .padding(contentPadding),
-        ) {
-            Checkbox(
-                checked = checked,
-                enabled = enabled,
-                modifier =
-                    if (toggleContentDescription == null) {
-                        Modifier
-                    } else {
-                        Modifier.semantics { contentDescription = toggleContentDescription }
+                outerModifier
+                    .defaultMinSize(minHeight = MIN_HEIGHT)
+                    .height(IntrinsicSize.Min)
+                    .width(IntrinsicSize.Max)
+                    .graphicsLayer {
+                        clip = true
+                        this.shape = shape
+
+                        val transformation = transformation ?: return@graphicsLayer
+                        with(transformation) { applyContainerTransformation() }
                     },
-                boxColor = { enabled, checked ->
-                    colors.boxColor(enabled = enabled, checked = checked)
-                },
-                checkmarkColor = { enabled, checked ->
-                    colors.checkmarkColor(enabled = enabled, checked = checked)
-                },
-            )
+        ) {
+            val startSectionShape = shape.startSection()
+            Row(
+                modifier =
+                    customActionsModifier
+                        .clickable(
+                            enabled = enabled,
+                            onClick = onContainerClick,
+                            indication =
+                                ripple(focusRingShape = rememberDelegatingShape(startSectionShape)),
+                            interactionSource = containerInteractionSource,
+                            onClickLabel = containerClickLabel,
+                        )
+                        .semantics { role = Role.Button }
+                        .fillMaxHeight()
+                        .clip(startSectionShape)
+                        .drawBehind { drawRect(containerColorState.value) }
+                        .padding(contentPadding)
+                        .weight(1.0f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Labels(
+                    label =
+                        provideScopeContent(
+                            contentColor =
+                                colors.contentColor(enabled = enabled, checked = checked),
+                            textStyle = SplitCheckboxButtonTokens.LabelFont.value,
+                            textConfiguration =
+                                TextConfiguration(
+                                    textAlign = TextAlign.Start,
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 3,
+                                ),
+                            content = label,
+                        ),
+                    secondaryLabel =
+                        provideNullableScopeContent(
+                            contentColor =
+                                colors.secondaryContentColor(enabled = enabled, checked = checked),
+                            textStyle = SplitCheckboxButtonTokens.SecondaryLabelFont.value,
+                            textConfiguration =
+                                TextConfiguration(
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    textAlign = TextAlign.Start,
+                                ),
+                            content = secondaryLabel,
+                        ),
+                )
+            }
+
+            Spacer(modifier = Modifier.size(2.dp))
+
+            val splitBackgroundOverlayState = colors.splitContainerColor(enabled, checked)
+            val hapticFeedback = LocalHapticFeedback.current
+            val endSectionShape = shape.endSection()
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier =
+                    Modifier.toggleable(
+                            enabled = enabled,
+                            value = checked,
+                            onValueChange = {
+                                hapticFeedback.performHapticFeedback(
+                                    if (it) HapticFeedbackType.ToggleOn
+                                    else HapticFeedbackType.ToggleOff
+                                )
+                                onCheckedChange(it)
+                            },
+                            indication =
+                                ripple(focusRingShape = rememberDelegatingShape(endSectionShape)),
+                            interactionSource = toggleInteractionSource,
+                        )
+                        .fillMaxHeight()
+                        .clip(endSectionShape)
+                        .drawBehind {
+                            drawRect(
+                                splitBackgroundOverlayState.value.compositeOver(
+                                    if (enabled) containerColorState.value else Color.Black
+                                )
+                            )
+                        }
+                        .defaultMinSize(minWidth = SPLIT_MIN_WIDTH)
+                        .wrapContentHeight(align = Alignment.CenterVertically)
+                        .padding(contentPadding)
+                        .semantics { stateDescription = currentStateDescription },
+            ) {
+                Checkbox(
+                    checked = checked,
+                    enabled = enabled,
+                    modifier =
+                        if (toggleContentDescription == null) {
+                            Modifier
+                        } else {
+                            Modifier.semantics { contentDescription = toggleContentDescription }
+                        },
+                    boxColor = { enabled, checked ->
+                        colors.boxColor(enabled = enabled, checked = checked)
+                    },
+                    checkmarkColor = { enabled, checked ->
+                        colors.checkmarkColor(enabled = enabled, checked = checked)
+                    },
+                )
+            }
         }
     }
 }
@@ -1587,7 +1636,6 @@ private val BOX_RADIUS = 2.dp
 private val BOX_SIZE = 18.dp
 
 private val SPLIT_MIN_WIDTH = 48.dp
-private val SPLIT_SECTIONS_SHAPE = ShapeTokens.CornerExtraSmall
 
 private val COLOR_ANIMATION_SPEC: AnimationSpec<Color>
     @Composable get() = MaterialTheme.motionScheme.slowEffectsSpec()

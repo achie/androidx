@@ -20,7 +20,7 @@ import androidx.datastore.TestFile
 import androidx.datastore.TestIO
 import androidx.datastore.TestingSerializerConfig
 import androidx.datastore.core.UpdatingDataContextElement.Companion.NESTED_UPDATE_ERROR_MESSAGE
-import androidx.datastore.core.handlers.NoOpCorruptionHandler
+import androidx.datastore.core.handlers.ReThrowCorruptionHandler
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -725,13 +725,12 @@ abstract class SingleProcessDataStoreTest<F : TestFile<F>>(private val testIO: T
         val myScope = CoroutineScope(coroutineContext + dispatcher)
         val cancelNow = CompletableDeferred<Unit>()
 
-        val coroutine =
-            myScope.launch {
-                store.updateData {
-                    cancelNow.complete(Unit)
-                    awaitCancellation()
-                }
+        val coroutine = myScope.launch {
+            store.updateData {
+                cancelNow.complete(Unit)
+                awaitCancellation()
             }
+        }
 
         cancelNow.await()
         coroutine.cancelAndJoin()
@@ -970,18 +969,17 @@ abstract class SingleProcessDataStoreTest<F : TestFile<F>>(private val testIO: T
 
     @Test
     fun nestedUpdateCallsShouldntDeadlock() = runTest {
-        val result =
-            store.updateData {
-                assertThrows<IllegalStateException> {
-                        store.updateData {
-                            // won't execute
-                            2.toByte()
-                        }
+        val result = store.updateData {
+            assertThrows<IllegalStateException> {
+                    store.updateData {
+                        // won't execute
+                        2.toByte()
                     }
-                    .hasMessageThat()
-                    .isEqualTo(NESTED_UPDATE_ERROR_MESSAGE)
-                1.toByte()
-            }
+                }
+                .hasMessageThat()
+                .isEqualTo(NESTED_UPDATE_ERROR_MESSAGE)
+            1.toByte()
+        }
         assertThat(result).isEqualTo(1.toByte())
         assertThat(store.data.first()).isEqualTo(1.toByte())
         // write again, make sure we allow new transactions
@@ -1107,13 +1105,13 @@ abstract class SingleProcessDataStoreTest<F : TestFile<F>>(private val testIO: T
         serializerConfig: TestingSerializerConfig = this.serializerConfig,
         scope: CoroutineScope = dataStoreScope,
         initTasksList: List<InitTaskList> = listOf(),
-        corruptionHandler: CorruptionHandler<Byte> = NoOpCorruptionHandler(),
+        corruptionHandler: CorruptionHandler<Byte> = ReThrowCorruptionHandler(),
     ): DataStore<Byte> {
         return DataStoreImpl(
             testIO.getStorage(serializerConfig, { createSingleProcessCoordinator(file.path()) }) {
                 file
             },
-            scope = scope,
+            context = scope.coroutineContext,
             initTasksList = initTasksList,
             corruptionHandler = corruptionHandler,
         )

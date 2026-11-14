@@ -243,6 +243,9 @@ internal class LayoutModifierNodeCoordinator(
         // get(line), to obtain the position of the alignment line the coordinator currently needs
         // our position in order ot know how to offset the value we provided).
         if (isShallowPlacing) return
+        if (!isPlacingForAlignment) {
+            layoutPendingForAlignment = false
+        }
         onPlaced()
         val wrapped = wrappedNonNull
         approachMeasureScope?.let {
@@ -259,9 +262,10 @@ internal class LayoutModifierNodeCoordinator(
                 wrapped.forcePlaceWithLookaheadOffset = approachComplete
             }
         }
+        val wasPlacingForAlignment = wrapped.isPlacingForAlignment
         wrapped.isPlacingForAlignment = isPlacingForAlignment
         measureResult.placeChildren()
-        wrapped.isPlacingForAlignment = false
+        wrapped.isPlacingForAlignment = wasPlacingForAlignment
         wrapped.forcePlaceWithLookaheadOffset = false
     }
 
@@ -304,12 +308,17 @@ private fun LookaheadCapablePlaceable.calculateAlignmentAndPlaceChildAsNeeded(
     if (positionInWrapped == AlignmentLine.Unspecified) {
         return AlignmentLine.Unspecified
     }
-    // Place our wrapped to obtain their position inside ourselves.
-    child.isShallowPlacing = true
-    isPlacingForAlignment = true
-    replace()
-    child.isShallowPlacing = false
-    isPlacingForAlignment = false
+    if (layoutPendingForAlignment) {
+        // Place our wrapped to obtain their position inside ourselves.
+        val wasShallowPlacing = isShallowPlacing
+        val wasPlacingForAlignment = isPlacingForAlignment
+        child.isShallowPlacing = true
+        isPlacingForAlignment = true
+        replace()
+        child.isShallowPlacing = wasShallowPlacing
+        isPlacingForAlignment = wasPlacingForAlignment
+        layoutPendingForAlignment = false
+    }
     return if (alignmentLine is HorizontalAlignmentLine) {
         positionInWrapped + child.position.y
     } else {

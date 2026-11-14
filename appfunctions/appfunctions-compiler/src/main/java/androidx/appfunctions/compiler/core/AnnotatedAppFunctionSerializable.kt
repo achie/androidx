@@ -20,6 +20,8 @@ import androidx.appfunctions.compiler.AppFunctionCompiler
 import androidx.appfunctions.compiler.core.AnnotatedAppFunctionSerializableProxy.ResolvedAnnotatedSerializableProxies
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionSerializableFactoryClass
+import androidx.appfunctions.compiler.core.IntrospectionHelper.ExperimentalAppFunctionsApiAnnotation
+import androidx.appfunctions.compiler.core.IntrospectionHelper.OptInAnnotation
 import androidx.appfunctions.compiler.core.IntrospectionHelper.RESTRICT_API_TO_33_ANNOTATION
 import androidx.appfunctions.compiler.processors.AppFunctionSerializableFactoryCodeBuilderHelper
 import androidx.appfunctions.compiler.processors.AppFunctionSerializableFactoryCodeBuilderHelper.Companion.buildFromAppFunctionDataFunction
@@ -28,6 +30,7 @@ import androidx.appfunctions.compiler.processors.AppFunctionSerializableFactoryC
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
+import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
@@ -43,7 +46,7 @@ open class AnnotatedAppFunctionSerializable(override val classDeclaration: KSCla
         "${appFunctionSerializableTypeClassDeclaration.jvmClassName.replace("$", "").replaceFirstChar {  it.lowercase() } }Factory"
     }
 
-    override val isDescribedByKdoc: Boolean by lazy {
+    override val isDescribedByKDoc: Boolean by lazy {
         val annotation =
             classDeclaration.annotations.findAnnotation(
                 IntrospectionHelper.AppFunctionSerializableAnnotation.CLASS_NAME
@@ -56,7 +59,19 @@ open class AnnotatedAppFunctionSerializable(override val classDeclaration: KSCla
 
     /** A description of the AppFunctionSerializable class and its intended use. */
     override fun getDescription(sharedDataTypeDescriptionMap: Map<String, String>): String {
-        return docString.ifEmpty { sharedDataTypeDescriptionMap[jvmQualifiedName] ?: "" }
+        val instructionAnnotation =
+            classDeclaration.annotations.findAnnotation(
+                IntrospectionHelper.AppFunctionInstructionAnnotation.CLASS_NAME
+            )
+        if (instructionAnnotation != null) {
+            return instructionAnnotation.requirePropertyValueOfType(
+                IntrospectionHelper.AppFunctionInstructionAnnotation.PROPERTY_INSTRUCTION,
+                String::class,
+            )
+        }
+        return sanitizeKDoc(
+            docString.ifEmpty { sharedDataTypeDescriptionMap[jvmQualifiedName] ?: "" }
+        )
     }
 
     /**
@@ -85,6 +100,16 @@ open class AnnotatedAppFunctionSerializable(override val classDeclaration: KSCla
     override fun validate(
         allowSerializableInterfaceTypes: Boolean
     ): AnnotatedAppFunctionSerializable {
+        if (
+            classDeclaration.annotations.findAnnotation(
+                IntrospectionHelper.AppFunctionSerializableAnnotation.CLASS_NAME
+            ) == null
+        ) {
+            throw ProcessingException(
+                "${classDeclaration.getJvmClassName()} cannot be represented as an app function serializable. Did you forget to annotate ${classDeclaration.getJvmClassName()}?",
+                classDeclaration,
+            )
+        }
         val validateHelper = AppFunctionSerializableValidateHelper(this)
         validateHelper.validatePrimaryConstructor()
         validateHelper.validateParameters(allowSerializableInterfaceTypes)
@@ -127,6 +152,21 @@ open class AnnotatedAppFunctionSerializable(override val classDeclaration: KSCla
                         .addAnnotation(AppFunctionCompiler.GENERATED_ANNOTATION)
                         .addSuperinterface(superInterfaceClass)
                         .apply {
+                            if (
+                                annotatedClass.classDeclaration.referencesAnnotation(
+                                    ExperimentalAppFunctionsApiAnnotation.CLASS_NAME
+                                )
+                            ) {
+                                addAnnotation(
+                                    AnnotationSpec.builder(OptInAnnotation.CLASS_NAME)
+                                        .addMember(
+                                            "%T::class",
+                                            ExperimentalAppFunctionsApiAnnotation.CLASS_NAME,
+                                        )
+                                        .build()
+                                )
+                            }
+
                             if (
                                 annotatedClass.appFunctionSerializableTypeClassDeclaration.modifiers
                                     .contains(Modifier.INTERNAL)

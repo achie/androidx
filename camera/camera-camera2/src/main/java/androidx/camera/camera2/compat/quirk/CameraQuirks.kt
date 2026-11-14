@@ -178,6 +178,14 @@ constructor(
         }
         if (
             quirkSettings.shouldEnableQuirk(
+                LowLightBoostStreamUseCaseQuirk::class.java,
+                LowLightBoostStreamUseCaseQuirk.isEnabled(cameraMetadata),
+            )
+        ) {
+            quirks.add(LowLightBoostStreamUseCaseQuirk())
+        }
+        if (
+            quirkSettings.shouldEnableQuirk(
                 PreviewOrientationIncorrectQuirk::class.java,
                 PreviewOrientationIncorrectQuirk.isEnabled(cameraMetadata),
             )
@@ -271,6 +279,14 @@ constructor(
             )
         ) {
             quirks.add(UltraWideFlashCaptureUnderexposureQuirk())
+        }
+        if (
+            quirkSettings.shouldEnableQuirk(
+                CameraCrashWhenHlg10UhdWithVideoStabilizationQuirk::class.java,
+                CameraCrashWhenHlg10UhdWithVideoStabilizationQuirk.isEnabled(),
+            )
+        ) {
+            quirks.add(CameraCrashWhenHlg10UhdWithVideoStabilizationQuirk())
         }
 
         Quirks(quirks).also { Logger.d(TAG, "camera2 CameraQuirks = " + Quirks.toString(it)) }

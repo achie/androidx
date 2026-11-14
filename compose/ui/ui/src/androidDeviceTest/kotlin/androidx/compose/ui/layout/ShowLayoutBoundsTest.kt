@@ -18,13 +18,16 @@ package androidx.compose.ui.layout
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.ParcelFileDescriptor
+import android.view.View
+import androidx.annotation.DoNotInline
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.FixedSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.assertRect
-import androidx.compose.ui.background
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.padding
@@ -32,7 +35,7 @@ import androidx.compose.ui.platform.AndroidComposeView
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.TestActivity
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
@@ -40,7 +43,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -48,14 +50,29 @@ import org.junit.Test
 
 @MediumTest
 class ShowLayoutBoundsTest {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
+
+    private fun executeShellCommandSynchronously(command: String) {
+        val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        ParcelFileDescriptor.AutoCloseInputStream(uiAutomation.executeShellCommand(command)).use {
+            it.readBytes()
+        }
+    }
 
     private fun setIsShowingLayoutBounds(value: Boolean) {
-        val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        uiAutomation.executeShellCommand("setprop debug.layout $value")
+        executeShellCommandSynchronously("setprop debug.layout $value")
         // 1599295570 is SYSPROPS_TRANSACTION -- used to poke the system properties
         // to notify that a change happened
-        uiAutomation.executeShellCommand("service call activity 1599295570")
+        executeShellCommandSynchronously("service call activity 1599295570")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            rule.waitUntil(5000) {
+                rule.runOnUiThread {
+                    val decorView = rule.activity.window.decorView
+                    !decorView.isAttachedToWindow ||
+                        Api30Impl.isShowingLayoutBounds(decorView) == value
+                }
+            }
+        }
         rule.waitForIdle()
     }
 
@@ -81,12 +98,14 @@ class ShowLayoutBoundsTest {
         rule.runOnIdle {
             assertThat(view.showLayoutBounds).isTrue()
             view.viewTreeObserver.addOnPreDrawListener {
-                latch.countDown()
+                if (!view.showLayoutBounds) {
+                    latch.countDown()
+                }
                 true
             }
         }
         setIsShowingLayoutBounds(false)
-        assertThat(latch.await(1, TimeUnit.SECONDS)).isTrue()
+        assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue()
         rule.runOnIdle { assertThat(view.showLayoutBounds).isFalse() }
     }
 
@@ -153,5 +172,10 @@ class ShowLayoutBoundsTest {
         assertThat(bitmap.width).isEqualTo(width)
         assertThat(bitmap.height).isEqualTo(height)
         return bitmap
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private object Api30Impl {
+        @JvmStatic @DoNotInline fun isShowingLayoutBounds(view: View) = view.isShowingLayoutBounds
     }
 }

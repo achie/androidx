@@ -16,7 +16,10 @@
 
 package androidx.camera.testing.impl;
 
+import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
+import android.media.Image;
+import android.media.ImageReader;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
 import android.opengl.EGLContext;
@@ -206,6 +209,14 @@ public final class SurfaceTextureProvider {
             @Nullable Consumer<SurfaceRequest> onSurfaceRequestAvailableListener,
             @Nullable Consumer<SurfaceRequest.Result> resultListener
     ) {
+        if (AndroidUtil.isEmulator(24)) {
+            // Use ImageReader to drain frames without OpenGL/EGL to avoid SwiftShader native
+            // crashes in eglCreateImageKHR on API 24 emulators (b/563154933, b/539514196).
+            return createAutoDrainingImageReaderProvider(
+                    frameAvailableListener,
+                    onSurfaceRequestAvailableListener,
+                    resultListener);
+        }
         return (surfaceRequest) -> {
             if (onSurfaceRequestAvailableListener != null) {
                 onSurfaceRequestAvailableListener.accept(surfaceRequest);
@@ -242,6 +253,60 @@ public final class SurfaceTextureProvider {
         };
     }
 
+    private static Preview.@NonNull SurfaceProvider createAutoDrainingImageReaderProvider(
+            SurfaceTexture.@Nullable OnFrameAvailableListener frameAvailableListener,
+            @Nullable Consumer<SurfaceRequest> onSurfaceRequestAvailableListener,
+            @Nullable Consumer<SurfaceRequest.Result> resultListener) {
+        return (surfaceRequest) -> {
+            if (onSurfaceRequestAvailableListener != null) {
+                onSurfaceRequestAvailableListener.accept(surfaceRequest);
+            }
+            HandlerThread handlerThread = new HandlerThread("CameraX-AutoDrainThread");
+            handlerThread.start();
+            Handler handler = HandlerCompat.createAsync(handlerThread.getLooper());
+
+            ImageReader imageReader = ImageReader.newInstance(
+                    surfaceRequest.getResolution().getWidth(),
+                    surfaceRequest.getResolution().getHeight(),
+                    ImageFormat.PRIVATE,
+                    2);
+
+            SurfaceTexture dummySurfaceTexture =
+                    frameAvailableListener != null ? new SurfaceTexture(0) : null;
+
+            imageReader.setOnImageAvailableListener(reader -> {
+                boolean frameReceived = false;
+                try {
+                    Image image = reader.acquireLatestImage();
+                    if (image != null) {
+                        image.close();
+                        frameReceived = true;
+                    }
+                } catch (IllegalStateException e) {
+                    // ImageReader may already be closed.
+                }
+                if (frameReceived && frameAvailableListener != null) {
+                    frameAvailableListener.onFrameAvailable(dummySurfaceTexture);
+                }
+            }, handler);
+
+            Surface surface = imageReader.getSurface();
+            surfaceRequest.provideSurface(surface,
+                    CameraXExecutors.directExecutor(),
+                    (surfaceResponse) -> {
+                        if (resultListener != null) {
+                            resultListener.accept(surfaceResponse);
+                        }
+                        surface.release();
+                        imageReader.close();
+                        if (dummySurfaceTexture != null) {
+                            dummySurfaceTexture.release();
+                        }
+                        handlerThread.quitSafely();
+                    });
+        };
+    }
+
     /**
      * Creates a {@link SurfaceTextureHolder} asynchronously that contains a {@link SurfaceTexture}
      * which will automatically drain frames as new frames arrive.
@@ -263,6 +328,7 @@ public final class SurfaceTextureProvider {
             glExecutor.execute(() -> {
                 Object lock = new Object();
                 AtomicBoolean surfaceTextureReleased = new AtomicBoolean(false);
+                AtomicBoolean updateTexImageFailedLogged = new AtomicBoolean(false);
                 EGLContextParams contextParams = createDummyEGLContext();
                 EGL14.eglMakeCurrent(contextParams.display, contextParams.outputSurface,
                         contextParams.outputSurface, contextParams.context);
@@ -277,7 +343,16 @@ public final class SurfaceTextureProvider {
                                 if (surfaceTextureReleased.get()) {
                                     return;
                                 }
-                                it.updateTexImage();
+                                try {
+                                    it.updateTexImage();
+                                } catch (RuntimeException e) {
+                                    if (updateTexImageFailedLogged.compareAndSet(false, true)) {
+                                        Logger.w(TAG, "Failed to updateTexImage", e);
+                                    } else {
+                                        Logger.d(TAG, "Failed to updateTexImage: "
+                                                + e.getMessage());
+                                    }
+                                }
                                 if (frameAvailableListener != null) {
                                     frameAvailableListener.onFrameAvailable(surfaceTexture);
                                 }

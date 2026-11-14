@@ -38,7 +38,7 @@ import androidx.compose.ui.graphics.shadow.ShadowContext
  * @param layerContainer [ViewGroup] used to contain [View] based layers that are created by the
  *   returned [GraphicsContext]
  */
-fun GraphicsContext(layerContainer: ViewGroup): GraphicsContext =
+public fun GraphicsContext(layerContainer: ViewGroup): GraphicsContext =
     AndroidGraphicsContext(layerContainer)
 
 private class AndroidGraphicsContext(private val ownerView: ViewGroup) : GraphicsContext {
@@ -117,9 +117,7 @@ private class AndroidGraphicsContext(private val ownerView: ViewGroup) : Graphic
             val layerImpl =
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     GraphicsLayerV29(ownerId)
-                } else if (
-                    isRenderNodeCompatible && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                ) {
+                } else if (isRenderNodeCompatible) {
                     try {
                         GraphicsLayerV23(ownerView, ownerId)
                     } catch (_: Throwable) {

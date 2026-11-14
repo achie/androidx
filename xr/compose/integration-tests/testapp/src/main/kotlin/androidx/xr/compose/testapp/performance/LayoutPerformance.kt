@@ -60,12 +60,12 @@ import androidx.xr.compose.subspace.SpatialColumn
 import androidx.xr.compose.subspace.SpatialMainPanel
 import androidx.xr.compose.subspace.SpatialPanel
 import androidx.xr.compose.subspace.SpatialRow
+import androidx.xr.compose.subspace.draw.scale
 import androidx.xr.compose.subspace.layout.SpatialAlignment
 import androidx.xr.compose.subspace.layout.SpatialArrangement
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.height
 import androidx.xr.compose.subspace.layout.rotate
-import androidx.xr.compose.subspace.layout.scale
 import androidx.xr.compose.subspace.layout.width
 import androidx.xr.compose.testapp.ui.components.CommonTestScaffold
 import androidx.xr.compose.testapp.ui.components.FpsCounterScreen
@@ -151,7 +151,7 @@ class LayoutPerformance : ComponentActivity() {
 
         SpatialRow(
             modifier = SubspaceModifier.width(6000.dp).height(6000.dp),
-            alignment = SpatialAlignment.Center,
+            verticalAlignment = SpatialAlignment.CenterVertically,
             horizontalArrangement = SpatialArrangement.SpaceAround,
         ) {
             SpatialPanel(modifier = SubspaceModifier.width(controlWidth).height(controlHeight)) {

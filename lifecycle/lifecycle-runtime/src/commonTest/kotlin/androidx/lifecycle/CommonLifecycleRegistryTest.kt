@@ -21,7 +21,6 @@ import androidx.kruth.assertThrows
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 
-@IgnoreWebTarget
 class CommonLifecycleRegistryTest {
     private lateinit var mLifecycleOwner: LifecycleOwner
     private lateinit var mRegistry: LifecycleRegistry
@@ -42,6 +41,20 @@ class CommonLifecycleRegistryTest {
         assertThat(mRegistry.currentState).isEqualTo(Lifecycle.State.RESUMED)
         mRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         assertThat(mRegistry.currentState).isEqualTo(Lifecycle.State.DESTROYED)
+    }
+
+    @Test
+    fun getCurrentStateFlow() {
+        val stateFlow = mRegistry.currentStateFlow
+        assertThat(stateFlow.value).isEqualTo(Lifecycle.State.INITIALIZED)
+
+        mRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        assertThat(stateFlow.value).isEqualTo(Lifecycle.State.RESUMED)
+
+        mRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        assertThat(stateFlow.value).isEqualTo(Lifecycle.State.DESTROYED)
+
+        assertThat(mRegistry.currentStateFlow).isSameInstanceAs(stateFlow)
     }
 
     @Test

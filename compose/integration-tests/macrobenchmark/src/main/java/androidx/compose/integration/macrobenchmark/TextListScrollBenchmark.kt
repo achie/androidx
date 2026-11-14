@@ -23,7 +23,6 @@ import android.graphics.Canvas
 import android.util.Log
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.ExperimentalMetricApi
-import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.TraceSectionMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.filters.LargeTest
@@ -31,6 +30,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
+import androidx.testutils.defaultComposeScrollingMetrics
+import androidx.testutils.defaultMemoryMetrics
+import androidx.testutils.findObjectOrThrow
+import androidx.tracing.trace
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -55,29 +58,20 @@ class TextListScrollBenchmark(private val styled: Boolean, private val prefetch:
         benchmarkRule.measureRepeated(
             packageName = PackageName,
             metrics =
-                listOf(
-                    FrameTimingMetric(),
-                    TraceSectionMetric(
-                        sectionName = "TextStringSimpleNode::measure",
-                        label = "measureText",
-                        mode = TraceSectionMetric.Mode.Sum,
+                defaultComposeScrollingMetrics() +
+                    defaultMemoryMetrics() +
+                    listOf(
+                        TraceSectionMetric(
+                            sectionName = "TextStringSimpleNode::measure",
+                            label = "measureText",
+                            mode = TraceSectionMetric.Mode.Sum,
+                        ),
+                        TraceSectionMetric(
+                            sectionName = "BackgroundTextMeasurement",
+                            label = "bgMeasureText",
+                            mode = TraceSectionMetric.Mode.Sum,
+                        ),
                     ),
-                    TraceSectionMetric(
-                        sectionName = "BackgroundTextMeasurement",
-                        label = "bgMeasureText",
-                        mode = TraceSectionMetric.Mode.Sum,
-                    ),
-                    TraceSectionMetric(
-                        sectionName = "compose:lazy:prefetch:measure",
-                        label = "premeasure",
-                        mode = TraceSectionMetric.Mode.Sum,
-                    ),
-                    TraceSectionMetric(
-                        sectionName = "compose:lazy:prefetch:compose",
-                        label = "precompose",
-                        mode = TraceSectionMetric.Mode.Sum,
-                    ),
-                ),
             compilationMode = CompilationMode.Full(),
             iterations = 3,
             setupBlock = {
@@ -90,12 +84,16 @@ class TextListScrollBenchmark(private val styled: Boolean, private val prefetch:
                 intent.putExtra(BenchmarkConfig.WordLength, 8)
                 tryFreeTextLayoutCache()
                 startActivityAndWait(intent)
+                device.waitForIdle()
             },
         ) {
-            val content = device.findObject(By.res("android", "content"))
+            val content = device.findObjectOrThrow(By.res("android", "content"))
             content.setGestureMargin(device.displayWidth / 5)
             for (i in 1..5) {
-                content.fling(Direction.DOWN)
+                trace("TextListScroll#fling_$i") {
+                    content.fling(Direction.DOWN)
+                    device.waitForIdle()
+                }
             }
         }
     }

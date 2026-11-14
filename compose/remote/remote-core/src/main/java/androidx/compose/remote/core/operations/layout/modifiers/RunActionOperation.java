@@ -17,14 +17,15 @@ package androidx.compose.remote.core.operations.layout.modifiers;
 
 import androidx.annotation.RestrictTo;
 import androidx.compose.remote.core.CoreDocument;
+import androidx.compose.remote.core.Limits;
 import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.Operations;
 import androidx.compose.remote.core.PaintContext;
 import androidx.compose.remote.core.PaintOperation;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.documentation.DocumentationBuilder;
+import androidx.compose.remote.core.operations.ComponentData;
 import androidx.compose.remote.core.operations.layout.ActionOperation;
-import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.layout.Container;
 import androidx.compose.remote.core.serialize.MapSerializer;
 
@@ -35,7 +36,7 @@ import java.util.List;
 
 /** Contains actions and immediately runs them */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-public class RunActionOperation extends PaintOperation implements Container {
+public class RunActionOperation extends PaintOperation implements Container, ComponentData {
     private static final int OP_CODE = Operations.RUN_ACTION;
     private static final String CLASS_NAME = "RunActionOperation";
 
@@ -78,14 +79,23 @@ public class RunActionOperation extends PaintOperation implements Container {
     @Override
     public void paint(@NonNull PaintContext context) {
         CoreDocument document = context.getContext().getDocument();
-        Component component = context.getContext().mLastComponent;
-        if (document == null || component == null) {
+        if (document == null) {
             return;
         }
         for (Operation op : getList()) {
+
+            if (!Limits.ENABLE_RUN_ACTION_HOST_ACTIONS) {
+                if (op instanceof HostActionMetadataOperation
+                        || op instanceof HostNamedActionOperation
+                        || op instanceof HostActionOperation) {
+                    System.err.println("HostAction not allowed in a RunAction");
+                    continue; // you cannot run host actions in RunActionOperation
+                }
+            }
+
             if (op instanceof ActionOperation) {
                 ActionOperation actionOperation = (ActionOperation) op;
-                actionOperation.runAction(context.getContext(), document, component, 0f, 0f);
+                actionOperation.runAction(context.getContext(), document);
             }
         }
     }

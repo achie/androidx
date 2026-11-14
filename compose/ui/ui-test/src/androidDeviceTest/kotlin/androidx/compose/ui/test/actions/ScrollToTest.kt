@@ -25,10 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.actions.ScrollToTest.ExpectedAlignment.Bottom
@@ -48,7 +46,7 @@ import androidx.compose.ui.test.actions.ScrollToTest.StartPosition.PartiallyBefo
 import androidx.compose.ui.test.actions.ScrollToTest.StartPosition.StartAlignedIn
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.util.ClickableTestBox
@@ -56,7 +54,7 @@ import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.LayoutDirection
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -168,7 +166,7 @@ class ScrollToTest(private val config: TestConfig) {
         }
     }
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun scrollToTarget() {
@@ -236,24 +234,60 @@ class ScrollToTest(private val config: TestConfig) {
         }
     }
 
-    private fun DpRect.toPx(): Rect = with(rule.density) { toRect() }
+    @Test
+    fun scrollToTarget_autoAdvanceDisabled() {
+        val scrollState = ScrollState(config.initialScrollOffset)
+        val isRtl = config.orientation == HorizontalRtl
 
-    private fun rowModifier(scrollState: ScrollState): Modifier =
-        Modifier.composed {
-            with(LocalDensity.current) {
-                Modifier.testTag(containerTag)
-                    .requiredSize(config.viewportSizePx.toDp(), itemSizePx.toDp())
-                    .horizontalScroll(scrollState, reverseScrolling = config.reverseScrolling)
+        rule.setContent {
+            val direction = if (isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                when (config.orientation) {
+                    HorizontalLtr,
+                    HorizontalRtl -> Row(rowModifier(scrollState)) { Boxes() }
+                    Vertical -> Column(columnModifier(scrollState)) { Boxes() }
+                }
             }
         }
 
+        if (config.expectScrolling) {
+            // When scrolling is required to bring the target into view, performScrollTo() fails
+            // because the scroll animation needs the test clock to advance in order to run.
+            rule.mainClock.autoAdvance = false
+            val error =
+                assertThrows(AssertionError::class.java) {
+                    rule.onNodeWithTag(itemTag).performScrollTo()
+                }
+            assertThat(error).hasMessageThat().contains("mainClock.autoAdvance is set to false")
+
+            // Re-enabling autoAdvance allows the scroll animation to run and bring the node into
+            // view.
+            rule.mainClock.autoAdvance = true
+            rule.onNodeWithTag(itemTag).performScrollTo()
+            rule.waitForIdle()
+        } else {
+            // When the target is already visible in the viewport, no scroll animation is needed,
+            // so performScrollTo() is a no-op and succeeds even with autoAdvance disabled.
+            rule.mainClock.autoAdvance = false
+            rule.onNodeWithTag(itemTag).performScrollTo()
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    private fun DpRect.toPx(): Rect = with(rule.density) { toRect() }
+
+    private fun rowModifier(scrollState: ScrollState): Modifier =
+        with(rule.density) {
+            Modifier.testTag(containerTag)
+                .requiredSize(config.viewportSizePx.toDp(), itemSizePx.toDp())
+                .horizontalScroll(scrollState, reverseScrolling = config.reverseScrolling)
+        }
+
     private fun columnModifier(scrollState: ScrollState): Modifier =
-        Modifier.composed {
-            with(LocalDensity.current) {
-                Modifier.testTag(containerTag)
-                    .requiredSize(itemSizePx.toDp(), config.viewportSizePx.toDp())
-                    .verticalScroll(scrollState, reverseScrolling = config.reverseScrolling)
-            }
+        with(rule.density) {
+            Modifier.testTag(containerTag)
+                .requiredSize(itemSizePx.toDp(), config.viewportSizePx.toDp())
+                .verticalScroll(scrollState, reverseScrolling = config.reverseScrolling)
         }
 
     @Composable

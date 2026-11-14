@@ -56,14 +56,13 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.test.TestActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Rule
 import org.junit.Test
@@ -73,7 +72,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class CompositionLocalMapInjectionTest {
 
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     @After
     fun teardown() {
@@ -92,7 +91,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInDraw() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBox(modifierOf { ConsumeInDrawNode() }.size(10.dp))
             }
         }
@@ -102,7 +101,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInLayout() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBox(modifierOf { ConsumeInLayoutNode() }.size(10.dp))
             }
         }
@@ -112,7 +111,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInAttach() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBox(modifierOf { ConsumeInAttachNode() }.size(10.dp))
             }
         }
@@ -123,7 +122,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInDrawNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBox(modifierOf { node }.size(10.dp))
             }
         }
@@ -137,7 +136,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInLayoutNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBox(modifierOf { node }.size(10.dp))
             }
         }
@@ -151,7 +150,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInAttachNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBox(modifierOf { node }.size(10.dp))
             }
         }
@@ -164,7 +163,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInDrawSkippableUpdate() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBoxSkippableUpdate(modifierOf { ConsumeInDrawNode() }.size(10.dp))
             }
         }
@@ -174,7 +173,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInLayoutSkippableUpdate() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBoxSkippableUpdate(modifierOf { ConsumeInLayoutNode() }.size(10.dp))
             }
         }
@@ -184,7 +183,7 @@ class CompositionLocalMapInjectionTest {
     fun consumeInAttachSkippableUpdate() {
         // No assertions needed. This not crashing is the test
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides 1) {
+            CompositionLocalProvider(LocalSomeValue provides 1) {
                 OldBoxSkippableUpdate(modifierOf { ConsumeInAttachNode() }.size(10.dp))
             }
         }
@@ -195,7 +194,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInDrawNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBoxSkippableUpdate(modifierOf { node }.size(10.dp))
             }
         }
@@ -209,7 +208,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInLayoutNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBoxSkippableUpdate(modifierOf { node }.size(10.dp))
             }
         }
@@ -223,7 +222,7 @@ class CompositionLocalMapInjectionTest {
         val node = ConsumeInAttachNode()
         var state by mutableStateOf(1)
         rule.setContent {
-            CompositionLocalProvider(SomeLocal provides state) {
+            CompositionLocalProvider(LocalSomeValue provides state) {
                 OldBoxSkippableUpdate(modifierOf { node }.size(10.dp))
             }
         }
@@ -233,7 +232,7 @@ class CompositionLocalMapInjectionTest {
     }
 }
 
-val SomeLocal = compositionLocalOf<Int> { error("unprovided value") }
+val LocalSomeValue = compositionLocalOf<Int> { error("unprovided value") }
 
 inline fun <reified T : Modifier.Node> modifierOf(crossinline fn: () -> T) =
     object : ModifierNodeElement<T>() {
@@ -254,7 +253,7 @@ class ConsumeInDrawNode : CompositionLocalConsumerModifierNode, DrawModifierNode
         // Consume Static local
         view = currentValueOf(LocalView)
         // Consume Freshly Provided Local
-        int = currentValueOf(SomeLocal)
+        int = currentValueOf(LocalSomeValue)
     }
 }
 
@@ -270,7 +269,7 @@ class ConsumeInLayoutNode :
         // Consume Static local
         view = currentValueOf(LocalView)
         // Consume Freshly Provided Local
-        int = currentValueOf(SomeLocal)
+        int = currentValueOf(LocalSomeValue)
         val placeable = measurable.measure(constraints)
         return layout(constraints.minWidth, constraints.maxWidth) { placeable.place(0, 0) }
     }
@@ -285,7 +284,7 @@ class ConsumeInAttachNode :
         // Consume Static local
         view = currentValueOf(LocalView)
         // Consume Freshly Provided Local
-        int = currentValueOf(SomeLocal)
+        int = currentValueOf(LocalSomeValue)
     }
 
     override fun onAttach() {
@@ -300,6 +299,7 @@ class ConsumeInAttachNode :
 // This composable is intentionally written to look like the "old" version of Layout, before
 // aosp/2318839. This function allows us to emulate what a module targeting an older version of
 // compose UI would have inlined into their function body. See b/275067189 for more details.
+@Suppress("ComposableLambdaParameterPosition")
 @UiComposable
 @Composable
 inline fun OldLayoutSkippableUpdate(

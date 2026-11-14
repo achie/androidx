@@ -35,7 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 
 /**
  * High level element that displays text and provides semantics / accessibility information.
@@ -73,9 +75,9 @@ import androidx.compose.ui.unit.TextUnit
  * @param lineHeight Line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
@@ -165,16 +167,16 @@ public fun Text(
  * @param lineHeight Line height for the [Paragraph] in [TextUnit] unit, e.g. SP or EM. See
  *   [TextStyle.lineHeight].
  * @param overflow How visual overflow should be handled.
- * @param softWrap Whether the text should break at soft line breaks. If false, the glyphs in the
- *   text will be positioned as if there was unlimited horizontal space. If [softWrap] is false,
- *   [overflow] and TextAlign may have unexpected effects.
+ * @param softWrap Whether to wrap text at soft line breaks. When true, wraps text to the next line
+ *   when it exceeds layout bounds. When false, positions text as if there was unlimited horizontal
+ *   space, which may cause it to clip or overflow according to [overflow].
  * @param maxLines An optional maximum number of lines for the text to span, wrapping if necessary.
  *   If the text exceeds the given number of lines, it will be truncated according to [overflow] and
  *   [softWrap]. If it is not null, then it must be greater than zero.
  * @param minLines The minimum height in terms of minimum number of visible lines. It is required
  *   that 1 <= [minLines] <= [maxLines].
- * @param inlineContent A map store composables that replaces certain ranges of the text. It's used
- *   to insert composables into text layout. Check [InlineTextContent] for more information.
+ * @param inlineContent A map that stores composables that replace certain ranges of the text. It's
+ *   used to insert composables into text layout. Check [InlineTextContent] for more information.
  * @param onTextLayout Callback that is executed when a new text layout is calculated. A
  *   [TextLayoutResult] object that callback provides contains paragraph information, size of the
  *   text, baselines and other details. The callback can be used to add additional decoration or
@@ -306,4 +308,30 @@ public object TextConfigurationDefaults {
 
     /** Default max lines for [Text] */
     public val MaxLines: Int = Int.MAX_VALUE
+}
+
+/** Contains the default values used by [Text]. */
+public object TextDefaults {
+    /**
+     * The minimum top content padding for the list when a [Text] is placed at the top. Recommended
+     * for use with [androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope]'s
+     * [androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope.minimumVerticalContentPadding],
+     * which allows items to choose a preferred content padding for the list.
+     * [TransformingLazyColumn] takes its contentPadding as the maximum of the preferred content
+     * padding values and its own contentPadding parameter.
+     */
+    public val minimumTopListContentPadding: Dp
+        @Composable get() = screenWidthFraction(SMALL_VERTICAL_CONTENT_PADDING_FRACTION)
+
+    /**
+     * The minimum bottom content padding for the list when a [Text] is placed at the bottom.
+     * Recommended for use with
+     * [androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope]'s
+     * [androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope.minimumVerticalContentPadding],
+     * which allows items to choose a preferred content padding for the list.
+     * [TransformingLazyColumn] takes its contentPadding as the maximum of the preferred content
+     * padding values and its own contentPadding parameter.
+     */
+    public val minimumBottomListContentPadding: Dp
+        @Composable get() = screenWidthFraction(LARGE_VERTICAL_CONTENT_PADDING_FRACTION)
 }

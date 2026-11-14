@@ -21,7 +21,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
 import io.reactivex.BackpressureStrategy
@@ -32,7 +32,6 @@ import io.reactivex.Single
 import io.reactivex.SingleEmitter
 import io.reactivex.SingleOnSubscribe
 import io.reactivex.subjects.BehaviorSubject
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,7 +48,7 @@ class RxJava2AdapterTest(private val factory: () -> Stream) {
             arrayOf(ObservableStream(), FlowableStream(), SingleStream(), MaybeStream())
     }
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun whenValueIsNotSetWeGotNull() {

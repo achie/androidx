@@ -28,6 +28,7 @@ import androidx.build.getBuildInfoDirectory
 import androidx.build.getProjectZipPath
 import androidx.build.getSupportRootFolder
 import androidx.build.gitclient.getHeadShaProvider
+import androidx.build.isKlibCrossCompilationEnabled
 import androidx.build.jetpad.LibraryBuildInfoFile
 import androidx.build.kotlinExtensionOrNull
 import com.android.build.api.variant.AndroidComponentsExtension
@@ -215,9 +216,9 @@ abstract class CreateLibraryBuildInfoFileTask : DefaultTask() {
             mavenGroup: LibraryGroup?,
             variant: VariantPublishPlan,
             shaProvider: Provider<String>,
-            shouldPublishDocs: Boolean,
+            shouldPublishDocs: Provider<Boolean>,
             isKmp: Boolean,
-            target: String,
+            target: Provider<String>,
             kmpChildren: Set<String>,
             testModuleNames: Provider<Set<String>>,
             gradlePluginIds: Set<String>,
@@ -288,38 +289,42 @@ abstract class CreateLibraryBuildInfoFileTask : DefaultTask() {
             }
         }
 
-        fun List<Dependency>.asBuildInfoDependencies() =
-            filter { it.group.isAndroidXDependency() }
-                .map {
-                    LibraryBuildInfoFile.Dependency().apply {
-                        this.artifactId = it.name
-                        this.groupId = it.group!!
-                        this.version = it.version!!
-                        this.isTipOfTree =
-                            it is ProjectDependency || it is BuildInfoVariantDependency
-                    }
+        fun List<Dependency>.asBuildInfoDependencies() = filter {
+            it.group.isAndroidXDependency()
+        }
+            .map {
+                LibraryBuildInfoFile.Dependency().apply {
+                    this.artifactId = it.name
+                    this.groupId = it.group!!
+                    this.version = it.version!!
+                    this.isTipOfTree = it is ProjectDependency || it is BuildInfoVariantDependency
                 }
-                .toHashSet()
-                .sortedWith(compareBy({ it.groupId }, { it.artifactId }, { it.version }))
+            }
+            .toHashSet()
+            .sortedWith(compareBy({ it.groupId }, { it.artifactId }, { it.version }))
 
         @JvmName("dependencyConstraintsasBuildInfoDependencies")
-        fun List<DependencyConstraint>.asBuildInfoDependencies() =
-            filter { it.group.isAndroidXDependency() }
-                .map {
-                    LibraryBuildInfoFile.Dependency().apply {
-                        this.artifactId = it.name
-                        this.groupId = it.group
-                        this.version = it.version!!
-                        this.isTipOfTree = it is DefaultProjectDependencyConstraint
-                    }
+        fun List<DependencyConstraint>.asBuildInfoDependencies() = filter {
+            it.group.isAndroidXDependency()
+        }
+            .map {
+                LibraryBuildInfoFile.Dependency().apply {
+                    this.artifactId = it.name
+                    this.groupId = it.group
+                    this.version = it.version!!
+                    this.isTipOfTree = it is DefaultProjectDependencyConstraint
                 }
-                .toHashSet()
-                .sortedWith(compareBy({ it.groupId }, { it.artifactId }, { it.version }))
+            }
+            .toHashSet()
+            .sortedWith(compareBy({ it.groupId }, { it.artifactId }, { it.version }))
 
         private fun String?.isAndroidXDependency() =
             this != null &&
                 startsWith("androidx.") &&
-                !startsWith("androidx.test") &&
+                // we are allowing androidx.test.uiautomator because of b/483359994
+                // uiautomator is released with other AndroidX libraries in Jetpad so if another
+                // package depends on it we need to have it in the build info file
+                (startsWith("androidx.test.uiautomator") || !startsWith("androidx.test")) &&
                 !startsWith("androidx.databinding") &&
                 !startsWith("androidx.media3")
 
@@ -359,6 +364,25 @@ abstract class CreateLibraryBuildInfoFileTask : DefaultTask() {
     }
 }
 
+private fun createBuildTargetProvider(
+    hasApplePlatform: Boolean,
+    crossCompilationEnabled: Provider<Boolean>,
+): Provider<String> = crossCompilationEnabled.map { enabled ->
+    computeBuildTarget(hasApplePlatform, enabled)
+}
+
+/**
+ * Selects the build target for a project based on whether it targets an Apple platform and whether
+ * its Apple targets can be cross-compiled on a non-Mac host.
+ */
+@VisibleForTesting
+fun computeBuildTarget(hasApplePlatform: Boolean, crossCompilationEnabled: Boolean): String =
+    if (hasApplePlatform && !crossCompilationEnabled) {
+        "androidx_multiplatform_mac"
+    } else {
+        "androidx"
+    }
+
 // Tasks that create a json files of a project's variant's dependencies
 fun Project.addCreateLibraryBuildInfoFileTasks(
     androidXExtension: AndroidXExtension,
@@ -370,17 +394,20 @@ fun Project.addCreateLibraryBuildInfoFileTasks(
         configure<PublishingExtension> {
 
             /**
-             * Select the appropriate target based on if the project targets any Apple platforms
+             * Select the appropriate target based on whether the project targets any Apple platform
+             * and whether its Apple targets can be cross-compiled on a non-Mac host.
              *
-             * If the project targets any Apple platform then the project can only be built on the
-             * 'androidx_multiplatform_mac' target. Otherwise the 'androidx' build target is used.
+             * A project targeting an Apple platform can only be built on the 'androidx' target when
+             * it and all its dependencies do not use C-interop. For projects using C-interop, KLIB
+             * cross-compilation is disabled for it via
+             * `kotlin.native.enableKlibsCrossCompilation=false`
              */
+            val hasApplePlatform = hasApplePlatform(androidXKmpExtension.supportedPlatforms)
             val buildTarget =
-                if (hasApplePlatform(androidXKmpExtension.supportedPlatforms)) {
-                    "androidx_multiplatform_mac"
-                } else {
-                    "androidx"
-                }
+                createBuildTargetProvider(
+                    hasApplePlatform = hasApplePlatform,
+                    crossCompilationEnabled = project.isKlibCrossCompilationEnabled(),
+                )
 
             // Unfortunately, dependency information is only available through internal API
             // (See https://github.com/gradle/gradle/issues/21345).
@@ -391,7 +418,12 @@ fun Project.addCreateLibraryBuildInfoFileTasks(
                     createTaskForComponent(
                         anchorTask = anchorTask,
                         pub = mavenPub,
-                        libraryGroup = androidXExtension.mavenGroup,
+                        libraryGroup =
+                            if (androidXExtension.projectDirectlySpecifiesMavenVersion) {
+                                androidXExtension.mavenGroup?.copy(requireSameVersion = false)
+                            } else {
+                                androidXExtension.mavenGroup
+                            },
                         // `mavenPub.artifactId` is a var annotated @ToBeReplacedByLazyProperty
                         // It may not yet be set to the right value at configuration time, so wrap
                         // it in a provider.
@@ -415,9 +447,9 @@ private fun Project.createTaskForComponent(
     pub: ProjectComponentPublication,
     libraryGroup: LibraryGroup?,
     artifactId: Provider<String>,
-    shouldPublishDocs: Boolean,
+    shouldPublishDocs: Provider<Boolean>,
     isKmp: Boolean,
-    buildTarget: String,
+    buildTarget: Provider<String>,
     kmpChildren: Set<String>,
     testModuleNames: Provider<Set<String>>,
     isolatedProjectEnabled: Boolean,
@@ -447,9 +479,9 @@ private fun Project.createBuildInfoTask(
     libraryGroup: LibraryGroup?,
     artifactId: Provider<String>,
     shaProvider: Provider<String>,
-    shouldPublishDocs: Boolean,
+    shouldPublishDocs: Provider<Boolean>,
     isKmp: Boolean,
-    buildTarget: String,
+    buildTarget: Provider<String>,
     kmpChildren: Set<String>,
     testModuleNames: Provider<Set<String>>,
     variantName: String,
@@ -481,7 +513,7 @@ private fun Project.createBuildInfoTask(
         shaProvider = shaProvider,
         // There's a build_info file for each KMP platform, but only the artifact without a platform
         // suffix is listed in docs-public/build.gradle.
-        shouldPublishDocs = shouldPublishDocs && kmpTaskSuffix == "",
+        shouldPublishDocs = shouldPublishDocs.map { it && kmpTaskSuffix == "" },
         isKmp = isKmp,
         target = buildTarget,
         kmpChildren = kmpChildren.map { modifyKmpChildrenForBuildInfo(it) }.toSet(),
@@ -526,7 +558,9 @@ private fun Project.resolveRuntimeConfigurationNames(variantName: String): List<
 private fun Iterable<KotlinCompilation<*>>.classpathConfigs(): List<String> =
     asSequence()
         .filterNot { it.name.contains("test", ignoreCase = true) }
-        .mapNotNull { it.runtimeDependencyConfigurationName }
+        .mapNotNull {
+            it.runtimeDependencyConfigurationName ?: it.compileDependencyConfigurationName
+        }
         .toList()
 
 private fun modifyKmpChildrenForBuildInfo(kmpChild: String): String {
@@ -575,5 +609,6 @@ fun computeTaskSuffix(variantName: String, isKmp: Boolean) =
  * @return true if any [PlatformIdentifier]s targets an Apple platform, false otherwise
  */
 @VisibleForTesting
-fun hasApplePlatform(supportedPlatforms: Set<PlatformIdentifier>) =
-    supportedPlatforms.any { it.group == PlatformGroup.MAC }
+fun hasApplePlatform(supportedPlatforms: Set<PlatformIdentifier>) = supportedPlatforms.any {
+    it.group == PlatformGroup.MAC
+}

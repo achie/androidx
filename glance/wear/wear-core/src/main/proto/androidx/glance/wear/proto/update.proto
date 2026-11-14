@@ -20,6 +20,8 @@ package androidx.glance.wear.proto;
 
 // Encodes data for an Update Request
 message WearWidgetUpdateRequestProto {
+  reserved 3;
+  reserved "creation_uptime_millis";
 
   // The ID of the widget instance for which an update is being requested.
   uint32 id = 1;

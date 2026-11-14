@@ -17,6 +17,7 @@
 package androidx.appsearch.localstorage;
 
 import androidx.annotation.RestrictTo;
+import androidx.appsearch.flags.Flags;
 
 import com.google.android.icing.proto.PersistType;
 
@@ -33,6 +34,7 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     private final boolean mStoreParentInfoAsSyntheticProperty;
     private final boolean mShouldRetrieveParentInfo;
     private final boolean mPersistToDiskRecoveryProof;
+    private final boolean mEnableUpgradableLockAndTwoStageOptimize;
 
     public AppSearchConfigImpl(@NonNull LimitConfig limitConfig,
             @NonNull IcingOptionsConfig icingOptionsConfig) {
@@ -48,11 +50,26 @@ public class AppSearchConfigImpl implements AppSearchConfig {
             boolean storeParentInfoAsSyntheticProperty,
             boolean shouldRetrieveParentInfo,
             boolean persistToDiskRecoveryProof) {
+        this(limitConfig,
+                icingOptionsConfig,
+                storeParentInfoAsSyntheticProperty,
+                shouldRetrieveParentInfo,
+                persistToDiskRecoveryProof,
+                Flags.enableUpgradableLockAndTwoStageOptimize());
+    }
+
+    public AppSearchConfigImpl(@NonNull LimitConfig limitConfig,
+            @NonNull IcingOptionsConfig icingOptionsConfig,
+            boolean storeParentInfoAsSyntheticProperty,
+            boolean shouldRetrieveParentInfo,
+            boolean persistToDiskRecoveryProof,
+            boolean enableUpgradableLockAndTwoStageOptimize) {
         mLimitConfig = limitConfig;
         mIcingOptionsConfig = icingOptionsConfig;
         mStoreParentInfoAsSyntheticProperty = storeParentInfoAsSyntheticProperty;
         mShouldRetrieveParentInfo = shouldRetrieveParentInfo;
         mPersistToDiskRecoveryProof = persistToDiskRecoveryProof;
+        mEnableUpgradableLockAndTwoStageOptimize = enableUpgradableLockAndTwoStageOptimize;
     }
 
     @Override
@@ -63,11 +80,6 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     @Override
     public int getIndexMergeSize() {
         return mIcingOptionsConfig.getIndexMergeSize();
-    }
-
-    @Override
-    public boolean getDocumentStoreNamespaceIdFingerprint() {
-        return mIcingOptionsConfig.getDocumentStoreNamespaceIdFingerprint();
     }
 
     @Override
@@ -101,11 +113,6 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     }
 
     @Override
-    public boolean getUsePersistentHashMap() {
-        return mIcingOptionsConfig.getUsePersistentHashMap();
-    }
-
-    @Override
     public int getMaxPageBytesLimit() {
         return mIcingOptionsConfig.getMaxPageBytesLimit();
     }
@@ -121,23 +128,8 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     }
 
     @Override
-    public boolean getLiteIndexSortAtIndexing() {
-        return mIcingOptionsConfig.getLiteIndexSortAtIndexing();
-    }
-
-    @Override
     public int getLiteIndexSortSize() {
         return mIcingOptionsConfig.getLiteIndexSortSize();
-    }
-
-    @Override
-    public boolean getUseNewQualifiedIdJoinIndex() {
-        return mIcingOptionsConfig.getUseNewQualifiedIdJoinIndex();
-    }
-
-    @Override
-    public boolean getBuildPropertyExistenceMetadataHits() {
-        return mIcingOptionsConfig.getBuildPropertyExistenceMetadataHits();
     }
 
     @Override
@@ -171,6 +163,11 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     }
 
     @Override
+    public int getMaxAccumulatedResultBytes() {
+        return mLimitConfig.getMaxAccumulatedResultBytes();
+    }
+
+    @Override
     public boolean shouldStoreParentInfoAsSyntheticProperty() {
         return mStoreParentInfoAsSyntheticProperty;
     }
@@ -197,6 +194,11 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     }
 
     @Override
+    public boolean enableUpgradableLockAndTwoStageOptimize() {
+        return mEnableUpgradableLockAndTwoStageOptimize;
+    }
+
+    @Override
     public int getCompressionThresholdBytes() {
         return mIcingOptionsConfig.getCompressionThresholdBytes();
     }
@@ -207,7 +209,17 @@ public class AppSearchConfigImpl implements AppSearchConfig {
     }
 
     @Override
-    public boolean enableRepeatedFieldJoins() {
-        return mIcingOptionsConfig.enableRepeatedFieldJoins();
+    public boolean getAllowRepeatedFieldJoins() {
+        return mIcingOptionsConfig.getAllowRepeatedFieldJoins();
+    }
+
+    @Override
+    public boolean enableIcingBackgroundTaskScheduler() {
+        return mIcingOptionsConfig.enableIcingBackgroundTaskScheduler();
+    }
+
+    @Override
+    public long getExpiredDocumentPurgingThresholdMillis() {
+        return mIcingOptionsConfig.getExpiredDocumentPurgingThresholdMillis();
     }
 }

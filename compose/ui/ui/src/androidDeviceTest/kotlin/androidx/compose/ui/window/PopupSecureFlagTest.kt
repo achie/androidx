@@ -26,14 +26,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.node.Owner
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.assertion.ViewAssertions
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.hamcrest.CoreMatchers
 import org.junit.Rule
 import org.junit.Test
@@ -57,8 +56,7 @@ class PopupSecureFlagTest(private val setSecureFlagOnActivity: Boolean) {
                 ActivityWithFlagSecure::class.java
             } else {
                 ComponentActivity::class.java
-            },
-            StandardTestDispatcher(),
+            }
         )
 
     private val testTag = "testedPopup"

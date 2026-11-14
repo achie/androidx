@@ -16,6 +16,7 @@
 
 package androidx.collection
 
+import java.lang.ref.WeakReference
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert
@@ -30,28 +31,24 @@ public class SimpleArrayMapJvmTest {
         val TEST_LEN_MS = 5000
         println("Starting SimpleArrayMap concurrency test")
         Thread {
-                var i = 0
-                while (!done.get()) {
-                    try {
-                        map.put(String.format(Locale.US, "key %d", i++), "B_DONT_DO_THAT")
-                    } catch (e: ArrayIndexOutOfBoundsException) {
-                        // SimpleArrayMap is not thread safe, so lots of concurrent modifications
-                        // can still cause data corruption
-                        System.err.println(
-                            "concurrent modification uncaught, causing indexing failure"
-                        )
-                        e.printStackTrace()
-                    } catch (e: ClassCastException) {
-                        // cache corruption should not occur as it is hard to trace and one thread
-                        // may corrupt the pool for all threads in the same process.
-                        System.err.println(
-                            "concurrent modification uncaught, causing cache corruption"
-                        )
-                        e.printStackTrace()
-                        Assert.fail()
-                    } catch (_: ConcurrentModificationException) {}
-                }
+            var i = 0
+            while (!done.get()) {
+                try {
+                    map.put(String.format(Locale.US, "key %d", i++), "B_DONT_DO_THAT")
+                } catch (e: ArrayIndexOutOfBoundsException) {
+                    // SimpleArrayMap is not thread safe, so lots of concurrent modifications
+                    // can still cause data corruption
+                    System.err.println("concurrent modification uncaught, causing indexing failure")
+                    e.printStackTrace()
+                } catch (e: ClassCastException) {
+                    // cache corruption should not occur as it is hard to trace and one thread
+                    // may corrupt the pool for all threads in the same process.
+                    System.err.println("concurrent modification uncaught, causing cache corruption")
+                    e.printStackTrace()
+                    Assert.fail()
+                } catch (_: ConcurrentModificationException) {}
             }
+        }
             .start()
         for (i in 0 until TEST_LEN_MS / 100) {
             try {
@@ -66,4 +63,20 @@ public class SimpleArrayMapJvmTest {
         }
         done.set(true)
     }
+
+    @Test
+    public fun removeAtDoesNotRetainRemovedValue() {
+        val map = SimpleArrayMap<Any, Any>(12)
+        repeat(3) { map.put(Any(), Any()) }
+        val removed = removeLast(map)
+        repeat(10) {
+            if (removed.get() != null) {
+                System.gc()
+            }
+        }
+        Assert.assertNull(removed.get())
+    }
+
+    private fun removeLast(map: SimpleArrayMap<Any, Any>): WeakReference<Any> =
+        WeakReference(map.removeAt(map.size() - 1))
 }

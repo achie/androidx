@@ -26,12 +26,15 @@ import static java.util.Objects.requireNonNull;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
+import android.hardware.DataSpace;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Size;
 import android.view.Surface;
 
 import androidx.annotation.IntRange;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.arch.core.util.Function;
@@ -59,6 +62,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -77,6 +81,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
         SurfaceTexture.OnFrameAvailableListener {
     private static final String TAG = "DefaultSurfaceProcessor";
+    // Per-GL-thread map of active input SurfaceTextures and Surfaces to prevent premature GC
+    // finalization before the provideSurface result listener releases them.
+    private static final ThreadLocal<Map<SurfaceTexture, Surface>> sInputSurfaces =
+            new ThreadLocal<>() {
+                @Override
+                protected Map<SurfaceTexture, Surface> initialValue() {
+                    return new HashMap<>();
+                }
+            };
 
     private final OpenGlRenderer mGlRenderer;
     @VisibleForTesting
@@ -92,9 +105,13 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
     final Map<SurfaceOutput, Surface> mOutputSurfaces = new LinkedHashMap<>();
 
     // Only access this on GL thread.
-    private int mInputSurfaceCount = 0;
-    // Only access this on GL thread.
     private boolean mIsReleased = false;
+    // Whether the input is HDR YUV, i.e. whether the input color range matters to the default
+    // shader. Only access this on GL thread.
+    private boolean mIsYuvHdrInput = false;
+    // The data space of the last HDR YUV input frame, for logging. -1 means no frame has been
+    // received yet, since a valid data space is never negative. Only access this on GL thread.
+    private int mLastInputDataSpace = -1;
     // Only access this on GL thread.
     private final List<PendingSnapshot> mPendingSnapshots = new ArrayList<>();
 
@@ -135,11 +152,13 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
             return;
         }
         executeSafely(() -> {
-            mInputSurfaceCount++;
+            // Log the data space of the first frame of the new input.
+            mLastInputDataSpace = -1;
             SurfaceTexture surfaceTexture = new SurfaceTexture(mGlRenderer.getTextureName());
             surfaceTexture.setDefaultBufferSize(surfaceRequest.getResolution().getWidth(),
                     surfaceRequest.getResolution().getHeight());
             Surface surface = new Surface(surfaceTexture);
+            requireNonNull(sInputSurfaces.get()).put(surfaceTexture, surface);
             surfaceRequest.setTransformationInfoListener(mGlExecutor, transformationInfo -> {
                 InputFormat inputFormat = InputFormat.DEFAULT;
                 if (surfaceRequest.getDynamicRange().is10BitHdr()
@@ -147,6 +166,7 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
                     inputFormat = InputFormat.YUV;
                 }
 
+                mIsYuvHdrInput = inputFormat == InputFormat.YUV;
                 mGlRenderer.setInputFormat(inputFormat);
             });
             surfaceRequest.provideSurface(surface, mGlExecutor, result -> {
@@ -154,7 +174,7 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
                 surfaceTexture.setOnFrameAvailableListener(null);
                 surfaceTexture.release();
                 surface.release();
-                mInputSurfaceCount--;
+                requireNonNull(sInputSurfaces.get()).remove(surfaceTexture);
                 checkReadyToRelease();
             });
             surfaceTexture.setOnFrameAvailableListener(this, mGlHandler);
@@ -222,8 +242,16 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
             // Ignore frame update if released.
             return;
         }
-        surfaceTexture.updateTexImage();
+        try {
+            surfaceTexture.updateTexImage();
+        } catch (RuntimeException e) {
+            Logger.w(TAG, "Failed to updateTexImage: " + e);
+            return;
+        }
         surfaceTexture.getTransformMatrix(mTextureMatrix);
+        if (mIsYuvHdrInput) {
+            updateInputColorRange(surfaceTexture);
+        }
         // Surface, size and transform matrix for JPEG Surface if exists
         Triple<Surface, Size, float[]> jpegOutput = null;
 
@@ -278,11 +306,11 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
         }
 
         // Write to JPEG surface, once for each snapshot request.
+        Bitmap bitmap = null;
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             byte[] jpegBytes = null;
             int jpegQuality = -1;
             int rotationDegrees = -1;
-            Bitmap bitmap = null;
             Iterator<PendingSnapshot> iterator = mPendingSnapshots.iterator();
             while (iterator.hasNext()) {
                 PendingSnapshot pendingSnapshot = iterator.next();
@@ -292,6 +320,7 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
                     // Recycle the previous bitmap to free up memory.
                     if (bitmap != null) {
                         bitmap.recycle();
+                        bitmap = null;
                     }
                     bitmap = getBitmap(jpegOutput.getSecond(), jpegOutput.getThird(),
                             rotationDegrees);
@@ -311,6 +340,10 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
             }
         } catch (IOException e) {
             failAllPendingSnapshots(e);
+        } finally {
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
         }
     }
 
@@ -341,7 +374,7 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
 
     @WorkerThread
     private void checkReadyToRelease() {
-        if (mIsReleased && mInputSurfaceCount == 0) {
+        if (mIsReleased && requireNonNull(sInputSurfaces.get()).isEmpty()) {
             // Once release is called, we can stop sending frame to output surfaces.
             for (SurfaceOutput surfaceOutput : mOutputSurfaces.keySet()) {
                 surfaceOutput.close();
@@ -424,6 +457,56 @@ public class DefaultSurfaceProcessor implements SurfaceProcessorInternal,
                 CallbackToFutureAdapter.@NonNull Completer<Void> completer) {
             return new AutoValue_DefaultSurfaceProcessor_PendingSnapshot(
                     jpegQuality, rotationDegrees, completer);
+        }
+    }
+
+    /**
+     * Updates the color range of the renderer input from the latest frame.
+     *
+     * <p>The color range of the input depends on the producer (e.g. the camera HAL), so it's read
+     * from the data space of the latest frame. Limited range is assumed when the data space is not
+     * available (below API 33) or doesn't specify the range, which is the most common range for
+     * video.
+     */
+    private void updateInputColorRange(@NonNull SurfaceTexture surfaceTexture) {
+        if (Build.VERSION.SDK_INT < 33) {
+            // The renderer defaults to limited range.
+            return;
+        }
+        try {
+            int dataSpace = Api33Impl.getDataSpace(surfaceTexture);
+            if (dataSpace != mLastInputDataSpace) {
+                // Only logs when the data space changes to avoid per-frame logging. This also logs
+                // the first frame, including DATASPACE_UNKNOWN (0).
+                Logger.d(TAG, "Input data space: 0x" + Integer.toHexString(dataSpace));
+                mLastInputDataSpace = dataSpace;
+            }
+            mGlRenderer.setInputFullRange(isFullRangeDataSpace(dataSpace));
+        } catch (RuntimeException e) {
+            // This should not happen. However, when it happens, we catch the exception to prevent
+            // the crash. The previous color range continues to be used.
+            Logger.e(TAG, "Failed to update the input color range.", e);
+        }
+    }
+
+    /** Returns whether the given {@link DataSpace} is full range. */
+    @RequiresApi(33)
+    @VisibleForTesting
+    static boolean isFullRangeDataSpace(int dataSpace) {
+        return Api33Impl.isFullRangeDataSpace(dataSpace);
+    }
+
+    @RequiresApi(33)
+    private static final class Api33Impl {
+        private Api33Impl() {
+        }
+
+        static int getDataSpace(@NonNull SurfaceTexture surfaceTexture) {
+            return surfaceTexture.getDataSpace();
+        }
+
+        static boolean isFullRangeDataSpace(int dataSpace) {
+            return DataSpace.getRange(dataSpace) == DataSpace.RANGE_FULL;
         }
     }
 

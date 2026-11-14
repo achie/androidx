@@ -21,6 +21,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import androidx.camera.camera2.pipe.AeMode
 import androidx.camera.camera2.pipe.AfMode
 import androidx.camera.camera2.pipe.AwbMode
+import androidx.camera.camera2.pipe.ControlMode
 import androidx.camera.camera2.pipe.FlashMode
 import androidx.camera.camera2.pipe.config.CameraGraphScope
 import javax.inject.Inject
@@ -32,20 +33,27 @@ internal data class State3A(
     val aeMode: AeMode? = null,
     val afMode: AfMode? = null,
     val awbMode: AwbMode? = null,
+    val controlMode: ControlMode? = null,
     val flashMode: FlashMode? = null,
     val aeRegions: List<MeteringRectangle>? = null,
     val afRegions: List<MeteringRectangle>? = null,
     val awbRegions: List<MeteringRectangle>? = null,
     val aeLock: Boolean? = null,
+    val afLock: Boolean? = null,
     val awbLock: Boolean? = null,
 )
 
-/** Converts a State3A object into a map of parameters for a [CaptureRequest]. */
-internal fun State3A.toCaptureRequestParameterMap(): Map<CaptureRequest.Key<*>, Any> {
-    return mutableMapOf<CaptureRequest.Key<*>, Any>().apply {
+/**
+ * Converts a State3A object into a map of parameters for a [CaptureRequest]. Note that the
+ * parameter for autofocus is intentionally excluded since they are usually submitted as a single
+ * request.
+ */
+internal fun State3A.toCaptureRequestParameterMap(): Map<CaptureRequest.Key<*>, Any?> {
+    return mutableMapOf<CaptureRequest.Key<*>, Any?>().apply {
         aeMode?.let { put(CaptureRequest.CONTROL_AE_MODE, it.value) }
         afMode?.let { put(CaptureRequest.CONTROL_AF_MODE, it.value) }
         awbMode?.let { put(CaptureRequest.CONTROL_AWB_MODE, it.value) }
+        controlMode?.let { put(CaptureRequest.CONTROL_MODE, it.value) }
         flashMode?.let { put(CaptureRequest.FLASH_MODE, it.value) }
         aeRegions?.let { put(CaptureRequest.CONTROL_AE_REGIONS, it.toTypedArray()) }
         afRegions?.let { put(CaptureRequest.CONTROL_AF_REGIONS, it.toTypedArray()) }
@@ -67,6 +75,16 @@ internal fun State3A.wasAeUnlocked(current: State3A): Boolean {
     return (this.aeLock ?: false) && !(current.aeLock ?: false)
 }
 
+/** Checks if the AF lock state changed from unlocked to locked between two states. */
+internal fun State3A.wasAfLocked(current: State3A): Boolean {
+    return !(this.afLock ?: false) && (current.afLock ?: false)
+}
+
+/** Checks if the AF lock state changed from locked to unlocked between two states. */
+internal fun State3A.wasAfUnlocked(current: State3A): Boolean {
+    return (this.afLock ?: false) && !(current.afLock ?: false)
+}
+
 /** Checks if the AWB lock state changed from unlocked to locked between two states. */
 internal fun State3A.wasAwbLocked(current: State3A): Boolean {
     return !(this.awbLock ?: false) && (current.awbLock ?: false)
@@ -85,9 +103,9 @@ internal fun State3A.wasAwbUnlocked(current: State3A): Boolean {
  *
  * The state is comprised of the modes, metering regions for ae, af and awb, and locks for ae and
  * awb. We don't track the lock for af since af lock is achieved by setting 'af trigger = start' in
- * in a request and then omitting the af trigger field in the subsequent requests doesn't disturb
- * the af state. However for ae and awb, the lock type is boolean and should be explicitly set to
- * 'true' in the subsequent requests once we have locked ae/awb and want them to stay locked.
+ * a request and then omitting the af trigger field in the subsequent requests doesn't disturb the
+ * af state. However for ae and awb, the lock type is boolean and should be explicitly set to 'true'
+ * in the subsequent requests once we have locked ae/awb and want them to stay locked.
  */
 @CameraGraphScope
 internal class GraphState3A @Inject constructor() {
@@ -108,11 +126,13 @@ internal class GraphState3A @Inject constructor() {
         aeMode: AeMode? = null,
         afMode: AfMode? = null,
         awbMode: AwbMode? = null,
+        controlMode: ControlMode? = null,
         flashMode: FlashMode? = null,
         aeRegions: List<MeteringRectangle>? = null,
         afRegions: List<MeteringRectangle>? = null,
         awbRegions: List<MeteringRectangle>? = null,
         aeLock: Boolean? = null,
+        afLock: Boolean? = null,
         awbLock: Boolean? = null,
     ) {
         _state.update { currentState ->
@@ -120,17 +140,19 @@ internal class GraphState3A @Inject constructor() {
                 aeMode = aeMode ?: currentState.aeMode,
                 afMode = afMode ?: currentState.afMode,
                 awbMode = awbMode ?: currentState.awbMode,
+                controlMode = controlMode ?: currentState.controlMode,
                 flashMode = flashMode ?: currentState.flashMode,
                 aeRegions = aeRegions?.ifEmpty { null } ?: currentState.aeRegions,
                 afRegions = afRegions?.ifEmpty { null } ?: currentState.afRegions,
                 awbRegions = awbRegions?.ifEmpty { null } ?: currentState.awbRegions,
                 aeLock = aeLock ?: currentState.aeLock,
+                afLock = afLock ?: currentState.afLock,
                 awbLock = awbLock ?: currentState.awbLock,
             )
         }
     }
 
     /** Reads the current state and returns it as a map for building a [CaptureRequest]. */
-    fun toCaptureRequestParametersMap(): Map<CaptureRequest.Key<*>, Any> =
+    fun toCaptureRequestParametersMap(): Map<CaptureRequest.Key<*>, Any?> =
         this.current.toCaptureRequestParameterMap()
 }

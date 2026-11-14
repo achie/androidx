@@ -21,15 +21,19 @@ import androidx.annotation.GuardedBy
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.FrameBuffer
 import androidx.camera.camera2.pipe.FrameReference
-import androidx.camera.camera2.pipe.Metadata
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.StreamId
+import androidx.camera.camera2.pipe.TagBundle
 import androidx.camera.camera2.pipe.config.FrameGraphCoroutineScope
 import androidx.camera.camera2.pipe.config.FrameGraphScope
-import androidx.camera.camera2.pipe.core.Log
 import androidx.camera.camera2.pipe.filterToCaptureRequestParameters
 import androidx.camera.camera2.pipe.filterToMetadataParameters
 import androidx.camera.camera2.pipe.internal.FrameDistributor
+import androidx.camera.camera2.pipe.internal.FrameGraphResourceTrimmer
+import androidx.camera.camera2.pipe.isTagKey
+import androidx.camera.camera2.pipe.toTagBundle
+import androidx.camera.common.Metadata
+import java.util.Objects.deepEquals
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 
@@ -39,17 +43,23 @@ internal class FrameGraphBuffers
 internal constructor(
     private val cameraGraph: CameraGraph,
     @FrameGraphCoroutineScope private val frameGraphCoroutineScope: CoroutineScope,
+    private val frameGraphResourceTrimmer: FrameGraphResourceTrimmer,
 ) : FrameDistributor.FrameStartedListener {
     private val lock = Any()
     @GuardedBy("lock") private val buffers = mutableListOf<FrameBufferImpl>()
     @GuardedBy("lock") private var streams = mutableSetOf<StreamId>()
-    @GuardedBy("lock") private var parameters = mutableMapOf<Any, Any>()
+    @GuardedBy("lock") private var parameters = mutableMapOf<Any, Any?>()
 
     internal fun attach(
         streams: Set<StreamId>,
         parameters: Map<Any, Any?>,
         capacity: Int,
     ): FrameBuffer {
+        for ((key, value) in parameters) {
+            require(!key.isTagKey() || value is TagBundle<*>) {
+                "Tag parameter $key needs a TagBundle value (use tagsOf), but was $value."
+            }
+        }
         val frameBuffer = FrameBufferImpl(this, streams, parameters, capacity)
         val modified =
             synchronized(lock) {
@@ -59,6 +69,8 @@ internal constructor(
         if (modified) {
             invalidate()
         }
+        frameGraphResourceTrimmer.onFrameBufferAttached(frameBuffer)
+
         return frameBuffer
     }
 
@@ -71,58 +83,72 @@ internal constructor(
         if (modified) {
             invalidate()
         }
+        frameGraphResourceTrimmer.onFrameBufferDetached(frameBuffer)
     }
 
     @GuardedBy("lock")
     private fun updateStreamsAndParameters(): Boolean {
         val newStreams = mutableSetOf<StreamId>()
-        val newParameters = mutableMapOf<Any, Any>()
-        var modified: Boolean
-        synchronized(lock) {
-            for (buffer in buffers) {
-                newStreams.addAll(buffer.streams)
+        val newParameters = mutableMapOf<Any, Any?>()
+        for (buffer in buffers) {
+            newStreams.addAll(buffer.streams)
 
-                for (parameter in buffer.parameters) {
-                    val key = parameter.key
-                    val value = parameter.value
-                    check(key is CaptureRequest.Key<*> || key is Metadata.Key<*>) {
-                        "Invalid type for ${parameter.key}"
-                    }
-                    if (newParameters.containsKey(key) && newParameters[key] != value) {
-                        throw IllegalStateException(
-                            "Conflicting parameter values, $key and ${parameters[key]} have different values."
-                        )
-                    } else if (value == null) {
-                        continue
-                    } else {
-                        newParameters.put(key, value)
-                    }
+            for (parameter in buffer.parameters) {
+                val key = parameter.key
+                val value = parameter.value
+                check(key is CaptureRequest.Key<*> || key is Metadata.Key<*>) {
+                    "Invalid type for ${parameter.key}"
                 }
+
+                val existingValue = newParameters[key]
+                if (key.isTagKey() && existingValue is TagBundle<*> && value is TagBundle<*>) {
+                    // Tag bundles from different buffers are merged, so the repeating request
+                    // carries every tag that at least one attached buffer has.
+                    newParameters[key] = (existingValue + value).toTagBundle()
+                    continue
+                }
+
+                // If the key is present the values shouldn't conflict.
+                check(!newParameters.containsKey(key) || deepEquals(existingValue, value)) {
+                    "Conflicting parameter values: $key has different values ($existingValue and $value)."
+                }
+
+                newParameters[key] = value
             }
-            modified = newStreams != streams || newParameters != parameters
-            streams = newStreams
-            parameters = newParameters
         }
+        val modified: Boolean = newStreams != streams || newParameters != parameters
+        streams = newStreams
+        parameters = newParameters
         return modified
     }
 
-    fun invalidate() {
-        if (buffers.isEmpty()) {
-            Log.warn { "No available buffer, invoke stop repeating." }
-            cameraGraph.useSessionIn(frameGraphCoroutineScope) { session ->
+    fun flush(session: CameraGraph.Session) {
+        synchronized(lock) {
+            if (buffers.isEmpty()) {
                 session.stopRepeating()
+                frameGraphResourceTrimmer.onRepeatingRequestUpdated(null)
+                return
             }
-        } else {
-            cameraGraph.useSessionIn(frameGraphCoroutineScope) { session ->
-                session.startRepeating(
-                    Request(
-                        streams = streams.toList(),
-                        parameters = parameters.filterToCaptureRequestParameters(),
-                        extras = parameters.filterToMetadataParameters(),
-                    )
+            val request =
+                Request(
+                    streams = streams.toList(),
+                    parameters = parameters.filterToCaptureRequestParameters(),
+                    extras = parameters.filterToMetadataParameters(),
                 )
-            }
+            session.startRepeating(request)
+            frameGraphResourceTrimmer.onRepeatingRequestUpdated(request)
         }
+    }
+
+    fun trimAll(streamId: StreamId) {
+        val buffersToTrim = synchronized(lock) { buffers.filter { it.streams.contains(streamId) } }
+        for (buffer in buffersToTrim) {
+            buffer.trimAll()
+        }
+    }
+
+    fun invalidate() {
+        cameraGraph.useSessionIn(frameGraphCoroutineScope) { session -> flush(session) }
     }
 
     override fun onFrameStarted(frameReference: FrameReference) {

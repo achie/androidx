@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TEST_LOCALE_LIST
 import androidx.compose.foundation.text.selection.fetchTextLayoutResult
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.getValue
@@ -43,7 +44,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.AnnotatedString
@@ -70,7 +71,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withTimeout
 import org.junit.Ignore
 import org.junit.Rule
@@ -80,13 +80,19 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class TextStringSimpleNodeTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
     val context: Context = InstrumentationRegistry.getInstrumentation().context
+    private val defaultLocaleList = TEST_LOCALE_LIST
 
     @Test
     fun draw_whenNotAttached_doesNotCrash() {
         val subject =
-            TextStringSimpleNode("text", TextStyle.Default, createFontFamilyResolver(context))
+            TextStringSimpleNode(
+                "text",
+                TextStyle.Default,
+                createFontFamilyResolver(context),
+                defaultLocaleList,
+            )
         rule.setContent {
             Canvas(Modifier.fillMaxSize()) {
                 val contentDrawScope =
@@ -153,6 +159,7 @@ class TextStringSimpleNodeTest {
                 "til",
                 TextStyle.Default.copy(fontFamily = asyncFont.toFontFamily()),
                 createFontFamilyResolver(context),
+                defaultLocaleList,
             )
 
         val modifier =
@@ -194,7 +201,12 @@ class TextStringSimpleNodeTest {
         val drawCount = AtomicInteger(0)
 
         val subject =
-            TextStringSimpleElement("til", TextStyle.Default, createFontFamilyResolver(context))
+            TextStringSimpleElement(
+                "til",
+                TextStyle.Default,
+                createFontFamilyResolver(context),
+                defaultLocaleList,
+            )
 
         val modifier =
             Modifier.fillMaxSize().drawBehind {
@@ -219,7 +231,12 @@ class TextStringSimpleNodeTest {
     @Test
     fun setTextSubstitution_setsSemantics() {
         val subject =
-            TextStringSimpleElement("til", TextStyle.Default, createFontFamilyResolver(context))
+            TextStringSimpleElement(
+                "til",
+                TextStyle.Default,
+                createFontFamilyResolver(context),
+                defaultLocaleList,
+            )
 
         rule.setContent { Box(Modifier.fillMaxSize() then subject) }
 
@@ -234,6 +251,40 @@ class TextStringSimpleNodeTest {
             Truth.assertThat(replacedNode.config[SemanticsProperties.TextSubstitution].text)
                 .isEqualTo("T")
         }
+    }
+
+    @Test
+    fun getTextLayoutResult_whenShowingTextSubstitution_returnsSubstitutedTextLayout() {
+        val originalText = "Bonjour"
+        val substitutedText = "Hello World"
+        val subject =
+            TextStringSimpleElement(
+                originalText,
+                TextStyle.Default,
+                createFontFamilyResolver(context),
+                defaultLocaleList,
+            )
+
+        rule.setContent { Box(Modifier.fillMaxSize().testTag("textNode") then subject) }
+
+        val initialLayout = rule.onNodeWithTag("textNode").fetchTextLayoutResult()
+        Truth.assertThat(initialLayout.layoutInput.text.text).isEqualTo(originalText)
+
+        val node = rule.onNodeWithTag("textNode").fetchSemanticsNode()
+        rule.runOnIdle {
+            node.config[SemanticsActions.SetTextSubstitution]
+                .action
+                ?.invoke(AnnotatedString(substitutedText))
+            node.config[SemanticsActions.ShowTextSubstitution].action?.invoke(true)
+        }
+
+        val substitutedLayout = rule.onNodeWithTag("textNode").fetchTextLayoutResult()
+        Truth.assertThat(substitutedLayout.layoutInput.text.text).isEqualTo(substitutedText)
+
+        rule.runOnIdle { node.config[SemanticsActions.ShowTextSubstitution].action?.invoke(false) }
+
+        val restoredLayout = rule.onNodeWithTag("textNode").fetchTextLayoutResult()
+        Truth.assertThat(restoredLayout.layoutInput.text.text).isEqualTo(originalText)
     }
 
     private fun makeAsyncFont(loadDeferred: Deferred<Unit>): Font {

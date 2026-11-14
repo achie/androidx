@@ -17,12 +17,13 @@
 package androidx.compose.ui.test.samples
 
 import android.content.res.Configuration
+import androidx.annotation.RequiresApi
 import androidx.annotation.Sampled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material.Text
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.roundToIntRect
 import androidx.core.view.WindowInsetsCompat
 
 @Sampled
+@RequiresApi(31)
 @Composable
 fun DeviceConfigurationOverrideThenSample() {
     DeviceConfigurationOverride(
@@ -113,6 +115,7 @@ fun DeviceConfigurationOverrideDarkModeSample() {
 }
 
 @Sampled
+@RequiresApi(31)
 @Composable
 fun DeviceConfigurationOverrideFontWeightAdjustmentSample() {
     DeviceConfigurationOverride(DeviceConfigurationOverride.FontWeightAdjustment(200)) {

@@ -21,13 +21,10 @@ import androidx.camera.camera2.adapter.CaptureConfigAdapter.Companion.getStillCa
 import androidx.camera.camera2.compat.quirk.DeviceQuirks
 import androidx.camera.camera2.compat.quirk.TorchIsClosedAfterImageCapturingQuirk
 import androidx.camera.camera2.config.UseCaseCameraScope
-import androidx.camera.camera2.impl.Camera2Logger
 import androidx.camera.camera2.impl.CameraProperties
 import androidx.camera.camera2.impl.CapturePipeline
 import androidx.camera.camera2.impl.CapturePipelineImpl
 import androidx.camera.camera2.impl.TorchControl
-import androidx.camera.camera2.impl.TorchControl.TorchMode
-import androidx.camera.camera2.impl.UseCaseThreads
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.isHardwareLevelLegacy
 import androidx.camera.camera2.pipe.RequestTemplate
 import androidx.camera.core.ImageCapture
@@ -36,9 +33,8 @@ import androidx.camera.core.imagecapture.CameraCapturePipeline
 import androidx.camera.core.impl.CaptureConfig
 import androidx.camera.core.impl.Config
 import javax.inject.Inject
+import javax.inject.Provider
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
 
 /**
  * This is a workaround for b/228272227 where the Torch is unexpectedly closed after a single
@@ -52,11 +48,11 @@ public class CapturePipelineTorchCorrection
 @Inject
 constructor(
     cameraProperties: CameraProperties,
-    private val capturePipelineImpl: CapturePipelineImpl,
-    private val threads: UseCaseThreads,
+    private val capturePipelineImplProvider: Provider<CapturePipelineImpl>,
     private val torchControl: TorchControl,
 ) : CapturePipeline {
-    private val isLegacyDevice = cameraProperties.metadata.isHardwareLevelLegacy
+    private val isLegacyDevice by lazy { cameraProperties.metadata.isHardwareLevelLegacy }
+    private val capturePipelineImpl by lazy { capturePipelineImplProvider.get() }
 
     override suspend fun submitStillCaptures(
         configs: List<CaptureConfig>,
@@ -68,28 +64,15 @@ constructor(
     ): List<Deferred<Void?>> {
         val needCorrectTorchState = isCorrectionRequired(configs, requestTemplate)
 
-        // Forward the capture request to capturePipelineImpl
-        val deferredResults =
-            capturePipelineImpl.submitStillCaptures(
-                configs,
-                requestTemplate,
-                sessionConfigOptions,
-                captureMode,
-                flashType,
-                flashMode,
-            )
-
-        if (needCorrectTorchState) {
-            threads.sequentialScope.launch {
-                deferredResults.joinAll()
-                Camera2Logger.debug { "Re-enable Torch to correct the Torch state" }
-                torchControl.setTorchAsync(TorchMode.OFF).join()
-                torchControl.setTorchAsync(TorchMode.USED_AS_FLASH).join()
-                Camera2Logger.debug { "Re-enable Torch to correct the Torch state, done" }
-            }
-        }
-
-        return deferredResults
+        return capturePipelineImpl.submitStillCaptures(
+            configs = configs,
+            requestTemplate = requestTemplate,
+            sessionConfigOptions = sessionConfigOptions,
+            captureMode = captureMode,
+            flashType = flashType,
+            flashMode = flashMode,
+            correctTorchState = needCorrectTorchState,
+        )
     }
 
     override suspend fun getCameraCapturePipeline(

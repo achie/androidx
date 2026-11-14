@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 The Android Open Source Project
+ * Copyright 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,8 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-@file:JvmName("ExceptionsKt")
+@file:JvmName("Exceptions")
 
 package androidx.webgpu
 
@@ -35,12 +34,30 @@ public class DawnException(message: String) : Exception(message)
  */
 public class DeviceLostException(
     public val device: GPUDevice,
-    @DeviceLostReason public val reason: Int,
+    @DeviceLostReason.Type public val reason: Int,
     message: String,
 ) : Exception(message)
 
 /** Base class for exceptions that can happen at runtime. */
-public open class WebGpuRuntimeException(message: String) : Exception(message)
+public open class WebGpuRuntimeException(message: String) : Exception(message) {
+    public companion object {
+        /**
+         * Create the exception for the appropriate error type.
+         *
+         * @param type The [ErrorType].
+         * @param message A human-readable message describing the error.
+         */
+        @JvmStatic
+        public fun create(@ErrorType.Type type: Int, message: String): WebGpuRuntimeException =
+            when (type) {
+                ErrorType.Validation -> ValidationException(message)
+                ErrorType.OutOfMemory -> OutOfMemoryException(message)
+                ErrorType.Internal -> InternalException(message)
+                ErrorType.Unknown -> UnknownException(message)
+                else -> UnknownException(message)
+            }
+    }
+}
 
 /**
  * Exception for Validation type errors.
@@ -70,24 +87,10 @@ public class InternalException(message: String) : WebGpuRuntimeException(message
  */
 public class UnknownException(message: String) : WebGpuRuntimeException(message)
 
-/**
- * Create the exception for the appropriate error type.
- *
- * @param type The [ErrorType].
- * @param message A human-readable message describing the device loss.
- */
-public fun getException(@ErrorType type: Int, message: String): WebGpuRuntimeException =
-    when (type) {
-        ErrorType.Validation -> ValidationException(message)
-        ErrorType.OutOfMemory -> OutOfMemoryException(message)
-        ErrorType.Internal -> InternalException(message)
-        ErrorType.Unknown -> UnknownException(message)
-        else -> UnknownException(message)
-    }
-
 public class CompilationInfoRequestException(
     public val reason: String = "",
-    @CompilationInfoRequestStatus public val status: Int = CompilationInfoRequestStatus.Success,
+    @CompilationInfoRequestStatus.Type
+    public val status: Int = CompilationInfoRequestStatus.Success,
 ) :
     Exception(
         (if (status != CompilationInfoRequestStatus.Success)
@@ -97,7 +100,7 @@ public class CompilationInfoRequestException(
 
 public class CreatePipelineAsyncException(
     public val reason: String = "",
-    @CreatePipelineAsyncStatus public val status: Int = CreatePipelineAsyncStatus.Success,
+    @CreatePipelineAsyncStatus.Type public val status: Int = CreatePipelineAsyncStatus.Success,
 ) :
     Exception(
         (if (status != CreatePipelineAsyncStatus.Success)
@@ -107,7 +110,7 @@ public class CreatePipelineAsyncException(
 
 public class MapAsyncException(
     public val reason: String = "",
-    @MapAsyncStatus public val status: Int = MapAsyncStatus.Success,
+    @MapAsyncStatus.Type public val status: Int = MapAsyncStatus.Success,
 ) :
     Exception(
         (if (status != MapAsyncStatus.Success) "${ MapAsyncStatus.toString(status)}: " else "") +
@@ -116,7 +119,7 @@ public class MapAsyncException(
 
 public class PopErrorScopeException(
     public val reason: String = "",
-    @PopErrorScopeStatus public val status: Int = PopErrorScopeStatus.Success,
+    @PopErrorScopeStatus.Type public val status: Int = PopErrorScopeStatus.Success,
 ) :
     Exception(
         (if (status != PopErrorScopeStatus.Success) "${ PopErrorScopeStatus.toString(status)}: "
@@ -125,7 +128,7 @@ public class PopErrorScopeException(
 
 public class QueueWorkDoneException(
     public val reason: String = "",
-    @QueueWorkDoneStatus public val status: Int = QueueWorkDoneStatus.Success,
+    @QueueWorkDoneStatus.Type public val status: Int = QueueWorkDoneStatus.Success,
 ) :
     Exception(
         (if (status != QueueWorkDoneStatus.Success) "${ QueueWorkDoneStatus.toString(status)}: "
@@ -134,7 +137,7 @@ public class QueueWorkDoneException(
 
 public class RequestAdapterException(
     public val reason: String = "",
-    @RequestAdapterStatus public val status: Int = RequestAdapterStatus.Success,
+    @RequestAdapterStatus.Type public val status: Int = RequestAdapterStatus.Success,
 ) :
     Exception(
         (if (status != RequestAdapterStatus.Success) "${ RequestAdapterStatus.toString(status)}: "
@@ -143,7 +146,7 @@ public class RequestAdapterException(
 
 public class RequestDeviceException(
     public val reason: String = "",
-    @RequestDeviceStatus public val status: Int = RequestDeviceStatus.Success,
+    @RequestDeviceStatus.Type public val status: Int = RequestDeviceStatus.Success,
 ) :
     Exception(
         (if (status != RequestDeviceStatus.Success) "${ RequestDeviceStatus.toString(status)}: "
@@ -152,12 +155,12 @@ public class RequestDeviceException(
 
 public class WebGpuException(
     public val reason: String = "",
-    @Status public val status: Int = Status.Success,
+    @Status.Type public val status: Int = Status.Success,
 ) : Exception((if (status != Status.Success) "${ Status.toString(status)}: " else "") + reason) {}
 
 public class SurfaceGetCurrentTextureException(
     public val reason: String = "",
-    @SurfaceGetCurrentTextureStatus
+    @SurfaceGetCurrentTextureStatus.Type
     public val status: Int = SurfaceGetCurrentTextureStatus.SuccessOptimal,
 ) :
     Exception(

@@ -18,16 +18,15 @@ package androidx.core.view.contentcapture;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.support.v4.BaseInstrumentationTestCase;
 import android.view.View;
-import android.view.ViewStructure;
 import android.view.autofill.AutofillId;
 import android.view.contentcapture.ContentCaptureSession;
 
@@ -40,14 +39,11 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import java.util.ArrayList;
-import java.util.List;
-
 @RunWith(AndroidJUnit4.class)
 @SmallTest
 @SdkSuppress(minSdkVersion = 29)
-public class ContentCaptureSessionCompatTest extends
-        BaseInstrumentationTestCase<ViewCompatActivity> {
+public class ContentCaptureSessionCompatTest
+        extends BaseInstrumentationTestCase<ViewCompatActivity> {
 
     private View mView;
 
@@ -99,44 +95,14 @@ public class ContentCaptureSessionCompatTest extends
     }
 
     @Test
-    @SdkSuppress(minSdkVersion = 29, maxSdkVersion = 33)
-    public void testNotifyViewsAppeared_throwsNPEBetweenSDK29And33() {
-        ContentCaptureSession mockContentCaptureSession = mock(ContentCaptureSession.class);
-        ViewStructure mockViewStructure = mock(ViewStructure.class);
-        List<ViewStructure> viewStructures = new ArrayList<>();
-        viewStructures.add(mockViewStructure);
-        ContentCaptureSessionCompat contentCaptureSessionCompat =
-                ContentCaptureSessionCompat.toContentCaptureSessionCompat(
-                        mockContentCaptureSession, mView);
+    @SdkSuppress(minSdkVersion = 36)
+    public void testFlush_delegatesToPlatformAboveSDK36() {
+        ContentCaptureSession mockSession = mock(ContentCaptureSession.class);
+        ContentCaptureSessionCompat compat =
+                ContentCaptureSessionCompat.toContentCaptureSessionCompat(mockSession, mView);
 
-        // Some final methods in the mock object throw NPE.
-        assertThrows(NullPointerException.class,
-                () -> contentCaptureSessionCompat.notifyViewsAppeared(viewStructures));
-    }
+        compat.flush();
 
-    @Test
-    public void testNotifyViewsDisappeared_throwsNPEAboveSDK29() {
-        ContentCaptureSession mockContentCaptureSession = mock(ContentCaptureSession.class);
-        long[] ids = {1L};
-        ContentCaptureSessionCompat contentCaptureSessionCompat =
-                ContentCaptureSessionCompat.toContentCaptureSessionCompat(
-                        mockContentCaptureSession, mView);
-
-        // Some final methods in the mock object throw NPE.
-        assertThrows(NullPointerException.class,
-                () -> contentCaptureSessionCompat.notifyViewsDisappeared(ids));
-    }
-
-    @Test
-    public void testNotifyViewTextChanged_throwsNPEAboveSDK29() {
-        ContentCaptureSession mockContentCaptureSession = mock(ContentCaptureSession.class);
-        ContentCaptureSessionCompat contentCaptureSessionCompat =
-                ContentCaptureSessionCompat.toContentCaptureSessionCompat(
-                        mockContentCaptureSession, mView);
-        AutofillId mockAutofillId = mock(AutofillId.class);
-
-        // Some final methods in the mock object throw NPE.
-        assertThrows(NullPointerException.class,
-                () -> contentCaptureSessionCompat.notifyViewTextChanged(mockAutofillId, "test"));
+        verify(mockSession).flush();
     }
 }

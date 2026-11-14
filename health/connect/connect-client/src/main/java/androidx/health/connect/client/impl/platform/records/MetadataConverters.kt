@@ -19,9 +19,12 @@
 
 package androidx.health.connect.client.impl.platform.records
 
+import android.annotation.SuppressLint
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.annotation.RestrictTo
+import androidx.health.connect.client.records.isAtLeastSdkExtension22
+import androidx.health.connect.client.records.isAtLeastSdkExtension23
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
@@ -38,12 +41,19 @@ internal fun PlatformMetadata.toSdkMetadata(): Metadata {
     )
 }
 
+@SuppressLint("NewApi") // Guarded by sdk extension check
 internal fun PlatformDevice.toSdkDevice(): Device? {
     // Convert Platform default to null (Jetpack default). See b/368338084
     if (this == PlatformDeviceBuilder().build()) {
         return null
     }
-    return Device(manufacturer = manufacturer, model = model, type = type.toSdkDevice())
+    return Device(
+        manufacturer = manufacturer,
+        model = model,
+        type = type.toSdkDevice(),
+        displayName = if (isAtLeastSdkExtension22()) displayName else null,
+        udi = if (isAtLeastSdkExtension23()) udi else null,
+    )
 }
 
 internal fun PlatformDataOrigin.toSdkDataOrigin(): DataOrigin {
@@ -68,16 +78,25 @@ internal fun DataOrigin.toPlatformDataOrigin(): PlatformDataOrigin {
     return PlatformDataOriginBuilder().apply { setPackageName(packageName) }.build()
 }
 
+@SuppressLint("NewApi") // Guarded by sdk extension check
 internal fun Device.toPlatformDevice(): PlatformDevice {
     val platformDeviceBuilder =
-        PlatformDeviceBuilder().apply {
-            manufacturer?.let { setManufacturer(it) }
-            model?.let { setModel(it) }
-        }
+        PlatformDeviceBuilder()
+            .setManufacturer(manufacturer)
+            .setModel(model)
+            .setType(type.toPlatformDevice())
+    if (isAtLeastSdkExtension22()) {
+        @Suppress("CheckReturnValue") platformDeviceBuilder.setDisplayName(displayName)
+    }
+    if (isAtLeastSdkExtension23()) {
+        @Suppress("CheckReturnValue") platformDeviceBuilder.setUdi(udi)
+    }
 
     return try {
-        platformDeviceBuilder.setType(type.toPlatformDevice()).build()
+        platformDeviceBuilder.build()
     } catch (_: IllegalArgumentException) {
+        // build() validates the type and throws if the module version doesn't support an
+        // extended device type yet.
         platformDeviceBuilder.setType(Device.TYPE_UNKNOWN.toPlatformDevice()).build()
     }
 }

@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.ReusableGraphicsLayerScope
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.nativePaint
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.GraphicLayerInfo
 import androidx.compose.ui.node.OwnedLayer
@@ -242,7 +243,7 @@ internal class ViewLayer(
                                         colorFilter = scope.colorFilter
                                         blendMode = scope.blendMode
                                     }
-                                    .asFrameworkPaint()
+                                    .nativePaint
                             } else {
                                 null
                             }
@@ -377,13 +378,8 @@ internal class ViewLayer(
         drawBlock = null
         invalidateParentLayer = null
 
-        val recycle = ownerView.recycle(this@ViewLayer)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M || shouldUseDispatchDraw || !recycle) {
-            container.removeViewInLayout(this)
-        } else {
-            visibility = GONE
-        }
+        ownerView.recycle(this@ViewLayer)
+        container.removeViewInLayout(this)
     }
 
     override fun updateDisplayList() {
@@ -418,11 +414,7 @@ internal class ViewLayer(
         drawBlock: (canvas: Canvas, parentLayer: GraphicsLayer?) -> Unit,
         invalidateParentLayer: () -> Unit,
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M || shouldUseDispatchDraw) {
-            container.addView(this)
-        } else {
-            visibility = VISIBLE
-        }
+        container.addView(this)
         matrixCache.reset()
         clipToBounds = false
         drawnWithZ = false

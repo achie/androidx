@@ -16,6 +16,7 @@
 
 package androidx.camera.integration.uiwidgets.rotations
 
+import android.app.UiAutomation
 import android.os.Build
 import android.view.Surface
 import android.view.View
@@ -39,8 +40,7 @@ import org.junit.runners.Parameterized
 class ImageAnalysisOrientationConfigChangesTest(
     private val lensFacing: Int,
     private val rotation: Int,
-    private val cameraXConfig: String,
-) : ImageAnalysisBaseTest<OrientationConfigChangesOverriddenActivity>(cameraXConfig) {
+) : ImageAnalysisBaseTest<OrientationConfigChangesOverriddenActivity>() {
 
     companion object {
         @JvmStatic
@@ -53,15 +53,11 @@ class ImageAnalysisOrientationConfigChangesTest(
             )
 
         @JvmStatic
-        @Parameterized.Parameters(name = "lensFacing={0}, rotation={1}, cameraXConfig={2}")
+        @Parameterized.Parameters(name = "lensFacing={0}, rotation={1}")
         fun data() =
             mutableListOf<Array<Any?>>().apply {
                 lensFacingList.forEach { lens ->
-                    rotations.forEach { rotation ->
-                        cameraXConfigList.forEach { cameraXConfig ->
-                            add(arrayOf(lens, rotation, cameraXConfig))
-                        }
-                    }
+                    rotations.forEach { rotation -> add(arrayOf(lens, rotation)) }
                 }
             }
     }
@@ -74,6 +70,7 @@ class ImageAnalysisOrientationConfigChangesTest(
                     "redmi note 9s",
                     "redmi note 8",
                     "m2003j15sc", // Redmi Note 9
+                    "m2004j19c", // Redmi 9
                     "m2006c3lg", // Redmi 9A
                     "m2006c3mg", // Redmi 9C
                 )
@@ -84,13 +81,19 @@ class ImageAnalysisOrientationConfigChangesTest(
 
     @After
     fun after() {
-        tearDown()
+        try {
+            val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            uiAutomation.setRotation(UiAutomation.ROTATION_FREEZE_0)
+            uiAutomation.setRotation(UiAutomation.ROTATION_UNFREEZE)
+        } finally {
+            tearDown()
+        }
     }
 
     @Test
     @SdkSuppress(maxSdkVersion = 33) // b/360867144: Module crashes on API34
     fun verifyRotation() {
-        verifyRotation<OrientationConfigChangesOverriddenActivity>(lensFacing, cameraXConfig) {
+        verifyRotation<OrientationConfigChangesOverriddenActivity>(lensFacing) {
             if (rotate(rotation)) {
 
                 // Wait for the rotation to occur

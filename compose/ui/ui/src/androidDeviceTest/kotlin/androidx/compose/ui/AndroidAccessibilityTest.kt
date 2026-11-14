@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION") // b/552879150
+
 package androidx.compose.ui
 
 import android.content.Context.ACCESSIBILITY_SERVICE
@@ -27,6 +29,7 @@ import android.os.Parcelable
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.MotionEvent.ACTION_HOVER_ENTER
+import android.view.MotionEvent.ACTION_HOVER_EXIT
 import android.view.MotionEvent.ACTION_HOVER_MOVE
 import android.view.View
 import android.view.ViewGroup
@@ -40,6 +43,7 @@ import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT
 import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
 import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
 import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY
 import android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH
 import android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX
 import android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY
@@ -112,6 +116,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.testutils.expectError
 import androidx.compose.ui.AndroidComposeViewAccessibilityDelegateCompatTest.Companion.AccessibilityEventComparator
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -122,10 +127,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toComposeRect
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.platform.AndroidComposeView
 import androidx.compose.ui.platform.AndroidComposeViewAccessibilityDelegateCompat
 import androidx.compose.ui.platform.AndroidComposeViewAccessibilityDelegateCompat.Companion.ClassName
@@ -151,6 +160,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.isSensitiveData
 import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.pageUp
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.role
@@ -176,7 +186,7 @@ import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isHiddenFromAccessibility
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -189,10 +199,11 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.toUpperCase
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
@@ -237,9 +248,9 @@ import java.util.Date
 import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.hamcrest.CoreMatchers.instanceOf
 import org.junit.After
+import org.junit.Assume
 import org.junit.Before
 import org.junit.Ignore
 import org.junit.Rule
@@ -258,10 +269,13 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 
 @LargeTest
-@OptIn(ExperimentalMaterialApi::class)
+@OptIn(
+    ExperimentalMaterialApi::class,
+    androidx.compose.ui.platform.ExperimentalComposeUiHostApi::class,
+)
 @RunWith(AndroidJUnit4::class)
 class AndroidAccessibilityTest {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     private val accessibilityEventLoopIntervalMs = 100L
     private lateinit var androidComposeView: AndroidComposeView
@@ -735,12 +749,19 @@ class AndroidAccessibilityTest {
                         AccessibilityActionCompat(ACTION_FOCUS, null),
                         AccessibilityActionCompat(ACTION_ACCESSIBILITY_FOCUS, null),
                     )
-                if (Build.VERSION.SDK_INT >= 26) {
+
+                if (Build.VERSION.SDK_INT >= 37) {
                     assertThat(availableExtraData)
                         .containsExactly(
                             "androidx.compose.ui.semantics.id",
-                            // TODO(b/272068594): This looks like a bug. This should be
-                            //  AccessibilityNodeInfoCompat.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY
+                            "androidx.compose.ui.semantics.testTag",
+                            EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+                            EXTRA_DATA_RENDERING_INFO_KEY,
+                        )
+                } else if (Build.VERSION.SDK_INT >= 26) {
+                    assertThat(availableExtraData)
+                        .containsExactly(
+                            "androidx.compose.ui.semantics.id",
                             EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
                             "androidx.compose.ui.semantics.testTag",
                         )
@@ -2209,8 +2230,8 @@ class AndroidAccessibilityTest {
         val colSemanticsNode =
             rule.onNodeWithTag(columnTag).fetchSemanticsNode("can't find node with tag $columnTag")
         val viewHolder =
-            androidComposeView.androidViewsHandler.layoutNodeToHolder[
-                    colSemanticsNode.replacedChildren[1].layoutNode]
+            androidComposeView.androidViewsHandler
+                ?.layoutNodeToHolder[colSemanticsNode.replacedChildren[1].layoutNode]
         checkNotNull(viewHolder)
         val firstButtonId = rule.onNodeWithText(firstButtonText).semanticsId()
         val lastButtonId = rule.onNodeWithText(lastButtonText).semanticsId()
@@ -2307,8 +2328,8 @@ class AndroidAccessibilityTest {
         val colSemanticsNode =
             rule.onNodeWithTag(columnTag).fetchSemanticsNode("can't find node with tag $columnTag")
         val viewHolder =
-            androidComposeView.androidViewsHandler.layoutNodeToHolder[
-                    colSemanticsNode.replacedChildren[1].layoutNode]
+            androidComposeView.androidViewsHandler
+                ?.layoutNodeToHolder[colSemanticsNode.replacedChildren[1].layoutNode]
         checkNotNull(viewHolder) // Check that the View exists
         val firstButtonId = rule.onNodeWithText(firstButtonText).semanticsId()
         val thirdButtonId = rule.onNodeWithText(thirdButtonText).semanticsId()
@@ -2418,6 +2439,159 @@ class AndroidAccessibilityTest {
         val target2Id = rule.onNodeWithTag(target2Tag).semanticsId()
         rule.runOnUiThread {
             assertThat(provider.performAction(target2Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+    }
+
+    @Test
+    fun testPerformAction_showOnScreen_lazy_withContentPadding() {
+        rule.mainClock.autoAdvance = false
+
+        val lazyState = LazyListState()
+        val target0Tag = "target0"
+        val target1Tag = "target1"
+        setContent {
+            Box {
+                with(LocalDensity.current) {
+                    LazyColumn(
+                        modifier = Modifier.size(200.toDp()),
+                        state = lazyState,
+                        contentPadding = PaddingValues(top = 40.toDp(), bottom = 60.toDp()),
+                    ) {
+                        item { BasicText("First", Modifier.testTag(target0Tag).size(80.toDp())) }
+                        item { BasicText("Second", Modifier.testTag(target1Tag).size(80.toDp())) }
+                        item { BasicText("Third", Modifier.size(80.toDp())) }
+                    }
+                }
+            }
+        }
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+
+        // Second item is at [120, 200], which is within the outer bounds [0, 200] of LazyColumn
+        // but obscured by bottom contentPadding [140, 200]. ACTION_SHOW_ON_SCREEN should scroll
+        // by 60px so that Second item's bottom aligns with the padded viewport bottom (140).
+        val showOnScreen = android.R.id.accessibilityActionShowOnScreen
+        val target1Id = rule.onNodeWithTag(target1Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target1Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(60)
+
+        // First item is now at [-20, 60], partially obscured by top contentPadding [0, 40].
+        // ACTION_SHOW_ON_SCREEN on First item should scroll back to 0 so its top aligns with 40.
+        val target0Id = rule.onNodeWithTag(target0Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target0Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+    }
+
+    @Test
+    fun testPerformAction_showOnScreen_lazy_reverseLayout_withContentPadding() {
+        rule.mainClock.autoAdvance = false
+
+        val lazyState = LazyListState()
+        val target0Tag = "target0"
+        val target1Tag = "target1"
+        setContent {
+            Box {
+                with(LocalDensity.current) {
+                    LazyColumn(
+                        modifier = Modifier.size(200.toDp()),
+                        state = lazyState,
+                        reverseLayout = true,
+                        contentPadding = PaddingValues(top = 60.toDp(), bottom = 40.toDp()),
+                    ) {
+                        item { BasicText("First", Modifier.testTag(target0Tag).size(70.toDp())) }
+                        item { BasicText("Second", Modifier.testTag(target1Tag).size(70.toDp())) }
+                        item { BasicText("Third", Modifier.size(70.toDp())) }
+                    }
+                }
+            }
+        }
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+
+        // With reverseLayout = true, First item is at [90, 160] and Second item is at [20, 90],
+        // which is within the outer bounds [0, 200] but obscured by top contentPadding [0, 60].
+        // ACTION_SHOW_ON_SCREEN on Second item should scroll by 40px so its top aligns with 60.
+        val showOnScreen = android.R.id.accessibilityActionShowOnScreen
+        val target1Id = rule.onNodeWithTag(target1Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target1Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(40)
+
+        // First item is now at [130, 200], within outer bounds [0, 200] but obscured by bottom
+        // contentPadding [160, 200]. ACTION_SHOW_ON_SCREEN on First item should scroll back to 0.
+        val target0Id = rule.onNodeWithTag(target0Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target0Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+    }
+
+    @Test
+    fun testPerformAction_showOnScreen_lazyRow_rtl_withContentPadding() {
+        rule.mainClock.autoAdvance = false
+
+        val lazyState = LazyListState()
+        val target0Tag = "target0"
+        val target1Tag = "target1"
+        setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                Box {
+                    with(LocalDensity.current) {
+                        LazyRow(
+                            modifier = Modifier.size(200.toDp()),
+                            state = lazyState,
+                            contentPadding = PaddingValues(start = 40.toDp(), end = 60.toDp()),
+                        ) {
+                            item {
+                                BasicText("First", Modifier.testTag(target0Tag).size(70.toDp()))
+                            }
+                            item {
+                                BasicText("Second", Modifier.testTag(target1Tag).size(70.toDp()))
+                            }
+                            item { BasicText("Third", Modifier.size(70.toDp())) }
+                        }
+                    }
+                }
+            }
+        }
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(0)
+
+        // In RTL, start (40px) is on the right [160, 200] and end (60px) is on the left [0, 60].
+        // First item is at [90, 160] and Second item is at [20, 90], within outer bounds [0, 200]
+        // but obscured by left (end) contentPadding [0, 60]. ACTION_SHOW_ON_SCREEN on Second item
+        // should scroll by 40px so its left edge aligns with 60.
+        val showOnScreen = android.R.id.accessibilityActionShowOnScreen
+        val target1Id = rule.onNodeWithTag(target1Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target1Id, showOnScreen, null)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(5000)
+        assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
+        assertThat(lazyState.firstVisibleItemScrollOffset).isEqualTo(40)
+
+        // First item is now at [130, 200], within outer bounds [0, 200] but obscured by right
+        // (start) contentPadding [160, 200]. ACTION_SHOW_ON_SCREEN on First item should scroll
+        // back to 0.
+        val target0Id = rule.onNodeWithTag(target0Tag).semanticsId()
+        rule.runOnUiThread {
+            assertThat(provider.performAction(target0Id, showOnScreen, null)).isTrue()
         }
         rule.mainClock.advanceTimeBy(5000)
         assertThat(lazyState.firstVisibleItemIndex).isEqualTo(0)
@@ -2536,8 +2710,9 @@ class AndroidAccessibilityTest {
         val toggleableNodeId = rule.onNodeWithTag(tag).semanticsId()
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread { provider.performAction(toggleableNodeId, ACTION_CLICK, null) }
+        val actionPerformed = rule.runOnUiThread {
+            provider.performAction(toggleableNodeId, ACTION_CLICK, null)
+        }
 
         // Assert.
         rule.mainClock.advanceTimeBy(accessibilityEventLoopIntervalMs)
@@ -2563,8 +2738,9 @@ class AndroidAccessibilityTest {
         val toggleableId = rule.onNodeWithTag(tag).assertIsDisplayed().assertIsOn().semanticsId()
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread { provider.performAction(toggleableId, ACTION_CLICK, null) }
+        val actionPerformed = rule.runOnUiThread {
+            provider.performAction(toggleableId, ACTION_CLICK, null)
+        }
 
         // Assert.
         rule.onNodeWithTag(tag).assertIsOn()
@@ -2616,8 +2792,9 @@ class AndroidAccessibilityTest {
         val textFieldNodeId = rule.onNodeWithTag(tag).assertIsDisplayed().semanticsId()
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread { provider.performAction(textFieldNodeId, ACTION_CLICK, null) }
+        val actionPerformed = rule.runOnUiThread {
+            provider.performAction(textFieldNodeId, ACTION_CLICK, null)
+        }
 
         // Assert.
         rule.onNodeWithTag(tag).assert(expectValue(Focused, true))
@@ -2650,11 +2827,10 @@ class AndroidAccessibilityTest {
         argument.putInt(AccessibilityNodeInfoCompat.ACTION_ARGUMENT_SELECTION_END_INT, 1)
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread {
-                textFieldSelectionOne = false
-                provider.performAction(textFieldId, ACTION_SET_SELECTION, argument)
-            }
+        val actionPerformed = rule.runOnUiThread {
+            textFieldSelectionOne = false
+            provider.performAction(textFieldId, ACTION_SET_SELECTION, argument)
+        }
         rule.waitUntil(5_000) { textFieldSelectionOne }
 
         // Assert.
@@ -2679,16 +2855,18 @@ class AndroidAccessibilityTest {
         val textFieldId = rule.onNodeWithTag(tag).assert(expectValue(Focused, false)).semanticsId()
 
         // Act.
-        var actionPerformed =
-            rule.runOnUiThread { provider.performAction(textFieldId, ACTION_FOCUS, null) }
+        var actionPerformed = rule.runOnUiThread {
+            provider.performAction(textFieldId, ACTION_FOCUS, null)
+        }
 
         // Assert.
         rule.onNodeWithTag(tag).assert(expectValue(Focused, true))
         assertThat(actionPerformed).isTrue()
 
         // Act.
-        actionPerformed =
-            rule.runOnUiThread { provider.performAction(textFieldId, ACTION_CLEAR_FOCUS, null) }
+        actionPerformed = rule.runOnUiThread {
+            provider.performAction(textFieldId, ACTION_CLEAR_FOCUS, null)
+        }
 
         // Assert.
         rule.onNodeWithTag(tag).assert(expectValue(Focused, false))
@@ -2774,8 +2952,9 @@ class AndroidAccessibilityTest {
         assertThat(data!!.size).isEqualTo(1)
 
         val rectF = data[0] as RectF // result in screen coordinates
+        val innerCoordinatorPosition = textFieldNode.layoutNode.innerCoordinator.positionInRoot()
         val expectedRectInLocalCoords =
-            textLayoutResult.getBoundingBox(0).translate(textFieldNode.positionInWindow)
+            textLayoutResult.getBoundingBox(0).translate(innerCoordinatorPosition)
         val expectedTopLeftInScreenCoords =
             androidComposeView.localToScreen(expectedRectInLocalCoords.topLeft)
         assertThat(rectF.left).isEqualTo(expectedTopLeftInScreenCoords.x)
@@ -2786,6 +2965,48 @@ class AndroidAccessibilityTest {
         val testTagKey = "androidx.compose.ui.semantics.testTag"
         provider.addExtraDataToAccessibilityNodeInfo(textFieldNode.id, info, testTagKey, argument)
         assertThat(info.extras.getCharSequence(testTagKey)).isEqualTo(tag)
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
+    @Suppress("DEPRECATION")
+    fun testCharacterLocations_withSemanticsBeforePadding_reportsCorrectBoundingBoxes() {
+        val padding = 24
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                // An outer semantics modifier before padding can cause getBoundingBoxes
+                // to use the wrong position if it picks this coordinator over the inner
+                // text layout coordinator. This is the scenario being regression-tested.
+                BasicText(
+                    text = "text",
+                    modifier = Modifier.semantics {}.padding(padding.dp).testTag(tag),
+                )
+            }
+        }
+        val textNode =
+            rule.onNodeWithTag(tag).fetchSemanticsNode("couldn't find node with tag $tag")
+        val info = AccessibilityNodeInfoCompat.obtain()
+        val argument =
+            Bundle().apply {
+                putInt(EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, 0)
+                putInt(EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 1)
+            }
+
+        provider.addExtraDataToAccessibilityNodeInfo(
+            textNode.id,
+            info,
+            EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+            argument,
+        )
+
+        val data = info.extras.getParcelableArray(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+        assertThat(data!!.size).isEqualTo(1)
+
+        val rectF = data[0] as RectF
+        val viewPosition = intArrayOf(0, 0)
+        androidComposeView.getLocationOnScreen(viewPosition)
+        assertThat(rectF.left).isEqualTo(viewPosition[0].toFloat() + padding)
+        assertThat(rectF.top).isEqualTo(viewPosition[1].toFloat() + padding)
     }
 
     @Test
@@ -3012,8 +3233,9 @@ class AndroidAccessibilityTest {
         val virtualViewId = rule.onNodeWithTag(tag).semanticsId()
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread { provider.performAction(virtualViewId, ACTION_CLICK, null) }
+        val actionPerformed = rule.runOnUiThread {
+            provider.performAction(virtualViewId, ACTION_CLICK, null)
+        }
 
         // Assert.
         rule.mainClock.advanceTimeBy(accessibilityEventLoopIntervalMs)
@@ -3144,10 +3366,9 @@ class AndroidAccessibilityTest {
         val toggleableVirtualViewId = rule.onNodeWithTag(tag).assertIsDisplayed().semanticsId()
 
         // Act.
-        val actionPerformed =
-            rule.runOnUiThread {
-                provider.performAction(toggleableVirtualViewId, ACTION_CLICK, null)
-            }
+        val actionPerformed = rule.runOnUiThread {
+            provider.performAction(toggleableVirtualViewId, ACTION_CLICK, null)
+        }
 
         // Assert that `TYPE_VIEW_CLICKED` event was sent.
         rule.runOnIdle {
@@ -3317,7 +3538,7 @@ class AndroidAccessibilityTest {
     @Test
     fun sendTextEvents_whenSetText() {
         // Arrange.
-        val locale = LocaleList("en_US")
+        val locale = Locale("en-US")
         val initialText = "h"
         val finalText = "hello"
         setContent {
@@ -3679,13 +3900,12 @@ class AndroidAccessibilityTest {
             with(rule.density) { rule.onNodeWithTag(tag).getBoundsInRoot().toRect() }
 
         // Act.
-        val toggleableNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    (toggleableBounds.left + toggleableBounds.right) / 2,
-                    (toggleableBounds.top + toggleableBounds.bottom) / 2,
-                )
-            }
+        val toggleableNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                (toggleableBounds.left + toggleableBounds.right) / 2,
+                (toggleableBounds.top + toggleableBounds.bottom) / 2,
+            )
+        }
 
         // Assert.
         assertThat(toggleableId).isEqualTo(toggleableNodeId)
@@ -3713,13 +3933,12 @@ class AndroidAccessibilityTest {
             with(rule.density) { rule.onNodeWithTag(childTwoTag).getBoundsInRoot().toRect() }
 
         // Act.
-        val overlappedChildNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    (overlappedChildNodeBounds.left + overlappedChildNodeBounds.right) / 2,
-                    (overlappedChildNodeBounds.top + overlappedChildNodeBounds.bottom) / 2,
-                )
-            }
+        val overlappedChildNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                (overlappedChildNodeBounds.left + overlappedChildNodeBounds.right) / 2,
+                (overlappedChildNodeBounds.top + overlappedChildNodeBounds.bottom) / 2,
+            )
+        }
 
         // Assert.
         assertThat(childOneId).isEqualTo(overlappedChildNodeId)
@@ -3780,16 +3999,330 @@ class AndroidAccessibilityTest {
         val bounds = with(rule.density) { rule.onNodeWithTag(tag).getBoundsInRoot().toRect() }
 
         // Act.
-        val hitNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    bounds.left + bounds.width / 2,
-                    bounds.top + bounds.height / 2,
-                )
-            }
+        val hitNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+            )
+        }
 
         // Assert.
         rule.runOnIdle { assertThat(hitNodeId).isEqualTo(InvalidId) }
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlay() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag)) { BasicText("") }
+                Box(Modifier.fillMaxSize().semantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlay_firstChild() {
+        setContent {
+            Box {
+                Row {
+                    Box(Modifier.size(100.dp).clickable {}.testTag("child1"))
+                    Box(Modifier.size(100.dp).clickable {}.testTag("child2"))
+                }
+                Column(Modifier.fillMaxSize().semantics {}) {}
+            }
+        }
+        val targetNode = rule.onNodeWithTag("child1")
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlay_secondChild() {
+        setContent {
+            Box {
+                Row {
+                    Box(Modifier.size(100.dp).clickable {}.testTag("child1"))
+                    Box(Modifier.size(100.dp).clickable {}.testTag("child2"))
+                }
+                Column(Modifier.fillMaxSize().semantics {}) {}
+            }
+        }
+        val targetNode = rule.onNodeWithTag("child2")
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_overlayWithExplicitZIndex() {
+        setContent {
+            Box {
+                // Visually on top (Z=1), but unimportant for a11y
+                Box(Modifier.size(100.dp).zIndex(1f).semantics {})
+                // Visually at the bottom (Z=0), but important for a11y (clickable)
+                Box(Modifier.size(100.dp).zIndex(0f).clickable {}.testTag(tag))
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_doubleOverlay() {
+        setContent {
+            Box {
+                Box {
+                    Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                    Box(Modifier.size(100.dp).semantics {})
+                }
+                Box(Modifier.size(100.dp).semantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_sandwichedTarget() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).semantics {})
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                Box(Modifier.size(100.dp).semantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_offsetOverlap() {
+        // Two overlapping boxes offset from each other. We hit-test the intersection.
+        setContent {
+            Box {
+                // Important clickable at (0,0)
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                // Unimportant overlay at (50,50), overlaps the bottom-right of the clickable
+                Box(Modifier.offset(50.dp, 50.dp).size(100.dp).semantics {})
+            }
+        }
+        val targetNodeId = rule.onNodeWithTag(tag).semanticsId()
+        // We pick a point inside the intersection of the two boxes (e.g., 75, 75).
+        val intersectionX = with(rule.density) { 75.dp.toPx() }
+        val intersectionY = with(rule.density) { 75.dp.toPx() }
+
+        dispatchTouchToExploreMotionEventAt(Offset(x = intersectionX, y = intersectionY))
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_importantOverlay() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {})
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+            }
+        }
+        val overlayNode = rule.onNodeWithTag(tag)
+        val overlayNodeId = overlayNode.semanticsId()
+        val clickTarget = with(rule.density) { overlayNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(overlayNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_hiddenFromAccessibilityOverlay() {
+        setContent {
+            Box {
+                // Bottom: important (target)
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                // Top: clickable, but explicitly hidden from a11y
+                Box(Modifier.size(100.dp).clickable {}.semantics { hideFromAccessibility() })
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_clearAndSetSemanticsOverlay() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                // Because the overlay is not interactive, it is unimportant for accessibility.
+                Box(Modifier.size(100.dp).clearAndSetSemantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlayWithImportantChild_clickOutsideChild() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {}.testTag(tag))
+                // Unimportant overlay, but has an important child
+                Box(Modifier.size(100.dp).semantics {}) {
+                    // Important child is only 50dp, so the bottom-right 50dp of the overlay parent
+                    // is empty
+                    Box(Modifier.size(50.dp).clickable {})
+                }
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        // Target a point (75, 75) which is outside the important child, but inside the unimportant
+        // overlay parent and bottom clickable.
+        val clickTargetX = with(rule.density) { 75.dp.toPx() }
+        val clickTargetY = with(rule.density) { 75.dp.toPx() }
+
+        dispatchTouchToExploreMotionEventAt(Offset(x = clickTargetX, y = clickTargetY))
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlayWithImportantChild_clickInsideChild() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {})
+                // Unimportant overlay, but has an important child
+                Box(Modifier.size(100.dp).semantics {}) {
+                    // Important child is only 50dp, top-left
+                    Box(Modifier.size(50.dp).clickable {}.testTag(tag))
+                }
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlayWithImportantMinTouchTargetSibling() {
+        setContent {
+            Box {
+                // Small important node (10x10 dp).
+                // Relies on the minimum touch target (48x48 dp) to be hit.
+                Box(Modifier.size(10.dp).clickable {}.testTag(tag))
+                Box(Modifier.size(100.dp).semantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+
+        // Dispatch touch at (20dp, 20dp), which is outside the 10dp target bounds, but inside its
+        // 48dp minimum touch target. It's also directly inside the 100dp overlay bounds.
+        val clickTarget = with(rule.density) { Offset(20.dp.toPx(), 20.dp.toPx()) }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_mergeDescendantsOverlay_hitsOverlay() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable {})
+                // An overlay that declares it merges descendants, but has no actionable semantics
+                // of its own.
+                Box(Modifier.size(100.dp).semantics(mergeDescendants = true) {}.testTag(tag))
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_pointerInputSharedWithSiblings_hitsTopNode() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).pointerInputSharedWithSiblings().clickable(onClick = {}))
+                Box(
+                    Modifier.size(100.dp)
+                        .pointerInputSharedWithSiblings()
+                        .clickable(onClick = {})
+                        .testTag(tag)
+                )
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
+    }
+
+    @Test
+    fun testSemanticsHitTest_unimportantOverlayWithSharedPointerInput_fallsThrough() {
+        setContent {
+            Box {
+                Box(Modifier.size(100.dp).clickable(onClick = {}).testTag(tag))
+                Box(Modifier.size(100.dp).pointerInputSharedWithSiblings().semantics {})
+            }
+        }
+        val targetNode = rule.onNodeWithTag(tag)
+        val targetNodeId = targetNode.semanticsId()
+        val clickTarget = with(rule.density) { targetNode.getBoundsInRoot().toRect().center }
+
+        dispatchTouchToExploreMotionEventAt(clickTarget)
+
+        verifyHoverEnterAccessibilityEventSentFor(targetNodeId)
     }
 
     @Test
@@ -3855,13 +4388,12 @@ class AndroidAccessibilityTest {
         val bounds = with(rule.density) { rule.onNodeWithTag(tag).getBoundsInRoot().toRect() }
 
         // Act.
-        val hitNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    bounds.left + bounds.width / 2,
-                    bounds.top + bounds.height / 2,
-                )
-            }
+        val hitNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+            )
+        }
 
         // Assert.
         rule.runOnIdle { assertThat(hitNodeId).isEqualTo(InvalidId) }
@@ -3882,13 +4414,12 @@ class AndroidAccessibilityTest {
             with(rule.density) { rule.onNodeWithTag(innertag, true).getBoundsInRoot().toRect() }
 
         // Act.
-        val hitNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    bounds.left + bounds.width / 2,
-                    bounds.top + bounds.height / 2,
-                )
-            }
+        val hitNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+            )
+        }
 
         // Assert.
         rule.runOnIdle { assertThat(outerNodeId).isEqualTo(hitNodeId) }
@@ -3946,8 +4477,9 @@ class AndroidAccessibilityTest {
         val androidView =
             rule.onNodeWithTag(tag).fetchSemanticsNode("can't find node with tag $tag")
         val viewGroup =
-            androidComposeView.androidViewsHandler.layoutNodeToHolder[androidView.layoutNode]!!.view
-                as ViewGroup
+            androidComposeView.androidViewsHandler
+                ?.layoutNodeToHolder[androidView.layoutNode]!!
+                .view as ViewGroup
         val getAccessibilityViewIdMethod =
             View::class.java.getDeclaredMethod("getAccessibilityViewId")
         getAccessibilityViewIdMethod.isAccessible = true
@@ -3981,11 +4513,10 @@ class AndroidAccessibilityTest {
         val colAccessibilityNode = createAccessibilityNodeInfo(colSemanticsNode.id)
 
         // Act.
-        val buttonHolder =
-            rule.runOnIdle {
-                androidComposeView.androidViewsHandler.layoutNodeToHolder[
-                        colSemanticsNode.replacedChildren[0].layoutNode]
-            }
+        val buttonHolder = rule.runOnIdle {
+            androidComposeView.androidViewsHandler
+                ?.layoutNodeToHolder[colSemanticsNode.replacedChildren[0].layoutNode]
+        }
         checkNotNull(buttonHolder)
 
         // Assert.
@@ -4055,6 +4586,213 @@ class AndroidAccessibilityTest {
                     eq(androidComposeView),
                     argThat(ArgumentMatcher { it.eventType == TYPE_VIEW_HOVER_EXIT }),
                 )
+        }
+    }
+
+    @Composable
+    private fun RecordingAndroidView(
+        receivedActions: MutableList<Int>,
+        modifier: Modifier = Modifier,
+    ) {
+        AndroidView(
+            factory = { context ->
+                object : Button(context) {
+                    init {
+                        layoutParams =
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
+                    }
+
+                    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+                        receivedActions.add(event.actionMasked)
+                        return super.dispatchGenericMotionEvent(event)
+                    }
+                }
+            },
+            modifier = modifier,
+        )
+    }
+
+    private fun nodeCenter(tag: String): Offset =
+        with(rule.density) { rule.onNodeWithTag(tag).getBoundsInRoot().toRect().center }
+
+    private fun dispatchHover(action: Int, x: Float, y: Float): Boolean =
+        androidComposeView.dispatchHoverEvent(createHoverMotionEvent(action = action, x = x, y = y))
+
+    @Test
+    fun testViewInterop_hoverOverComposeContentCoveringAndroidView_doesNotForwardToView() {
+        val overlayTag = "overlayTag"
+        val receivedActions = mutableListOf<Int>()
+        setContent {
+            Box(Modifier.size(100.dp)) {
+                RecordingAndroidView(receivedActions, Modifier.fillMaxSize())
+                Box(
+                    Modifier.fillMaxSize().testTag(overlayTag).semantics {
+                        contentDescription = "Covering Overlay"
+                    }
+                )
+            }
+        }
+
+        val overlayId = rule.onNodeWithTag(overlayTag).semanticsId()
+        val (centerX, centerY) = nodeCenter(overlayTag)
+
+        rule.runOnUiThread {
+            // Hover enter, move, and exit over covering Compose node should not reach
+            // AndroidView
+            assertThat(dispatchHover(ACTION_HOVER_ENTER, centerX, centerY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(overlayId)
+            assertThat(dispatchHover(ACTION_HOVER_MOVE, centerX, centerY)).isTrue()
+            assertThat(dispatchHover(ACTION_HOVER_EXIT, centerX, centerY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(InvalidId)
+            assertThat(receivedActions).isEmpty()
+        }
+    }
+
+    @Test
+    fun testViewInterop_hoverOverUncoveredAndroidViewInFrontOfComposeContent_forwardsToView() {
+        val bgTag = "backgroundCompose"
+        val receivedActions = mutableListOf<Int>()
+        setContent {
+            Box(Modifier.size(100.dp)) {
+                Box(
+                    Modifier.fillMaxSize().testTag(bgTag).semantics {
+                        contentDescription = "Background"
+                    }
+                )
+                // Raw AndroidView without any Compose modifiers or semantics placed in front
+                RecordingAndroidView(receivedActions)
+            }
+        }
+
+        val (centerX, centerY) = nodeCenter(bgTag)
+
+        rule.runOnUiThread {
+            assertThat(dispatchHover(ACTION_HOVER_ENTER, centerX, centerY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(InvalidId)
+            assertThat(receivedActions).containsExactly(ACTION_HOVER_ENTER)
+        }
+    }
+
+    @Test
+    fun testViewInterop_hoverMoveFromUncoveredAndroidViewToCoveringComposeNode_synthesizesHoverExit() {
+        val overlayTag = "overlayTag"
+        val receivedActions = mutableListOf<Int>()
+        setContent {
+            Box(Modifier.size(100.dp)) {
+                RecordingAndroidView(receivedActions, Modifier.fillMaxSize())
+                // Overlay covers the bottom half (y in 50.dp..100.dp)
+                Box(
+                    Modifier.offset(y = 50.dp)
+                        .size(width = 100.dp, height = 50.dp)
+                        .testTag(overlayTag)
+                        .semantics { contentDescription = "Bottom Sheet" }
+                )
+            }
+        }
+
+        val overlayId = rule.onNodeWithTag(overlayTag).semanticsId()
+        val overlayBounds =
+            with(rule.density) { rule.onNodeWithTag(overlayTag).getBoundsInRoot().toRect() }
+        val centerX = overlayBounds.center.x
+        val topHalfY = overlayBounds.top / 2f
+        val bottomHalfY = overlayBounds.center.y
+
+        rule.runOnUiThread {
+            // 1. Hover enter on uncovered top half -> forwards to AndroidView
+            assertThat(dispatchHover(ACTION_HOVER_ENTER, centerX, topHalfY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(InvalidId)
+            assertThat(receivedActions).contains(ACTION_HOVER_ENTER)
+            receivedActions.clear()
+
+            // 2. Hover move onto covering overlay -> synthesizes single HOVER_EXIT to
+            // AndroidView
+            assertThat(dispatchHover(ACTION_HOVER_MOVE, centerX, bottomHalfY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(overlayId)
+            assertThat(receivedActions).containsExactly(ACTION_HOVER_EXIT)
+            receivedActions.clear()
+
+            // 3. Hover exit from overlay -> does not send duplicate HOVER_EXIT to AndroidView
+            assertThat(dispatchHover(ACTION_HOVER_EXIT, centerX, bottomHalfY)).isTrue()
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(InvalidId)
+            assertThat(receivedActions).isEmpty()
+        }
+    }
+
+    @Test
+    fun testViewInterop_hoverOverHiddenAndroidView_doesNotForwardToView() {
+        val directTag = "directHidden"
+        val ancestorTag = "ancestorHidden"
+        val receivedActions = mutableListOf<Int>()
+        setContent {
+            Column {
+                RecordingAndroidView(
+                    receivedActions,
+                    Modifier.size(100.dp).testTag(directTag).semantics {
+                        hideFromAccessibility()
+                    },
+                )
+                Box(
+                    Modifier.size(100.dp).testTag(ancestorTag).semantics(mergeDescendants = true) {
+                        hideFromAccessibility()
+                    }
+                ) {
+                    RecordingAndroidView(receivedActions, Modifier.fillMaxSize())
+                }
+            }
+        }
+
+        val (directX, directY) = nodeCenter(directTag)
+        val (ancestorX, ancestorY) = nodeCenter(ancestorTag)
+
+        rule.runOnUiThread {
+            dispatchHover(ACTION_HOVER_ENTER, directX, directY)
+            dispatchHover(ACTION_HOVER_ENTER, ancestorX, ancestorY)
+            assertThat(delegate.hoveredVirtualViewId).isEqualTo(InvalidId)
+            assertThat(receivedActions).isEmpty()
+        }
+    }
+
+    @Test
+    fun dispatchHoverEvent_returnsTrueForHandledAndFalseForUnhandled() {
+        val hoverableBoxTag = "hoverable"
+        val unhoverableBoxTag = "unhoverable"
+
+        setContent {
+            Column {
+                Box(
+                    Modifier.testTag(hoverableBoxTag).size(100.dp).semantics {
+                        contentDescription = "Hoverable Box"
+                    }
+                )
+                Box(Modifier.testTag(unhoverableBoxTag).size(100.dp))
+            }
+        }
+
+        val hoverableBounds =
+            with(rule.density) { rule.onNodeWithTag(hoverableBoxTag).getBoundsInRoot().toRect() }
+        rule.runOnUiThread {
+            val hoverEnter =
+                createHoverMotionEvent(
+                    action = ACTION_HOVER_ENTER,
+                    x = (hoverableBounds.left + hoverableBounds.right) / 2f,
+                    y = (hoverableBounds.top + hoverableBounds.bottom) / 2f,
+                )
+            assertThat(androidComposeView.dispatchHoverEvent(hoverEnter)).isTrue()
+        }
+
+        val unhoverableBounds =
+            with(rule.density) { rule.onNodeWithTag(unhoverableBoxTag).getBoundsInRoot().toRect() }
+        rule.runOnUiThread {
+            val hoverEnter =
+                createHoverMotionEvent(
+                    action = ACTION_HOVER_ENTER,
+                    x = (unhoverableBounds.left + unhoverableBounds.right) / 2f,
+                    y = (unhoverableBounds.top + unhoverableBounds.bottom) / 2f,
+                )
+            assertThat(androidComposeView.dispatchHoverEvent(hoverEnter)).isFalse()
         }
     }
 
@@ -4176,6 +4914,40 @@ class AndroidAccessibilityTest {
         val parentNodeId = rule.onNodeWithTag(parentTag).semanticsId()
         val overlappedChildOneNodeId = rule.onNodeWithTag(childOneTag).semanticsId()
         val overlappedChildTwoNodeId = rule.onNodeWithTag(childTwoTag).semanticsId()
+
+        // Assert.
+        rule.runOnIdle {
+            assertThat(createAccessibilityNodeInfo(parentNodeId).childCount).isEqualTo(1)
+            assertThat(createAccessibilityNodeInfo(overlappedChildOneNodeId).text.toString())
+                .isEqualTo("Child One")
+            assertThat(provider.createAccessibilityNodeInfo(overlappedChildTwoNodeId)).isNull()
+        }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun testAccessibilityNodeInfoTreePruned_completelyCovered_whenInMergingContainer() {
+        Assume.assumeTrue(ComposeUiFlags.isAccessibilityShouldIncludeOffscreenChildrenEnabled)
+        // Arrange.
+        val parentTag = "ParentForOverlappedChildren"
+        val childOneTag = "OverlappedChildOne"
+        val childTwoTag = "OverlappedChildTwo"
+        setContent {
+            Box(Modifier.testTag(parentTag).semantics(true) {}) {
+                with(LocalDensity.current) {
+                    BasicText(
+                        "Child One",
+                        Modifier.zIndex(1f).testTag(childOneTag).requiredSize(50.toDp()),
+                    )
+                    BasicText("Child Two", Modifier.testTag(childTwoTag).requiredSize(50.toDp()))
+                }
+            }
+        }
+        val parentNodeId = rule.onNodeWithTag(parentTag, useUnmergedTree = true).semanticsId()
+        val overlappedChildOneNodeId =
+            rule.onNodeWithTag(childOneTag, useUnmergedTree = true).semanticsId()
+        val overlappedChildTwoNodeId =
+            rule.onNodeWithTag(childTwoTag, useUnmergedTree = true).semanticsId()
 
         // Assert.
         rule.runOnIdle {
@@ -4538,6 +5310,43 @@ class AndroidAccessibilityTest {
         assertThat(rect.height()).isEqualTo(150)
     }
 
+    // Regression test for b/479577752
+    @Test
+    fun testChildBounds_clippedToParentBounds_whenParentLargerThanMinTouchTarget() {
+        // When parent's size (100) is larger than minimum touch target (48),
+        // and the child bounds are larger than the parent's (200),
+        // child bounds should be clipped to parent's actual bounds (100),
+        // not parent bounds + half min touch target (100 + 24 = 124).
+        setContent {
+            // density = 1f so that we don't have to convert at all.
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                Box(Modifier.size(200.dp).background(Color.Black.copy(alpha = 0.1f))) {
+                    // Constraining and clipping parent
+                    Box(Modifier.requiredSize(100.dp).clipToBounds()) {
+                        // Semantically clickable and clipped child
+                        Box(
+                            Modifier.wrapContentSize(Alignment.TopStart, unbounded = true)
+                                .requiredSize(200.dp)
+                                .background(Color.Blue)
+                                // onClick needed to go down the touch bounds path.
+                                .semantics { onClick { true } }
+                                .testTag(tag)
+                        )
+                    }
+                }
+            }
+        }
+
+        val virtualViewId = rule.onNodeWithTag(tag).semanticsId()
+        val info = rule.runOnIdle { createAccessibilityNodeInfo(virtualViewId) }
+        val rect = Rect().also { info.getBoundsInScreen(it) }
+
+        // Child should be clipped to parent's 100px.
+        // The regression size for 48 minTouchTarget would be 124.
+        assertThat(rect.width()).isEqualTo(100)
+        assertThat(rect.height()).isEqualTo(100)
+    }
+
     @Test
     fun testSemanticsHitTest_unimportantTraversalProperties() {
         // Arrange.
@@ -4552,13 +5361,12 @@ class AndroidAccessibilityTest {
         val bounds = with(rule.density) { rule.onNodeWithTag(tag).getBoundsInRoot().toRect() }
 
         // Act.
-        val hitNodeId =
-            rule.runOnIdle {
-                delegate.hitTestSemanticsAt(
-                    bounds.left + bounds.width / 2,
-                    bounds.top + bounds.height / 2,
-                )
-            }
+        val hitNodeId = rule.runOnIdle {
+            delegate.hitTestSemanticsAt(
+                bounds.left + bounds.width / 2,
+                bounds.top + bounds.height / 2,
+            )
+        }
 
         // Assert it doesn't hit the tagged node since it only has unimportant properties.
         rule.runOnIdle { assertThat(hitNodeId).isEqualTo(InvalidId) }
@@ -4858,8 +5666,9 @@ class AndroidAccessibilityTest {
             val virtualViewId = rule.onNodeWithTag("tag").semanticsId()
 
             // Act.
-            val accessibilityNodeInfo =
-                rule.runOnIdle { createAccessibilityNodeInfo(virtualViewId) }
+            val accessibilityNodeInfo = rule.runOnIdle {
+                createAccessibilityNodeInfo(virtualViewId)
+            }
 
             // Assert.
             rule.runOnIdle {
@@ -4897,8 +5706,9 @@ class AndroidAccessibilityTest {
             val virtualViewId = rule.onNodeWithTag("tag").semanticsId()
 
             // Act.
-            val accessibilityNodeInfo =
-                rule.runOnIdle { createAccessibilityNodeInfo(virtualViewId) }
+            val accessibilityNodeInfo = rule.runOnIdle {
+                createAccessibilityNodeInfo(virtualViewId)
+            }
 
             // Assert.
             rule.runOnIdle {
@@ -4966,8 +5776,9 @@ class AndroidAccessibilityTest {
             val virtualViewId = rule.onNodeWithTag(tag).semanticsId()
 
             // Act.
-            val accessibilityNodeInfo =
-                rule.runOnIdle { createAccessibilityNodeInfo(virtualViewId) }
+            val accessibilityNodeInfo = rule.runOnIdle {
+                createAccessibilityNodeInfo(virtualViewId)
+            }
 
             // Assert.
             rule.runOnIdle {
@@ -5867,6 +6678,247 @@ class AndroidAccessibilityTest {
         container.setContent(content)
         rule.mainClock.advanceTimeBy(accessibilityEventLoopIntervalMs)
         clearInvocations(container)
+    }
+
+    /**
+     * Dispatch a hover enter motion event, which is the event dispatched on TalkBack's
+     * touch-to-explore tap.
+     */
+    private fun dispatchTouchToExploreMotionEventAt(offset: Offset) {
+        rule.runOnUiThread {
+            val hoverEnter =
+                createHoverMotionEvent(action = ACTION_HOVER_ENTER, x = offset.x, y = offset.y)
+            assertThat(androidComposeView.dispatchHoverEvent(hoverEnter)).isTrue()
+        }
+        rule.mainClock.advanceTimeBy(accessibilityEventLoopIntervalMs)
+    }
+
+    private fun verifyHoverEnterAccessibilityEventSentFor(semanticsNodeId: Int) {
+        rule.runOnIdle {
+            verify(container, times(1))
+                .requestSendAccessibilityEvent(
+                    eq(androidComposeView),
+                    argThat(
+                        ArgumentMatcher {
+                            it.eventType == TYPE_VIEW_HOVER_ENTER &&
+                                getAccessibilityEventSourceSemanticsNodeId(it) == semanticsNodeId
+                        }
+                    ),
+                )
+        }
+    }
+
+    @Test
+    fun clippedChildInScrollContainer_doesNotOccludeAdjacentSiblingTouchTarget() {
+        val topButtonTag = "top_button"
+        val gridItemTag = "grid_item"
+        var itemTopOffsetDp by mutableStateOf((-12).dp)
+        container.setContent {
+            Column(Modifier.size(200.dp)) {
+                // Top bar with a 48.dp clickable button (zIndex = 0f)
+                Box(Modifier.fillMaxWidth().height(56.dp)) {
+                    Box(
+                        Modifier.size(48.dp)
+                            .align(Alignment.BottomStart)
+                            .testTag(topButtonTag)
+                            .clickable {}
+                    )
+                }
+                // Clipped container below top bar with a partially scrolled/clipped clickable
+                // item
+                Box(Modifier.fillMaxWidth().height(144.dp).clipToBounds()) {
+                    Box(
+                        Modifier.offset(y = itemTopOffsetDp)
+                            .size(100.dp)
+                            .testTag(gridItemTag)
+                            .clickable {}
+                    )
+                }
+            }
+        }
+
+        val topButtonNode = rule.onNodeWithTag(topButtonTag).fetchSemanticsNode()
+        val gridItemNode = rule.onNodeWithTag(gridItemTag).fetchSemanticsNode()
+        val expectedHeight = with(rule.density) { 48.dp.roundToPx() }
+        val containerTopPx = with(rule.density) { 56.dp.roundToPx().toFloat() }
+        // Since 88.dp (>= 48.dp) of grid_item is visible inside the clipped container, its
+        // touchBoundsInRoot should be clipped to the container's top edge (56.dp).
+        assertThat(gridItemNode.touchBoundsInRoot.top).isEqualTo(containerTopPx)
+        rule.runOnIdle {
+            val topButtonAni = createAccessibilityNodeInfo(topButtonNode.id)
+            val bounds = Rect().also { topButtonAni.getBoundsInScreen(it) }
+            assertThat(bounds.height()).isEqualTo(expectedHeight)
+        }
+
+        // Now scroll the item further up so less than 48.dp (20.dp) is visible inside the
+        // clipped container. Its touchBoundsInRoot extends above the container for minimum
+        // touch target, but it still must not occlude the sibling top_button outside the
+        // clipped container.
+        rule.runOnIdle { itemTopOffsetDp = (-80).dp }
+        val gridItemNodeAfterScroll = rule.onNodeWithTag(gridItemTag).fetchSemanticsNode()
+        assertThat(gridItemNodeAfterScroll.touchBoundsInRoot.top).isLessThan(containerTopPx)
+        rule.runOnIdle {
+            val topButtonAniAfterScroll = createAccessibilityNodeInfo(topButtonNode.id)
+            val boundsAfterScroll = Rect().also { topButtonAniAfterScroll.getBoundsInScreen(it) }
+            assertThat(boundsAfterScroll.height()).isEqualTo(expectedHeight)
+        }
+    }
+
+    @Test
+    fun overlappingClippedChildrenNearContainerEdge_occludedChildIsPruned() {
+        val primaryButtonTag = "primary_button"
+        val secondaryButtonTag = "secondary_button"
+        container.setContent {
+            Box(Modifier.size(100.dp).clipToBounds()) {
+                // Two 0.dp-height clickable nodes placed 20.dp above the bottom edge of a
+                // 100.dp clipping container (at y = 80.dp). Both expand their 48.dp minimum
+                // touch target to [56.dp, 104.dp], sticking 4.dp outside the container's
+                // bottom edge (100.dp).
+                Box(
+                    Modifier.offset(y = 80.dp)
+                        .size(width = 80.dp, height = 0.dp)
+                        .testTag(primaryButtonTag)
+                        .clickable {}
+                )
+                Box(
+                    Modifier.offset(y = 80.dp)
+                        .size(width = 80.dp, height = 0.dp)
+                        .testTag(secondaryButtonTag)
+                        .clickable {}
+                )
+            }
+        }
+
+        val primaryNode = rule.onNodeWithTag(primaryButtonTag).fetchSemanticsNode()
+        val secondaryNode = rule.onNodeWithTag(secondaryButtonTag).fetchSemanticsNode()
+        val expectedHeight = with(rule.density) { 48.dp.roundToPx() }
+
+        rule.runOnIdle {
+            val rootAni = createAccessibilityNodeInfo(AccessibilityNodeProviderCompat.HOST_VIEW_ID)
+            val secondaryAni = createAccessibilityNodeInfo(secondaryNode.id)
+            val secondaryBounds = Rect().also { secondaryAni.getBoundsInScreen(it) }
+            assertThat(secondaryBounds.height()).isEqualTo(expectedHeight)
+            // The underlying primary button is 100% occluded within the clipping container and
+            // must be pruned rather than surviving with a 4.dp overhang sliver outside the
+            // container.
+            assertThat(rootAni.childCount).isEqualTo(1)
+            assertThat(provider.createAccessibilityNodeInfo(primaryNode.id)).isNull()
+        }
+    }
+
+    @Test
+    fun overlappingClippedChildrenInContainerCorner_occludedChildIsPruned() {
+        val primaryButtonTag = "primary_corner_button"
+        val secondaryButtonTag = "secondary_corner_button"
+        container.setContent {
+            Box(Modifier.padding(50.dp).size(100.dp).clipToBounds()) {
+                // Two 20.dp clickable nodes stacked in the bottom-start corner of a 100.dp
+                // clipping container. Their 48.dp minimum touch target overhangs both the left
+                // and bottom edges by 14.dp (an L-shaped overhang outside the container).
+                Box(
+                    Modifier.align(Alignment.BottomStart)
+                        .size(20.dp)
+                        .testTag(primaryButtonTag)
+                        .clickable {}
+                )
+                Box(
+                    Modifier.align(Alignment.BottomStart)
+                        .size(20.dp)
+                        .testTag(secondaryButtonTag)
+                        .clickable {}
+                )
+            }
+        }
+
+        val primaryNode = rule.onNodeWithTag(primaryButtonTag).fetchSemanticsNode()
+        val secondaryNode = rule.onNodeWithTag(secondaryButtonTag).fetchSemanticsNode()
+        val expectedSize = with(rule.density) { 48.dp.roundToPx() }
+
+        rule.runOnIdle {
+            val rootAni = createAccessibilityNodeInfo(AccessibilityNodeProviderCompat.HOST_VIEW_ID)
+            val secondaryAni = createAccessibilityNodeInfo(secondaryNode.id)
+            val secondaryBounds = Rect().also { secondaryAni.getBoundsInScreen(it) }
+            assertThat(secondaryBounds.width()).isEqualTo(expectedSize)
+            assertThat(secondaryBounds.height()).isEqualTo(expectedSize)
+            assertThat(rootAni.childCount).isEqualTo(1)
+            assertThat(provider.createAccessibilityNodeInfo(primaryNode.id)).isNull()
+        }
+    }
+
+    @Test
+    fun clippedChildWithPerpendicularSiblingOverlap_preservesFullTouchTargetBounds() {
+        val dismissButtonTag = "dismiss_tag_button"
+        val lowerRowButtonTag = "lower_row_button"
+        container.setContent {
+            Box(Modifier.padding(50.dp).size(200.dp)) {
+                // Row 0: A 32.dp-tall, 100.dp-wide clipping chip container (height < 48.dp,
+                // width >= 48.dp) with a 24.dp dismiss button placed 4.dp from the right edge.
+                // Its 48x48.dp touchBoundsInRoot extends 8.dp vertically ([-8.dp, 40.dp]) and
+                // 8.dp horizontally past the right edge of the chip ([68.dp, 108.dp]).
+                // Because the chip clips horizontally (width = 100.dp >= 48.dp) but not
+                // vertically (height = 32.dp < 48.dp), clippedTouchBoundsInRoot is
+                // [68.dp, 100.dp] x [-8.dp, 40.dp].
+                Box(Modifier.size(width = 100.dp, height = 32.dp).clipToBounds()) {
+                    Box(
+                        Modifier.align(Alignment.CenterEnd)
+                            .padding(end = 4.dp)
+                            .size(24.dp)
+                            .testTag(dismissButtonTag)
+                            .clickable {}
+                    )
+                }
+                // Row 1 (placed 8.dp below Row 0, at y = 40.dp): A 32.dp-tall clickable sibling
+                // spanning x = [0.dp, 100.dp]. Its 48.dp vertical touch target spans
+                // y = [32.dp, 80.dp], overlapping y = [32.dp, 40.dp] across x = [68.dp, 100.dp]
+                // inside the chip's clipped width, while leaving the right overhang
+                // x = [100.dp, 108.dp] x [-8.dp, 40.dp] completely unoccluded.
+                Box(
+                    Modifier.offset(y = 40.dp)
+                        .size(width = 100.dp, height = 32.dp)
+                        .testTag(lowerRowButtonTag)
+                        .clickable {}
+                )
+            }
+        }
+
+        val dismissNode = rule.onNodeWithTag(dismissButtonTag).fetchSemanticsNode()
+        val expectedSize = with(rule.density) { 48.dp.roundToPx() }
+
+        rule.runOnIdle {
+            val dismissAni = createAccessibilityNodeInfo(dismissNode.id)
+            val dismissBounds = Rect().also { dismissAni.getBoundsInScreen(it) }
+            assertThat(dismissBounds.width()).isEqualTo(expectedSize)
+            assertThat(dismissBounds.height()).isEqualTo(expectedSize)
+        }
+    }
+
+    private fun Modifier.pointerInputSharedWithSiblings(onPointerEvent: () -> Unit = {}): Modifier =
+        this.then(PointerInputSharedWithSiblingsElement(onPointerEvent))
+
+    private data class PointerInputSharedWithSiblingsElement(val onPointerEvent: () -> Unit) :
+        ModifierNodeElement<PointerInputSharedWithSiblingsNode>() {
+        override fun create(): PointerInputSharedWithSiblingsNode {
+            return PointerInputSharedWithSiblingsNode(onPointerEvent)
+        }
+
+        override fun update(node: PointerInputSharedWithSiblingsNode) {
+            node.onPointerEvent = onPointerEvent
+        }
+    }
+
+    private class PointerInputSharedWithSiblingsNode(var onPointerEvent: () -> Unit) :
+        Modifier.Node(), PointerInputModifierNode {
+        override fun onPointerEvent(
+            pointerEvent: PointerEvent,
+            pass: PointerEventPass,
+            bounds: IntSize,
+        ) {
+            onPointerEvent.invoke()
+        }
+
+        override fun onCancelPointerInput() {}
+
+        override fun sharePointerInputWithSiblings() = true
     }
 }
 

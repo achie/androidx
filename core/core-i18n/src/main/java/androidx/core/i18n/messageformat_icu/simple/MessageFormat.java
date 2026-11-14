@@ -376,7 +376,7 @@ public class MessageFormat extends Format {
      * Sets the locale and calls applyPattern(pattern).
      *
      * @param pattern the pattern for this message format
-     * @exception IllegalArgumentException if the pattern is invalid
+     * @throws IllegalArgumentException if the pattern is invalid
      * @see Category#FORMAT
      * icu_annot::stable ICU 3.0
      */
@@ -393,7 +393,7 @@ public class MessageFormat extends Format {
      *
      * @param pattern the pattern for this message format
      * @param locale the locale for this message format
-     * @exception IllegalArgumentException if the pattern is invalid
+     * @throws IllegalArgumentException if the pattern is invalid
      * icu_annot::stable ICU 3.0
      */
     public MessageFormat(Context context, String pattern, Locale locale) {
@@ -625,7 +625,7 @@ public class MessageFormat extends Format {
      * the <code>parse</code> methods.
      *
      * @param newFormats the new formats to use
-     * @exception NullPointerException if <code>newFormats</code> is null
+     * @throws NullPointerException if <code>newFormats</code> is null
      * icu_annot::stable ICU 3.0
      */
     public void setFormats(Format[] newFormats) {
@@ -718,7 +718,7 @@ public class MessageFormat extends Format {
      *
      * @param formatElementIndex the index of a format element within the pattern
      * @param newFormat the format to use for the specified format element
-     * @exception ArrayIndexOutOfBoundsException if formatElementIndex is equal to or
+     * @throws ArrayIndexOutOfBoundsException if formatElementIndex is equal to or
      *            larger than the number of format elements in the pattern string
      * icu_annot::stable ICU 3.0
      */
@@ -956,7 +956,8 @@ public class MessageFormat extends Format {
      * Creates a MessageFormat with the given pattern and uses it
      * to format the given arguments. This is equivalent to
      * <blockquote>
-     *     <code>(new {@link #MessageFormat(String) MessageFormat}(pattern)).{@link
+     *     <code>(new {@link MessageFormat#MessageFormat(Context, String)
+     *     MessageFormat}(context, pattern)).{@link
      *     #format(java.lang.Object[], java.lang.StringBuffer, java.text.FieldPosition)
      *     format}(arguments, new StringBuffer(), null).toString()</code>
      * </blockquote>
@@ -1065,7 +1066,7 @@ public class MessageFormat extends Format {
      *
      * @param arguments an array of objects to be formatted and substituted.
      * @return AttributedCharacterIterator describing the formatted value.
-     * @exception NullPointerException if <code>arguments</code> is null.
+     * @throws NullPointerException if <code>arguments</code> is null.
      * @throws IllegalArgumentException if a value in the
      *         <code>arguments</code> array is not of the type
      *         expected by the corresponding argument or custom Format object.
@@ -1177,8 +1178,8 @@ public class MessageFormat extends Format {
      *
      * @param source A <code>String</code> whose beginning should be parsed.
      * @return An <code>Object</code> array parsed from the string.
-     * @exception ParseException if the beginning of the specified string cannot be parsed.
-     * @exception IllegalArgumentException if this format uses named arguments
+     * @throws ParseException if the beginning of the specified string cannot be parsed.
+     * @throws IllegalArgumentException if this format uses named arguments
      * icu_annot::stable ICU 3.0
      */
     public Object[] parse(String source) throws ParseException {
@@ -1391,7 +1392,7 @@ public class MessageFormat extends Format {
         }
     }
 
-    /**
+    /*
      * {@inheritDoc}
      * icu_annot::stable ICU 3.0
     @Override
@@ -2292,6 +2293,7 @@ public class MessageFormat extends Format {
         return newFormat;
     }
 
+    @SuppressWarnings("deprecation")
     private static final Locale rootLocale = new Locale("");  // Locale.ROOT only @since 1.6
 
     private static final int findKeyword(String s, String[] list) {
@@ -2446,10 +2448,10 @@ public class MessageFormat extends Format {
                     break;
                 }
                 break;
-            ///CLOVER:OFF
+            //CLOVER:OFF
             default: // Never happens.
                 break;
-            ///CLOVER:ON
+            //CLOVER:ON
             }
             buf.append(c);
         }

@@ -72,7 +72,7 @@ class RoomKmpGradlePluginTest {
             |  }
             |
             |  compilerOptions {
-            |    languageVersion = org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_1
+            |    languageVersion = org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_2
             |  }
             |}
             |
@@ -147,7 +147,7 @@ class RoomKmpGradlePluginTest {
                 """
                 @Query("SELECT * FROM NativeEntity")
                 fun blockingQuery(): NativeEntity
-            """
+                """
                     .trimIndent(),
         )
 
@@ -171,7 +171,7 @@ class RoomKmpGradlePluginTest {
                 """
                 @Insert
                 fun blockingInsert(entity: NativeEntity)
-            """
+                """
                     .trimIndent(),
         )
 
@@ -195,7 +195,7 @@ class RoomKmpGradlePluginTest {
                 """
                 @Transaction
                 fun blockingTransaction() { }
-            """
+                """
                     .trimIndent(),
         )
 

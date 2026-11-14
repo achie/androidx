@@ -20,10 +20,10 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.util.Size
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraStream
 import androidx.camera.camera2.pipe.OutputStream
 import androidx.camera.camera2.pipe.StreamFormat
+import androidx.camera.common.CameraId
 
 /**
  * Fake CameraGraph configuration that can be used for more complicated tests that need a realistic
@@ -34,22 +34,16 @@ internal object FakeGraphConfigs {
     private val camera2 = CameraId("TestCamera-2")
 
     val fakeMetadata =
-        FakeCameraMetadata(
-            mapOf(
-                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL to
-                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL,
-                CameraCharacteristics.LENS_FACING to CameraCharacteristics.LENS_FACING_BACK,
-            ),
+        FakeCameraMetadata.fromTemplate(
+            template = HighEndDeviceTemplate,
             cameraId = camera1,
+            lensFacing = CameraCharacteristics.LENS_FACING_BACK,
         )
     val fakeMetadata2 =
-        FakeCameraMetadata(
-            mapOf(
-                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL to
-                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL,
-                CameraCharacteristics.LENS_FACING to CameraCharacteristics.LENS_FACING_FRONT,
-            ),
+        FakeCameraMetadata.fromTemplate(
+            template = HighEndDeviceTemplate,
             cameraId = camera2,
+            lensFacing = CameraCharacteristics.LENS_FACING_FRONT,
         )
     val fakeCameraBackend =
         FakeCameraBackend(

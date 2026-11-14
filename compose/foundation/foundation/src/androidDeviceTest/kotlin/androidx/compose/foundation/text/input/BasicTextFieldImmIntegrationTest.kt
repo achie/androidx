@@ -16,6 +16,8 @@
 
 package androidx.compose.foundation.text.input
 
+import androidx.compose.foundation.ComposeFoundationFlags
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -34,8 +36,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
@@ -48,18 +49,16 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalTestApi::class)
 @SmallTest
 @RunWith(AndroidJUnit4::class)
 internal class BasicTextFieldImmIntegrationTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val immRule = ComposeInputMethodManagerTestRule()
 
@@ -119,6 +118,98 @@ internal class BasicTextFieldImmIntegrationTest {
         requestFocus(Tag)
         rule.runOnIdle { windowFocus = false }
         inputMethodInterceptor.assertSessionActive()
+    }
+
+    @Test
+    fun doesNotStartTextInputSession_whenFocusedAndWindowNotFocused() {
+        val state = TextFieldState()
+        inputMethodInterceptor.setContent {
+            CompositionLocalProvider(
+                LocalWindowInfo provides
+                    object : WindowInfo {
+                        override val isWindowFocused = false
+                    }
+            ) {
+                BasicTextField(state, Modifier.testTag(Tag))
+            }
+        }
+        requestFocus(Tag)
+        inputMethodInterceptor.assertNoSessionActive()
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun startsTextInputSession_whenFocusedAndWindowNotFocused_ifFlagDisabled() {
+        val originalFlag = ComposeFoundationFlags.isTextFieldWaitWindowFocusForInputSessionEnabled
+        ComposeFoundationFlags.isTextFieldWaitWindowFocusForInputSessionEnabled = false
+        try {
+            val state = TextFieldState()
+            inputMethodInterceptor.setContent {
+                CompositionLocalProvider(
+                    LocalWindowInfo provides
+                        object : WindowInfo {
+                            override val isWindowFocused = false
+                        }
+                ) {
+                    BasicTextField(state, Modifier.testTag(Tag))
+                }
+            }
+            requestFocus(Tag)
+            inputMethodInterceptor.assertSessionActive()
+        } finally {
+            ComposeFoundationFlags.isTextFieldWaitWindowFocusForInputSessionEnabled = originalFlag
+        }
+    }
+
+    @Test
+    fun startsTextInputSession_whenFocusedAndWindowGainsFocusLater() {
+        val state = TextFieldState()
+        var windowFocus by mutableStateOf(false)
+        inputMethodInterceptor.setContent {
+            CompositionLocalProvider(
+                LocalWindowInfo provides
+                    object : WindowInfo {
+                        override val isWindowFocused: Boolean
+                            get() = windowFocus
+                    }
+            ) {
+                BasicTextField(state, Modifier.testTag(Tag))
+            }
+        }
+        requestFocus(Tag)
+        inputMethodInterceptor.assertNoSessionActive()
+
+        rule.runOnIdle { windowFocus = true }
+        inputMethodInterceptor.assertSessionActive()
+        inputMethodInterceptor.assertThatSessionCount().isEqualTo(1)
+    }
+
+    @Test
+    fun doesNotRestartTextInputSession_whenWindowGainsFocusBack() {
+        val state = TextFieldState()
+        var windowFocus by mutableStateOf(true)
+        inputMethodInterceptor.setContent {
+            CompositionLocalProvider(
+                LocalWindowInfo provides
+                    object : WindowInfo {
+                        override val isWindowFocused: Boolean
+                            get() = windowFocus
+                    }
+            ) {
+                BasicTextField(state, Modifier.testTag(Tag))
+            }
+        }
+        requestFocus(Tag)
+        inputMethodInterceptor.assertSessionActive()
+        inputMethodInterceptor.assertThatSessionCount().isEqualTo(1)
+
+        rule.runOnIdle { windowFocus = false }
+        inputMethodInterceptor.assertSessionActive()
+        inputMethodInterceptor.assertThatSessionCount().isEqualTo(1)
+
+        rule.runOnIdle { windowFocus = true }
+        inputMethodInterceptor.assertSessionActive()
+        inputMethodInterceptor.assertThatSessionCount().isEqualTo(1)
     }
 
     @Test

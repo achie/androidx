@@ -18,10 +18,18 @@ package androidx.glance.wear.parcel
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Build
+import android.os.RemoteException
 import android.util.Log
-import androidx.glance.wear.ActiveWearWidgetHandle
+import androidx.glance.wear.ActiveWidgetStore
 import androidx.glance.wear.GlanceWearWidget
-import androidx.glance.wear.WearWidgetParams
+import androidx.glance.wear.WearWidgetContentTooLargeException
+import androidx.glance.wear.cache.WearWidgetCache
+import androidx.glance.wear.core.ActiveWearWidgetHandle
+import androidx.glance.wear.core.RendererVersion
+import androidx.glance.wear.core.WearWidgetEventBatch
+import androidx.glance.wear.core.WearWidgetParams
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -40,6 +48,14 @@ internal class WearWidgetProviderImpl(
     private val widget: GlanceWearWidget,
 ) : IWearWidgetProvider.Stub() {
 
+    private val activeWidgetStore: ActiveWidgetStore? =
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActiveWidgetStore(context)
+        } else {
+            null
+        }
+    private val widgetCache: WearWidgetCache = WearWidgetCache(context)
+
     override fun getApiVersion(): Int = API_VERSION
 
     override fun onWidgetRequest(
@@ -50,32 +66,68 @@ internal class WearWidgetProviderImpl(
         requireNotNull(callback) { "Invalid widget callback." }
         mainScope.launch {
             // TODO: Report errors in the callback if any of the following steps fail.
-            val params = WearWidgetParams.fromParcel(requestParcel)
-            val widgetContent = widget.provideWidgetData(context, params)
-            val rawContent = widgetContent.captureRawContent(context, params)
-            callback.updateWidgetContent(rawContent.toParcel())
+            val params =
+                WearWidgetParams.fromParcel(
+                    parcel = requestParcel,
+                    getDefaultRendererVersion = { RendererVersion.fromPlHostPackage(context) },
+                )
+
+            launch {
+                activeWidgetStore?.markWidgetAsActive(providerName, params.instanceId.id)
+                widgetCache.update {
+                    setContainerTypeForInstance(params.instanceId, params.containerType)
+                    setWidgetParams(params)
+                }
+            }
+
+            val rawContent =
+                try {
+                    widget.provideWidgetDataAsRawContent(context, params)
+                } catch (e: WearWidgetContentTooLargeException) {
+                    Log.e(TAG, "Not sending widget content for ${params.instanceId}.", e)
+                    return@launch
+                }
+            try {
+                callback.updateWidgetContent(rawContent.toParcel())
+            } catch (e: RemoteException) {
+                Log.e(TAG, "Failed to send widget content for ${params.instanceId}.", e)
+            }
         }
     }
 
     override fun onActivated(
         handleParcel: ActiveWearWidgetHandleParcel?,
         callback: IExecutionCallback?,
-    ) {}
+    ) =
+        onEvent(handleParcel, callback) { _, handle ->
+            activeWidgetStore?.markWidgetAsActive(providerName, handle.instanceId.id)
+        }
 
     override fun onDeactivated(
         handleParcel: ActiveWearWidgetHandleParcel?,
         callback: IExecutionCallback?,
-    ) {}
+    ) =
+        onEvent(handleParcel, callback) { _, handle ->
+            activeWidgetStore?.markWidgetAsActive(providerName, handle.instanceId.id)
+        }
 
     override fun onAdded(
         handleParcel: ActiveWearWidgetHandleParcel?,
         callback: IExecutionCallback?,
-    ) = onEvent(handleParcel, callback, widget::onAdded)
+    ) =
+        onEvent(handleParcel, callback) { context, handle ->
+            activeWidgetStore?.markWidgetAsActive(providerName, handle.instanceId.id)
+            widget.onAdded(context, handle)
+        }
 
     override fun onRemoved(
         handleParcel: ActiveWearWidgetHandleParcel?,
         callback: IExecutionCallback?,
-    ) = onEvent(handleParcel, callback, widget::onRemoved)
+    ) =
+        onEvent(handleParcel, callback) { context, handle ->
+            activeWidgetStore?.markWidgetAsInactive(providerName, handle.instanceId.id)
+            widget.onRemoved(context, handle)
+        }
 
     private fun onEvent(
         handleParcel: ActiveWearWidgetHandleParcel?,
@@ -86,7 +138,7 @@ internal class WearWidgetProviderImpl(
             if (handleParcel == null) {
                 val errMessage = "Null widget handle parcel."
                 Log.e(TAG, errMessage)
-                callback?.onError(ACTIVATION_ERROR_CODE_INVALID_ARGUMENT, errMessage)
+                callback?.onError(ERROR_CODE_INVALID_ARGUMENT, errMessage)
                 return@launch
             }
             val handle =
@@ -95,18 +147,49 @@ internal class WearWidgetProviderImpl(
                 } catch (e: IllegalArgumentException) {
                     val errMessage = "Error deserializing ActiveWearWidgetHandle"
                     Log.e(TAG, errMessage, e)
-                    callback?.onError(ACTIVATION_ERROR_CODE_INVALID_ARGUMENT, errMessage)
+                    callback?.onError(ERROR_CODE_INVALID_ARGUMENT, errMessage)
                     return@launch
                 }
             try {
                 eventHandler.invoke(context, handle)
             } catch (e: Exception) {
-                callback?.onError(ACTIVATION_ERROR_CODE_INTERNAL_ERROR, e.message)
+                callback?.onError(ERROR_CODE_INTERNAL_ERROR, e.message)
                 throw e
             }
             callback?.onSuccess()
         }
     }
+
+    override fun onEvents(
+        eventBatchParcel: WearWidgetEventBatchParcel?,
+        callback: IExecutionCallback?,
+    ) {
+        mainScope.launch {
+            if (eventBatchParcel == null) {
+                val errorMessage = "Null event batch parcel."
+                Log.e(TAG, errorMessage)
+                callback?.onError(ERROR_CODE_INVALID_ARGUMENT, errorMessage)
+                return@launch
+            }
+            val eventBatch =
+                try {
+                    WearWidgetEventBatch.fromParcel(eventBatchParcel)
+                } catch (e: IOException) {
+                    Log.e(TAG, "Error deserializing WearWidgetEventBatch", e)
+                    callback?.onError(ERROR_CODE_INVALID_ARGUMENT, e.message)
+                    return@launch
+                }
+            try {
+                widget.onEvents(context, eventBatch.events)
+            } catch (e: Exception) {
+                callback?.onError(ERROR_CODE_INTERNAL_ERROR, e.message)
+                throw e
+            }
+            callback?.onSuccess()
+        }
+    }
+
+    override fun getInterfaceVersion(): Int = VERSION
 
     private companion object {
         private const val TAG = "WearWidgetProviderImpl"

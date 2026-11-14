@@ -29,6 +29,7 @@ import androidx.biometric.PromptContentItemBulletedText;
 import androidx.fragment.app.FragmentActivity;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,31 +44,39 @@ public class AuthenticationSampleActivity extends FragmentActivity {
                         @Override
                         public void onAuthResult(@NonNull AuthenticationResult result) {
                             if (result.isSuccess()) {
-                                Log.i(TAG, "onAuthenticationSucceeded with type"
-                                        + result.success().getAuthType());
-                            } else if (result.isError()) {
-                                // Handle authentication error, e.g. negative button click, user
-                                // cancellation, etc
                                 Log.i(
                                         TAG,
-                                        "onAuthenticationError " + result.error().getErrorCode()
+                                        "onAuthenticationSucceeded with type "
+                                                + result.success().getAuthType());
+                            } else if (result.isError()) {
+                                // Handle authentication error, e.g. user cancellation, lockout
+                                // errors, etc
+                                Log.i(
+                                        TAG,
+                                        "onAuthenticationError "
+                                                + result.error().getErrorCode()
                                                 + " "
-                                                + result.error().getErrString()
-                                );
+                                                + result.error().getErrString());
+                            } else if (result.isCustomFallbackSelected()) {
+                                Log.i(
+                                        TAG,
+                                        "fallback is selected, text: "
+                                                + result.customFallbackSelected()
+                                                        .getFallback()
+                                                        .getText());
                             }
                         }
 
                         // Handle intermediate authentication failure, this is optional and
                         // not needed in most cases
                         @Override
-                        public void onAuthFailure() {
+                        public void onAuthAttemptFailed() {
                             Log.i(TAG, "onAuthenticationFailed, try again");
                         }
-                    }
-            );
+                    });
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         String title = "Title";
         String subtitle = "Subtitle";
@@ -75,19 +84,22 @@ public class AuthenticationSampleActivity extends FragmentActivity {
                 new AuthenticationRequest.BodyContent.VerticalList(
                         "Vertical list description",
                         new ArrayList<>(
-                                Arrays.asList(new PromptContentItemBulletedText("test item1"),
-                                        new PromptContentItemBulletedText("test item2")))
+                                Arrays.asList(
+                                        new PromptContentItemBulletedText("test item1"),
+                                        new PromptContentItemBulletedText("test item2"))));
 
-                );
-        Biometric.Fallback fallback = new Biometric.Fallback.NegativeButton("Cancel button");
         Biometric.Strength minStrength = Biometric.Strength.Class2.INSTANCE;
 
         AuthenticationRequest authRequest =
-                new Biometric.Builder(title, fallback)
+                new Biometric.Builder(
+                                title,
+                                Biometric.Fallback.DeviceCredential.INSTANCE,
+                                new Biometric.Fallback.CustomOption(
+                                        "Use account password",
+                                        Biometric.Fallback.ICON_TYPE_PASSWORD))
                         .setMinStrength(minStrength)
                         .setSubtitle(subtitle)
                         .setContent(bodyContent)
-                        .setSubtitle(subtitle)
                         .setIsConfirmationRequired(true)
                         .build();
 
@@ -96,4 +108,3 @@ public class AuthenticationSampleActivity extends FragmentActivity {
         mAuthResultLauncher.launch(authRequest);
     }
 }
-

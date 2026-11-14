@@ -1,0 +1,212 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package androidx.compose.remote.creation.compose.state
+
+import android.graphics.BlendModeColorFilter as AndroidBlendModeColorFilter
+import android.graphics.ColorFilter as AndroidColorFilter
+import android.graphics.Paint as AndroidPaint
+import android.graphics.Typeface
+import android.graphics.fonts.FontVariationAxis
+import android.os.Build
+import android.util.Log
+import androidx.annotation.ColorInt
+import androidx.annotation.RestrictTo
+import androidx.compose.remote.creation.compose.layout.toAndroidBlendMode
+import androidx.compose.remote.creation.compose.layout.toRemoteBlendMode
+import androidx.compose.remote.creation.compose.layout.toRemotePaintingStyle
+import androidx.compose.remote.creation.compose.layout.toRemoteStrokeCap
+import androidx.compose.remote.creation.compose.layout.toRemoteStrokeJoin
+import androidx.compose.remote.creation.compose.shaders.RemoteShader
+import androidx.compose.remote.creation.compose.text.RemoteFontVariation
+import androidx.compose.remote.creation.compose.text.RemoteTypeface
+
+/**
+ * An implementation of [android.graphics.Paint] that supports [RemoteColor] and [RemoteShader].
+ *
+ * This class provides a bridge for using remote-first types with standard Android paint APIs,
+ * allowing it to be easily converted to a [RemotePaint].
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public open class CompatAndroidRemotePaint : AndroidPaint {
+    public constructor() : super()
+
+    public constructor(flags: Int) : super(flags)
+
+    public constructor(paint: AndroidPaint) : super(paint) {
+        if (paint is CompatAndroidRemotePaint) {
+            remoteColor = paint.remoteColor
+            remoteColorFilter = paint.remoteColorFilter
+            remoteShader = paint.remoteShader
+        }
+    }
+
+    /**
+     * The [RemoteColor] associated with this paint.
+     *
+     * Setting this property also updates the underlying [android.graphics.Paint.setColor] if the
+     * [RemoteColor] has a constant value.
+     */
+    public var remoteColor: RemoteColor? = null
+        set(value) {
+            field = value
+            if (value != null) {
+                val constantValue = value.constantValueOrNull
+                if (constantValue != null) {
+                    super.setColor(constantValue)
+                } else {
+                    super.setColor(android.graphics.Color.TRANSPARENT)
+                }
+            }
+        }
+
+    public override fun setColor(@ColorInt color: Int) {
+        remoteColor = null
+        super.setColor(color)
+    }
+
+    /**
+     * The [RemoteColorFilter] associated with this paint.
+     *
+     * Setting this property also updates the underlying [android.graphics.Paint.setColorFilter] if
+     * the [RemoteColorFilter] is a type that can be converted to a platform color filter.
+     */
+    public var remoteColorFilter: RemoteColorFilter? = null
+        set(value) {
+            field = value
+            when (value) {
+                is RemoteBlendModeColorFilter -> {
+                    val constantValue = value.color.constantValueOrNull
+                    if (constantValue != null) {
+                        super.setColorFilter(
+                            AndroidBlendModeColorFilter(
+                                constantValue,
+                                value.blendMode.toAndroidBlendMode(),
+                            )
+                        )
+                    } else {
+                        super.setColorFilter(null)
+                    }
+                }
+                null -> super.setColorFilter(null)
+            }
+        }
+
+    public override fun setColorFilter(filter: AndroidColorFilter?): AndroidColorFilter? {
+        remoteColorFilter = null
+        return super.setColorFilter(filter)
+    }
+
+    /**
+     * The [RemoteShader] associated with this paint.
+     *
+     * This is a convenience property that aliases [android.graphics.Paint.setShader].
+     */
+    public var remoteShader: RemoteShader?
+        get() = shader.toRemoteShader()
+        set(value) {
+            shader = value.toAndroidShader()
+        }
+}
+
+/**
+ * Converts an [android.graphics.Paint] to a [RemotePaint].
+ *
+ * @return a [RemotePaint] configured with this paint's properties
+ */
+internal fun android.graphics.Paint.asRemotePaint(): RemotePaint {
+    val compat = this as? CompatAndroidRemotePaint
+    val remotePaint = StandardRemotePaint()
+    remotePaint.isAntiAlias = isAntiAlias
+    remotePaint.blendMode = blendMode?.toRemoteBlendMode() ?: RemoteBlendMode.SrcOver
+    remotePaint.style = style.toRemotePaintingStyle()
+    remotePaint.strokeWidth = strokeWidth.rf
+    remotePaint.strokeCap = strokeCap.toRemoteStrokeCap()
+    remotePaint.strokeJoin = strokeJoin.toRemoteStrokeJoin()
+    remotePaint.filterQuality =
+        if (isFilterBitmap) RemoteFilterQuality.Low else RemoteFilterQuality.None
+    remotePaint.shader = compat?.remoteShader ?: shader.toRemoteShader()
+    remotePaint.color = compat?.remoteColor ?: RemoteColor(color)
+    remotePaint.colorFilter =
+        compat?.remoteColorFilter
+            ?: (colorFilter as? AndroidBlendModeColorFilter)?.let {
+                RemoteBlendModeColorFilter(RemoteColor(it.color), it.mode.toRemoteBlendMode())
+            }
+    remotePaint.textSize = textSize.rf
+    remotePaint.typeface = fromAndroidTypeface(typeface)
+    remotePaint.fontFeatureSettings = fontFeatureSettings
+    remotePaint.fontVariationSettings = parseFontVariationSettings(fontVariationSettings)
+    return remotePaint
+}
+
+/** Maps an Android framework Typeface to a RemoteTypeface. */
+private fun fromAndroidTypeface(typeface: Typeface?): RemoteTypeface {
+    return when (typeface) {
+        null -> RemoteTypeface.Default
+        Typeface.DEFAULT -> RemoteTypeface.Default
+        Typeface.DEFAULT_BOLD -> RemoteTypeface.DefaultBold
+        Typeface.SANS_SERIF -> RemoteTypeface.SansSerif
+        Typeface.SERIF -> RemoteTypeface.Serif
+        Typeface.MONOSPACE -> RemoteTypeface.Monospace
+        else -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val name = typeface.systemFontFamilyName
+                val weight = typeface.weight
+                val italic = typeface.isItalic
+                if (name != null) {
+                    RemoteTypeface.Named(name, weight, italic)
+                } else {
+                    RemoteTypeface.Default
+                }
+            } else {
+                RemoteTypeface.Default
+            }
+        }
+    }
+}
+
+@Suppress("deprecation")
+private class AndroidRemoteShaderWrapper(val remoteShader: RemoteShader) :
+    android.graphics.Shader() {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is AndroidRemoteShaderWrapper) return false
+        return remoteShader == other.remoteShader
+    }
+
+    override fun hashCode(): Int = remoteShader.hashCode()
+}
+
+private fun android.graphics.Shader?.toRemoteShader(): RemoteShader? =
+    (this as? AndroidRemoteShaderWrapper)?.remoteShader
+
+private fun RemoteShader?.toAndroidShader(): android.graphics.Shader? =
+    this?.let { AndroidRemoteShaderWrapper(it) }
+
+private fun parseFontVariationSettings(settingsString: String?): RemoteFontVariation.Settings? {
+    if (settingsString == null) return null
+    try {
+        val axes = FontVariationAxis.fromFontVariationSettings(settingsString)
+        if (axes != null) {
+            val settingsList = axes.map { axis ->
+                RemoteFontVariation.Setting(axis.tag, axis.styleValue.rf)
+            }
+            return RemoteFontVariation.Settings(settingsList)
+        }
+    } catch (e: IllegalArgumentException) {
+        Log.w("RemoteCompose", "invalid font variation string", e)
+    }
+    return null
+}

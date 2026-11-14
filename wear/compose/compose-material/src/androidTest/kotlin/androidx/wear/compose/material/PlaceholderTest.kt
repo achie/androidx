@@ -31,7 +31,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Dp
 import androidx.test.filters.SdkSuppress
@@ -39,12 +39,11 @@ import androidx.wear.compose.materialcore.screenHeightDp
 import androidx.wear.compose.materialcore.screenWidthDp
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.max
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 class PlaceholderTest {
-    @get:Rule val rule = createComposeRule(effectContext = StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
     @OptIn(ExperimentalWearMaterialApi::class)
@@ -239,14 +238,14 @@ class PlaceholderTest {
 
         placeholderState.moveToStartOfNextAnimationLoop(PlaceholderStage.ShowPlaceholder)
 
-        // Move the start of the next placeholder shimmer animation loop and them advance the
+        // Move the start of the next placeholder shimmer animation loop and then advance the
         // clock to show the shimmer.
         placeholderState.advanceFrameMillisAndCheckState(
             (PLACEHOLDER_SHIMMER_DURATION_MS * 0.5f).toLong(),
             PlaceholderStage.ShowPlaceholder,
         )
 
-        // The placeholder shimmer effect is faint and largely transparent gradiant, but it should
+        // The placeholder shimmer effect is faint and largely transparent gradient, but it should
         // reduce the amount of the normal color.
         rule
             .onNodeWithTag("test-item")
@@ -362,8 +361,10 @@ class PlaceholderTest {
     @OptIn(ExperimentalWearMaterialApi::class)
     @Composable
     fun TestPlaceholderChip(contents: String?, currentState: StableRef<PlaceholderState?>) {
-        val placeholderState =
-            rememberPlaceholderState { contents != null }.also { currentState.value = it }
+        val placeholderState = rememberPlaceholderState {
+            contents != null
+        }
+            .also { currentState.value = it }
         Chip(
             modifier = Modifier.testTag("test-item").placeholderShimmer(placeholderState),
             content = {},

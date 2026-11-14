@@ -39,11 +39,13 @@ import java.io.File
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 @RequiresApi(28)
-fun collect(
+public fun collect(
     uniqueName: String,
     packageName: String,
     stableIterations: Int,
     maxIterations: Int,
+    maxLoadOrderIterations: Int = 0,
+    restrictLoadOrderToDataDirectory: Boolean = true,
     strictStability: Boolean = false,
     includeInStartupProfile: Boolean,
     filterPredicate: ((String) -> Boolean),
@@ -63,6 +65,9 @@ fun collect(
             var lastProfile: String? = null
             var iteration = 1
             val finalMaxIterations = if (Arguments.dryRunMode) 1 else maxIterations
+            val finalMaxLoadOrderIterations =
+                if (Arguments.dryRunMode && maxLoadOrderIterations > 0) 1
+                else maxLoadOrderIterations
 
             while (iteration <= finalMaxIterations) {
                 trace("generate profile for $packageName ($iteration)") {
@@ -136,6 +141,16 @@ fun collect(
                     " invokes the target app, and runs a non-trivial amount of code"
             }
 
+            var loadOrder: File? = null
+            if (finalMaxLoadOrderIterations > 0) {
+                loadOrder =
+                    scope.buildNativeLoadOrder(
+                        maxLoadOrderIterations = finalMaxLoadOrderIterations,
+                        profileBlock = profileBlock,
+                        restrictToDataDirectory = restrictLoadOrderToDataDirectory,
+                    )
+            }
+
             val profile =
                 filterProfileRulesToTargetP(
                     profile = lastProfile,
@@ -144,6 +159,7 @@ fun collect(
                 )
             return reportResults(
                 profile = profile,
+                loadOrder = loadOrder,
                 uniqueFilePrefix = uniqueName,
                 startTime = startTime,
                 includeInStartupProfile = includeInStartupProfile,
@@ -167,6 +183,7 @@ private fun buildMacrobenchmarkScope(packageName: String): MacrobenchmarkScope {
 /** Reports the results after having collected baseline profiles. */
 private fun reportResults(
     profile: String,
+    loadOrder: File?,
     uniqueFilePrefix: String,
     startTime: Long,
     includeInStartupProfile: Boolean,
@@ -191,11 +208,34 @@ private fun reportResults(
             it.writeText(profile)
         }
 
+    val loadOrderFiles = mutableListOf<String>()
+    if (loadOrder != null) {
+        val fileName = "$uniqueFilePrefix-load-order.txt"
+        val tsFileName = "$uniqueFilePrefix-load-order-${Outputs.dateToFileName()}.txt"
+        Outputs.writeFile(fileName) {
+            Shell.cp(from = loadOrder.absolutePath, to = it.absolutePath)
+        }
+        val tsAbsolutePath =
+            Outputs.writeFile(tsFileName) {
+                Log.d(TAG, "Pull Load order with: `adb pull \"${it.absolutePath}\" .`")
+                Shell.cp(from = loadOrder.absolutePath, to = it.absolutePath)
+            }
+        loadOrderFiles += tsAbsolutePath
+    }
+
     val resultsContainer =
         if (includeInStartupProfile) {
-            BaselineProfileResult(startupProfiles = listOf(tsAbsolutePath))
+            BaselineProfileResult(
+                startupProfiles = listOf(tsAbsolutePath),
+                baselineProfiles = emptyList(),
+                loadOrderFiles = loadOrderFiles,
+            )
         } else {
-            BaselineProfileResult(baselineProfiles = listOf(tsAbsolutePath))
+            BaselineProfileResult(
+                startupProfiles = emptyList(),
+                baselineProfiles = listOf(tsAbsolutePath),
+                loadOrderFiles = loadOrderFiles,
+            )
         }
 
     val totalRunTime = System.nanoTime() - startTime
@@ -272,7 +312,7 @@ private fun extractProfileRooted(uid: Int, packageName: String): String {
             }
             .joinToString(separator = "\n")
     if (mergedProfile.isBlank()) {
-        throw IllegalStateException("No profiles found for all apks in app")
+        throw IllegalStateException("No profiles found for all APKs in app")
     }
 
     return mergedProfile
@@ -282,15 +322,14 @@ private fun profmanGetProfileRules(apkPath: String, pathOptions: List<String>): 
     // When compiling with CompilationMode.SpeedProfile, ART stores the profile in one of
     // 2 locations. The `ref` profile path, or the `current` path.
     // The `current` path is eventually merged  into the `ref` path after background dexopt.
-    val profiles =
-        pathOptions.mapNotNull { currentPath ->
-            Log.d(TAG, "Using profile location: $currentPath")
-            val profile =
-                Shell.executeScriptCaptureStdout(
-                    "profman --dump-classes-and-methods --profile-file=$currentPath --apk=$apkPath"
-                )
-            profile.ifBlank { null }
-        }
+    val profiles = pathOptions.mapNotNull { currentPath ->
+        Log.d(TAG, "Using profile location: $currentPath")
+        val profile =
+            Shell.executeScriptCaptureStdout(
+                "profman --dump-classes-and-methods --profile-file=$currentPath --apk=$apkPath"
+            )
+        profile.ifBlank { null }
+    }
     if (profiles.isEmpty()) {
         Log.d(TAG, "No profiles found for $apkPath")
         return ""
@@ -365,7 +404,7 @@ private fun summaryRecord(record: Summary): String {
     return summary.toString()
 }
 
-/** adb device specifier, blank if can't be defined. Includes right side space. */
+/** adb device specifier, blank if it can't be defined. Includes right side space. */
 internal val deviceSpecifier by lazy {
     if (DeviceInfo.isEmulator) {
         // emulators have serials that aren't usable via ADB -s,
@@ -390,7 +429,30 @@ private data class Summary(
 /** A container for the results of collecting Baseline Profiles using the [collect] API. */
 public class BaselineProfileResult(
     /** A list of absolute file paths to the generated baseline profiles. */
-    val baselineProfiles: List<String> = emptyList(),
+    public val baselineProfiles: List<String> = emptyList(),
     /** A list of absolute file paths to the generated startup profiles. */
-    val startupProfiles: List<String> = emptyList(),
-)
+    public val startupProfiles: List<String> = emptyList(),
+) {
+    /** A list of absolute paths to the load order files */
+    public var loadOrderFiles: List<String> = emptyList()
+        internal set
+
+    /**
+     * Constructs a container for the results of collecting Baseline Profiles using the [collect]
+     * API.
+     *
+     * @param baselineProfiles A list of absolute paths to the generated baseline profiles.
+     * @param startupProfiles A list of absolute paths to the generated startup profiles.
+     * @param loadOrderFiles A list of absolute paths to the generated native load order files.
+     */
+    public constructor(
+        baselineProfiles: List<String>,
+        startupProfiles: List<String>,
+        loadOrderFiles: List<String>,
+    ) : this(
+        baselineProfiles = baselineProfiles,
+        startupProfiles = startupProfiles,
+    ) {
+        this.loadOrderFiles = loadOrderFiles
+    }
+}

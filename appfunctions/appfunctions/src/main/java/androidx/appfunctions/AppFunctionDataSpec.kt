@@ -16,7 +16,10 @@
 
 package androidx.appfunctions
 
-import android.app.PendingIntent
+import android.os.Build
+import android.os.Parcelable
+import androidx.annotation.RequiresApi
+import androidx.annotation.RestrictTo
 import androidx.appfunctions.metadata.AppFunctionAllOfTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionArrayTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionBooleanTypeMetadata
@@ -30,16 +33,20 @@ import androidx.appfunctions.metadata.AppFunctionLongTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionObjectTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionOneOfTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionParameterMetadata
-import androidx.appfunctions.metadata.AppFunctionPendingIntentTypeMetadata
+import androidx.appfunctions.metadata.AppFunctionParcelableTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionReferenceTypeMetadata
 import androidx.appfunctions.metadata.AppFunctionResponseMetadata
 import androidx.appfunctions.metadata.AppFunctionStringTypeMetadata
 import java.util.Objects
 
 /** Specification class defining the properties metadata for [AppFunctionData]. */
-internal abstract class AppFunctionDataSpec {
-    abstract val objectQualifiedName: String
-    abstract val componentMetadata: AppFunctionComponentsMetadata
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+// The spec cannot be internal because the generated factory that does not live
+// in the same module need to use it for data serialization/deserialization.
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public abstract class AppFunctionDataSpec {
+    public abstract val objectQualifiedName: String
+    public abstract val componentMetadata: AppFunctionComponentsMetadata
 
     internal abstract fun getDataType(key: String): AppFunctionDataTypeMetadata?
 
@@ -49,7 +56,7 @@ internal abstract class AppFunctionDataSpec {
     internal abstract fun getAllPropertyKeys(): Set<String>
 
     /** Checks if there is a metadata for [key]. */
-    fun containsMetadata(key: String): Boolean {
+    public fun containsMetadata(key: String): Boolean {
         return getDataType(key) != null
     }
 
@@ -64,7 +71,7 @@ internal abstract class AppFunctionDataSpec {
      *   [AppFunctionData].
      * @throws IllegalArgumentException If this is no child specification associated with [key].
      */
-    fun getPropertyObjectSpec(key: String, qualifiedName: String): AppFunctionDataSpec {
+    public fun getPropertyObjectSpec(key: String, qualifiedName: String): AppFunctionDataSpec {
         val childDataType =
             getDataType(key)
                 ?: throw IllegalArgumentException("Value associated with $key is not an object")
@@ -94,7 +101,7 @@ internal abstract class AppFunctionDataSpec {
                 ObjectSpec(type.getPseudoObjectTypeMetadata(componentMetadata), componentMetadata)
             }
             is AppFunctionOneOfTypeMetadata -> {
-                val oneOfType = type.getObjectMetadataForOneOfType(qualifiedName)
+                val oneOfType = type.getObjectMetadataForOneOfType(qualifiedName, componentMetadata)
                 getPropertyObjectSpec(oneOfType, qualifiedName)
             }
             else -> {
@@ -108,11 +115,47 @@ internal abstract class AppFunctionDataSpec {
      *
      * @throws IllegalArgumentException If the [data] does not match the specification.
      */
-    fun validateDataSpecMatches(data: AppFunctionData) {
-        // TODO(b/447064745): Fix child object validation when spec is from schema inventory
-        val unused = data.spec ?: return
-        //        require(this == otherSpec) { "$data does not match the metadata specification of
-        // $this" }
+    public fun validateDataSpecMatches(data: AppFunctionData) {
+        val otherSpec = data.spec ?: return
+        requireSemanticallyEquivalentTo(otherSpec)
+    }
+
+    private fun requireSemanticallyEquivalentTo(other: AppFunctionDataSpec) {
+        // Spec equality ignores the component metadata, so only take the fast path when both
+        // specs also resolve references against the same components.
+        if (this == other && componentMetadata === other.componentMetadata) {
+            return
+        }
+        val thisKeys = this.getAllPropertyKeys()
+        val otherKeys = other.getAllPropertyKeys()
+        require(thisKeys == otherKeys) {
+            "Property keys mismatch. Expected keys: $thisKeys, actual keys: $otherKeys"
+        }
+
+        for (key in thisKeys) {
+            require(this.isRequired(key) == other.isRequired(key)) {
+                "Requirement mismatch for key \"$key\". Expected required: " +
+                    "${this.isRequired(key)}, actual required: ${other.isRequired(key)}"
+            }
+            val thisType = this.getDataType(key)
+            val otherType = other.getDataType(key)
+            if (thisType == null && otherType == null) continue
+            requireNotNull(thisType) {
+                "Missing data type metadata for key \"$key\" in expected spec."
+            }
+            requireNotNull(otherType) {
+                "Missing data type metadata for key \"$key\" in actual spec."
+            }
+            try {
+                thisType.requireSemanticallyEquivalentTo(
+                    otherType,
+                    this.componentMetadata,
+                    other.componentMetadata,
+                )
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("Type mismatch for key \"$key\": ${e.message}", e)
+            }
+        }
     }
 
     /**
@@ -123,7 +166,7 @@ internal abstract class AppFunctionDataSpec {
      *   metadata.
      * @throws IllegalArgumentException If the request is invalid.
      */
-    fun validateWriteRequest(
+    public fun validateWriteRequest(
         targetKey: String,
         targetClass: Class<*>,
         isCollection: Boolean,
@@ -154,7 +197,7 @@ internal abstract class AppFunctionDataSpec {
      *   metadata.
      * @throws IllegalArgumentException If the request is invalid.
      */
-    fun validateReadRequest(
+    public fun validateReadRequest(
         targetKey: String,
         targetClass: Class<*>,
         isCollection: Boolean,
@@ -197,8 +240,14 @@ internal abstract class AppFunctionDataSpec {
                 }
             }
             is AppFunctionStringTypeMetadata -> {
+                require(targetValue is String) {
+                    "Expected String for \"$targetKey\", got ${targetValue.javaClass.name}"
+                }
                 require(enumValues == null || enumValues.contains(targetValue)) {
                     "Invalid value for \"$targetKey\" got \"$targetValue\", expecting one of $enumValues"
+                }
+                require(patternMatchers == null || patternMatchers.any { it.match(targetValue) }) {
+                    "Invalid value for \"$targetKey\" got \"$targetValue\", expecting match with one of $patternMatchers"
                 }
             }
             is AppFunctionArrayTypeMetadata -> {
@@ -303,7 +352,10 @@ internal abstract class AppFunctionDataSpec {
             parameterMetadataList.map { it.name }.toSet()
     }
 
-    fun AppFunctionDataTypeMetadata.conform(typeClazz: Class<*>, isCollection: Boolean): Boolean {
+    public fun AppFunctionDataTypeMetadata.conform(
+        typeClazz: Class<*>,
+        isCollection: Boolean,
+    ): Boolean {
         return when (this) {
             is AppFunctionIntTypeMetadata -> {
                 !isCollection && typeClazz == Int::class.java
@@ -329,8 +381,10 @@ internal abstract class AppFunctionDataSpec {
                 // against AppFunctionBytesTypeMetadata, it must always be a collection.
                 isCollection && typeClazz == Byte::class.java
             }
-            is AppFunctionPendingIntentTypeMetadata -> {
-                !isCollection && typeClazz == PendingIntent::class.java
+            is AppFunctionParcelableTypeMetadata -> {
+                !isCollection &&
+                    Parcelable::class.java.isAssignableFrom(typeClazz) &&
+                    typeClazz.name == qualifiedName
             }
             is AppFunctionArrayTypeMetadata -> {
                 isCollection && this.conform(typeClazz)
@@ -374,22 +428,24 @@ internal abstract class AppFunctionDataSpec {
         return typeClass == AppFunctionData::class.java
     }
 
-    companion object {
-        fun create(
+    public companion object {
+        private const val TAG = "AppFunctionDataSpec"
+
+        public fun create(
             objectType: AppFunctionObjectTypeMetadata,
             componentMetadata: AppFunctionComponentsMetadata,
         ): AppFunctionDataSpec {
             return ObjectSpec(objectType, componentMetadata)
         }
 
-        fun create(
+        public fun create(
             parameterMetadataList: List<AppFunctionParameterMetadata>,
             componentMetadata: AppFunctionComponentsMetadata,
         ): AppFunctionDataSpec {
             return ParametersSpec(parameterMetadataList, componentMetadata)
         }
 
-        fun create(
+        public fun create(
             responseMetadata: AppFunctionResponseMetadata,
             componentMetadata: AppFunctionComponentsMetadata,
         ): AppFunctionDataSpec {

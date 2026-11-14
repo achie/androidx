@@ -28,6 +28,7 @@ import androidx.camera.testing.impl.RequiresDevice
 import androidx.camera.testing.impl.mocks.MockConsumer
 import androidx.camera.testing.impl.mocks.helpers.ArgumentCaptor
 import androidx.camera.testing.impl.mocks.helpers.CallTimes
+import androidx.camera.testing.impl.mocks.helpers.CallTimesAtLeast
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
@@ -98,45 +99,6 @@ class AudioStreamImplTest {
     fun tearDown() {
         if (this::audioStream.isInitialized) {
             audioStream.release()
-        }
-    }
-
-    @RequiresDevice // b/264902324
-    @Test
-    fun readBeforeStart_throwException() {
-        assertThrows(IllegalStateException::class.java) { audioStream.read(byteBuffer) }
-    }
-
-    @RequiresDevice // b/264902324
-    @Test
-    fun readAfterStop_throwException() {
-        audioStream.start()
-        audioStream.stop()
-        assertThrows(IllegalStateException::class.java) { audioStream.read(byteBuffer) }
-    }
-
-    @RequiresDevice // b/264902324
-    @Test
-    fun startAfterReleased_throwException() {
-        audioStream.release()
-        assertThrows(IllegalStateException::class.java) { audioStream.start() }
-    }
-
-    @RequiresDevice // b/264902324
-    @Test
-    fun setCallbackAfterStarted_throwException() {
-        audioStream.start()
-        assertThrows(IllegalStateException::class.java) {
-            audioStream.setCallback(audioStreamCallback, ioExecutor())
-        }
-    }
-
-    @RequiresDevice // b/264902324
-    @Test
-    fun setCallbackAfterReleased_throwException() {
-        audioStream.release()
-        assertThrows(IllegalStateException::class.java) {
-            audioStream.setCallback(audioStreamCallback, ioExecutor())
         }
     }
 
@@ -231,7 +193,7 @@ class AudioStreamImplTest {
         audioStream.start()
 
         // Assert: Do not check isSilenced value since it depends on real status.
-        audioStreamCallback.verifyOnSilenceStateChanged(CallTimes(1), COMMON_TIMEOUT_MS)
+        audioStreamCallback.verifyOnSilenceStateChanged(CallTimesAtLeast(1), COMMON_TIMEOUT_MS)
     }
 
     private class AudioStreamCallback : AudioStream.AudioStreamCallback {

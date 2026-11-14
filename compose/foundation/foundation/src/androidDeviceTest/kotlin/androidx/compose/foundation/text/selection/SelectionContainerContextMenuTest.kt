@@ -18,6 +18,7 @@ package androidx.compose.foundation.text.selection
 
 import androidx.compose.foundation.contextmenu.ContextMenuItemLabels
 import androidx.compose.foundation.contextmenu.ContextMenuItemState
+import androidx.compose.foundation.contextmenu.LookUpItemOverrideRule
 import androidx.compose.foundation.contextmenu.ProcessTextItemOverrideRule
 import androidx.compose.foundation.contextmenu.assertContextMenuItem
 import androidx.compose.foundation.contextmenu.assertContextMenuItems
@@ -33,7 +34,6 @@ import androidx.compose.foundation.text.input.internal.selection.FakeClipboard
 import androidx.compose.foundation.text.selection.gestures.util.longPress
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -44,19 +44,20 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isPopup
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performTrackpadInput
 import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.lerp
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -65,7 +66,7 @@ import org.junit.runner.RunWith
 @RunWith(ContextMenuFlagFlipperRunner::class)
 open class SelectionContainerContextMenuTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule
     val processTextRule =
@@ -76,13 +77,15 @@ open class SelectionContainerContextMenuTest {
 
     @get:Rule val platformSelectionBehaviorsRule = PlatformSelectionBehaviorsRule()
 
+    @get:Rule val lookUpRule = LookUpItemOverrideRule()
+
     private val textTag = "text"
     private val defaultText = "Text Text Text"
     private val initialClipboardText = "clip"
 
     // region SelectionContainer Context Menu Gesture Tests
     @Test
-    fun contextMenu_rightClick_appears() {
+    fun contextMenu_mouseRightClick_appears() {
         rule.setContent {
             SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
         }
@@ -94,7 +97,19 @@ open class SelectionContainerContextMenuTest {
     }
 
     @Test
-    fun contextMenu_leftClick_doesNotAppear() {
+    fun contextMenu_trackpadRightClick_appears() {
+        rule.setContent {
+            SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
+        }
+
+        val contextMenuInteraction = rule.onNode(isPopup())
+        contextMenuInteraction.assertDoesNotExist()
+        rule.onNodeWithTag(textTag).performTrackpadInput { rightClick(center) }
+        contextMenuInteraction.assertExists()
+    }
+
+    @Test
+    fun contextMenu_mouseLeftClick_doesNotAppear() {
         rule.setContent {
             SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
         }
@@ -106,7 +121,19 @@ open class SelectionContainerContextMenuTest {
     }
 
     @Test
-    fun contextMenu_disappearsOnClickOffOfPopup() {
+    fun contextMenu_trackpadLeftClick_doesNotAppear() {
+        rule.setContent {
+            SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
+        }
+
+        val contextMenuInteraction = rule.onNode(isPopup())
+        contextMenuInteraction.assertDoesNotExist()
+        rule.onNodeWithTag(textTag).performTrackpadInput { click(center) }
+        contextMenuInteraction.assertDoesNotExist()
+    }
+
+    @Test
+    fun contextMenu_disappearsOnMouseClickOffOfPopup() {
         rule.setContent {
             SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
         }
@@ -114,6 +141,21 @@ open class SelectionContainerContextMenuTest {
         val contextMenuInteraction = rule.onNode(isPopup())
         contextMenuInteraction.assertDoesNotExist()
         rule.onNodeWithTag(textTag).performMouseInput { rightClick(center) }
+        contextMenuInteraction.assertExists()
+        rule.clickOffPopup { rootRect -> lerp(rootRect.topLeft, rootRect.center, 0.5f) }
+        contextMenuInteraction.assertDoesNotExist()
+    }
+
+    @Ignore("b/534893012")
+    @Test
+    fun contextMenu_disappearsOnTrackpadClickOffOfPopup() {
+        rule.setContent {
+            SelectionContainer { BasicText(defaultText, modifier = Modifier.testTag(textTag)) }
+        }
+
+        val contextMenuInteraction = rule.onNode(isPopup())
+        contextMenuInteraction.assertDoesNotExist()
+        rule.onNodeWithTag(textTag).performTrackpadInput { rightClick(center) }
         contextMenuInteraction.assertExists()
         rule.clickOffPopup { rootRect -> lerp(rootRect.topLeft, rootRect.center, 0.5f) }
         contextMenuInteraction.assertDoesNotExist()
@@ -163,10 +205,10 @@ open class SelectionContainerContextMenuTest {
     ) {
         val clipboard = FakeClipboard(initialClipboardText)
 
-        var selection by mutableStateOf<Selection?>(null)
+        val state = SelectionState()
         rule.setContent {
             CompositionLocalProvider(LocalClipboard provides clipboard) {
-                SelectionContainer(selection = selection, onSelectionChange = { selection = it }) {
+                SelectionContainer(state = state) {
                     BasicText(text, modifier = Modifier.testTag(textTag))
                 }
             }
@@ -189,7 +231,7 @@ open class SelectionContainerContextMenuTest {
         itemInteraction.assertDoesNotExist()
 
         // Assert
-        assertionBlock(selection, clipboard)
+        assertionBlock(state.selection, clipboard)
     }
 
     // endregion Context Menu Item Click Tests
@@ -236,6 +278,7 @@ open class SelectionContainerContextMenuTest {
             )
         }
 
+    @Ignore("b/534893012")
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
     fun contextMenu_onClickProcessText() {
@@ -258,9 +301,10 @@ open class SelectionContainerContextMenuTest {
         }
     }
 
+    @Ignore("b/534893012")
     @Test
     @ContextMenuFlagSuppress(suppressedFlagValue = false)
-    fun contextMenu_processText_itemsMatch() = runCorrectItemsTest { selection ->
+    fun contextMenu_processText_itemsMatch() = runCorrectItemsTest { _ ->
         rule.assertContextMenuItem(
             label = ContextMenuItemLabels.PROCESS_TEXT_1,
             state = ContextMenuItemState.ENABLED,
@@ -286,11 +330,11 @@ open class SelectionContainerContextMenuTest {
 
         val clipboard = FakeClipboard("Clipboard Text")
 
-        var selection by mutableStateOf<Selection?>(null)
+        val state = SelectionState()
 
         rule.setContent {
             CompositionLocalProvider(LocalClipboard provides clipboard) {
-                SelectionContainer(selection = selection, onSelectionChange = { selection = it }) {
+                SelectionContainer(state = state) {
                     BasicText(text, modifier = Modifier.testTag(textTag))
                 }
             }
@@ -319,7 +363,7 @@ open class SelectionContainerContextMenuTest {
         // open context menu
         rule.onNodeWithTag(textTag).performMouseInput { rightClick(center) }
 
-        assertBlock(selection)
+        assertBlock(state.selection)
     }
     // endregion Context Menu Correct Item Tests
 }

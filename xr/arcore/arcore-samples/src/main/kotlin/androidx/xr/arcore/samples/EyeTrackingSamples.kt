@@ -20,14 +20,15 @@ import androidx.annotation.Sampled
 import androidx.xr.arcore.ArDevice
 import androidx.xr.arcore.Eye
 import androidx.xr.arcore.HitResult
+import androidx.xr.arcore.TrackingState
 import androidx.xr.arcore.hitTest
 import androidx.xr.runtime.Session
-import androidx.xr.runtime.TrackingState
 import androidx.xr.runtime.math.Ray
 import androidx.xr.scenecore.scene
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 
+/** @param session the [Session] to get the eye from */
 @Sampled
 fun getLeftEye(session: Session) {
     // We need the ArDevice object to properly transform the eye pose coordinate space into
@@ -35,7 +36,7 @@ fun getLeftEye(session: Session) {
     val arDevice = ArDevice.getInstance(session)
 
     // Obtain the left eye from the Session object.
-    Eye.left(session)?.let {
+    Eye.left(session).let {
         // The left eye is available; launch a coroutine
         // to respond to changes in the eye's state.
         yourCoroutineScope.launch {
@@ -75,6 +76,7 @@ fun getLeftEye(session: Session) {
     }
 }
 
+/** @param session the [Session] to get the eye from */
 @Sampled
 fun getRightEye(session: Session) {
     // We need the ArDevice object to properly transform the eye pose coordinate space into
@@ -82,7 +84,7 @@ fun getRightEye(session: Session) {
     val arDevice = ArDevice.getInstance(session)
 
     // Obtain the right eye from the Session object.
-    Eye.right(session)?.let {
+    Eye.right(session).let {
         // The left eye is available; launch a coroutine
         // to respond to changes in the eye's state.
         yourCoroutineScope.launch {

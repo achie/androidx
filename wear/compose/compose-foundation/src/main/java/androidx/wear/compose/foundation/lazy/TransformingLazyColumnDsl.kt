@@ -27,8 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.ParentDataModifier
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.ParentDataModifierNode
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.util.fastFirstOrNull
 import androidx.compose.ui.util.trace
 import androidx.wear.compose.foundation.lazy.layout.LazyLayoutAnimateItemElement
 import androidx.wear.compose.foundation.lazy.layout.LazyLayoutAnimationSpecsNode
@@ -76,7 +81,7 @@ public sealed interface TransformingLazyColumnItemScope {
      *   from item reordering all other position changes caused by events like arrangement or
      *   alignment changes will also be animated. When null is provided no animations will happen.
      * @param fadeOutSpec an animation spec to use for animating the item disappearance. When null
-     *   is provided the item will be disappearance without animations.
+     *   is provided the item will disappear without animations.
      */
     public fun Modifier.animateItem(
         fadeInSpec: FiniteAnimationSpec<Float>? = spring(stiffness = Spring.StiffnessMediumLow),
@@ -86,6 +91,82 @@ public sealed interface TransformingLazyColumnItemScope {
                 visibilityThreshold = IntOffset.VisibilityThreshold,
             ),
         fadeOutSpec: FiniteAnimationSpec<Float>? = spring(stiffness = Spring.StiffnessMediumLow),
+    ): Modifier
+
+    /**
+     * This modifier allows items to choose a preferred content padding for the list, if they are
+     * placed at the top or bottom edge. When this item is at the top or bottom of the layout, the
+     * [TransformingLazyColumn] takes its contentPadding as the maximum of these vertical padding
+     * values and its own contentPadding parameter.
+     *
+     * The vertical padding values are expected to be provided by design systems, such as the
+     * recommended values in Material3 `ButtonDefaults`, `CardDefaults`, `ListHeaderDefaults` and so
+     * on.
+     *
+     * This modifier can be used to ensure that, when a list item is at the top or bottom of the
+     * list, the distance from the item to the screen edge is sufficient (such as to avoid the item
+     * being clipped by edges of a round screen).
+     *
+     * @sample androidx.wear.compose.foundation.samples.TransformingLazyColumnMinimumVerticalContentPaddingSample
+     * @param top The preferred top content padding for the list, when this item is placed at the
+     *   top edge. Used when either this is the first item for a layout that is not reversed, or
+     *   this is the last item for a reversed layout.
+     * @param bottom The preferred bottom content padding for the list, when this item is placed at
+     *   the bottom edge. Used when either this is the last item for a layout that is not reversed,
+     *   or this is the first item for a reversed layout.
+     */
+    public fun Modifier.minimumVerticalContentPadding(top: Dp, bottom: Dp): Modifier
+
+    /**
+     * This modifier allows items to choose a preferred content padding for the list, if they are
+     * placed at the top or bottom edge. When this item is at the top or bottom of the layout, the
+     * [TransformingLazyColumn] takes its contentPadding as the maximum of this vertical padding
+     * value and its own contentPadding parameter.
+     *
+     * The vertical padding values are expected to be provided by design systems, such as the
+     * recommended values in Material3 `ButtonDefaults`, `CardDefaults`, `ListHeaderDefaults` and so
+     * on.
+     *
+     * This modifier can be used to ensure that, when a list item is at the top or bottom of the
+     * list, the distance from the item to the screen edge is sufficient (such as to avoid the item
+     * being clipped by edges of a round screen).
+     *
+     * @sample androidx.wear.compose.foundation.samples.TransformingLazyColumnMinimumVerticalContentPaddingSample
+     * @param padding The preferred content padding for the list, when this item is placed at either
+     *   the top or bottom edges.
+     */
+    public fun Modifier.minimumVerticalContentPadding(padding: Dp): Modifier
+
+    /**
+     * Sets the threshold height above which this item is split into snap segments when the
+     * [TransformingLazyColumn] snaps (see [TransformingLazyColumnDefaults.snapFlingBehavior] and
+     * [androidx.wear.compose.foundation.rotary.RotaryScrollableDefaults.snapBehavior]).
+     *
+     * An item taller than its snap segment threshold is split into `ceil(measuredHeight /
+     * threshold)` equal segments, each with a snap point at its center, so that rotary input and
+     * flings step through the item instead of skipping over it.
+     *
+     * By default, the snap segment threshold is estimated as the maximum height at which the
+     * measured width of the item is still fully visible on a round screen, assuming the
+     * [TransformingLazyColumn] fills the screen and the item has rounded corners. Use this modifier
+     * when an item's content is inset from its bounds (so that the threshold depends on where the
+     * content is fully visible rather than the item bounds), when the list does not fill the
+     * screen, or to keep the item whole regardless of height by returning at least
+     * `measuredHeight`. With a snap segment threshold above the height at which the item is fully
+     * visible, including when keeping a tall item whole, parts of the item are never fully visible
+     * when snapped.
+     *
+     * @sample androidx.wear.compose.foundation.samples.TransformingLazyColumnSnapSegmentThresholdSample
+     * @param threshold A callback that returns the threshold height in pixels, given the measured
+     *   (untransformed) width and height of the item in pixels. A positive value less than
+     *   `measuredHeight` is coerced to between 20% and 100% of the viewport height; a value at
+     *   least `measuredHeight` keeps the item whole with a single snap point at its center; a
+     *   non-positive value uses the default threshold, the same as not applying this modifier.
+     *   Called when the item is measured, so reading snapshot state inside this lambda causes the
+     *   list to remeasure when that state changes.
+     */
+    public fun Modifier.snapSegmentThreshold(
+        threshold: (measuredWidth: Int, measuredHeight: Int) -> Int
     ): Modifier
 }
 
@@ -192,6 +273,7 @@ public inline fun <T> TransformingLazyColumnScope.itemsIndexed(
     }
 
 internal class TransformingLazyColumnItemScopeImpl(
+    val key: Any,
     val index: Int,
     val state: TransformingLazyColumnState,
     val reduceMotionEnabled: Boolean,
@@ -200,14 +282,30 @@ internal class TransformingLazyColumnItemScopeImpl(
     private val _scrollProgress: TransformingLazyColumnItemScrollProgress
         get() =
             trace("wear-compose:tlc:scrollProgress") {
-                with(state.layoutInfo.visibleItems) {
-                    val firstItem =
-                        firstOrNull()
-                            ?: return@trace TransformingLazyColumnItemScrollProgress.Unspecified
-                    val delta = index - firstItem.index
-                    if (delta in indices) this[delta].scrollProgress
-                    else TransformingLazyColumnItemScrollProgress.Unspecified
+                val layoutInfo = state.layoutInfoState.value
+                val visibleItems = layoutInfo.visibleItems
+                val fastResolvedItemByIndex =
+                    visibleItems.getOrNull(index - (visibleItems.firstOrNull()?.index ?: 0))
+                val resolvedItem =
+                    if (fastResolvedItemByIndex?.key == key) {
+                        fastResolvedItemByIndex
+                    } else {
+                        // Search all positioned items including pinned off-screen items
+                        layoutInfo.positionedItems.fastFirstOrNull { it.key == key }
+                    }
+                if (resolvedItem != null) {
+                    return@trace resolvedItem.scrollProgress
                 }
+
+                val animatedProgress = state.animator.getAnimation(key)?.animatedScrollProgress
+                if (
+                    animatedProgress != null &&
+                        animatedProgress != TransformingLazyColumnItemScrollProgress.Unspecified
+                ) {
+                    return@trace animatedProgress
+                }
+
+                TransformingLazyColumnItemScrollProgress.Unspecified
             }
 
     override val DrawScope.scrollProgress: TransformingLazyColumnItemScrollProgress
@@ -234,6 +332,15 @@ internal class TransformingLazyColumnItemScopeImpl(
         } else {
             this then LazyLayoutAnimateItemElement(fadeInSpec, placementSpec, fadeOutSpec)
         }
+
+    override fun Modifier.minimumVerticalContentPadding(top: Dp, bottom: Dp): Modifier =
+        this then MinimumVerticalContentPaddingElement(top = top, bottom = bottom)
+
+    override fun Modifier.minimumVerticalContentPadding(padding: Dp): Modifier =
+        this then Modifier.minimumVerticalContentPadding(top = padding, bottom = padding)
+
+    override fun Modifier.snapSegmentThreshold(threshold: (Int, Int) -> Int): Modifier =
+        this then SnapSegmentThresholdElement(threshold)
 }
 
 internal class TransformingLazyColumnCompositeParentDataModifier(
@@ -253,6 +360,9 @@ internal class TransformingLazyColumnCompositeParentDataModifier(
 internal data class TransformingLazyColumnParentData(
     val heightProvider: ((Int, TransformingLazyColumnItemScrollProgress) -> Int)? = null,
     val animationSpecs: LazyLayoutAnimationSpecsNode? = null,
+    val minimumTopContentPadding: Dp? = null,
+    val minimumBottomContentPadding: Dp? = null,
+    val snapSegmentThreshold: ((measuredWidth: Int, measuredHeight: Int) -> Int)? = null,
 )
 
 internal class TransformingLazyColumnScopeImpl(
@@ -298,3 +408,61 @@ internal class TransformingLazyColumnInterval(
     override val type: ((index: Int) -> Any?),
     val item: @Composable TransformingLazyColumnItemScope.(index: Int) -> Unit,
 ) : LazyLayoutIntervalContent.Interval
+
+private data class MinimumVerticalContentPaddingElement(val top: Dp, val bottom: Dp) :
+    ModifierNodeElement<MinimumVerticalContentPaddingNode>() {
+    override fun create() = MinimumVerticalContentPaddingNode(top, bottom)
+
+    override fun update(node: MinimumVerticalContentPaddingNode) {
+        node.top = top
+        node.bottom = bottom
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "MinimumVerticalContentPadding"
+        properties["top"] = top
+        properties["bottom"] = bottom
+    }
+}
+
+private class MinimumVerticalContentPaddingNode(var top: Dp, var bottom: Dp) :
+    Modifier.Node(), ParentDataModifierNode {
+    override fun Density.modifyParentData(parentData: Any?): Any {
+        return if (parentData is TransformingLazyColumnParentData) {
+            parentData.copy(minimumTopContentPadding = top, minimumBottomContentPadding = bottom)
+        } else {
+            TransformingLazyColumnParentData(
+                minimumTopContentPadding = top,
+                minimumBottomContentPadding = bottom,
+            )
+        }
+    }
+}
+
+private class SnapSegmentThresholdElement(val threshold: (Int, Int) -> Int) :
+    ModifierNodeElement<SnapSegmentThresholdNode>() {
+    override fun create() = SnapSegmentThresholdNode(threshold)
+
+    override fun update(node: SnapSegmentThresholdNode) {
+        node.threshold = threshold
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is SnapSegmentThresholdElement && other.threshold === threshold
+
+    override fun hashCode(): Int = threshold.hashCode()
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "snapSegmentThreshold"
+        properties["threshold"] = threshold
+    }
+}
+
+private class SnapSegmentThresholdNode(var threshold: (Int, Int) -> Int) :
+    Modifier.Node(), ParentDataModifierNode {
+    // As the other item modifiers, which all store their parent data in
+    // TransformingLazyColumnParentData, other parent data is replaced.
+    override fun Density.modifyParentData(parentData: Any?): Any =
+        (parentData as? TransformingLazyColumnParentData)?.copy(snapSegmentThreshold = threshold)
+            ?: TransformingLazyColumnParentData(snapSegmentThreshold = threshold)
+}

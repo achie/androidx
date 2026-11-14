@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 
@@ -30,9 +29,9 @@ plugins {
 
 android {
     namespace = "androidx.compose.integration.hero.sysui.macrobenchmark.implementation"
-    compileSdk = 36
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
     defaultConfig {
-        minSdk = 31 // This benchmark does not run below API 31
+        minSdk { version = release(31) } // This benchmark does not run below API 31
     }
     lint {
         baseline = file("lint-baseline.xml")
@@ -42,10 +41,13 @@ android {
 // Create a release build type and make sure it's the only one enabled.
 // This is needed because we benchmark the release build type only.
 android.buildTypes { release {} }
-androidComponents { beforeVariants(selector().all()) { enabled = buildType == 'release' } }
+androidComponents { beforeVariants(selector().all()) { enabled = buildType == "release" } }
 
 dependencies {
     // Compose
+    implementation(project(":compose:foundation:foundation"))
+    implementation(project(":compose:foundation:foundation-layout"))
+    implementation(project(":compose:runtime:runtime"))
     implementation(project(":compose:ui:ui"))
     implementation(project(":compose:ui:ui-graphics"))
     implementation(project(":compose:ui:ui-tooling-preview"))

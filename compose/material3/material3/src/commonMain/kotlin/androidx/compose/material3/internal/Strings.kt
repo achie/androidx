@@ -94,9 +94,14 @@ internal expect value class Strings constructor(val value: Int) {
         val TimePickerHourTextField: Strings
         val TimePickerMinuteTextField: Strings
         val TimePickerDialogTitle: Strings
+        val TimeScrollDialogTitle: Strings
         val TimeInputDialogTitle: Strings
         val TimePickerToggleKeyboard: Strings
+        val TimePickerToggleScroll: Strings
         val TimePickerToggleTouch: Strings
+        val TimePickerMinuteError: Strings
+        val TimePickerHourError: Strings
+        val TimePicker24HourError: Strings
         val TooltipPaneDescription: Strings
         val WideNavigationRailPaneTitle: Strings
         val ButtonGroupMoreOptions: Strings

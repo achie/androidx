@@ -13,73 +13,94 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@file:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-@file:Suppress("RestrictedApiAndroidX")
 
 package androidx.wear.compose.remote.material3
 
-import android.annotation.SuppressLint
 import androidx.annotation.RestrictTo
 import androidx.compose.remote.creation.compose.layout.RemoteComposable
 import androidx.compose.remote.creation.compose.modifier.RemoteModifier
 import androidx.compose.remote.creation.compose.state.RemoteColor
 import androidx.compose.remote.creation.compose.state.RemoteString
+import androidx.compose.remote.creation.compose.state.RemoteTextUnit
+import androidx.compose.remote.creation.compose.text.RemoteFontFamily
+import androidx.compose.remote.creation.compose.text.RemoteFontStyle
+import androidx.compose.remote.creation.compose.text.RemoteFontVariation
+import androidx.compose.remote.creation.compose.text.RemoteFontWeight
+import androidx.compose.remote.creation.compose.text.RemoteTextAlign
+import androidx.compose.remote.creation.compose.text.RemoteTextOverflow
+import androidx.compose.remote.creation.compose.text.RemoteTextStyle
+import androidx.compose.remote.foundation.text.RemoteBasicText
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontVariation
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
-import androidx.wear.compose.material3.LocalTextConfiguration
-import androidx.wear.compose.material3.LocalTextStyle
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.structuralEqualityPolicy
 
 /**
- * High level element that displays text and provides semantics / accessibility information.
+ * Displays Material Design text and provides accessibility semantics in a remote layout.
  *
- * For ease of use, commonly used parameters from [TextStyle] are also present here. The order of
- * precedence is as follows:
- * - If a parameter is explicitly set here (i.e, it is _not_ `null` or [TextUnit.Unspecified]), then
- *   this parameter will always be used.
- * - If a parameter is _not_ set, (`null` or [TextUnit.Unspecified]), then the corresponding value
- *   from [style] will be used instead.
+ * This is the Wear Material 3 counterpart to [RemoteBasicText] and the remote equivalent of
+ * [androidx.wear.compose.material3.Text], integrating with theme colors, typography, and ambient
+ * text configuration via [LocalRemoteTextConfiguration] provided by surrounding Wear Material 3
+ * components.
  *
- * @param text The text to be displayed.
- * @param modifier [Modifier] to apply to this layout node.
- * @param color [Color] to apply to the text.
- * @param fontSize The size of glyphs to use when painting the text. See [TextStyle.fontSize].
- * @param fontStyle The typeface variant to use when drawing the letters (e.g., italic). See
- *   [TextStyle.fontStyle].
- * @param fontWeight The typeface thickness to use when painting the text (e.g., [FontWeight.Bold]).
- * @param fontFamily The font family to be used when rendering the text. See [TextStyle.fontFamily].
- * @param textAlign The alignment of the text within the lines of the paragraph. See
- *   [TextStyle.textAlign].
- * @param overflow How visual overflow should be handled.
- * @param maxLines An optional maximum number of lines for the text to span.
- * @param style Style configuration for the text such as color, font, line height etc.
+ * Commonly used properties from [RemoteTextStyle] are also exposed directly as parameters for
+ * convenience:
+ * - When a styling parameter is non-`null`, it overrides the corresponding property in [style].
+ * - When `null`, the value from [style] is used instead, falling back to a default value if also
+ *   unset in [style].
+ *
+ * Example of styling [RemoteText] with [RemoteMaterialTheme.typography] and theme colors:
+ *
+ * @sample androidx.wear.compose.remote.material3.samples.RemoteTextSample
+ * @param text text to display
+ * @param modifier the [RemoteModifier] applied to this text layout
+ * @param color text color. If `null`, uses [RemoteTextStyle.color] from [style], or the ambient
+ *   content color if also `null` in [style]
+ * @param fontSize glyph size. If `null`, uses [RemoteTextStyle.fontSize] from [style], or `12.sp`
+ *   if also `null` in [style]
+ * @param fontStyle typeface slope (such as [RemoteFontStyle.Italic]). If `null`, uses
+ *   [RemoteTextStyle.fontStyle] from [style], or [RemoteFontStyle.Normal] if also `null` in [style]
+ * @param fontWeight typeface thickness (such as [RemoteFontWeight.Bold]). If `null`, uses
+ *   [RemoteTextStyle.fontWeight] from [style], or [RemoteFontWeight.Normal] if also `null` in
+ *   [style]
+ * @param fontFamily font family used to render the text. If `null`, uses
+ *   [RemoteTextStyle.fontFamily] from [style], or the platform default typeface if also `null` in
+ *   [style]
+ * @param textAlign horizontal alignment of the text within its container. Defaults to the ambient
+ *   text configuration's alignment; if `null`, uses [RemoteTextStyle.textAlign] from [style], or
+ *   [RemoteTextAlign.Start] if also unset in [style]
+ * @param overflow how visual overflow is handled. Defaults to the ambient text configuration's
+ *   overflow
+ * @param maxLines maximum number of visible lines (must be greater than zero). Defaults to the
+ *   ambient text configuration's `maxLines`
+ * @param fontVariationSettings OpenType variable font axis settings. If `null`, uses
+ *   [RemoteTextStyle.fontVariationSettings] from [style], or applies no custom variation settings
+ *   if also `null` in [style]
+ * @param style base [RemoteTextStyle] configuration for properties such as color, font, letter
+ *   spacing, and line height. Defaults to the ambient text style provided by surrounding Wear
+ *   Material 3 components
  */
-@SuppressLint("RestrictedApiAndroidX")
 @Composable
 @RemoteComposable
 public fun RemoteText(
     text: RemoteString,
     modifier: RemoteModifier = RemoteModifier,
-    color: RemoteColor? = LocalRemoteContentColor.current,
-    fontSize: TextUnit = TextUnit.Unspecified,
-    fontStyle: FontStyle? = null,
-    fontWeight: FontWeight? = null,
-    fontFamily: FontFamily? = null,
-    textAlign: TextAlign? = LocalTextConfiguration.current.textAlign,
-    overflow: TextOverflow = LocalTextConfiguration.current.overflow,
-    maxLines: Int = LocalTextConfiguration.current.maxLines,
-    style: TextStyle = LocalTextStyle.current,
-    fontVariationSettings: FontVariation.Settings? = null,
+    color: RemoteColor? = null,
+    fontSize: RemoteTextUnit? = null,
+    fontStyle: RemoteFontStyle? = null,
+    fontWeight: RemoteFontWeight? = null,
+    fontFamily: RemoteFontFamily? = null,
+    textAlign: RemoteTextAlign? = LocalRemoteTextConfiguration.current.textAlign,
+    overflow: RemoteTextOverflow = LocalRemoteTextConfiguration.current.overflow,
+    maxLines: Int = LocalRemoteTextConfiguration.current.maxLines,
+    fontVariationSettings: RemoteFontVariation.Settings? = null,
+    style: RemoteTextStyle = LocalRemoteTextStyle.current,
 ) {
-    androidx.compose.remote.creation.compose.layout.RemoteText(
+    val color = color ?: style.color ?: LocalRemoteContentColor.current
+    RemoteBasicText(
         text = text,
         modifier = modifier,
         color = color,
@@ -90,7 +111,99 @@ public fun RemoteText(
         textAlign = textAlign,
         overflow = overflow,
         maxLines = maxLines,
-        style = style,
         fontVariationSettings = fontVariationSettings,
+        style = style,
     )
+}
+
+/**
+ * CompositionLocal containing the preferred [RemoteTextStyle] that will be used by [RemoteText]
+ * components by default. To set the value for this CompositionLocal, see [ProvideRemoteTextStyle]
+ * which will merge any missing [RemoteTextStyle] properties with the existing [RemoteTextStyle] set
+ * in this CompositionLocal.
+ *
+ * @see ProvideRemoteTextStyle
+ */
+public val LocalRemoteTextStyle: ProvidableCompositionLocal<RemoteTextStyle> =
+    staticCompositionLocalOf {
+        RemoteTextStyle()
+    }
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) get
+
+/**
+ * This function is used to set the current value of [LocalRemoteTextStyle], merging the given style
+ * with the current style values for any missing attributes. Any [RemoteText] components included in
+ * this component's [content] will be styled with this style unless styled explicitly.
+ *
+ * @see LocalRemoteTextStyle
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+@Composable
+public fun ProvideRemoteTextStyle(
+    value: RemoteTextStyle,
+    content: @RemoteComposable @Composable () -> Unit,
+) {
+    val mergedStyle = LocalRemoteTextStyle.current.merge(value)
+    CompositionLocalProvider(LocalRemoteTextStyle provides mergedStyle, content = content)
+}
+
+/**
+ * CompositionLocal containing the preferred [RemoteTextConfiguration] that will be used by
+ * [RemoteText] components by default consisting of text alignment, overflow specification and max
+ * lines. Material3 components related to text such as [RemoteButton], [RemoteCheckboxButton],
+ * [RemoteSwitchButton], [RemoteRadioButton] use [LocalRemoteTextConfiguration] to set values with
+ * which to style child text components.
+ */
+public val LocalRemoteTextConfiguration: ProvidableCompositionLocal<RemoteTextConfiguration> =
+    compositionLocalOf(structuralEqualityPolicy()) {
+        RemoteTextConfiguration(
+            RemoteTextConfigurationDefaults.TextAlign,
+            RemoteTextConfigurationDefaults.Overflow,
+            RemoteTextConfigurationDefaults.MaxLines,
+        )
+    }
+
+/**
+ * Class representing aspects of [RemoteText] that can be configured with
+ * [LocalRemoteTextConfiguration].
+ *
+ * @param textAlign The alignment of the text within the lines of the paragraph.
+ * @param overflow How visual overflow should be handled.
+ * @param maxLines The maximum number of lines for the text to span, wrapping if necessary.
+ */
+@Immutable
+public class RemoteTextConfiguration(
+    public val textAlign: RemoteTextAlign?,
+    public val overflow: RemoteTextOverflow,
+    public val maxLines: Int,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other == null || other !is RemoteTextConfiguration) return false
+
+        if (textAlign != other.textAlign) return false
+        if (overflow != other.overflow) return false
+        if (maxLines != other.maxLines) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = textAlign?.hashCode() ?: 0
+        result = 31 * result + overflow.hashCode()
+        result = 31 * result + maxLines
+        return result
+    }
+}
+
+/** Default values for [RemoteTextConfiguration]. */
+public object RemoteTextConfigurationDefaults {
+    /** Default text alignment for [RemoteText]. */
+    public val TextAlign: RemoteTextAlign? = null
+
+    /** Default visual text overflow for [RemoteText]. */
+    public val Overflow: RemoteTextOverflow = RemoteTextOverflow.Clip
+
+    /** Default max lines for [RemoteText]. */
+    public val MaxLines: Int = Int.MAX_VALUE
 }

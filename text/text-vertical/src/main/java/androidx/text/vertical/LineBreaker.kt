@@ -17,10 +17,8 @@
 package androidx.text.vertical
 
 import android.graphics.Canvas
-import android.os.Build
 import android.text.TextPaint
 import androidx.annotation.Px
-import androidx.annotation.RequiresApi
 import androidx.text.vertical.LineBreaker.Result
 import java.text.BreakIterator
 import java.util.Locale
@@ -64,9 +62,9 @@ import kotlin.math.min
 
 internal object LineBreaker {
     /**
-     * Represents lines of text that has been laid out.
+     * Represents lines of text that have been laid out.
      *
-     * @property width The total width of the line.
+     * @property width sum of all laid-out line (column) widths in pixels
      * @property lineLeftSide The distance from each line left to each line baseline.
      * @property lineRightSide The distance from each line baseline to each line right.
      */
@@ -79,6 +77,32 @@ internal object LineBreaker {
         /** The number of lines in the text layout. */
         val lineCount: Int
             get() = lineLayouts.size
+
+        /** Maximum height in pixels among all laid-out lines, or `0f` when empty. */
+        val height: Float = lineLayouts.maxOfOrNull { it.height } ?: 0f
+
+        /**
+         * Bounding width in pixels across the maximum left and right extents of all vertical lines
+         * (columns).
+         */
+        val lineWidth: Float
+            get() = lineRightSide - lineLeftSide
+
+        /**
+         * Returns the laid-out width in pixels of the line at [lineNo].
+         *
+         * @param lineNo 0-based line (column) index
+         * @return width in pixels of the line at [lineNo]
+         */
+        fun getLineWidth(lineNo: Int): Float = lineLayouts[lineNo].width
+
+        /**
+         * Returns the laid-out height in pixels of the line at [lineNo].
+         *
+         * @param lineNo 0-based line (column) index
+         * @return height in pixels of the line at [lineNo]
+         */
+        fun getLineHeight(lineNo: Int): Float = lineLayouts[lineNo].height
 
         /**
          * Retrieves the inclusive starting character index of a specified line.
@@ -97,43 +121,63 @@ internal object LineBreaker {
         fun getLineEnd(lineNo: Int) = lineLayouts[lineNo].end
 
         /**
-         * Draws the text lines onto the given canvas.
+         * Draws the lines (columns) in `[lineStart, lineEnd)` onto the given canvas.
          *
-         * @param canvas The Canvas to draw on.
-         * @param x The starting X position for drawing. The right-top is the drawing origin.
-         * @param y The starting Y position for drawing. The right-top is the drawing origin.
-         * @param paint The TextPaint object to use for text rendering.
+         * Each drawn line keeps the position it has in a full draw.
+         *
+         * @param canvas [Canvas] to draw on
+         * @param x starting X position for drawing; the right-top is the drawing origin
+         * @param y starting Y position for drawing; the right-top is the drawing origin
+         * @param paint [TextPaint] to use for text rendering
+         * @param lineStart inclusive first line (column) index
+         * @param lineEnd exclusive last line (column) index
+         * @throws IndexOutOfBoundsException if the range is outside `0..lineCount` or `lineStart >
+         *   lineEnd`
          */
-        fun draw(canvas: Canvas, x: Float, y: Float, paint: TextPaint) {
-            val lineWidth = lineRightSide - lineLeftSide
-            lineLayouts.forEachIndexed { i, line ->
-                // Baseline offset of the i-th line.
-                val baselineOffset = -lineWidth * i - lineRightSide
-                line.draw(canvas, x + baselineOffset, y, paint)
+        fun draw(
+            canvas: Canvas,
+            x: Float,
+            y: Float,
+            paint: TextPaint,
+            lineStart: Int = 0,
+            lineEnd: Int = lineLayouts.size,
+        ) {
+            if (lineStart < 0 || lineEnd > lineLayouts.size || lineStart > lineEnd) {
+                throw IndexOutOfBoundsException(
+                    "Line range [$lineStart, $lineEnd) is outside 0..${lineLayouts.size}"
+                )
+            }
+            var currentX = x
+            for (i in 0 until lineStart) {
+                currentX -= lineLayouts[i].width
+            }
+            for (i in lineStart until lineEnd) {
+                val line = lineLayouts[i]
+                line.draw(canvas, currentX - line.rightSide, y, paint)
+                currentX -= line.width
             }
         }
     }
 
     /**
-     * Performs a line break and layouts each lines.
+     * Performs line breaking and lays out each line.
      *
      * @param text The text to be processed.
      * @param start The inclusive starting index of the range.
      * @param end The exclusive ending index of the range.
      * @param paint The TextPaint used for measuring and drawing text.
      * @param heightConstraint The height constraint in pixels.
-     * @param textOrientation The desired orientation for the text (MIXED, HORIZONTAL, VERTICAL).
-     *   Defaults to MIXED.
+     * @param textOrientation The desired orientation for the text (Mixed, Upright, Sideways).
+     *   Defaults to Mixed.
      * @return A Result object containing the broken text lines.
      */
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun breakTextIntoLines(
         text: CharSequence,
         start: Int,
         end: Int,
         paint: TextPaint,
         @Px heightConstraint: Float,
-        textOrientation: Int = TextOrientation.MIXED,
+        textOrientation: TextOrientation = TextOrientation.Mixed,
     ): Result {
         val ctx = Context(text, paint, heightConstraint)
         text.forEachParagraph(start, end) { paraStart, paraEnd ->
@@ -152,7 +196,7 @@ internal object LineBreaker {
             }
 
             // Add a line break after each paragraph except the last one.
-            if (paraEnd != end) {
+            if (paraEnd != end && ctx.currentLineRuns.isNotEmpty()) {
                 ctx.breakLine()
             }
         }
@@ -218,7 +262,7 @@ private data class WordBreaker(val text: CharSequence, val locale: Locale) {
 private data class Context(
     val text: CharSequence,
     val paint: TextPaint,
-    @Px val heightConstraint: Float,
+    @param:Px val heightConstraint: Float,
 ) {
     val breaker = WordBreaker(text, paint.textLocale)
     var currentLineHeight: Float = 0f
@@ -237,17 +281,16 @@ private data class Context(
         currentLineHeight = 0f
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun addRun(start: Int, end: Int, orientation: ResolvedOrientation) =
         currentLineRuns.add(createLayoutRun(text, start, end, paint, orientation))
 
     /**
-     * Iterate through each words within a specified range of a CharSequence.
+     * Iterates through each word within a specified range of a CharSequence.
      *
      * @param start The inclusive starting index of the range.
      * @param end The exclusive ending index of the range.
-     * @param advances An array advances.
-     * @param consumer A callback function that is called for each words. It receives three
+     * @param advances An array of advances.
+     * @param consumer A callback function that is called for each word. It receives three
      *   parameters:
      *     - The inclusive start index of the word.
      *     - The exclusive end index of the word.
@@ -308,7 +351,6 @@ private data class Context(
      * @param end The exclusive ending index of the run.
      * @param orientation The text orientation of the run (e.g., Horizontal, Vertical, TateChuYoko).
      */
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun processRun(start: Int, end: Int, orientation: ResolvedOrientation) {
         require(
             orientation == ResolvedOrientation.Upright || orientation == ResolvedOrientation.Rotate
@@ -403,13 +445,11 @@ private data class Context(
      * @param ruby The ruby span.
      * @param orientation The text orientation mode.
      */
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    fun processRubyRun(start: Int, end: Int, ruby: RubySpan, @OrientationMode orientation: Int) {
+    fun processRubyRun(start: Int, end: Int, ruby: RubySpan, orientation: TextOrientation) {
         val rubyLayout = RubyLayoutRun(text, start, end, orientation, paint, ruby)
         processNonBreakableLayout(rubyLayout)
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun processTateChuYoko(start: Int, end: Int) {
         val layout = createLayoutRun(text, start, end, paint, ResolvedOrientation.TateChuYoko)
         processNonBreakableLayout(layout)
@@ -445,17 +485,20 @@ private data class Context(
      * @return The result of the line breaking process.
      */
     fun finish(): Result {
-        breakLine()
+        if (currentLineRuns.isNotEmpty()) {
+            breakLine()
+        }
 
-        // To use the same line width, iterate over all lines and use the maximum of it.
         var leftSide = 0f
         var rightSide = 0f
+        var width = 0f
 
         brokenLines.forEach {
             leftSide = min(leftSide, it.leftSide)
             rightSide = max(rightSide, it.rightSide)
+            width += it.width
         }
 
-        return Result(brokenLines, (rightSide - leftSide) * brokenLines.size, leftSide, rightSide)
+        return Result(brokenLines, width, leftSide, rightSide)
     }
 }

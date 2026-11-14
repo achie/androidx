@@ -16,6 +16,7 @@
 
 package androidx.car.app.model;
 
+import static androidx.car.app.model.constraints.ActionsConstraints.ACTIONS_CONSTRAINTS_TAB_ACTIONS;
 import static androidx.car.app.model.constraints.ActionsConstraints.ACTIONS_CONSTRAINTS_TABS;
 
 import static java.util.Objects.requireNonNull;
@@ -79,6 +80,8 @@ public class TabTemplate implements Template {
     private final @Nullable TabContents mTabContents;
     private final @Nullable List<Tab> mTabs;
     private final @Nullable String mActiveTabContentId;
+    private final @Nullable TabStyle mStyle;
+    private final @Nullable Action mEndAction;
 
     /**
      * Returns the {@link Action} that is set to be displayed in the header of the template, or
@@ -127,6 +130,26 @@ public class TabTemplate implements Template {
         return requireNonNull(mActiveTabContentId);
     }
 
+    /**
+     * Returns the {@link TabStyle} for tabs in the template, or {@code null} if not set.
+     *
+     * @see TabTemplate.Builder#setStyle(TabStyle)
+     */
+    @RequiresCarApi(9)
+    public @Nullable TabStyle getStyle() {
+        return mStyle;
+    }
+
+    /**
+     * Returns the end action displayed in the tab bar, or {@code null} if none has been set.
+     *
+     * @see Builder#setEndAction(Action)
+     */
+    @RequiresCarApi(9)
+    public @Nullable Action getEndAction() {
+        return mEndAction;
+    }
+
     @Override
     public @NonNull String toString() {
         return "TabTemplate";
@@ -134,7 +157,8 @@ public class TabTemplate implements Template {
 
     @Override
     public int hashCode() {
-        return Objects.hash(mIsLoading, mHeaderAction, mTabs, mTabContents, mActiveTabContentId);
+        return Objects.hash(mIsLoading, mHeaderAction, mTabs, mTabContents, mActiveTabContentId,
+                mStyle, mEndAction);
     }
 
     @Override
@@ -150,7 +174,9 @@ public class TabTemplate implements Template {
                 && Objects.equals(mHeaderAction, otherTemplate.mHeaderAction)
                 && Objects.equals(mTabs, otherTemplate.mTabs)
                 && Objects.equals(mTabContents, otherTemplate.mTabContents)
-                && Objects.equals(mActiveTabContentId, otherTemplate.mActiveTabContentId);
+                && Objects.equals(mActiveTabContentId, otherTemplate.mActiveTabContentId)
+                && Objects.equals(mStyle, otherTemplate.mStyle)
+                && Objects.equals(mEndAction, otherTemplate.mEndAction);
     }
 
     TabTemplate(TabTemplate.Builder builder) {
@@ -160,6 +186,8 @@ public class TabTemplate implements Template {
         mTabContents = builder.mTabContents;
         mTabCallbackDelegate = builder.mTabCallbackDelegate;
         mActiveTabContentId = builder.mActiveTabContentId;
+        mStyle = builder.mStyle;
+        mEndAction = builder.mEndAction;
     }
 
     /** Constructs an empty instance, used by serialization code. */
@@ -170,6 +198,8 @@ public class TabTemplate implements Template {
         mTabContents = null;
         mTabCallbackDelegate = null;
         mActiveTabContentId = null;
+        mStyle = null;
+        mEndAction = null;
     }
 
     /** A builder of {@link TabTemplate}. */
@@ -181,9 +211,12 @@ public class TabTemplate implements Template {
         @Nullable Action mHeaderAction;
 
         final List<Tab> mTabs;
+        @Nullable Action mEndAction;
         @Nullable TabContents mTabContents;
 
         @Nullable String mActiveTabContentId;
+
+        @Nullable TabStyle mStyle;
 
         /**
          * Sets whether the template is in a loading state.
@@ -246,6 +279,19 @@ public class TabTemplate implements Template {
         }
 
         /**
+         * Sets the {@link TabStyle} for all tabs in this template, or {@code null} to clear the
+         * style.
+         *
+         * <p>Any fields not explicitly set here or in the individual tab styling of
+         * {@link Tab.Builder#setStyle} will fall back to host defaults.
+         */
+        @RequiresCarApi(9)
+        public TabTemplate.@NonNull Builder setStyle(@Nullable TabStyle tabStyle) {
+            mStyle = tabStyle;
+            return this;
+        }
+
+        /**
          * Adds an {@link Tab} to display in the template.
          *
          * @throws NullPointerException if {@code tab} is {@code null}
@@ -253,6 +299,27 @@ public class TabTemplate implements Template {
         public TabTemplate.@NonNull Builder addTab(@NonNull Tab tab) {
             requireNonNull(tab);
             mTabs.add(tab);
+            return this;
+        }
+
+        /**
+         * Sets an {@link Action} to be displayed at the end of the header/tab bar, or
+         * {@code null} to clear the end action.
+         *
+         * <h4>Requirements</h4>
+         *
+         * The end action displayed in the tab bar must have an icon and must not have a title.
+         *
+         * @throws IllegalArgumentException if {@code endAction} does not meet the template's
+         *                                  requirements
+         */
+        @RequiresCarApi(9)
+        public TabTemplate.@NonNull Builder setEndAction(@Nullable Action endAction) {
+            if (endAction != null) {
+                ACTIONS_CONSTRAINTS_TAB_ACTIONS.validateOrThrow(
+                        Collections.singletonList(endAction));
+            }
+            mEndAction = endAction;
             return this;
         }
 
@@ -316,6 +383,7 @@ public class TabTemplate implements Template {
         public Builder(@NonNull TabCallback callback) {
             mTabCallbackDelegate = TabCallbackDelegateImpl.create(requireNonNull(callback));
             mTabs = new ArrayList<>();
+            mEndAction = null;
         }
 
         /** Creates a new {@link Builder}, populated from the input {@link TabTemplate} */
@@ -326,6 +394,8 @@ public class TabTemplate implements Template {
             mTabContents = tabTemplate.getTabContents();
             mTabCallbackDelegate = tabTemplate.getTabCallbackDelegate();
             mActiveTabContentId = tabTemplate.getActiveTabContentId();
+            mStyle = tabTemplate.getStyle();
+            mEndAction = tabTemplate.getEndAction();
         }
     }
 }

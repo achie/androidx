@@ -22,13 +22,13 @@ import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Size
+import androidx.arch.core.executor.ArchTaskExecutor
+import androidx.arch.core.executor.TaskExecutor
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.CameraXConfig
@@ -38,13 +38,12 @@ import androidx.camera.testing.impl.SurfaceTextureProvider
 import androidx.camera.testing.impl.fakes.FakeLifecycleOwner
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.ParameterizedRobolectricTestRunner
@@ -62,10 +61,7 @@ import org.robolectric.shadows.StreamConfigurationMapBuilder
  * camera device fails to open for various reasons.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
-@Config(
-    minSdk = Build.VERSION_CODES.M,
-    shadows = [TestShadowCameraManager::class, TestShadowCameraDeviceImpl::class],
-)
+@Config(minSdk = 24, shadows = [TestShadowCameraManager::class, TestShadowCameraDeviceImpl::class])
 class CameraStateRobolectricTest(private val config: TestConfig) {
 
     data class TestConfig(
@@ -95,7 +91,7 @@ class CameraStateRobolectricTest(private val config: TestConfig) {
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
         fun data(): Collection<TestConfig> {
-            val impls = listOf("Camera2", "CameraPipe")
+            val impls = listOf("Camera2")
             val errorScenarios =
                 listOf(
                     // Recoverable errors should transition to OPENING or PENDING_OPEN
@@ -137,18 +133,33 @@ class CameraStateRobolectricTest(private val config: TestConfig) {
 
     @Before
     fun setUp() {
+        ArchTaskExecutor.getInstance()
+            .setDelegate(
+                object : TaskExecutor() {
+                    override fun executeOnDiskIO(runnable: Runnable) {
+                        runnable.run()
+                    }
+
+                    override fun postToMainThread(runnable: Runnable) {
+                        mainThreadHandler.post(runnable)
+                    }
+
+                    override fun isMainThread(): Boolean {
+                        return Looper.myLooper() == Looper.getMainLooper()
+                    }
+                }
+            )
         ShadowLog.stream = System.out
         val configBuilder =
             when (config.implName) {
                 "Camera2" -> CameraXConfig.Builder.fromConfig(Camera2Config.defaultConfig())
-                "CameraPipe" -> CameraXConfig.Builder.fromConfig(CameraPipeConfig.defaultConfig())
                 else -> throw IllegalArgumentException("Unknown impl name: ${config.implName}")
             }
 
         testSchedulerThread = HandlerThread("CameraStateTestScheduler")
         testSchedulerThread.start()
         testSchedulerHandler = Handler(testSchedulerThread.looper)
-        testCameraExecutor = Executors.newFixedThreadPool(2)
+        testCameraExecutor = Executor { testSchedulerHandler.post(it) }
 
         val cameraXConfig =
             configBuilder
@@ -174,11 +185,13 @@ class CameraStateRobolectricTest(private val config: TestConfig) {
     @After
     fun tearDown() {
         cameraProvider?.shutdownAsync()?.get(10, TimeUnit.SECONDS)
+        shadowAgent.closeAllOpenDevices()
+        flushLoopers()
         testSchedulerThread.quitSafely()
         ShadowCameraBridge.agent = null
+        ArchTaskExecutor.getInstance().setDelegate(null)
     }
 
-    @Ignore // b/446723558
     @Test
     @LooperMode(LooperMode.Mode.INSTRUMENTATION_TEST)
     fun cameraStateTransitionsToCorrectError_whenOpenFails() {
@@ -191,17 +204,10 @@ class CameraStateRobolectricTest(private val config: TestConfig) {
 
         // Act: Bind a use case, which will trigger the camera open call that we've hijacked.
         mainThreadHandler.post {
-            val preview = Preview.Builder().build()
-            preview.surfaceProvider =
-                SurfaceTextureProvider.createAutoDrainingSurfaceTextureProvider()
-            val camera =
-                cameraProvider!!.bindToLifecycle(
-                    fakeLifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                )
-
-            camera.cameraInfo.cameraState.observe(fakeLifecycleOwner) { state ->
+            val provider = requireNotNull(cameraProvider)
+            provider.getCameraInfo(CameraSelector.DEFAULT_BACK_CAMERA).cameraState.observe(
+                fakeLifecycleOwner
+            ) { state ->
                 // We are interested in the state where an error is first reported.
                 if (state.error != null && !isErrorCaptured) {
                     capturedState = state
@@ -209,17 +215,40 @@ class CameraStateRobolectricTest(private val config: TestConfig) {
                     cameraErrorLatch.countDown()
                 }
             }
+
+            val preview = Preview.Builder().build()
+            preview.surfaceProvider = SurfaceTextureProvider.createSurfaceTextureProvider()
+            provider.bindToLifecycle(
+                fakeLifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+            )
         }
         flushLoopers()
 
         // Assert: Wait for the error state and verify it matches expectations.
-        assertThat(cameraErrorLatch.await(5, TimeUnit.SECONDS)).isTrue()
+        // Periodically flush the loopers while waiting for the latch to prevent real-world time
+        // delays.
+        val timeoutMs = 5000L
+        val pollIntervalMs = 20L
+        val startTime = System.currentTimeMillis()
+        while (cameraErrorLatch.count > 0 && (System.currentTimeMillis() - startTime) < timeoutMs) {
+            flushLoopers()
+            cameraErrorLatch.await(pollIntervalMs, TimeUnit.MILLISECONDS)
+        }
+        assertWithMessage("Camera error latch did not reach 0 within the timeout period.")
+            .that(cameraErrorLatch.count)
+            .isEqualTo(0L)
         assertThat(capturedState).isNotNull()
-        assertThat(capturedState!!.type).isIn(config.expectedCameraStateTypes)
-        assertThat(capturedState.error?.code).isEqualTo(config.expectedErrorCode)
+        assertThat(capturedState!!.error?.code).isEqualTo(config.expectedErrorCode)
+        assertThat(capturedState.type).isIn(config.expectedCameraStateTypes)
     }
 
     private fun addFakeCamera(cameraId: String) {
+        if (cameraManager.cameraIdList.contains(cameraId)) {
+            shadowCameraManager.removeCamera(cameraId)
+        }
+
         val characteristics = createFakeCameraCharacteristics(CameraMetadata.LENS_FACING_BACK)
         shadowCameraManager.addCamera(cameraId, characteristics)
     }

@@ -17,6 +17,8 @@
 
 package androidx.biometric
 
+import androidx.activity.ComponentActivity
+import androidx.biometric.internal.AuthenticationResultRegistry
 import androidx.biometric.internal.ui.getConfirmCredentialActivityLauncher
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
@@ -26,8 +28,8 @@ import java.util.concurrent.Executor
  * Returns an [AuthenticationResultLauncher] that can be used to initiate authentication.
  *
  * A success or error result will be delivered to [AuthenticationResultCallback.onAuthResult] and
- * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthFailure], which
- * is set by [resultCallback]. The callback will be executed on the thread provided by the
+ * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthAttemptFailed],
+ * which is set by [resultCallback]. The callback will be executed on the thread provided by the
  * [callbackExecutor].
  *
  * This *must* be called unconditionally, as part of initialization path, typically as a field
@@ -42,13 +44,13 @@ import java.util.concurrent.Executor
  * @sample androidx.biometric.samples.activitySample
  */
 @Suppress("ExecutorRegistration")
-public fun FragmentActivity.registerForAuthenticationResult(
+public fun ComponentActivity.registerForAuthenticationResult(
     callbackExecutor: Executor,
     resultCallback: AuthenticationResultCallback,
 ): AuthenticationResultLauncher {
     return AuthenticationResultRegistry()
         .register(
-            context = this,
+            contextProvider = { this },
             viewModelStoreOwner = this,
             lifecycleOwner = this,
             confirmCredentialActivityLauncher = getConfirmCredentialActivityLauncher(),
@@ -61,8 +63,8 @@ public fun FragmentActivity.registerForAuthenticationResult(
  * Returns an [AuthenticationResultLauncher] that can be used to initiate authentication.
  *
  * A success or error result will be delivered to [AuthenticationResultCallback.onAuthResult] and
- * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthFailure], which
- * is set by [resultCallback]. The callback will be executed on the main thread.
+ * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthAttemptFailed],
+ * which is set by [resultCallback]. The callback will be executed on the main thread.
  *
  * This *must* be called unconditionally, as part of initialization path, typically as a field
  * initializer of an Activity.
@@ -77,12 +79,12 @@ public fun FragmentActivity.registerForAuthenticationResult(
  * @see FragmentActivity.registerForAuthenticationResult(Executor, AuthenticationResultCallback)
  */
 @Suppress("ExecutorRegistration")
-public fun FragmentActivity.registerForAuthenticationResult(
+public fun ComponentActivity.registerForAuthenticationResult(
     resultCallback: AuthenticationResultCallback
 ): AuthenticationResultLauncher {
     return AuthenticationResultRegistry()
         .register(
-            context = this,
+            contextProvider = { this },
             viewModelStoreOwner = this,
             lifecycleOwner = this,
             confirmCredentialActivityLauncher = getConfirmCredentialActivityLauncher(),
@@ -95,8 +97,8 @@ public fun FragmentActivity.registerForAuthenticationResult(
  * Returns an [AuthenticationResultLauncher] that can be used to initiate authentication.
  *
  * A success or error result will be delivered to [AuthenticationResultCallback.onAuthResult] and
- * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthFailure], which
- * is set by [resultCallback]. The callback will be executed on the thread provided by the
+ * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthAttemptFailed],
+ * which is set by [resultCallback]. The callback will be executed on the thread provided by the
  * [callbackExecutor].
  *
  * This *must* be called unconditionally, as part of initialization path, typically as a field
@@ -117,7 +119,7 @@ public fun Fragment.registerForAuthenticationResult(
 ): AuthenticationResultLauncher {
     return AuthenticationResultRegistry()
         .register(
-            context = requireContext(),
+            contextProvider = { requireContext() },
             viewModelStoreOwner = this,
             lifecycleOwner = this,
             confirmCredentialActivityLauncher = getConfirmCredentialActivityLauncher(),
@@ -130,8 +132,8 @@ public fun Fragment.registerForAuthenticationResult(
  * Returns an [AuthenticationResultLauncher] that can be used to initiate authentication.
  *
  * A success or error result will be delivered to [AuthenticationResultCallback.onAuthResult] and
- * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthFailure], which
- * is set by [resultCallback]. The callback will be executed on the main thread.
+ * (one or more) failures will be delivered to [AuthenticationResultCallback.onAuthAttemptFailed],
+ * which is set by [resultCallback]. The callback will be executed on the main thread.
  *
  * This *must* be called unconditionally, as part of initialization path, typically as a field
  * initializer of an Fragment.
@@ -151,7 +153,7 @@ public fun Fragment.registerForAuthenticationResult(
 ): AuthenticationResultLauncher {
     return AuthenticationResultRegistry()
         .register(
-            context = requireContext(),
+            contextProvider = { requireContext() },
             viewModelStoreOwner = this,
             lifecycleOwner = this,
             confirmCredentialActivityLauncher = getConfirmCredentialActivityLauncher(),

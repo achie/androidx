@@ -20,7 +20,7 @@ import android.content.ClipData
 import android.content.Context
 import android.os.Build
 import androidx.compose.ui.test.TestActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
@@ -29,7 +29,6 @@ import junit.framework.TestCase.assertEquals
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.runner.RunWith
@@ -39,11 +38,11 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
 class AndroidClipboardIntegrationTest {
 
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     @Test
     fun setText_affects_getClipEntry_and_vice_versa() = runTest {
-        val clipboard: Clipboard = AndroidClipboard(rule.activity)
+        val clipboard: Clipboard = AndroidClipboardImpl(rule.activity)
 
         clipboard.setClipEntry(null)
         assertFalse(clipboard.getClipEntry().hasText())
@@ -58,14 +57,14 @@ class AndroidClipboardIntegrationTest {
         assertFalse(clipboard.getClipEntry().hasText())
         assertEquals(null, clipboard.getClipEntry())
 
-        clipboard.nativeClipboard.setPrimaryClip(testClipEntry("test2").clipData)
+        clipboard.nativeClipboardManager.setPrimaryClip(testClipEntry("test2").clipData)
         assertTrue(clipboard.getClipEntry().hasText())
         assertEquals("test2", clipboard.getClipEntry()?.clipData?.getItemAt(0)?.text)
 
         // nativeClipboard should be correct too
         assertEquals(
             rule.activity.getSystemService(Context.CLIPBOARD_SERVICE),
-            clipboard.nativeClipboard,
+            clipboard.nativeClipboardManager,
         )
     }
 }

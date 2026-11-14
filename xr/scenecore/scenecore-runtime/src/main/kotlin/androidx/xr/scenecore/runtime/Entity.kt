@@ -22,7 +22,7 @@ import androidx.xr.runtime.math.Vector3
 import java.util.concurrent.Executor
 
 /** Interface for an XR Runtime Entity. */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public interface Entity : ScenePose {
 
     /** Sets the provided Entities to be children of the Entity. */
@@ -31,8 +31,6 @@ public interface Entity : ScenePose {
     /**
      * Sets the parent Entity for this Entity. The child Entity's pose will be relative to the pose
      * of its parent.
-     *
-     * @param parent The parent entity.
      */
     public var parent: Entity?
 
@@ -46,7 +44,7 @@ public interface Entity : ScenePose {
      *
      * @param hidden The new local hidden state of this Entity.
      */
-    public fun setHidden(hidden: Boolean): Unit
+    public fun setHidden(hidden: Boolean)
 
     /**
      * Add given Entity as child. The child Entity's pose will be relative to the pose of its parent
@@ -60,20 +58,6 @@ public interface Entity : ScenePose {
 
     /** Returns the pose for this entity, relative to its parent. */
     public fun getPose(): Pose = getPose(Space.PARENT)
-
-    /**
-     * Calculates a gravity-aligned version of a given pose.
-     *
-     * This function takes a pose in **PARENT space** and returns a new pose in the **PARENT
-     * space**. The new pose will have the same position as the input, but its rotation will be
-     * aligned with the direction of gravity. This effectively preserves the original yaw (Y-axis
-     * rotation) while setting the pitch (X-axis rotation) and roll (Z-axis rotation) to zero.
-     *
-     * @param pose The input [Pose] relative to the **PARENT space**.
-     * @return A new [Pose] in the **PARENT space**, with its rotation aligned to gravity.
-     * @throws IllegalStateException if the entity does not have a parent.
-     */
-    public fun getGravityAlignedPose(pose: Pose = Pose.Identity): Pose = pose
 
     /** Updates the pose (position and rotation) of the Entity relative to the given space. */
     public fun setPose(pose: Pose, @SpaceValue relativeTo: Int)
@@ -124,19 +108,12 @@ public interface Entity : ScenePose {
     public fun getAlpha(): Float = getAlpha(Space.PARENT)
 
     /**
-     * Sets the alpha transparency for the given Entity, relative to the given space.
-     *
-     * @param alpha Alpha transparency level for the Entity.
-     * @param relativeTo The space in which to set the alpha.
-     */
-    public fun setAlpha(alpha: Float, @SpaceValue relativeTo: Int)
-
-    /**
-     * Sets the alpha transparency for the given Entity.
+     * Sets the alpha transparency for the given Entity, relative to the parent space. Values are in
+     * the range [0, 1] with 0 being fully transparent and 1 being fully opaque.
      *
      * @param alpha Alpha transparency level for the Entity.
      */
-    public fun setAlpha(alpha: Float): Unit = setAlpha(alpha, Space.PARENT)
+    public fun setAlpha(alpha: Float): Unit
 
     /** Sets the provided Entities to be children of the Entity. */
     public fun addChildren(children: List<Entity>): Unit
@@ -166,8 +143,13 @@ public interface Entity : ScenePose {
     public fun removeInputEventListener(listener: InputEventListener)
 
     /**
-     * Dispose any system resources held by this entity, and transitively calls dispose() on all the
-     * children. Once disposed, Entity shouldn't be used again.
+     * Disposes system resources held by this entity.
+     *
+     * Once disposed, this [Entity] must not be used. Disposing an entity:
+     * * Detaches it from its [parent].
+     * * Detaches all child entities by setting their [parent] to `null`. The child entities
+     *   themselves are not disposed.
+     * * Removes all components.
      */
     public fun dispose()
 

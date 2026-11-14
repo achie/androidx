@@ -26,11 +26,12 @@ import androidx.camera.camera2.adapter.EncoderProfilesProviderAdapter
 import androidx.camera.camera2.compat.StreamConfigurationMapCompat
 import androidx.camera.camera2.compat.quirk.CameraQuirks
 import androidx.camera.camera2.pipe.CameraDevices
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraMetadata
+import androidx.camera.common.CameraId
 import androidx.camera.core.impl.EncoderProfilesProvider
 import androidx.camera.core.impl.ImageFormatConstants.INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE
 import androidx.camera.core.impl.Quirks
+import androidx.camera.core.impl.SizeFilteredEncoderProfilesProvider
 import androidx.camera.core.internal.utils.SizeUtil.getArea
 
 /**
@@ -166,10 +167,7 @@ public class EncoderProfilesProviderFallback(
         val streamConfigurationMap = cameraMetadata[SCALER_STREAM_CONFIGURATION_MAP]
         return CameraQuirks(
                 cameraMetadata,
-                StreamConfigurationMapCompat(
-                    streamConfigurationMap,
-                    OutputSizesCorrector(cameraMetadata, streamConfigurationMap),
-                ),
+                StreamConfigurationMapCompat(streamConfigurationMap, cameraMetadata),
             )
             .quirks
     }

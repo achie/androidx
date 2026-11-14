@@ -26,13 +26,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Constraints
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,7 +39,7 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class IntrinsicsMeasurementTest {
-    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     /**
      * When intrinsics are used for child content measurement and the content changes, then the
@@ -300,6 +299,129 @@ class IntrinsicsMeasurementTest {
                 layout(placeable.width, placeable.height) {
                     placeCount++
                     placeable.place(0, 0)
+                }
+            }
+        }
+
+        rule.runOnIdle {
+            measureCount = 0
+            placeCount = 0
+            showContent = false
+        }
+
+        rule.runOnIdle {
+            assertThat(measureCount).isEqualTo(1)
+            assertThat(placeCount).isEqualTo(1)
+            measureCount = 0
+            placeCount = 0
+            showContent = true
+        }
+
+        rule.runOnIdle {
+            assertThat(measureCount).isEqualTo(1)
+            assertThat(placeCount).isEqualTo(1)
+            assertThat(coords.size.height).isEqualTo(24)
+            useIntrinsics = false
+        }
+
+        rule.runOnIdle {
+            assertThat(coords.size.height).isEqualTo(120)
+            measureCount = 0
+            placeCount = 0
+            showContent = false
+        }
+
+        rule.runOnIdle {
+            assertThat(measureCount).isEqualTo(0)
+            assertThat(placeCount).isEqualTo(0)
+            assertThat(coords.size.height).isEqualTo(120)
+        }
+    }
+
+    /**
+     * When the intrinsics usage changes and the child is measured in the layout block, the content
+     * changing shouldn't cause measurement.
+     */
+    @Test
+    fun intrinsicsUsageChangesWhenMeasuredInPlacement() {
+        intrinsicsUsageChangesWhenMeasuredInPlacement { content -> content() }
+    }
+
+    /**
+     * Same as [intrinsicsUsageChangesWhenMeasuredInPlacement], but within a [LookaheadScope] so
+     * that the lookahead measure pass is also exercised.
+     */
+    @Test
+    fun intrinsicsUsageChangesWhenMeasuredInPlacementInLookahead() {
+        intrinsicsUsageChangesWhenMeasuredInPlacement { content -> LookaheadScope { content() } }
+    }
+
+    private fun intrinsicsUsageChangesWhenMeasuredInPlacement(
+        wrapper: @Composable (content: @Composable () -> Unit) -> Unit
+    ) {
+        lateinit var coords: LayoutCoordinates
+        var showContent by mutableStateOf(true)
+        var useIntrinsics by mutableStateOf(true)
+        var measureCount = 0
+        var placeCount = 0
+
+        val sometimesIntrinsicsMeasurePolicy =
+            object : MeasurePolicy {
+                override fun MeasureScope.measure(
+                    measurables: List<Measurable>,
+                    constraints: Constraints,
+                ): MeasureResult {
+                    if (useIntrinsics) {
+                        val placeable = measurables[0].measure(constraints)
+                        return layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                    }
+                    return layout(100, 100) {
+                        val placeable = measurables[0].measure(constraints)
+                        placeable.place(0, 0)
+                    }
+                }
+
+                override fun IntrinsicMeasureScope.minIntrinsicHeight(
+                    measurables: List<IntrinsicMeasurable>,
+                    width: Int,
+                ): Int {
+                    if (useIntrinsics) {
+                        return measurables[0].minIntrinsicHeight(width)
+                    }
+                    return 100
+                }
+            }
+
+        rule.setContent {
+            val content1: @Composable () -> Unit = {
+                Column {
+                    with(LocalDensity.current) {
+                        Box(Modifier.requiredSize(10.toDp()))
+                        if (showContent) {
+                            Box(Modifier.requiredSize(10.toDp()))
+                        }
+                    }
+                }
+            }
+            val content2: @Composable () -> Unit = {
+                Box { Layout(content1, Modifier, sometimesIntrinsicsMeasurePolicy) }
+            }
+            wrapper {
+                Layout(content = content2, modifier = Modifier.onPlaced { coords = it }) {
+                    measurables,
+                    _ ->
+                    // Only count the main pass so that lookahead and non-lookahead match.
+                    val isMainPass = !isLookingAhead
+                    if (isMainPass) measureCount++
+                    val intrinsicHeight = measurables[0].minIntrinsicHeight(Constraints.Infinity)
+                    val placeable =
+                        measurables[0].measure(
+                            Constraints.fixedHeight((intrinsicHeight * 1.2).roundToInt())
+                        )
+                    layout(placeable.width, placeable.height) {
+                        if (isMainPass) placeCount++
+                        placeable.place(0, 0)
+                    }
                 }
             }
         }

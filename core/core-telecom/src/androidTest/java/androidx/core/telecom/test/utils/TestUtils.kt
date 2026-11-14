@@ -35,7 +35,6 @@ import androidx.core.telecom.extensions.Participant
 import androidx.core.telecom.extensions.ParticipantParcelable
 import androidx.core.telecom.extensions.toParticipant
 import androidx.core.telecom.test.ITestAppControlCallback
-import androidx.core.telecom.util.ExperimentalAppActions
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.FileInputStream
 import java.util.UUID
@@ -85,6 +84,7 @@ object TestUtils {
     val CUSTOM_TEST_APP_SCHEME = "CoreTelecomUnitTestScheme:"
     val TEST_PHONE_NUMBER = "6506959001"
     val TEST_ADDRESS: Uri = Uri.parse(CUSTOM_TEST_APP_SCHEME + TEST_PHONE_NUMBER)
+    val TEST_CONTACT_URI: Uri = Uri.parse("content://com.android.contacts/contacts/lookup/2")
 
     // Define the minimal set of properties to start an outgoing call
     val OUTGOING_CALL_ATTRIBUTES =
@@ -94,6 +94,26 @@ object TestUtils {
             CallAttributesCompat.DIRECTION_OUTGOING,
             CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
             ALL_CALL_CAPABILITIES,
+        )
+
+    val OUTGOING_WITH_CONTACT_URI_CALL_ATTRIBUTES =
+        CallAttributesCompat(
+            OUTGOING_NAME,
+            TEST_ADDRESS,
+            CallAttributesCompat.DIRECTION_OUTGOING,
+            CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+            ALL_CALL_CAPABILITIES,
+            contactUri = TEST_CONTACT_URI,
+        )
+
+    val OUTGOING_GROUP_CALL_ATTRIBUTES =
+        CallAttributesCompat(
+            OUTGOING_NAME,
+            TEST_ADDRESS,
+            CallAttributesCompat.DIRECTION_OUTGOING,
+            CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+            ALL_CALL_CAPABILITIES,
+            isGroupCall = true,
         )
 
     val OUTGOING_NO_HOLD_CAP_CALL_ATTRIBUTES =
@@ -331,7 +351,6 @@ object TestUtils {
     }
 
     /** Generate a List of [Participant]s, where each ID corresponds to a range of 1 to [num] */
-    @ExperimentalAppActions
     fun generateParticipants(num: Int): List<Participant> {
         val participants = ArrayList<Participant>()
         for (i in 1..num) {
@@ -340,17 +359,14 @@ object TestUtils {
         return participants
     }
 
-    @ExperimentalAppActions
     fun getDefaultParticipant(): Participant {
         return Participant("123", "Gemini")
     }
 
-    @ExperimentalAppActions
     fun getDefaultParticipantParcelable(): ParticipantParcelable {
         return getDefaultParticipant().toParticipantParcelable()
     }
 
-    @ExperimentalAppActions
     fun printParticipants(participants: Collection<Participant>, tag: String) {
         Log.i(LOG_TAG, tag + ": printParticipants: set size=${participants.size}")
         for (v in participants) {
@@ -359,7 +375,6 @@ object TestUtils {
     }
 }
 
-@ExperimentalAppActions
 class TestCallCallbackListener(private val scope: CoroutineScope) : ITestAppControlCallback.Stub() {
     private val raisedHandFlow: MutableSharedFlow<Pair<String, Boolean>> =
         MutableSharedFlow(replay = 1)

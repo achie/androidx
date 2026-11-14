@@ -1,0 +1,73 @@
+# proto-file: google3/google/corp/android/engprod/codereviewagentconfiguration/v1/agent.proto
+# proto-message: HostAgents
+
+configs: {
+  id: "code-review-agent"
+  display_name: "Code Review Agent"
+  use_default_subagents: true
+  include_filters: {
+    path_regex: ".*"
+  }
+}
+
+configs: {
+  id: "android-compose-external-performance-review"
+  display_name: "Jetpack Compose Performance External Review"
+  description: "Check this changelist against Jetpack Compose best practices for UI development. Check for state management issues, unnecessary recompositions, improper modifier usage, side-effect handling, and UI performance optimizations."
+  skills: ".agents/skills/external-jetpack-compose-performance"
+  include_filters: {
+    path_regex: ".*\\.kt$"
+  }
+  automatic: false
+}
+
+configs: {
+  id: "android-compose-internal-performance-review"
+  display_name: "Jetpack Compose Performance Internal Review"
+  description: "Check this changelist against Jetpack Compose performance optimizations for AndroidX framework code. Check for layout coordinate and transformation caching, synthetic composition overhead, lazy property initialization, primitive and value class boxing, and allocation-free collections and iteration."
+  skills: ".agents/skills/android-jetpack-compose-performance-internal"
+  include_filters: {
+    path_regex: ".*\\.kt$"
+  }
+  automatic: false
+}
+
+configs: {
+  id: "android-compose-internal-performance-review-auto"
+  display_name: "Jetpack Compose Performance Internal Review (Automatic)"
+  description: "Check this changelist against Jetpack Compose performance optimizations for AndroidX framework code. Check for layout coordinate and transformation caching, synthetic composition overhead, lazy property initialization, primitive and value class boxing, and allocation-free collections and iteration."
+  skills: ".agents/skills/android-jetpack-compose-performance-internal"
+  include_filters: {
+    path_regex: ".*\\.kt$"
+  }
+  automatic: true
+  mdb_groups: "mdb/android-toolkit-team"
+  mdb_groups: "mdb/material-android-dev"
+}
+
+configs: {
+  id: "androidx-api-review"
+  display_name: "AndroidX API Review"
+  description: "Reviews public and restricted API changes against AndroidX and Jetpack Compose API design guidelines."
+  skills: ".agents/skills/code_review/api_review"
+  include_filters: {
+    project: "platform/frameworks/support"
+    path_regex: "(^|.*/)api/.*\\.txt$"
+  }
+  automatic: true
+}
+
+configs: {
+  id: "androidx-ktdoc-review"
+  display_name: "AndroidX KDoc Quality Review"
+  description: "Checks KDoc comments on public Kotlin APIs for clarity, active voice, symbol linking, and complete behavior contracts."
+  skills: ".agents/skills/ktdoc_quality"
+  include_filters: {
+    project: "platform/frameworks/support"
+    path_regex: "(^|.*/)src/(main|[^/]+Main)/.*\\.kt$"
+  }
+  exclude_filters: {
+    path_regex: "(^|.*/)(samples|integration-tests)/.*"
+  }
+  automatic: false
+}

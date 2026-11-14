@@ -16,16 +16,19 @@
 
 package androidx.biometric.internal
 
+import android.app.Activity
 import android.content.Context
 import android.os.Build
+import androidx.biometric.AuthenticationRequest.Biometric.Fallback
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricPrompt.AuthenticationCallback
 import androidx.biometric.R
+import androidx.biometric.internal.data.CanceledFrom
 import androidx.biometric.internal.viewmodel.AuthenticationViewModel
 import androidx.biometric.utils.AuthenticatorUtils
 import androidx.biometric.utils.DeviceUtils
-import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -58,16 +61,10 @@ internal class AuthenticationManager(
     val lifecycleOwner: LifecycleOwner,
     val viewModel: AuthenticationViewModel,
     val confirmCredentialActivityLauncher: Runnable,
-    clientExecutor: Executor,
-    clientAuthenticationCallback: AuthenticationCallback,
+    val clientExecutor: Executor,
+    val clientAuthenticationCallback: AuthenticationCallback,
+    private val onDismissed: (() -> Unit)? = null,
 ) {
-    /**
-     * A unique identifier for [AuthenticationManager] used to filter callbacks and events.
-     *
-     * @see [AuthenticationViewModel.authManagerKey]
-     */
-    private val key = viewModel.generateNextManagerKey()
-
     /** The dispatcher responsible for sending authentication results to the client's callback. */
     var resultDispatcher: AuthenticationResultDispatcher =
         object :
@@ -94,17 +91,27 @@ internal class AuthenticationManager(
     private var isAuthenticationPrepared: Boolean = false
 
     private var callbackObserverJob: Job? = null
+    private var delayedPromptJob: Job? = null
 
     /**
      * Observes a negative button press, which is typically used for either canceling the
      * authentication or falling back to the device's credential screen.
      */
     val isNegativeButtonPressPendingObserver = {
-        if (viewModel.isPromptShowing) {
-            if (context.isManagingDeviceCredentialButton(viewModel.allowedAuthenticators)) {
-                resultDispatcher.showKMAsFallback()
-            } else {
-                onCancelButtonPressed()
+        when (viewModel.singleFallbackOption) {
+            is Fallback.OverriddenDeviceCredential -> resultDispatcher.showKMAsFallback()
+            is Fallback.DefaultCancel -> {
+                resultDispatcher.onAuthenticationError(
+                    BiometricPrompt.ERROR_CANCELED,
+                    context.getString(R.string.generic_error_user_canceled),
+                )
+                cancelAuthentication(CanceledFrom.USER)
+            }
+            is Fallback.CustomOption -> {
+                resultDispatcher.sendFallbackOptionAndDismiss(
+                    viewModel.singleFallbackOption as Fallback.CustomOption
+                )
+                cancelAuthentication(CanceledFrom.NEGATIVE_BUTTON)
             }
         }
     }
@@ -123,25 +130,35 @@ internal class AuthenticationManager(
         resultDispatcher: AuthenticationResultDispatcher? = this.resultDispatcher,
         uiStateObserver: AuthenticationUiStateObserver? = this.uiStateObserver,
     ) {
+        resultDispatcher?.let { this.resultDispatcher = it }
+        uiStateObserver?.let { this.uiStateObserver = it }
+
         if (isInitialized) {
             return
         }
         isInitialized = true
-        resultDispatcher?.let { this.resultDispatcher = it }
-        uiStateObserver?.let { this.uiStateObserver = it }
 
         // When activity/fragment restarts, we need to check |viewModel.isPromptShowing| for
         // reconnecting view models.
         val observer = LifecycleEventObserver { owner, event ->
             when (event) {
-                Lifecycle.Event.ON_START ->
-                    if (viewModel.isPromptShowing) {
-                        startObservingAuth()
+                Lifecycle.Event.ON_CREATE,
+                Lifecycle.Event.ON_START -> {
+                    startObservingAuth()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    // cancel authentication when the client is permanently removed
+                    if (
+                        owner.isPermanentlyRemoved(event) && !viewModel.isConfirmingDeviceCredential
+                    ) {
+                        cancelAuthentication(CanceledFrom.INTERNAL)
                     }
+                }
 
                 Lifecycle.Event.ON_DESTROY -> {
                     stopObservingAuth()
-                    viewModel.resetManagerKey()
+                    viewModel.resetHandlerKey()
+
                     lifecycleContainer.clearObservers()
                 }
 
@@ -166,8 +183,6 @@ internal class AuthenticationManager(
         crypto: BiometricPrompt.CryptoObject?,
         showAuthentication: () -> Unit,
     ) {
-        // currentAuthenticationKey must be set prior to observing for correct validation.
-        viewModel.currentAuthenticationKey = key
         startObservingAuth()
 
         // PromptInfo has to be set prior to others.
@@ -175,6 +190,7 @@ internal class AuthenticationManager(
         viewModel.isIdentityCheckAvailable =
             BiometricManager.from(context).isIdentityCheckAvailable()
         viewModel.cryptoObject = crypto
+        viewModel.canceledFrom = CanceledFrom.INTERNAL
 
         viewModel.setNegativeButtonTextOverride(
             if (context.isManagingDeviceCredentialButton(viewModel.allowedAuthenticators)) {
@@ -192,10 +208,13 @@ internal class AuthenticationManager(
 
         // Check if we should delay showing the authentication prompt.
         if (viewModel.isDelayingPrompt) {
-            lifecycleOwner.lifecycleScope.launch {
-                delay(SHOW_PROMPT_DELAY_MS.toLong())
-                showPromptForAuthentication(showAuthentication)
-            }
+            delayedPromptJob?.cancel()
+            delayedPromptJob =
+                lifecycleOwner.lifecycleScope.launch {
+                    delay(SHOW_PROMPT_DELAY_MS.toLong())
+                    delayedPromptJob = null
+                    showPromptForAuthentication(showAuthentication)
+                }
         } else {
             showPromptForAuthentication(showAuthentication)
         }
@@ -209,13 +228,14 @@ internal class AuthenticationManager(
         if (canceledFrom != CanceledFrom.CLIENT && viewModel.isIgnoringCancel) {
             return
         }
+        delayedPromptJob?.cancel()
+        delayedPromptJob = null
         viewModel.canceledFrom = canceledFrom
         viewModel.cancellationSignalProvider.cancel()
     }
 
     /** Removes any associated UI from the client activity/fragment. */
     fun dismiss() {
-        viewModel.currentAuthenticationKey = 0
         viewModel.isPromptShowing = false
         viewModel.isConfirmingDeviceCredential = false
 
@@ -225,11 +245,19 @@ internal class AuthenticationManager(
             viewModel.setDelayedDelayingPrompt(false, SHOW_PROMPT_DELAY_MS.toLong())
         }
         stopObservingAuth()
+        lifecycleContainer.clearObservers()
+        onDismissed?.invoke()
+    }
+
+    /** Stops observing authentication state and removes all lifecycle observers. */
+    fun destroy() {
+        stopObservingAuth()
+        lifecycleContainer.clearObservers()
     }
 
     /** Prepares the authentication, setting up view model observers. */
     private fun startObservingAuth() {
-        if (isAuthenticationPrepared || key != viewModel.currentAuthenticationKey) {
+        if (isAuthenticationPrepared) {
             return
         }
         isAuthenticationPrepared = true
@@ -247,11 +275,6 @@ internal class AuthenticationManager(
             viewModel.isIgnoringCancel = true
             viewModel.setDelayedIgnoringCancel(false, 250L)
         }
-
-        // TODO(b/263800618): Add lifecycle observer to cancel authentication when the app enters
-        // the background. ProcessLifecycleOwner.get().lifecycle.addObserver(processObserver), or
-        // find a better alternative to handle backgrounded cancelling authentication, e.g. combine
-        // LifecycleEventObserver and fragment.isRemoving()/!activity.isChangingConfigurations().
     }
 
     /**
@@ -260,11 +283,10 @@ internal class AuthenticationManager(
      */
     private fun stopObservingAuth() {
         isAuthenticationPrepared = false
+        delayedPromptJob?.cancel()
+        delayedPromptJob = null
         disconnectCallbackObservers()
         uiStateObserver?.disconnectObservers()
-
-        // TODO(b/263800618): Remove lifecycle observer
-        // ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver)
     }
 
     /**
@@ -276,26 +298,20 @@ internal class AuthenticationManager(
             lifecycleOwner.lifecycleScope.launch {
                 launch {
                     viewModel.authenticationResult.collect { authenticationResult ->
-                        if (viewModel.isPromptShowing) {
-                            resultDispatcher.onAuthenticationSucceeded(authenticationResult)
-                        }
+                        resultDispatcher.onAuthenticationSucceeded(authenticationResult)
                     }
                 }
                 launch {
                     viewModel.authenticationError.collect { authenticationError ->
-                        if (viewModel.isPromptShowing) {
-                            resultDispatcher.onAuthenticationError(
-                                authenticationError.errorCode,
-                                authenticationError.errorMessage,
-                            )
-                        }
+                        resultDispatcher.onAuthenticationError(
+                            authenticationError.errorCode,
+                            authenticationError.errorMessage,
+                        )
                     }
                 }
                 launch {
                     viewModel.isAuthenticationFailurePending.collect {
-                        if (viewModel.isPromptShowing) {
-                            resultDispatcher.onAuthenticationFailed()
-                        }
+                        resultDispatcher.onAuthenticationFailed()
                     }
                 }
             }
@@ -308,30 +324,15 @@ internal class AuthenticationManager(
     }
 
     /**
-     * Callback that is run when the view model reports that the cancel button has been pressed on
-     * the prompt.
-     */
-    private fun onCancelButtonPressed() {
-        val negativeButtonText: CharSequence? = viewModel.negativeButtonText
-
-        resultDispatcher.sendErrorAndDismiss(
-            BiometricPrompt.ERROR_NEGATIVE_BUTTON,
-            negativeButtonText ?: context.getString(R.string.default_error_msg),
-        )
-
-        cancelAuthentication(CanceledFrom.NEGATIVE_BUTTON)
-    }
-
-    /**
      * Shows any of the framework biometric prompt, or framework credential view, or AndroidX
      * fingerprint UI dialog to the user and begins authentication.
      */
     @Suppress("WeakerAccess")
     private fun showPromptForAuthentication(showAuthentication: () -> Unit) {
-        showAuthentication()
-
         viewModel.isPromptShowing = true
         viewModel.isAwaitingResult = true
+
+        showAuthentication()
     }
 
     private companion object {
@@ -343,18 +344,13 @@ internal class AuthenticationManager(
     }
 }
 
-/** Represents the source or reason why an authentication operation was canceled. */
-internal enum class CanceledFrom {
-    INTERNAL,
-    USER,
-    NEGATIVE_BUTTON,
-    CLIENT,
-    MORE_OPTIONS_BUTTON,
-}
-
-private class AppLifecycleListener(val onBackgrounded: () -> Unit = {}) : DefaultLifecycleObserver {
-    override fun onStop(owner: LifecycleOwner) {
-        // app moved to background
-        onBackgrounded()
-    }
+private fun LifecycleOwner.isPermanentlyRemoved(event: Lifecycle.Event): Boolean {
+    val isDestroying = event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_DESTROY
+    val isNotChangingConfigurations =
+        when (this) {
+            is Activity -> isFinishing || !isChangingConfigurations
+            is Fragment -> isRemoving && (activity == null || !activity!!.isChangingConfigurations)
+            else -> false
+        }
+    return isDestroying && isNotChangingConfigurations
 }

@@ -33,6 +33,12 @@ dependencies {
 }
 
 android {
-    compileSdk = 35
+    compileSdk { version = release(37) }
     namespace = "androidx.compose.ui.graphics.benchmark.test"
+}
+
+androidx {
+    deviceTests {
+        maxShardCount = 1
+    }
 }

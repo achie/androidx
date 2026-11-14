@@ -27,6 +27,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.AndroidComposeUiFlags
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusEventModifierNode
 import androidx.compose.ui.focus.FocusState
@@ -40,7 +42,7 @@ import androidx.compose.ui.platform.PlatformTextInputModifierNode
 import androidx.compose.ui.platform.establishTextInputSession
 import androidx.compose.ui.platform.platformTextInputServiceInterceptor
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,7 +57,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,7 +67,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PlatformTextInputViewIntegrationTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var hostView: AndroidComposeView
     private lateinit var coroutineScope: CoroutineScope
@@ -77,6 +80,11 @@ class PlatformTextInputViewIntegrationTest {
     private fun expect(value: Int) {
         assertThat(expected).isEqualTo(value)
         expected++
+    }
+
+    @After
+    fun tearDown() {
+        platformTextInputServiceInterceptor = { it }
     }
 
     @Test
@@ -130,10 +138,9 @@ class PlatformTextInputViewIntegrationTest {
         rule.runOnIdle { assertThat(hostView.onCheckIsTextEditor()).isTrue() }
 
         // Handoff session to another node.
-        val sessionJob =
-            coroutineScope.launch {
-                node2.establishTextInputSession { startInputMethod(TestInputMethodRequest(view)) }
-            }
+        val sessionJob = coroutineScope.launch {
+            node2.establishTextInputSession { startInputMethod(TestInputMethodRequest(view)) }
+        }
 
         rule.runOnIdle {
             assertThat(hostView.onCheckIsTextEditor()).isTrue()
@@ -187,22 +194,21 @@ class PlatformTextInputViewIntegrationTest {
             assertThat(request2Texts).isEmpty()
         }
 
-        val sessionJob =
-            coroutineScope.launch {
-                node1.establishTextInputSession {
-                    startInputMethod(
-                        object : TestInputMethodRequest(view) {
-                            override fun commitText(
-                                text: CharSequence?,
-                                newCursorPosition: Int,
-                            ): Boolean {
-                                request2Texts += text.toString()
-                                return true
-                            }
+        val sessionJob = coroutineScope.launch {
+            node1.establishTextInputSession {
+                startInputMethod(
+                    object : TestInputMethodRequest(view) {
+                        override fun commitText(
+                            text: CharSequence?,
+                            newCursorPosition: Int,
+                        ): Boolean {
+                            request2Texts += text.toString()
+                            return true
                         }
-                    )
-                }
+                    }
+                )
             }
+        }
         rule.runOnIdle {
             val connection2 = hostView.onCreateInputConnection(editorInfo)
             assertNotNull(connection2)
@@ -266,28 +272,27 @@ class PlatformTextInputViewIntegrationTest {
         setupContent()
         // keep a strong reference to created InputConnection so it's not collected by GC
         var ic: InputConnection?
-        val sessionJob =
-            coroutineScope.launch {
-                try {
-                    node1.establishTextInputSession {
-                        try {
-                            startInputMethod(
-                                object : TestInputMethodRequest(view) {
-                                    override fun closeConnection() {
-                                        expect(1)
-                                    }
+        val sessionJob = coroutineScope.launch {
+            try {
+                node1.establishTextInputSession {
+                    try {
+                        startInputMethod(
+                            object : TestInputMethodRequest(view) {
+                                override fun closeConnection() {
+                                    expect(1)
                                 }
-                            )
-                        } catch (e: CancellationException) {
-                            expect(2)
-                            throw e
-                        }
+                            }
+                        )
+                    } catch (e: CancellationException) {
+                        expect(2)
+                        throw e
                     }
-                } catch (e: CancellationException) {
-                    expect(3)
-                    throw e
                 }
+            } catch (e: CancellationException) {
+                expect(3)
+                throw e
             }
+        }
         expect(0)
 
         rule.runOnIdle {
@@ -487,12 +492,11 @@ class PlatformTextInputViewIntegrationTest {
 
         setupContent()
         val connections = mutableListOf<TestConnection>()
-        val sessionJob =
-            coroutineScope.launch {
-                node1.establishTextInputSession {
-                    startInputMethod { TestConnection(view).also { connections += it } }
-                }
+        val sessionJob = coroutineScope.launch {
+            node1.establishTextInputSession {
+                startInputMethod { TestConnection(view).also { connections += it } }
             }
+        }
 
         rule.runOnIdle {
             assertThat(connections).isEmpty()
@@ -527,13 +531,12 @@ class PlatformTextInputViewIntegrationTest {
     fun innerSessionNotCanceled_whenIsolatedFromOuterSession_whenConnectionClosed() {
         setupContent()
         lateinit var innerJob: Job
-        val outerJob =
-            coroutineScope.launch {
-                node1.establishTextInputSession {
-                    innerJob = launch { startInputMethod(TestInputMethodRequest(view)) }
-                    awaitCancellation()
-                }
+        val outerJob = coroutineScope.launch {
+            node1.establishTextInputSession {
+                innerJob = launch { startInputMethod(TestInputMethodRequest(view)) }
+                awaitCancellation()
             }
+        }
 
         rule.runOnIdle {
             val connection = checkNotNull(hostView.onCreateInputConnection(EditorInfo()))
@@ -552,10 +555,9 @@ class PlatformTextInputViewIntegrationTest {
     @Test
     fun cancellationDoesNotPropagate_whenConnectionClosed() {
         setupContent()
-        val sessionJob =
-            coroutineScope.launch {
-                node1.establishTextInputSession { startInputMethod(TestInputMethodRequest(view)) }
-            }
+        val sessionJob = coroutineScope.launch {
+            node1.establishTextInputSession { startInputMethod(TestInputMethodRequest(view)) }
+        }
 
         rule.runOnIdle {
             val connection = checkNotNull(hostView.onCreateInputConnection(EditorInfo()))
@@ -646,6 +648,8 @@ class PlatformTextInputViewIntegrationTest {
                 view = (original as TextInputServiceAndroid).view,
                 rootPositionCalculator = FakeMatrixPositionCalculator,
                 inputMethodManager = inputMethodManager,
+                afterFrameCommandExecutor = original.afterFrameCommandExecutor,
+                nextFrameCommandExecutor = original.nextFrameCommandExecutor,
             )
         }
         rule.setContent {
@@ -686,6 +690,8 @@ class PlatformTextInputViewIntegrationTest {
                 view = (original as TextInputServiceAndroid).view,
                 rootPositionCalculator = FakeMatrixPositionCalculator,
                 inputMethodManager = inputMethodManager,
+                original.afterFrameCommandExecutor,
+                original.nextFrameCommandExecutor,
             )
         }
         rule.setContent {
@@ -709,6 +715,178 @@ class PlatformTextInputViewIntegrationTest {
         }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Suppress("DEPRECATION")
+    @Test
+    fun focusSwitchBetweenTestNodes_undispatched_doesNotHideKeyboard() {
+        assumeTrue(AndroidComposeUiFlags.isOutOfFrameSchedulerForTextInputEventsEnabled)
+        val inputMethodManager = TestInputMethodManager()
+        platformTextInputServiceInterceptor = { original ->
+            val origAndroid = original as TextInputServiceAndroid
+            TextInputServiceAndroid(
+                view = origAndroid.view,
+                rootPositionCalculator = FakeMatrixPositionCalculator,
+                inputMethodManager = inputMethodManager,
+                afterFrameCommandExecutor = origAndroid.afterFrameCommandExecutor,
+                nextFrameCommandExecutor = origAndroid.nextFrameCommandExecutor,
+            )
+        }
+        rule.setContent {
+            Column {
+                Box(
+                    TestElement(CoroutineStart.UNDISPATCHED) { node1 = it }
+                        .focusable()
+                        .testTag("tag1")
+                )
+                Box(
+                    TestElement(CoroutineStart.UNDISPATCHED) { node2 = it }
+                        .focusable()
+                        .testTag("tag2")
+                )
+            }
+        }
+
+        rule.onNodeWithTag("tag1").requestFocus()
+        rule.waitForIdle()
+        inputMethodManager.reset()
+
+        rule.onNodeWithTag("tag2").requestFocus()
+        rule.waitForIdle()
+
+        assertThat(inputMethodManager.hideKeyboardCalls).isEqualTo(0)
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Suppress("DEPRECATION")
+    @Test
+    fun startInputMethod_whenInputConnectionCreatedDuringIsActive_doesNotCallRestartInput() {
+        assumeTrue(AndroidComposeUiFlags.isSkipRedundantRestartInputOnInitialFocusEnabled)
+        val inputMethodManager = TestInputMethodManager()
+        platformTextInputServiceInterceptor = { original ->
+            val origAndroid = original as TextInputServiceAndroid
+            TextInputServiceAndroid(
+                view = origAndroid.view,
+                rootPositionCalculator = FakeMatrixPositionCalculator,
+                inputMethodManager = inputMethodManager,
+                afterFrameCommandExecutor = origAndroid.afterFrameCommandExecutor,
+                nextFrameCommandExecutor = origAndroid.nextFrameCommandExecutor,
+            )
+        }
+        setupContent()
+        var ic: InputConnection? = null
+        var createConnectionCalls = 0
+        // Simulate InputMethodManager.isActive() creating the InputConnection when the view
+        // first gains focus.
+        inputMethodManager.onIsActive = { ic = hostView.onCreateInputConnection(EditorInfo()) }
+        inputMethodManager.onRestartInput = { hostView.onCreateInputConnection(EditorInfo()) }
+
+        val sessionJob = coroutineScope.launch {
+            node1.establishTextInputSession {
+                startInputMethod(
+                    object : TestInputMethodRequest(view) {
+                        override fun createInputConnection(
+                            outAttributes: EditorInfo
+                        ): InputConnection {
+                            createConnectionCalls++
+                            return BaseInputConnection(view, true)
+                        }
+                    }
+                )
+            }
+        }
+
+        rule.runOnIdle {
+            assertThat(ic).isNotNull()
+            assertThat(inputMethodManager.isActiveCalls).isEqualTo(1)
+            assertThat(createConnectionCalls).isEqualTo(1)
+            assertThat(inputMethodManager.restartCalls).isEqualTo(0)
+            assertThat(inputMethodManager.showKeyboardCalls).isEqualTo(1)
+            sessionJob.cancel()
+        }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Suppress("DEPRECATION")
+    @Test
+    fun startInputMethod_whenSwitchingSessionsOnAlreadyFocusedView_callsRestartInput() {
+        assumeTrue(AndroidComposeUiFlags.isSkipRedundantRestartInputOnInitialFocusEnabled)
+        val inputMethodManager = TestInputMethodManager()
+        platformTextInputServiceInterceptor = { original ->
+            val origAndroid = original as TextInputServiceAndroid
+            TextInputServiceAndroid(
+                view = origAndroid.view,
+                rootPositionCalculator = FakeMatrixPositionCalculator,
+                inputMethodManager = inputMethodManager,
+                afterFrameCommandExecutor = origAndroid.afterFrameCommandExecutor,
+                nextFrameCommandExecutor = origAndroid.nextFrameCommandExecutor,
+            )
+        }
+        setupContent()
+        var ic1: InputConnection? = null
+        var ic2: InputConnection? = null
+        var node1CreateConnectionCalls = 0
+        var node2CreateConnectionCalls = 0
+
+        // Session 1 (initial focus on AndroidComposeView):
+        // IMM.isActive() synchronously creates InputConnection #1.
+        inputMethodManager.onIsActive = { ic1 = hostView.onCreateInputConnection(EditorInfo()) }
+        inputMethodManager.onRestartInput = { ic2 = hostView.onCreateInputConnection(EditorInfo()) }
+
+        val session1Job = coroutineScope.launch {
+            node1.establishTextInputSession {
+                startInputMethod(
+                    object : TestInputMethodRequest(view) {
+                        override fun createInputConnection(
+                            outAttributes: EditorInfo
+                        ): InputConnection {
+                            node1CreateConnectionCalls++
+                            return BaseInputConnection(view, true)
+                        }
+                    }
+                )
+            }
+        }
+
+        rule.runOnIdle {
+            assertThat(ic1).isNotNull()
+            assertThat(node1CreateConnectionCalls).isEqualTo(1)
+            assertThat(inputMethodManager.isActiveCalls).isEqualTo(1)
+            assertThat(inputMethodManager.restartCalls).isEqualTo(0)
+            assertThat(inputMethodManager.showKeyboardCalls).isEqualTo(1)
+        }
+
+        // Session 2 (switching focus from TextField A to TextField B inside the same
+        // already-focused AndroidComposeView):
+        // IMM.isActive() does not create a new InputConnection because the view is already
+        // focused, so restartInput() must be called to create InputConnection #2 for node2.
+        inputMethodManager.onIsActive = null
+        session1Job.cancel()
+        val session2Job = coroutineScope.launch {
+            node2.establishTextInputSession {
+                startInputMethod(
+                    object : TestInputMethodRequest(view) {
+                        override fun createInputConnection(
+                            outAttributes: EditorInfo
+                        ): InputConnection {
+                            node2CreateConnectionCalls++
+                            return BaseInputConnection(view, true)
+                        }
+                    }
+                )
+            }
+        }
+
+        rule.runOnIdle {
+            assertThat(inputMethodManager.isActiveCalls).isEqualTo(2)
+            assertThat(inputMethodManager.restartCalls).isEqualTo(1)
+            assertThat(node2CreateConnectionCalls).isEqualTo(1)
+            assertThat(ic2).isNotNull()
+            assertThat(ic2).isNotSameInstanceAs(ic1)
+            assertThat(inputMethodManager.showKeyboardCalls).isEqualTo(2)
+            session2Job.cancel()
+        }
+    }
+
     private fun setupContent() {
         rule.setContent {
             hostView = LocalView.current as AndroidComposeView
@@ -719,23 +897,28 @@ class PlatformTextInputViewIntegrationTest {
         }
     }
 
-    private data class TestElement(val onNode: (PlatformTextInputModifierNode) -> Unit) :
-        ModifierNodeElement<TestNode>() {
-        override fun create(): TestNode = TestNode(onNode)
+    private data class TestElement(
+        val start: CoroutineStart = CoroutineStart.DEFAULT,
+        val onNode: (PlatformTextInputModifierNode) -> Unit,
+    ) : ModifierNodeElement<TestNode>() {
+        override fun create(): TestNode = TestNode(start, onNode)
 
         override fun update(node: TestNode) {
+            node.start = start
             node.onNode = onNode
         }
     }
 
-    private class TestNode(var onNode: (PlatformTextInputModifierNode) -> Unit) :
-        Modifier.Node(), PlatformTextInputModifierNode, FocusEventModifierNode {
+    private class TestNode(
+        var start: CoroutineStart = CoroutineStart.DEFAULT,
+        var onNode: (PlatformTextInputModifierNode) -> Unit,
+    ) : Modifier.Node(), PlatformTextInputModifierNode, FocusEventModifierNode {
 
         private var inputSessionJob: Job? = null
 
         private fun startInputSession() {
             inputSessionJob =
-                coroutineScope.launch {
+                coroutineScope.launch(start = start) {
                     establishTextInputSession {
                         launch {
                             startInputMethod(
@@ -780,20 +963,29 @@ private object FakeMatrixPositionCalculator : MatrixPositionCalculator {
 
 @Suppress("DEPRECATION")
 private class TestInputMethodManager : InputMethodManager {
+    var isActiveCalls = 0
     var restartCalls = 0
     var showKeyboardCalls = 0
     var hideKeyboardCalls = 0
+    var onIsActive: (() -> Unit)? = null
+    var onRestartInput: (() -> Unit)? = null
 
     fun reset() {
+        isActiveCalls = 0
         restartCalls = 0
         showKeyboardCalls = 0
         hideKeyboardCalls = 0
     }
 
-    override fun isActive(): Boolean = true
+    override fun isActive(): Boolean {
+        isActiveCalls++
+        onIsActive?.invoke()
+        return true
+    }
 
     override fun restartInput() {
         restartCalls++
+        onRestartInput?.invoke()
     }
 
     override fun showSoftInput() {

@@ -18,7 +18,6 @@ package androidx.camera.integration.view
 
 import android.annotation.SuppressLint
 import android.content.ContentValues
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.LayoutInflater
@@ -29,7 +28,6 @@ import android.widget.SeekBar
 import android.widget.Toast
 import android.widget.ToggleButton
 import androidx.annotation.OptIn
-import androidx.annotation.RequiresApi
 import androidx.camera.core.CameraEffect.IMAGE_CAPTURE
 import androidx.camera.core.CameraEffect.PREVIEW
 import androidx.camera.core.CameraEffect.VIDEO_CAPTURE
@@ -51,6 +49,7 @@ import androidx.camera.view.PreviewView
 import androidx.camera.view.video.AudioConfig
 import androidx.fragment.app.Fragment
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 
 /** Fragment for testing effects integration. */
@@ -67,7 +66,6 @@ class Media3EffectsFragment : Fragment() {
     private lateinit var recordButton: Button
     private var recording: Recording? = null
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -86,10 +84,19 @@ class Media3EffectsFragment : Fragment() {
         cameraController.setEnabledUseCases(CameraController.VIDEO_CAPTURE)
         previewView.controller = cameraController
 
+        val effectName = arguments?.getString(ARG_EFFECT) ?: EFFECT_CONTRAST
+
         slider.setOnSeekBarChangeListener(
             object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                    media3Effect.setEffects(listOf(Contrast(progress / 100f)))
+                    val effectValue = (progress - 100) / 100f
+                    val effect =
+                        if (effectName == EFFECT_BRIGHTNESS) {
+                            Brightness(effectValue)
+                        } else {
+                            Contrast(effectValue)
+                        }
+                    media3Effect.setEffects(listOf(effect))
                 }
 
                 override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
@@ -186,5 +193,11 @@ class Media3EffectsFragment : Fragment() {
             )
             .setContentValues(contentValues)
             .build()
+    }
+
+    companion object {
+        const val ARG_EFFECT = "effect"
+        const val EFFECT_BRIGHTNESS = "brightness"
+        const val EFFECT_CONTRAST = "contrast"
     }
 }

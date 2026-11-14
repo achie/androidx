@@ -24,12 +24,13 @@ import androidx.xr.compose.spatial.Subspace
 import androidx.xr.compose.subspace.layout.SpatialAlignment
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.size
-import androidx.xr.compose.subspace.layout.testTag
+import androidx.xr.compose.subspace.semantics.testTag
 import androidx.xr.compose.testing.SubspaceTestingActivity
 import androidx.xr.compose.testing.assertHeightIsEqualTo
 import androidx.xr.compose.testing.assertPositionInRootIsEqualTo
 import androidx.xr.compose.testing.assertWidthIsEqualTo
 import androidx.xr.compose.testing.onSubspaceNodeWithTag
+import com.google.common.truth.Truth.assertThat
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,7 +39,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SpatialBoxTest {
 
-    @get:Rule val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
+    // Migrate to `androidx.compose.ui.test.junit4.v2.createAndroidComposeRule`,
+    // available starting with v1.11.0.
+    // See API docs for details.
+    @Suppress("DEPRECATION")
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<SubspaceTestingActivity>()
 
     @Test
     fun spatialBox_elementsAreCenteredByDefault() {
@@ -214,5 +220,16 @@ class SpatialBoxTest {
             .assertPositionInRootIsEqualTo(0.dp, 0.dp, 0.dp)
             .assertWidthIsEqualTo(150.dp)
             .assertHeightIsEqualTo(150.dp)
+    }
+
+    @Test
+    fun spatialBoxMeasurePolicy_equalsAndHashCode() {
+        val policy1 = SpatialBoxMeasurePolicy(SpatialAlignment.Center, false)
+        val policy2 = SpatialBoxMeasurePolicy(SpatialAlignment.Center, false)
+        val policyDifferent = SpatialBoxMeasurePolicy(SpatialAlignment.TopStart, false)
+
+        assertThat(policy1).isEqualTo(policy2)
+        assertThat(policy1.hashCode()).isEqualTo(policy2.hashCode())
+        assertThat(policy1).isNotEqualTo(policyDifferent)
     }
 }

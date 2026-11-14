@@ -16,8 +16,10 @@
 
 package androidx.car.app.model
 
+import androidx.car.app.TestUtils
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -169,6 +171,73 @@ class SectionedItemTemplateTest {
     }
 
     @Test
+    fun build_allowsSpotlightSection() {
+        val item = CondensedItem.Builder().setTitle("Item").build()
+        val section =
+            SpotlightSection.Builder(CarIcon.APP_ICON)
+                .setTitle("Spotlight")
+                .addItem(item)
+                .addItem(item)
+                .addItem(item)
+                .build()
+        val template = SectionedItemTemplate.Builder().addSection(section).build()
+
+        assertThat(template.sections).containsExactly(section)
+    }
+
+    @Test
+    fun build_throwsException_whenChipSectionIsNotFirst() {
+        try {
+            SectionedItemTemplate.Builder()
+                .addSection(RowSection.Builder().build())
+                .addSection(buildChipSection())
+                .build()
+            assertWithMessage("Expected builder to throw exception, but it didn't").fail()
+        } catch (e: IllegalArgumentException) {
+            assertThat(e.message).contains("must be the first section")
+        }
+    }
+
+    @Test
+    fun build_throwsException_whenMultipleChipSections() {
+        try {
+            SectionedItemTemplate.Builder()
+                .addSection(buildChipSection())
+                .addSection(buildChipSection())
+                .build()
+            assertWithMessage("Expected builder to throw exception, but it didn't").fail()
+        } catch (e: IllegalArgumentException) {
+            assertThat(e.message).contains("Only one ChipSection is allowed")
+        }
+    }
+
+    @Test
+    fun build_allowsChipSectionAsFirstSection() {
+        val section = buildChipSection()
+        val template = SectionedItemTemplate.Builder().addSection(section).build()
+
+        assertThat(template.sections).containsExactly(section)
+    }
+
+    @Test
+    fun build_withCondensedSection_containsCondensedSection() {
+        val item = CondensedItem.Builder().setTitle("Title").build()
+        val section = CondensedSection.Builder().addItem(item).build()
+        val template = SectionedItemTemplate.Builder().addSection(section).build()
+
+        assertThat(template.sections).containsExactly(section)
+    }
+
+    @Test
+    fun build_allowsBannerSection() {
+        val banner = Banner.Builder().setTitle("Primary").build()
+        val section = BannerSection.Builder().addItem(banner).build()
+        val template = SectionedItemTemplate.Builder().addSection(section).build()
+
+        assertThat(template.sections).containsExactly(section)
+    }
+
+    @Test
     fun addAction_throwsException_whenNotFabConstrained() {
         try {
             // Back action is not allowed as a FAB
@@ -200,9 +269,101 @@ class SectionedItemTemplateTest {
                             .build()
                     }
                 )
+            assertWithMessage("Expected builder to throw exception, but it didn't").fail()
         } catch (e: IllegalArgumentException) {
             assertThat(e.message).contains("list exceeded max number")
         }
+    }
+
+    @Test
+    fun addAction_allowsTitledAndPrimaryActions() {
+        val primaryAction = createAction(isPrimary = true)
+        val secondaryAction = createAction()
+
+        val template =
+            SectionedItemTemplate.Builder()
+                .addAction(primaryAction)
+                .addAction(secondaryAction)
+                .build()
+
+        assertThat(template.actions).containsExactly(primaryAction, secondaryAction).inOrder()
+    }
+
+    @Test
+    fun setActions_allowsTitledAndPrimaryActions() {
+        val primaryAction = createAction(isPrimary = true)
+        val secondaryAction = createAction()
+
+        val template =
+            SectionedItemTemplate.Builder()
+                .setActions(listOf(primaryAction, secondaryAction))
+                .build()
+
+        assertThat(template.actions).containsExactly(primaryAction, secondaryAction).inOrder()
+    }
+
+    @Test
+    fun addAction_throwsException_whenActionHasNoIcon() {
+        val actionWithoutIcon = createAction(icon = null)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            SectionedItemTemplate.Builder().addAction(actionWithoutIcon)
+        }
+    }
+
+    @Test
+    fun addAction_throwsException_whenMoreThanTwoActions() {
+        val action = createAction()
+        val builder = SectionedItemTemplate.Builder().addAction(action).addAction(action)
+
+        val exception =
+            assertThrows(IllegalArgumentException::class.java) { builder.addAction(action) }
+        assertThat(exception.message).contains("list exceeded max number")
+    }
+
+    @Test
+    fun addAction_throwsException_whenMoreThanOnePrimaryAction() {
+        val primaryAction = createAction(isPrimary = true)
+        val builder = SectionedItemTemplate.Builder().addAction(primaryAction)
+
+        val exception =
+            assertThrows(IllegalArgumentException::class.java) { builder.addAction(primaryAction) }
+        assertThat(exception.message).contains("exceeded max number of 1 primary actions")
+    }
+
+    @Test
+    fun addAction_unsupportedSpansInTitle_throwsException() {
+        val actionWithClickableSpan =
+            createAction(title = TestUtils.getCharSequenceWithClickableSpan("Title"))
+        assertThrows(IllegalArgumentException::class.java) {
+            SectionedItemTemplate.Builder().addAction(actionWithClickableSpan)
+        }
+
+        val actionWithDistanceSpan =
+            createAction(title = TestUtils.getCharSequenceWithDistanceAndDurationSpans("Title"))
+        assertThrows(IllegalArgumentException::class.java) {
+            SectionedItemTemplate.Builder().addAction(actionWithDistanceSpan)
+        }
+    }
+
+    @Test
+    fun addAction_allowsColorSpanInTitle() {
+        val actionWithColorSpan =
+            createAction(title = TestUtils.getCharSequenceWithColorSpan("Title"))
+        val template = SectionedItemTemplate.Builder().addAction(actionWithColorSpan).build()
+
+        assertThat(template.actions).containsExactly(actionWithColorSpan)
+    }
+
+    @Test
+    fun setActions_throwsException_whenMoreThanOnePrimaryAction() {
+        val primaryAction = createAction(isPrimary = true)
+
+        val exception =
+            assertThrows(IllegalArgumentException::class.java) {
+                SectionedItemTemplate.Builder().setActions(listOf(primaryAction, primaryAction))
+            }
+        assertThat(exception.message).contains("exceeded max number of 1 primary actions")
     }
 
     @Test
@@ -231,6 +392,32 @@ class SectionedItemTemplateTest {
         assertNotEqual(minimalTemplate, buildTemplate { setActions(testActions) })
         assertNotEqual(minimalTemplate, buildTemplate { setLoading(true) })
         assertNotEqual(minimalTemplate, buildTemplate { setAlphabeticalIndexingAllowed(true) })
+    }
+
+    @Test
+    fun getSearchHeader() {
+        val searchHeader =
+            SearchHeader.Builder(object : SearchCallback {})
+                .setInitialSearchText("initial")
+                .setSearchHint("hint")
+                .setShowKeyboardByDefault(false)
+                .setStartHeaderAction(Action.BACK)
+                .build()
+
+        val template = SectionedItemTemplate.Builder().setSearchHeader(searchHeader).build()
+
+        assertThat(template.searchHeader).isEqualTo(searchHeader)
+        assertThat(template.header).isNull()
+    }
+
+    @Test
+    fun build_withBothHeaderAndSearchHeader_throwsException() {
+        val searchHeader = SearchHeader.Builder(object : SearchCallback {}).build()
+        val builder = SectionedItemTemplate.Builder()
+        builder.setHeader(testHeader)
+        builder.setSearchHeader(searchHeader)
+
+        assertThrows(IllegalArgumentException::class.java) { builder.build() }
     }
 
     @Test
@@ -266,4 +453,24 @@ class SectionedItemTemplateTest {
 
     private fun createRowWithMediaAction(): Row =
         Row.Builder().setTitle("Bananas").addAction(Action.MEDIA_PLAYBACK).build()
+
+    private fun createAction(
+        title: CharSequence = "Action",
+        isPrimary: Boolean = false,
+        icon: CarIcon? = CarIcon.COMPOSE_MESSAGE,
+    ): Action =
+        Action.Builder()
+            .setTitle(title)
+            .apply {
+                icon?.let { setIcon(it) }
+                if (isPrimary) setFlags(Action.FLAG_PRIMARY)
+            }
+            .setOnClickListener {}
+            .build()
+
+    private fun buildChipSection(): ChipSection {
+        return ChipSection.Builder()
+            .addItem(Chip.Builder().setTitle("Chip").setOnClickListener {}.build())
+            .build()
+    }
 }

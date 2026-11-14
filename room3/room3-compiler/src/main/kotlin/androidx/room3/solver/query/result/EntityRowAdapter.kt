@@ -24,6 +24,7 @@ import androidx.room3.compiler.codegen.compat.XConverters.toString
 import androidx.room3.compiler.processing.XType
 import androidx.room3.ext.ArrayLiteral
 import androidx.room3.ext.CommonTypeNames
+import androidx.room3.ext.RoomMemberNames
 import androidx.room3.ext.RoomTypeNames.STATEMENT_UTIL
 import androidx.room3.ext.SQLiteDriverTypeNames
 import androidx.room3.solver.CodeGenScope
@@ -66,7 +67,7 @@ class EntityRowAdapter(val entity: Entity, out: XType) : QueryMappedRowAdapter(o
         stmtVarName: String,
         scope: CodeGenScope,
         indices: List<ColumnIndexVar>,
-    ) {
+    ): String {
         // Check if given indices are the default ones, i.e. onStatementReady() was called without
         // an indices argument and these are the default parameter ones, which means a wrapped
         // statement is not needed since the generated entity statement converter has access to the
@@ -82,14 +83,13 @@ class EntityRowAdapter(val entity: Entity, out: XType) : QueryMappedRowAdapter(o
             val entityColumnIndicesParam =
                 ArrayLiteral(XTypeName.PRIMITIVE_INT, *indices.map { it.indexVar }.toTypedArray())
             val wrapperTypeName = SQLiteDriverTypeNames.STATEMENT
-            val packageMember = STATEMENT_UTIL.packageMember("wrapMappedColumns")
             scope.builder.addLocalVariable(
                 checkNotNull(stmtDelegateVarName),
                 wrapperTypeName,
                 assignExpr =
                     XCodeBlock.of(
                         "%M(%L, %L, %L)",
-                        packageMember,
+                        RoomMemberNames.STATEMENT_UTIL_WRAP_MAPPED_COLUMNS,
                         stmtVarName,
                         entityColumnNamesParam,
                         entityColumnIndicesParam,
@@ -98,6 +98,7 @@ class EntityRowAdapter(val entity: Entity, out: XType) : QueryMappedRowAdapter(o
         }
         functionSpec =
             scope.writer.getOrCreateFunction(EntityStatementConverterWriter(entity = entity))
+        return stmtVarName
     }
 
     override fun convert(outVarName: String, stmtVarName: String, scope: CodeGenScope) {

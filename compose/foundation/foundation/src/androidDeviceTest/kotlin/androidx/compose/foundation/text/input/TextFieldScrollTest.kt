@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.FocusedWindowTest
+import androidx.compose.foundation.text.ForceTouchInputMode
 import androidx.compose.foundation.text.Handle
 import androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine
 import androidx.compose.foundation.text.input.TextFieldLineLimits.SingleLine
@@ -61,6 +62,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
@@ -68,9 +70,10 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
@@ -92,7 +95,6 @@ import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -112,7 +114,7 @@ class TextFieldScrollTest : FocusedWindowTest {
             "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu " +
             "fugiat nulla pariatur."
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var testScope: CoroutineScope
 
@@ -215,6 +217,21 @@ class TextFieldScrollTest : FocusedWindowTest {
     }
 
     @Test
+    fun textFieldScroll_horizontal_setsContentSize() {
+        val scrollState = ScrollState(0)
+
+        rule.setupHorizontallyScrollableContent(
+            state = TextFieldState("text"),
+            scrollState = scrollState,
+            modifier = Modifier.size(width = 300.dp, height = 50.dp),
+        )
+
+        rule.runOnIdle {
+            assertThat(scrollState.scrollIndicatorState?.contentSize).isGreaterThan(0)
+        }
+    }
+
+    @Test
     fun textFieldScroll_vertical_setsViewportSize() {
         val scrollState = ScrollState(0)
 
@@ -225,6 +242,21 @@ class TextFieldScrollTest : FocusedWindowTest {
         )
 
         rule.runOnIdle { assertThat(scrollState.viewportSize).isGreaterThan(0) }
+    }
+
+    @Test
+    fun textFieldScroll_vertical_setsContentSize() {
+        val scrollState = ScrollState(0)
+
+        rule.setupVerticallyScrollableContent(
+            state = TextFieldState("text"),
+            scrollState = scrollState,
+            modifier = Modifier.size(width = 300.dp, height = 100.dp),
+        )
+
+        rule.runOnIdle {
+            assertThat(scrollState.scrollIndicatorState?.contentSize).isGreaterThan(0)
+        }
     }
 
     @Test
@@ -499,7 +531,7 @@ class TextFieldScrollTest : FocusedWindowTest {
             Second Line
             Third Line
             Fourth Line
-        """
+            """
                 .trimIndent()
 
         val state = TextFieldState(text)
@@ -553,14 +585,18 @@ class TextFieldScrollTest : FocusedWindowTest {
         val columnScrollState = ScrollState(0)
 
         rule.setContent {
-            Column(Modifier.size(containerSize).padding(8.dp).verticalScroll(columnScrollState)) {
-                Box(Modifier.size(topItemSize))
-                ScrollableContent(
-                    modifier = Modifier.fillMaxWidth(),
-                    state = state,
-                    scrollState = textFieldScrollState,
-                    lineLimits = MultiLine(),
-                )
+            ForceTouchInputMode {
+                Column(
+                    Modifier.size(containerSize).padding(8.dp).verticalScroll(columnScrollState)
+                ) {
+                    Box(Modifier.size(topItemSize))
+                    ScrollableContent(
+                        modifier = Modifier.fillMaxWidth(),
+                        state = state,
+                        scrollState = textFieldScrollState,
+                        lineLimits = MultiLine(),
+                    )
+                }
             }
         }
 
@@ -619,14 +655,16 @@ class TextFieldScrollTest : FocusedWindowTest {
         val rowScrollState = ScrollState(0)
 
         rule.setContent {
-            Row(Modifier.size(containerSize).padding(8.dp).horizontalScroll(rowScrollState)) {
-                Box(Modifier.size(startItemSize))
-                ScrollableContent(
-                    modifier = Modifier.fillMaxHeight(),
-                    state = state,
-                    scrollState = textFieldScrollState,
-                    lineLimits = SingleLine,
-                )
+            ForceTouchInputMode {
+                Row(Modifier.size(containerSize).padding(8.dp).horizontalScroll(rowScrollState)) {
+                    Box(Modifier.size(startItemSize))
+                    ScrollableContent(
+                        modifier = Modifier.fillMaxHeight(),
+                        state = state,
+                        scrollState = textFieldScrollState,
+                        lineLimits = SingleLine,
+                    )
+                }
             }
         }
 
@@ -1007,6 +1045,34 @@ class TextFieldScrollTest : FocusedWindowTest {
         assertThat(textFieldScrollState.maxValue).isGreaterThan(initialMaxScrollValue)
         assertThat(textFieldScrollState.value).isEqualTo(textFieldScrollState.maxValue)
         assertThat(columnScrollState.value).isEqualTo(columnScrollState.maxValue)
+    }
+
+    @Test
+    fun textFieldScroll_mouseWheel_whileMouseDragSelecting() {
+        val state = TextFieldState((1..100).joinToString("\n") { "Line $it" })
+        val scrollState = ScrollState(0)
+
+        rule.setupVerticallyScrollableContent(
+            state = state,
+            scrollState = scrollState,
+            modifier = Modifier.size(width = 200.dp, height = 100.dp),
+            maxLines = 5,
+        )
+
+        rule.onNodeWithTag(TextfieldTag).performMouseInput {
+            moveTo(Offset(5f, 5f))
+            press()
+            moveBy(Offset(30f, 0f))
+        }
+        rule.runOnIdle {
+            assertThat(state.selection.collapsed).isFalse()
+            assertThat(scrollState.value).isEqualTo(0)
+        }
+
+        rule.onNodeWithTag(TextfieldTag).performMouseInput { scroll(10f, ScrollWheel.Vertical) }
+        rule.runOnIdle { assertThat(scrollState.value).isGreaterThan(0) }
+
+        rule.onNodeWithTag(TextfieldTag).performMouseInput { release() }
     }
 
     @OptIn(ExperimentalTestApi::class)

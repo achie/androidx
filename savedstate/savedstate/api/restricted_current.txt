@@ -1,7 +1,29 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=restricted-atomic-group
 package androidx.savedstate {
 
+  public final class SavedStateContainer {
+    ctor public SavedStateContainer();
+    method public operator boolean contains(String key);
+    method public androidx.savedstate.SavedStateContainer getOrCreateContainer(String key);
+    method public <T, R extends androidx.savedstate.SavedStateValue<T>> R getOrPutSavedStateValue(String key, kotlin.jvm.functions.Function0<? extends R> defaultValue);
+    method public <T, R extends androidx.savedstate.SavedStateValue<T>> R? getSavedStateValue(String key);
+    method public java.util.Set<java.lang.String> keys();
+    method public <T, R extends androidx.savedstate.SavedStateValue<T>> void putSavedStateValue(String key, R savedStateValue);
+    method public <T, R extends androidx.savedstate.SavedStateValue<T>> R? removeSavedStateValue(String key);
+    method public void restoreState(android.os.Bundle? savedState);
+    method public android.os.Bundle saveState();
+  }
+
   public final class SavedStateKt {
+    method @KotlinOnly public static inline <reified T> T getKotlinSerializable(androidx.savedstate.SavedStateReader, String key, optional androidx.savedstate.serialization.SavedStateConfiguration configuration);
+    method @KotlinOnly public static <T> T getKotlinSerializable(androidx.savedstate.SavedStateReader, kotlinx.serialization.KSerializer<T> deserializer, String key, optional androidx.savedstate.serialization.SavedStateConfiguration configuration);
+    method @BytecodeOnly public static <T> T getKotlinSerializable-FwvpL2Y(android.os.Bundle, kotlinx.serialization.KSerializer<T>, String, androidx.savedstate.serialization.SavedStateConfiguration);
+    method @BytecodeOnly public static Object! getKotlinSerializable-FwvpL2Y$default(android.os.Bundle!, kotlinx.serialization.KSerializer!, String!, androidx.savedstate.serialization.SavedStateConfiguration!, int, Object!);
+    method @KotlinOnly public static inline <reified T> void putKotlinSerializable(androidx.savedstate.SavedStateWriter, String key, T value, optional androidx.savedstate.serialization.SavedStateConfiguration configuration);
+    method @KotlinOnly public static <T> void putKotlinSerializable(androidx.savedstate.SavedStateWriter, kotlinx.serialization.KSerializer<T> serializer, String key, T value, optional androidx.savedstate.serialization.SavedStateConfiguration configuration);
+    method @BytecodeOnly public static <T> void putKotlinSerializable-xOxc9nE(android.os.Bundle, kotlinx.serialization.KSerializer<T>, String, T, androidx.savedstate.serialization.SavedStateConfiguration);
+    method @BytecodeOnly public static void putKotlinSerializable-xOxc9nE$default(android.os.Bundle!, kotlinx.serialization.KSerializer!, String!, Object!, androidx.savedstate.serialization.SavedStateConfiguration!, int, Object!);
     method public static inline <T> T read(android.os.Bundle, kotlin.jvm.functions.Function1<? super androidx.savedstate.SavedStateReader,? extends T> block);
     method public static inline android.os.Bundle savedState(android.os.Bundle initialState, optional kotlin.jvm.functions.Function1<? super androidx.savedstate.SavedStateWriter,kotlin.Unit> builderAction);
     method public static inline android.os.Bundle savedState(optional java.util.Map<java.lang.String,? extends java.lang.Object?> initialState, optional kotlin.jvm.functions.Function1<? super androidx.savedstate.SavedStateWriter,kotlin.Unit> builderAction);
@@ -11,7 +33,6 @@ package androidx.savedstate {
   }
 
   @kotlin.jvm.JvmInline public final value class SavedStateReader {
-    ctor @KotlinOnly @kotlin.PublishedApi internal SavedStateReader(android.os.Bundle source);
     method @BytecodeOnly public static androidx.savedstate.SavedStateReader! box-impl(android.os.Bundle!);
     method @BytecodeOnly @kotlin.PublishedApi internal static android.os.Bundle constructor-impl(android.os.Bundle);
     method @KotlinOnly public operator boolean contains(String key);
@@ -84,10 +105,10 @@ package androidx.savedstate {
     method @BytecodeOnly public static Integer? getIntOrNull-impl(android.os.Bundle!, String);
     method @KotlinOnly public inline <reified T extends java.io.Serializable> T getJavaSerializable(String key);
     method @KotlinOnly public <T extends java.io.Serializable> T getJavaSerializable(String key, kotlin.reflect.KClass<T> serializableClass);
-    method @BytecodeOnly public static <T extends java.io.Serializable> T getJavaSerializable-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends java.io.Serializable> T getJavaSerializable-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends java.io.Serializable> T? getJavaSerializableOrNull(String key);
     method @KotlinOnly public <T extends java.io.Serializable> T? getJavaSerializableOrNull(String key, kotlin.reflect.KClass<T> serializableClass);
-    method @BytecodeOnly public static <T extends java.io.Serializable> T? getJavaSerializableOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends java.io.Serializable> T? getJavaSerializableOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public long getLong(String key);
     method @BytecodeOnly public static long getLong-impl(android.os.Bundle!, String);
     method @KotlinOnly public long[] getLongArray(String key);
@@ -98,22 +119,22 @@ package androidx.savedstate {
     method @BytecodeOnly public static Long? getLongOrNull-impl(android.os.Bundle!, String);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> T getParcelable(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> T getParcelable(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> T getParcelable-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> T getParcelable-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> T[] getParcelableArray(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> T[] getParcelableArray(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> T![] getParcelableArray-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> T[] getParcelableArray-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> T[]? getParcelableArrayOrNull(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> T[]? getParcelableArrayOrNull(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> T![]? getParcelableArrayOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> T[]? getParcelableArrayOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> java.util.List<T> getParcelableList(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> java.util.List<T> getParcelableList(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> java.util.List<T!> getParcelableList-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> java.util.List<T> getParcelableList-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> java.util.List<T>? getParcelableListOrNull(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> java.util.List<T>? getParcelableListOrNull(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> java.util.List<T!>? getParcelableListOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> java.util.List<T>? getParcelableListOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> T? getParcelableOrNull(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> T? getParcelableOrNull(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> T? getParcelableOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> T? getParcelableOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public android.os.Bundle getSavedState(String key);
     method @BytecodeOnly public static android.os.Bundle getSavedState-impl(android.os.Bundle!, String);
     method @KotlinOnly public android.os.Bundle[] getSavedStateArray(String key);
@@ -136,10 +157,10 @@ package androidx.savedstate {
     method @BytecodeOnly public static android.util.Size? getSizeOrNull-impl(android.os.Bundle!, String);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> android.util.SparseArray<T> getSparseParcelableArray(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> android.util.SparseArray<T> getSparseParcelableArray(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> android.util.SparseArray<T!> getSparseParcelableArray-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> android.util.SparseArray<T> getSparseParcelableArray-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public inline <reified T extends android.os.Parcelable> android.util.SparseArray<T>? getSparseParcelableArrayOrNull(String key);
     method @KotlinOnly public <T extends android.os.Parcelable> android.util.SparseArray<T>? getSparseParcelableArrayOrNull(String key, kotlin.reflect.KClass<T> parcelableClass);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> android.util.SparseArray<T!>? getSparseParcelableArrayOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> android.util.SparseArray<T>? getSparseParcelableArrayOrNull-impl(android.os.Bundle!, String, kotlin.reflect.KClass<T>);
     method @KotlinOnly public String getString(String key);
     method @BytecodeOnly public static String getString-impl(android.os.Bundle!, String);
     method @KotlinOnly public String[] getStringArray(String key);
@@ -164,25 +185,33 @@ package androidx.savedstate {
   }
 
   public final class SavedStateReaderKt {
-    method @kotlin.PublishedApi internal static Void keyOrValueNotFoundError(String key);
+    method @BytecodeOnly @kotlin.PublishedApi internal static Void keyOrValueNotFoundError(String);
   }
 
   public final class SavedStateRegistry {
+    ctor public SavedStateRegistry();
+    ctor public SavedStateRegistry(android.os.Bundle? initialState);
+    method @MainThread public androidx.savedstate.SavedStateContainer asContainer();
     method @MainThread public android.os.Bundle? consumeRestoredStateForKey(String key);
+    method @MainThread public androidx.savedstate.SavedStateContainer getOrCreateContainer(String key);
     method public androidx.savedstate.SavedStateRegistry.SavedStateProvider? getSavedStateProvider(String key);
     method @InaccessibleFromKotlin @MainThread public boolean isRestored();
     method @MainThread public void registerSavedStateProvider(String key, androidx.savedstate.SavedStateRegistry.SavedStateProvider provider);
-    method @MainThread public void runOnNextRecreation(Class<? extends androidx.savedstate.SavedStateRegistry.AutoRecreated> clazz);
+    method @Deprecated @MainThread public void runOnNextRecreation(Class<? extends androidx.savedstate.SavedStateRegistry.AutoRecreated> clazz);
     method @MainThread public void unregisterSavedStateProvider(String key);
     property @MainThread public boolean isRestored;
   }
 
-  public static interface SavedStateRegistry.AutoRecreated {
-    method public void onRecreated(androidx.savedstate.SavedStateRegistryOwner owner);
+  @Deprecated public static interface SavedStateRegistry.AutoRecreated {
+    method @Deprecated public void onRecreated(androidx.savedstate.SavedStateRegistryOwner owner);
   }
 
   public static fun interface SavedStateRegistry.SavedStateProvider {
     method public android.os.Bundle saveState();
+  }
+
+  public static fun interface SavedStateRegistry.SavedStateRestorer {
+    method public void restoreState(android.os.Bundle? savedState);
   }
 
   public final class SavedStateRegistryController {
@@ -204,8 +233,17 @@ package androidx.savedstate {
     property public abstract androidx.savedstate.SavedStateRegistry savedStateRegistry;
   }
 
+  public final class SavedStateRegistryOwnerFactory {
+    method @KotlinOnly public static androidx.savedstate.SavedStateRegistryOwner SavedStateRegistryOwner(androidx.savedstate.SavedStateRegistry savedStateRegistry, androidx.lifecycle.Lifecycle lifecycle);
+    method @InaccessibleFromKotlin public static androidx.savedstate.SavedStateRegistryOwner create(androidx.savedstate.SavedStateRegistry savedStateRegistry, androidx.lifecycle.Lifecycle lifecycle);
+  }
+
+  public interface SavedStateValue<T> extends androidx.savedstate.SavedStateRegistry.SavedStateProvider androidx.savedstate.SavedStateRegistry.SavedStateRestorer {
+    method @InaccessibleFromKotlin public T getValue();
+    property public abstract T value;
+  }
+
   @kotlin.jvm.JvmInline public final value class SavedStateWriter {
-    ctor @KotlinOnly @kotlin.PublishedApi internal SavedStateWriter(android.os.Bundle source);
     method @BytecodeOnly public static androidx.savedstate.SavedStateWriter! box-impl(android.os.Bundle!);
     method @KotlinOnly public void clear();
     method @BytecodeOnly public static void clear-impl(android.os.Bundle!);
@@ -253,9 +291,9 @@ package androidx.savedstate {
     method @KotlinOnly public <T extends android.os.Parcelable> void putParcelable(String key, T value);
     method @BytecodeOnly public static <T extends android.os.Parcelable> void putParcelable-impl(android.os.Bundle!, String, T);
     method @KotlinOnly public <T extends android.os.Parcelable> void putParcelableArray(String key, T[] value);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> void putParcelableArray-impl(android.os.Bundle!, String, T![]);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> void putParcelableArray-impl(android.os.Bundle!, String, T[]);
     method @KotlinOnly public <T extends android.os.Parcelable> void putParcelableList(String key, java.util.List<T> value);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> void putParcelableList-impl(android.os.Bundle!, String, java.util.List<? extends T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> void putParcelableList-impl(android.os.Bundle!, String, java.util.List<? extends T>);
     method @KotlinOnly public void putSavedState(String key, android.os.Bundle value);
     method @BytecodeOnly public static void putSavedState-impl(android.os.Bundle!, String, android.os.Bundle);
     method @KotlinOnly public void putSavedStateArray(String key, android.os.Bundle[] value);
@@ -267,7 +305,7 @@ package androidx.savedstate {
     method @KotlinOnly public void putSizeF(String key, android.util.SizeF value);
     method @BytecodeOnly public static void putSizeF-impl(android.os.Bundle!, String, android.util.SizeF);
     method @KotlinOnly public <T extends android.os.Parcelable> void putSparseParcelableArray(String key, android.util.SparseArray<T> value);
-    method @BytecodeOnly public static <T extends android.os.Parcelable> void putSparseParcelableArray-impl(android.os.Bundle!, String, android.util.SparseArray<T!>);
+    method @BytecodeOnly public static <T extends android.os.Parcelable> void putSparseParcelableArray-impl(android.os.Bundle!, String, android.util.SparseArray<T>);
     method @KotlinOnly public void putString(String key, String value);
     method @BytecodeOnly public static void putString-impl(android.os.Bundle!, String, String);
     method @KotlinOnly public void putStringArray(String key, String[] value);
@@ -280,7 +318,7 @@ package androidx.savedstate {
   }
 
   public final class SavedStateWriterKt {
-    method @kotlin.PublishedApi internal static <T> java.util.ArrayList<T> toArrayListUnsafe(java.util.Collection<? extends java.lang.Object?>);
+    method @BytecodeOnly @kotlin.PublishedApi internal static <T> java.util.ArrayList<T> toArrayListUnsafe(java.util.Collection<? extends java.lang.Object!>);
   }
 
   public final class ViewKt {

@@ -59,30 +59,38 @@ abstract class DexInspectorTask : DefaultTask() {
         val output = outputFile.get().asFile
         output.parentFile.mkdirs()
         val errorStream = ByteArrayOutputStream()
-        val executionResult =
-            execOperations.javaexec {
-                it.classpath(d8Executable.files)
-                it.mainClass.set("com.android.tools.r8.D8")
-                it.allJvmArgs.add("-Xmx2G")
+        val executionResult = execOperations.javaexec {
+            it.classpath(d8Executable.files)
+            it.mainClass.set("com.android.tools.r8.D8")
+            it.allJvmArgs.add("-Xmx2G")
 
-                val filesToDex = jars.map { file -> file.absolutePath }
+            val filesToDex = jars.map { file -> file.absolutePath }
 
-                // All runtime dependencies of the inspector are already jarjar-ed and packed in
-                // the single jar by previous steps. However, inspectors have compileOnly
-                // dependencies as well that are required by d8 for clean dexing.
-                // Those compileOnly libraries are inspected libraries, that are provided by an
-                // inspected app in the runtime. But it's hard to access compileOnly Configuration
-                // and easy to access the compileConfiguration and it's ok to pass extra libraries
-                // to
-                // d8, so we pass the entire compileConfiguration here.
-                // More on compileConfiguratioh, see here:
-                // https://docs.gradle.org/current/userguide/java_plugin.html#sec:java_plugin_and_dependency_management
-                val libArgs = compileClasspath.map { listOf("--lib", it.absolutePath) }.flatten()
-                val minApiArg = listOf("--min-api", "$minSdkVersion")
-                it.args = listOf("--output", output.absolutePath) + libArgs + minApiArg + filesToDex
-                it.errorOutput = errorStream
-                it.isIgnoreExitValue = true
-            }
+            // All runtime dependencies of the inspector are already jarjar-ed and packed in
+            // the single jar by previous steps. However, inspectors have compileOnly
+            // dependencies as well that are required by d8 for clean dexing.
+            // Those compileOnly libraries are inspected libraries, that are provided by an
+            // inspected app in the runtime. But it's hard to access compileOnly Configuration
+            // and easy to access the compileConfiguration and it's ok to pass extra libraries
+            // to
+            // d8, so we pass the entire compileConfiguration here.
+            // More on compileConfiguratioh, see here:
+            // https://docs.gradle.org/current/userguide/java_plugin.html#sec:java_plugin_and_dependency_management
+            val libArgs = compileClasspath.map { listOf("--lib", it.absolutePath) }.flatten()
+            val minApiArg = listOf("--min-api", "$minSdkVersion")
+            // There are R8 warnings that are expected handling the kotlin metadata library.
+            // For details see: https://b.corp.google.com/issues/562516798#comment3
+            it.args =
+                listOf(
+                    "--output",
+                    output.absolutePath,
+                    "--map-diagnostics:StringDiagnostic",
+                    "info",
+                    "none",
+                ) + libArgs + minApiArg + filesToDex
+            it.errorOutput = errorStream
+            it.isIgnoreExitValue = true
+        }
         val errors = errorStream.toByteArray()
         val exitCode = executionResult.exitValue
         if (errors.isNotEmpty() || exitCode != 0) {
@@ -117,7 +125,7 @@ fun Project.registerBundleInspectorTask(
             task.minSdkVersion = libraryExtension.defaultConfig.minSdk!!
             task.d8Executable.setFrom(
                 configurations.detachedConfiguration(
-                    dependencies.create("com.android.tools:r8:8.11.18")
+                    dependencies.create("com.android.tools:r8:9.4.17")
                 )
             )
             task.jars.from(jar.get().archiveFile)

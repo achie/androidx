@@ -68,7 +68,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.math.abs
-import kotlin.math.round
 import org.junit.Assert
 
 /** Constant to emulate very big but finite constraints */
@@ -203,7 +202,7 @@ fun ImageBitmap.assertContainsColor(expectedColor: Color, minPercent: Float = 50
         throw AssertionError("Expected color $expectedColor was not found in the bitmap.")
     }
 
-    val actualPercent = round((histogram[expectedColor]!! * 100f) / (width * height))
+    val actualPercent = (histogram[expectedColor]!! * 100f) / (width * height)
     if (actualPercent < minPercent) {
         throw AssertionError(
             "Expected color $expectedColor found $actualPercent%, below threshold $minPercent%"
@@ -360,7 +359,7 @@ private fun ImageBitmap.histogram(): MutableMap<Color, Long> {
 
 /**
  * writeToDevice - utility for writing an image bitmap to storage on the emulated device. The image
- * can be extract using adb pull, for example: adb pull
+ * can be extracted using adb pull, for example: adb pull
  * /storage/emulated/0/Android/data/androidx.wear.compose.test/cache/screenshots/mytest.png
  * /usr/local/username/Desktop/mytest.png
  */

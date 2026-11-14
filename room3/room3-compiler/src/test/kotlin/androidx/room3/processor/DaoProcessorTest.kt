@@ -252,15 +252,15 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDao.kt",
                 """
-            package foo.bar
-            import androidx.room3.*
-            @Dao
-            @Suppress(RoomWarnings.QUERY_MISMATCH)
-            interface MyDao {
-                @Query("SELECT uid from user")
-                fun userId(): Int
-            }
-            """
+                package foo.bar
+                import androidx.room3.*
+                @Dao
+                @Suppress(RoomWarnings.QUERY_MISMATCH)
+                interface MyDao {
+                    @Query("SELECT uid from user")
+                    fun userId(): Int
+                }
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(daoSrc) + COMMON.USER) { invocation ->
@@ -323,7 +323,7 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             """
                 @Dao interface MyDao {
                     static class Merged extends User {
-                       @Relation(parentColumn = "name", entityColumn = "lastName",
+                       @Relation(parentColumns = {"name"}, entityColumns = {"lastName"},
                                  entity = User.class)
                        java.util.List<User> users;
                     }
@@ -352,7 +352,7 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             """
                 @Dao interface MyDao {
                     static class Merged extends User {
-                       @Relation(parentColumn = "name", entityColumn = "lastName",
+                       @Relation(parentColumns = {"name"}, entityColumns = {"lastName"},
                                  entity = User.class)
                        java.util.List<User> users;
                     }
@@ -380,7 +380,7 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             """
                 @Dao interface MyDao {
                     static class Merged extends User {
-                       @Relation(parentColumn = "name", entityColumn = "lastName",
+                       @Relation(parentColumns = {"name"}, entityColumns = {"lastName"},
                                  entity = User.class)
                        java.util.List<User> users;
                     }
@@ -441,15 +441,15 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDao.kt",
                 """
-            import androidx.room3.*;
-            @Dao
-            interface MyDao {
-                @Suppress("INAPPLICABLE_JVM_NAME")
-                @JvmName("jvmMethodName")
-                @Query("SELECT 1")
-                fun method(): Int
-            }
-        """
+                import androidx.room3.*;
+                @Dao
+                interface MyDao {
+                    @Suppress("INAPPLICABLE_JVM_NAME")
+                    @JvmName("jvmMethodName")
+                    @Query("SELECT 1")
+                    fun method(): Int
+                }
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(source)) { invocation ->
@@ -474,20 +474,20 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
+                import androidx.room3.*
 
-            @Dao
-            interface MyDao {
-              @get:Query("SELECT * FROM MyEntity")
-              val allEntities: List<MyEntity>
-            }
+                @Dao
+                interface MyDao {
+                  @get:Query("SELECT * FROM MyEntity")
+                  val allEntities: List<MyEntity>
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
-            """
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -510,19 +510,19 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
+                import androidx.room3.*
 
-            @Dao
-            interface MyDao {
-              val allEntities: List<MyEntity>
-            }
+                @Dao
+                interface MyDao {
+                  val allEntities: List<MyEntity>
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
-            """
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -547,20 +547,20 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
+                import androidx.room3.*
 
-            @Dao
-            interface MyDao {
-              @Query("SELECT * FROM MyEntity")
-              val allEntities: List<MyEntity>
-            }
+                @Dao
+                interface MyDao {
+                  @Query("SELECT * FROM MyEntity")
+                  val allEntities: List<MyEntity>
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
-            """
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -585,51 +585,51 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
-            import com.google.common.collect.ImmutableList
+                import androidx.room3.*
+                import com.google.common.collect.ImmutableList
 
-            @Dao
-            interface MyDao {
-              @Query("SELECT * FROM MyEntity")
-              fun nullableList(): List<MyEntity>?
+                @Dao
+                interface MyDao {
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableList(): List<MyEntity>?
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableImmutableList(): ImmutableList<MyEntity>?
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableImmutableList(): ImmutableList<MyEntity>?
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableArray(): Array<MyEntity>?
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableArray(): Array<MyEntity>?
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableOptional(): java.util.Optional<MyEntity>?
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableOptional(): java.util.Optional<MyEntity>?
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableOptionalGuava(): com.google.common.base.Optional<MyEntity>?
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableOptionalGuava(): com.google.common.base.Optional<MyEntity>?
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableMap(): Map<MyEntity, MyOtherEntity>?
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableMap(): Map<MyEntity, MyOtherEntity>?
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableMap(): com.google.common.collect.ImmutableMap<MyEntity, MyOtherEntity>?
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableMap(): com.google.common.collect.ImmutableMap<MyEntity, MyOtherEntity>?
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableSetMultimap(): com.google.common.collect.ImmutableSetMultimap<MyEntity, MyOtherEntity>?
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableSetMultimap(): com.google.common.collect.ImmutableSetMultimap<MyEntity, MyOtherEntity>?
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableListMultimap(): com.google.common.collect.ImmutableListMultimap<MyEntity, MyOtherEntity>?
-            }
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableListMultimap(): com.google.common.collect.ImmutableListMultimap<MyEntity, MyOtherEntity>?
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
 
-            @Entity
-            data class MyOtherEntity(
-                @PrimaryKey
-                var otherPk: Int
-            )
-            """
+                @Entity
+                data class MyOtherEntity(
+                    @PrimaryKey
+                    var otherPk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -708,51 +708,51 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDatabase.kt",
                 """
-            import androidx.room3.*
-            import com.google.common.collect.ImmutableList
+                import androidx.room3.*
+                import com.google.common.collect.ImmutableList
 
-            @Dao
-            interface MyDao {
-              @Query("SELECT * FROM MyEntity")
-              fun nullableList(): List<MyEntity?>
+                @Dao
+                interface MyDao {
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableList(): List<MyEntity?>
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableImmutableList(): ImmutableList<MyEntity?>
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableImmutableList(): ImmutableList<MyEntity>
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableArray(): Array<MyEntity?>
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableArray(): Array<MyEntity?>
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableOptional(): java.util.Optional<MyEntity?>
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableOptional(): java.util.Optional<MyEntity?>
 
-              @Query("SELECT * FROM MyEntity")
-              fun nullableOptionalGuava(): com.google.common.base.Optional<MyEntity?>
+                  @Query("SELECT * FROM MyEntity")
+                  fun nullableOptionalGuava(): com.google.common.base.Optional<MyEntity>
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableMap(): Map<MyEntity?, MyOtherEntity>
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableMap(): Map<MyEntity?, MyOtherEntity>
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableMap(): com.google.common.collect.ImmutableMap<MyEntity?, MyOtherEntity>
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableMap(): com.google.common.collect.ImmutableMap<MyEntity, MyOtherEntity>
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableSetMultimap(): com.google.common.collect.ImmutableSetMultimap<MyEntity?, MyOtherEntity>
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableSetMultimap(): com.google.common.collect.ImmutableSetMultimap<MyEntity, MyOtherEntity>
 
-              @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
-              fun nullableImmutableListMultimap(): com.google.common.collect.ImmutableListMultimap<MyEntity?, MyOtherEntity>
-            }
+                  @Query("SELECT * FROM MyEntity JOIN MyOtherEntity ON MyEntity.pk = MyOtherEntity.otherPk")
+                  fun nullableImmutableListMultimap(): com.google.common.collect.ImmutableListMultimap<MyEntity, MyOtherEntity>
+                }
 
-            @Entity
-            data class MyEntity(
-                @PrimaryKey
-                var pk: Int
-            )
+                @Entity
+                data class MyEntity(
+                    @PrimaryKey
+                    var pk: Int
+                )
 
-            @Entity
-            data class MyOtherEntity(
-                @PrimaryKey
-                var otherPk: Int
-            )
-            """
+                @Entity
+                data class MyOtherEntity(
+                    @PrimaryKey
+                    var otherPk: Int
+                )
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -770,20 +770,10 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
                     nullableComponentInDaoFunctionReturnType("kotlin.collections.List<MyEntity?>")
                 )
                 hasWarningContaining(
-                    nullableComponentInDaoFunctionReturnType(
-                        "com.google.common.collect.ImmutableList<MyEntity?>"
-                    )
-                )
-                hasWarningContaining(
                     nullableComponentInDaoFunctionReturnType("kotlin.Array<MyEntity?>")
                 )
                 hasWarningContaining(
                     nullableComponentInDaoFunctionReturnType("java.util.Optional<MyEntity?>")
-                )
-                hasWarningContaining(
-                    nullableComponentInDaoFunctionReturnType(
-                        "com.google.common.base.Optional<MyEntity?>"
-                    )
                 )
                 hasWarningContaining(
                     nullableComponentInDaoFunctionReturnType(
@@ -792,28 +782,10 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
                 )
                 hasWarningContaining(
                     nullableComponentInDaoFunctionReturnType(
-                        "com.google.common.collect.ImmutableMap<MyEntity?, MyOtherEntity>"
+                        "kotlin.collections.Map<MyEntity?, MyOtherEntity>"
                     )
                 )
-                // We expect "MutableMap" when ImmutableMap is used because TypeAdapterStore will
-                // convert the map to a mutable one and re-run the `findQueryResultAdapter`
-                // algorithm
-                hasWarningContaining(
-                    nullableComponentInDaoFunctionReturnType(
-                        "kotlin.collections.MutableMap<MyEntity?, MyOtherEntity>"
-                    )
-                )
-                hasWarningContaining(
-                    nullableComponentInDaoFunctionReturnType(
-                        "com.google.common.collect.ImmutableSetMultimap<MyEntity?, MyOtherEntity>"
-                    )
-                )
-                hasWarningContaining(
-                    nullableComponentInDaoFunctionReturnType(
-                        "com.google.common.collect.ImmutableListMultimap<MyEntity?, MyOtherEntity>"
-                    )
-                )
-                hasWarningCount(10)
+                hasWarningCount(4)
             }
         }
     }
@@ -824,18 +796,18 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.java(
                 "MyDao",
                 """
-            import androidx.room3.*;
-            import java.util.List;
+                import androidx.room3.*;
+                import java.util.List;
 
-            @Dao
-            public interface MyDao {
-              @Query("SELECT * FROM MyEntity")
-              List<MyEntity> nullableList();
+                @Dao
+                public interface MyDao {
+                  @Query("SELECT * FROM MyEntity")
+                  List<MyEntity> nullableList();
 
-              @Query("SELECT * FROM MyEntity")
-              MyEntity[] nullableArray();
-            }
-            """
+                  @Query("SELECT * FROM MyEntity")
+                  MyEntity[] nullableArray();
+                }
+                """
                     .trimIndent(),
             )
         val entity =
@@ -849,7 +821,7 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
                     @PrimaryKey
                     public int pk;
                 }
-            """
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(dao, entity)) { invocation ->
@@ -872,17 +844,17 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
             Source.kotlin(
                 "MyDao.kt",
                 """
-            import androidx.room3.*
+                import androidx.room3.*
 
-            @Dao
-            abstract class MyDao(private val db: RoomDatabase?) {
-              @Query("SELECT * FROM MyEntity")
-              abstract fun getEntities(): List<MyEntity>
-            }
+                @Dao
+                abstract class MyDao(private val db: RoomDatabase?) {
+                  @Query("SELECT * FROM MyEntity")
+                  abstract fun getEntities(): List<MyEntity>
+                }
 
-            @Entity
-            data class MyEntity(@PrimaryKey val pk: Int)
-            """
+                @Entity
+                data class MyEntity(@PrimaryKey val pk: Int)
+                """
                     .trimIndent(),
             )
         runKspTest(sources = listOf(src)) { invocation ->
@@ -897,6 +869,283 @@ class DaoProcessorTest(private val enableVerification: Boolean) {
                 .process()
             invocation.assertCompilationResult {
                 hasErrorContaining(ProcessorErrors.INVALID_NULLABLE_DAO_CONSTRUCTOR_PARAM)
+            }
+        }
+    }
+
+    @Test
+    fun argsMapParamAllowsUnusedQueryParameters() {
+        val converter =
+            Source.kotlin(
+                "FooReturnTypeConverter.kt",
+                """
+                import androidx.room3.*
+
+                class FooReturnTypeConverter {
+                    @DaoReturnTypeConverter(operations = [OperationType.READ])
+                    suspend fun <T> convert(
+                        args: Map<String, Any?>,
+                        executeAndConvert: suspend () -> T,
+                    ): Foo<T> {
+                       TODO()
+                    }
+                }
+
+                class Foo<T>
+                """
+                    .trimIndent(),
+            )
+        val dao =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                @DaoReturnTypeConverters(FooReturnTypeConverter::class)
+                @Dao
+                abstract class MyDao(private val db: RoomDatabase) {
+                  @Query("SELECT * FROM MyEntity")
+                  abstract suspend fun getFoo(keyColumn: String): Foo<MyEntity>
+                }
+
+                @Entity
+                data class MyEntity(@PrimaryKey val pk: Int)
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(converter, dao)) { invocation ->
+            val daoElm = invocation.processingEnv.requireTypeElement("MyDao")
+            val dbType = invocation.context.processingEnv.requireType(ROOM_DB)
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = daoElm,
+                    dbType = dbType,
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult { hasErrorCount(0) }
+        }
+    }
+
+    @Test
+    fun unusedQueryParameterWithoutArgsConverterReportsError() {
+        val converter =
+            Source.kotlin(
+                "FooReturnTypeConverter.kt",
+                """
+                import androidx.room3.*
+
+                class FooReturnTypeConverter {
+                    @DaoReturnTypeConverter(operations = [OperationType.READ])
+                    suspend fun <T> convert(
+                        executeAndConvert: suspend () -> T,
+                    ): Foo<T> {
+                       TODO()
+                    }
+                }
+
+                class Foo<T>
+                """
+                    .trimIndent(),
+            )
+        val dao =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                @DaoReturnTypeConverters(FooReturnTypeConverter::class)
+                @Dao
+                abstract class MyDao(private val db: RoomDatabase) {
+                  @Query("SELECT * FROM MyEntity")
+                  abstract suspend fun getFoo(keyColumn: String): Foo<MyEntity>
+                }
+
+                @Entity
+                data class MyEntity(@PrimaryKey val pk: Int)
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(converter, dao)) { invocation ->
+            val daoElm = invocation.processingEnv.requireTypeElement("MyDao")
+            val dbType = invocation.context.processingEnv.requireType(ROOM_DB)
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = daoElm,
+                    dbType = dbType,
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult {
+                hasErrorContaining(
+                    ProcessorErrors.unusedQueryFunctionParameter(listOf("keyColumn"))
+                )
+            }
+        }
+    }
+
+    @Test
+    fun argsMapParamAllowsUnboundCustomTypeParameters() {
+        val converter =
+            Source.kotlin(
+                "FooReturnTypeConverter.kt",
+                """
+                import androidx.room3.*
+
+                class FooReturnTypeConverter {
+                    @DaoReturnTypeConverter(operations = [OperationType.READ])
+                    suspend fun <T> convert(
+                        args: Map<String, Any?>,
+                        executeAndConvert: suspend () -> T,
+                    ): Foo<T> {
+                       TODO()
+                    }
+                }
+
+                class Foo<T>
+                """
+                    .trimIndent(),
+            )
+        val dao =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                class CustomParam(val id: String)
+
+                @DaoReturnTypeConverters(FooReturnTypeConverter::class)
+                @Dao
+                abstract class MyDao(private val db: RoomDatabase) {
+                  @Query("SELECT * FROM MyEntity")
+                  abstract suspend fun getFoo(custom: CustomParam): Foo<MyEntity>
+                }
+
+                @Entity
+                data class MyEntity(@PrimaryKey val pk: Int)
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(converter, dao)) { invocation ->
+            val daoElm = invocation.processingEnv.requireTypeElement("MyDao")
+            val dbType = invocation.context.processingEnv.requireType(ROOM_DB)
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = daoElm,
+                    dbType = dbType,
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult { hasErrorCount(0) }
+        }
+    }
+
+    @Test
+    fun daoReturnTypeConverterOnFunction_scopesToAnnotatedFunction() {
+        val src =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                @Dao
+                interface MyDao {
+                  @DaoReturnTypeConverters(FooReturnTypeConverter::class)
+                  @Query("SELECT * FROM MyEntity")
+                  suspend fun getAnnotated(): Foo<MyEntity>
+
+                  @Query("SELECT * FROM MyEntity")
+                  suspend fun getUnannotated(): Foo<MyEntity>
+                }
+
+                @Entity
+                data class MyEntity(@PrimaryKey val pk: Int)
+
+                class Foo<T>(val data: T)
+
+                object FooReturnTypeConverter {
+                    @DaoReturnTypeConverter(operations = [OperationType.READ])
+                    suspend fun <T> convert(
+                        executeAndConvert: suspend () -> T,
+                    ): Foo<T> = Foo(executeAndConvert())
+                }
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(src)) { invocation ->
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = invocation.processingEnv.requireTypeElement("MyDao"),
+                    dbType = invocation.context.processingEnv.requireType(ROOM_DB),
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult {
+                hasErrorCount(1)
+                hasErrorContaining(ProcessorErrors.cannotFindQueryResultAdapter("Foo<MyEntity>"))
+            }
+        }
+    }
+
+    @Test
+    fun daoReturnTypeConverterOnConcreteFunction() {
+        val src =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                @Dao
+                abstract class MyDao {
+                    @DaoReturnTypeConverters(Any::class)
+                    @Transaction
+                    open suspend fun wrapper() {}
+                }
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(src)) { invocation ->
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = invocation.processingEnv.requireTypeElement("MyDao"),
+                    dbType = invocation.context.processingEnv.requireType(ROOM_DB),
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult {
+                hasErrorCount(1)
+                hasErrorContaining(ProcessorErrors.DAO_RETURN_TYPE_CONVERTER_ON_NON_DAO_OPERATION)
+            }
+        }
+    }
+
+    @Test
+    fun daoReturnTypeConverterOnUnannotatedAbstractFunction() {
+        val src =
+            Source.kotlin(
+                "MyDao.kt",
+                """
+                import androidx.room3.*
+
+                @Dao
+                abstract class MyDao {
+                    @DaoReturnTypeConverters(Any::class)
+                    abstract suspend fun unannotated()
+                }
+                """
+                    .trimIndent(),
+            )
+        runKspTest(sources = listOf(src)) { invocation ->
+            DaoProcessor(
+                    baseContext = invocation.context,
+                    element = invocation.processingEnv.requireTypeElement("MyDao"),
+                    dbType = invocation.context.processingEnv.requireType(ROOM_DB),
+                    dbVerifier = null,
+                )
+                .process()
+            invocation.assertCompilationResult {
+                hasErrorCount(1)
+                hasErrorContaining(ProcessorErrors.INVALID_ANNOTATION_COUNT_IN_DAO_FUNCTION)
             }
         }
     }

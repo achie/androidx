@@ -16,7 +16,62 @@
 
 package androidx.camera.viewfinder.core
 
+import androidx.annotation.IntDef
+import androidx.annotation.RestrictTo
 import androidx.camera.viewfinder.core.TransformationInfo.Companion.CROP_NONE
+
+/**
+ * The transformation mode of the source.
+ *
+ * This indicates how the source has been transformed before reaching the viewfinder.
+ */
+public object TransformationMode {
+    /**
+     * Indicates that the transformation (such as rotation and scaling) is deferred to the consumer
+     * (e.g., the Viewfinder).
+     *
+     * The consumer is responsible for applying the transformation matrix associated with the
+     * buffers to make the frames appear correctly relative to the display.
+     *
+     * For example, when receiving buffers directly from a camera source via a SurfaceTexture, the
+     * viewfinder must apply the texture's transform matrix (which typically encodes
+     * sensor-to-display rotation).
+     *
+     * Note: Different [ImplementationMode]s (such as [ImplementationMode.EXTERNAL] vs.
+     * [ImplementationMode.EMBEDDED]) may apply this matrix differently due to their underlying
+     * implementation.
+     */
+    public const val DEFERRED: Int = 0
+
+    /**
+     * Indicates that the transformation associated with the buffers has already been applied by the
+     * producer or an upstream pipeline before reaching the consumer.
+     *
+     * The consumer should ignore the transformation matrix associated with the buffers (or assume
+     * it is identity). Any clockwise rotation that remains to be applied for the frames to appear
+     * upright relative to the display is described by [TransformationInfo.sourceRotation], and is
+     * applied by the viewfinder. Any mirroring is assumed to have already been baked into the
+     * buffers by the upstream pipeline, so [TransformationInfo.isSourceMirroredHorizontally] and
+     * [TransformationInfo.isSourceMirroredVertically] are ignored in this mode.
+     *
+     * For example, if an OpenGL pipeline has already rotated the images to an upright orientation
+     * for the current display rotation, [TransformationInfo.sourceRotation] should be `0` and the
+     * viewfinder will not apply further rotation. If the display has since rotated, the pipeline
+     * can report the remaining rotation through [TransformationInfo.sourceRotation] instead of
+     * re-rendering the frames.
+     *
+     * Note: Non-zero [TransformationInfo.sourceRotation] cannot be applied in
+     * [ImplementationMode.EXTERNAL] below API level 29, so `Viewfinder` and `ViewfinderView`
+     * default to [ImplementationMode.EMBEDDED] there unless [ImplementationMode.EXTERNAL] is
+     * explicitly requested.
+     */
+    public const val PRE_APPLIED: Int = 1
+}
+
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+@IntDef(TransformationMode.DEFERRED, TransformationMode.PRE_APPLIED)
+@Retention(AnnotationRetention.SOURCE)
+public annotation class TransformationModeValue
 
 /**
  * Transformation information associated with the preview output.
@@ -24,16 +79,29 @@ import androidx.camera.viewfinder.core.TransformationInfo.Companion.CROP_NONE
  * This information can be used to transform the Surface of a Viewfinder to be suitable to be
  * displayed.
  */
-class TransformationInfo
+public class TransformationInfo
 @JvmOverloads
 constructor(
-    /** Rotation of the source, relative to the device's natural rotation, in degrees. */
-    val sourceRotation: Int = 0,
+    /**
+     * Clockwise rotation in degrees required for the source to appear upright relative to the
+     * display orientation.
+     *
+     * For [TransformationMode.DEFERRED] sources, this is the source's clockwise rotation relative
+     * to the display rotation. For [TransformationMode.PRE_APPLIED] sources, this is the clockwise
+     * rotation relative to the display that remains to be applied after the upstream pipeline's own
+     * transformation (`0` when the upstream pipeline has already rotated frames to match the
+     * display).
+     */
+    public val sourceRotation: Int = 0,
 
     /**
      * Indicates whether the source has been mirrored horizontally.
      *
      * This is common if the source comes from a camera that is front-facing.
+     *
+     * Applies only to [TransformationMode.DEFERRED] sources. For [TransformationMode.PRE_APPLIED]
+     * sources, upstream pipelines are responsible for baking any mirroring into the rendered buffer
+     * contents and this property is ignored by the viewfinder.
      *
      * It is not common for both [isSourceMirroredHorizontally] and [isSourceMirroredVertically] to
      * be set to `true`. This is equivalent to [sourceRotation] being rotated by an additional 180
@@ -43,7 +111,7 @@ constructor(
      * @see android.hardware.camera2.params.OutputConfiguration.MIRROR_MODE_H
      * @see androidx.camera.core.SurfaceRequest.TransformationInfo.isMirroring
      */
-    val isSourceMirroredHorizontally: Boolean = false,
+    public val isSourceMirroredHorizontally: Boolean = false,
 
     /**
      * Indicates whether the source has been mirrored vertically.
@@ -51,13 +119,17 @@ constructor(
      * It is not common for a camera source to be mirror vertically, and typically
      * [isSourceMirroredHorizontally] will be the appropriate property.
      *
+     * Applies only to [TransformationMode.DEFERRED] sources. For [TransformationMode.PRE_APPLIED]
+     * sources, upstream pipelines are responsible for baking any mirroring into the rendered buffer
+     * contents and this property is ignored by the viewfinder.
+     *
      * It is not common for both [isSourceMirroredHorizontally] and [isSourceMirroredVertically] to
      * be set to `true`. This is equivalent to [sourceRotation] being rotated by an additional 180
      * degrees.
      *
      * @see android.hardware.camera2.params.OutputConfiguration.MIRROR_MODE_V
      */
-    val isSourceMirroredVertically: Boolean = false,
+    public val isSourceMirroredVertically: Boolean = false,
 
     /**
      * Left offset of the cropRect in pixels.
@@ -66,7 +138,7 @@ constructor(
      *
      * If not set, this value will default to [CROP_NONE], which is equivalent to an offset of 0.
      */
-    val cropRectLeft: Float = CROP_NONE,
+    public val cropRectLeft: Float = CROP_NONE,
 
     /**
      * Top offset of the cropRect in pixels
@@ -75,7 +147,7 @@ constructor(
      *
      * If not set, this value will default to [CROP_NONE], which is equivalent to an offset of 0.
      */
-    val cropRectTop: Float = CROP_NONE,
+    public val cropRectTop: Float = CROP_NONE,
 
     /**
      * Right offset of the cropRect in pixels
@@ -85,7 +157,7 @@ constructor(
      * If not set, this value will default to [CROP_NONE], which is equivalent to an offset of the
      * width of the surface.
      */
-    val cropRectRight: Float = CROP_NONE,
+    public val cropRectRight: Float = CROP_NONE,
 
     /**
      * Bottom offset of the cropRect in pixels
@@ -95,8 +167,20 @@ constructor(
      * If not set, this value will default to [CROP_NONE], which is equivalent to an offset of the
      * height of the surface.
      */
-    val cropRectBottom: Float = CROP_NONE,
+    public val cropRectBottom: Float = CROP_NONE,
+
+    /**
+     * The transformation mode of the source.
+     *
+     * This indicates how the source has been transformed before reaching the viewfinder.
+     *
+     * If not set, this value will default to [TransformationMode.DEFERRED].
+     */
+    @get:JvmName("getTransformationMode")
+    @TransformationModeValue
+    public val transformationMode: Int = TransformationMode.DEFERRED,
 ) {
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is TransformationInfo) return false
@@ -108,6 +192,7 @@ constructor(
         if (cropRectTop != other.cropRectTop) return false
         if (cropRectRight != other.cropRectRight) return false
         if (cropRectBottom != other.cropRectBottom) return false
+        if (transformationMode != other.transformationMode) return false
 
         return true
     }
@@ -120,6 +205,7 @@ constructor(
         result = 31 * result + cropRectTop.hashCode()
         result = 31 * result + cropRectRight.hashCode()
         result = 31 * result + cropRectBottom.hashCode()
+        result = 31 * result + transformationMode.hashCode()
         return result
     }
 
@@ -131,11 +217,12 @@ constructor(
             "cropRectLeft=$cropRectLeft, " +
             "cropRectTop=$cropRectTop, " +
             "cropRectRight=$cropRectRight, " +
-            "cropRectBottom=$cropRectBottom" +
+            "cropRectBottom=$cropRectBottom, " +
+            "transformationMode=$transformationMode" +
             ")"
     }
 
-    companion object {
+    public companion object {
         /**
          * A crop value specifying no crop should be applied.
          *
@@ -144,7 +231,7 @@ constructor(
          * [TransformationInfo.cropRectBottom], the crop rect dimension will be equivalent to the
          * resolution of the untransformed surface.
          */
-        const val CROP_NONE: Float = Float.NaN
+        public const val CROP_NONE: Float = Float.NaN
 
         /**
          * A [TransformationInfo] with default values.
@@ -152,6 +239,6 @@ constructor(
          * This transformation info instance has no source rotation, no mirroring, and no crop
          * rectangle.
          */
-        @JvmField val DEFAULT: TransformationInfo = TransformationInfo()
+        @JvmField public val DEFAULT: TransformationInfo = TransformationInfo()
     }
 }

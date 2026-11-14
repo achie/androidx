@@ -15,6 +15,8 @@
  */
 package androidx.wear.compose.material3
 
+import androidx.annotation.FloatRange
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -24,23 +26,35 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onVisibilityChanged
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.SemanticsModifierNode
+import androidx.compose.ui.node.invalidateSemantics
+import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.onClick as semanticOnClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -48,18 +62,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults
 import androidx.wear.compose.foundation.lazy.ScalingLazyListScope
+import androidx.wear.compose.foundation.lazy.ScalingLazyListState
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
-import androidx.wear.compose.material3.AlertDialogDefaults.ConfirmIcon
-import androidx.wear.compose.material3.AlertDialogDefaults.DismissIcon
 import androidx.wear.compose.material3.AlertDialogDefaults.EdgeButton
 import androidx.wear.compose.material3.PaddingDefaults.horizontalContentPadding
 import androidx.wear.compose.material3.PaddingDefaults.verticalContentPadding
@@ -70,6 +86,18 @@ import androidx.wear.compose.material3.lazy.ResponsiveTransformationSpec
 import androidx.wear.compose.material3.lazy.TransformationSpec
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureAction
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureClickIndicator
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureClickIndicatorState
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureConfiguration
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureDefaults
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGesturePriority
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureScrollIndicator
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureScrollIndicatorState
+import androidx.wear.compose.material3.onehandedgesture.oneHandedGesture
+import androidx.wear.compose.material3.onehandedgesture.rememberOneHandedGestureConfiguration
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 // Confirm and dismiss buttons
 /**
@@ -81,6 +109,10 @@ import androidx.wear.compose.material3.lazy.transformedHeight
  * bottom of the dialog. It should be used when the user will be presented with a binary decision,
  * to either confirm or dismiss an action.
  *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down and
+ * confirming (if using [AlertDialogDefaults.ConfirmButton]) using the primary gesture (e.g. double
+ * pinch) or dismissing using the dismiss gesture (e.g. wrist turn).
+ *
  * Where user input is not required, such as displaying a transient success or failure message, use
  * [ConfirmationDialog], [SuccessConfirmationDialog] or [FailureConfirmationDialog] instead.
  *
@@ -90,6 +122,11 @@ import androidx.wear.compose.material3.lazy.transformedHeight
  * Example of an [AlertDialog] with an icon, title and two buttons to confirm and dismiss:
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithConfirmAndDismissSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithConfirmAndDismissSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed by swiping
  *   right (typically also called by the [dismissButton]). Implementation of this lambda must remove
@@ -138,7 +175,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (ScalingLazyListScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             confirmButton = confirmButton,
             title = title,
@@ -167,6 +208,10 @@ public fun AlertDialog(
  * failure message, use [ConfirmationDialog], [SuccessConfirmationDialog] or
  * [FailureConfirmationDialog] instead.
  *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down and
+ * confirming (if using [AlertDialogDefaults.ConfirmButton]) using the primary gesture (e.g. double
+ * pinch) or dismissing using the dismiss gesture (e.g. wrist turn).
+ *
  * The [transformationSpec] parameter enables the use of a [TransformingLazyColumn] internally for
  * advanced control over transformations of scrolling content, which can not be achieved with
  * [ScalingLazyColumn].
@@ -174,6 +219,11 @@ public fun AlertDialog(
  * Example of an [AlertDialog] with an icon, title and two buttons to confirm and dismiss:
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithConfirmAndDismissTransformingContentSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithConfirmAndDismissTransformingContentSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed by swiping
  *   right (typically also called by the [dismissButton]). Implementation of this lambda must remove
@@ -234,7 +284,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (TransformingLazyColumnScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             confirmButton = confirmButton,
             title = title,
@@ -259,6 +313,9 @@ public fun AlertDialog(
  * This overload doesn't have any dedicated slots for buttons. It has a content slot so that the
  * caller has flexibility in how to seek user input. In most cases, we recommend using other
  * AlertDialog variations with 2 confirm/dismiss buttons or a single confirmation button.
+ *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down using the
+ * primary gesture (e.g. double pinch) or dismissing using the dismiss gesture (e.g. wrist turn).
  *
  * Where user input is not required, such as displaying a transient success or failure message, use
  * [ConfirmationDialog], [SuccessConfirmationDialog] or [FailureConfirmationDialog] instead.
@@ -306,7 +363,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (ScalingLazyListScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             title = title,
             modifier = modifier,
@@ -327,6 +388,9 @@ public fun AlertDialog(
  * This overload doesn't have any dedicated slots for buttons, but it does have a content slot so
  * that the caller has flexibility in how to seek user input. It uses a [TransformationSpec] for
  * advanced control over transformations of scrolling content.
+ *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down using the
+ * primary gesture (e.g. double pinch) or dismissing using the dismiss gesture (e.g. wrist turn).
  *
  * In most cases, we recommend using other AlertDialog variations with 2 confirm/dismiss buttons or
  * a single confirmation button. Where user input is not required, such as displaying a transient
@@ -388,7 +452,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (TransformingLazyColumnScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             title = title,
             modifier = modifier,
@@ -411,6 +479,11 @@ public fun AlertDialog(
  * This overload has a single slot for a confirm [EdgeButton] at the bottom of the dialog, which
  * should be used when the user will be presented with a single acknowledgement.
  *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down and
+ * confirming (if using the [AlertDialogDefaults.EdgeButton] overload with
+ * `gestureVisibilityThreshold`) using the primary gesture (e.g. double pinch) or dismissing using
+ * the dismiss gesture (e.g. wrist turn).
+ *
  * Where user input is not required, such as displaying a transient success or failure message, use
  * [ConfirmationDialog], [SuccessConfirmationDialog] or [FailureConfirmationDialog] instead.
  *
@@ -421,9 +494,18 @@ public fun AlertDialog(
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithEdgeButtonSample
  *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithEdgeButtonSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * Example of an [AlertDialog] with content groups and a bottom [EdgeButton]:
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithContentGroupsSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithContentGroupsSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed by swiping to
  *   the right or by other dismiss action. Implementation of this lambda must remove the dialog from
@@ -434,7 +516,7 @@ public fun AlertDialog(
  *   that when using an [EdgeButton] which is not Medium size, the contentPadding parameters should
  *   be specified.
  * @param title A slot for displaying the title of the dialog. Title should contain a summary of the
- *   dialog's purpose or content and should not exceed 3 lines of text.By default,
+ *   dialog's purpose or content and should not exceed 3 lines of text. By default,
  *   [TextOverflow.Ellipsis] will be applied when text exceeds 3 lines.
  * @param modifier Modifier to be applied to the dialog content.
  * @param icon Optional slot for an icon to be shown at the top of the dialog.
@@ -471,7 +553,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (ScalingLazyListScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             edgeButton = edgeButton,
             title = title,
@@ -494,6 +580,11 @@ public fun AlertDialog(
  * should be used when the user will be presented with a single acknowledgement. It uses a
  * [TransformationSpec] for advanced control over transformations of scrolling content.
  *
+ * This [AlertDialog] overload supports one-handed gestures by default, for scrolling down and
+ * confirming (if using the [AlertDialogDefaults.EdgeButton] overload with
+ * `gestureVisibilityThreshold`) using the primary gesture (e.g. double pinch) or dismissing using
+ * the dismiss gesture (e.g. wrist turn).
+ *
  * Where user input is not required, such as displaying a transient success or failure message, use
  * [ConfirmationDialog], [SuccessConfirmationDialog] or [FailureConfirmationDialog] instead.
  *
@@ -505,9 +596,18 @@ public fun AlertDialog(
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithEdgeButtonTransformingContentSample
  *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithEdgeButtonTransformingContentSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * Example of an [AlertDialog] with content groups and a bottom [EdgeButton]:
  *
  * @sample androidx.wear.compose.material3.samples.AlertDialogWithContentGroupsTransformingContentSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_AlertDialogWithContentGroupsTransformingContentSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param visible A boolean indicating whether the dialog should be displayed.
  * @param onDismissRequest A lambda function to be called when the dialog is dismissed by swiping to
  *   the right or by other dismiss action. Implementation of this lambda must remove the dialog from
@@ -518,7 +618,7 @@ public fun AlertDialog(
  *   that when using an [EdgeButton] which is not Medium size, the contentPadding parameters should
  *   be specified.
  * @param title A slot for displaying the title of the dialog. Title should contain a summary of the
- *   dialog's purpose or content and should not exceed 3 lines of text.By default,
+ *   dialog's purpose or content and should not exceed 3 lines of text. By default,
  *   [TextOverflow.Ellipsis] will be applied when text exceeds 3 lines.
  * @param transformationSpec A spec that defines how items inside the [TransformingLazyColumn]
  *   transform and animate as they are scrolled. It is recommended to create a spec using
@@ -567,7 +667,11 @@ public fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     content: (TransformingLazyColumnScope.() -> Unit)? = null,
 ) {
-    Dialog(visible = visible, onDismissRequest = onDismissRequest, properties = properties) {
+    DialogWithDismissGesture(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+    ) {
         AlertDialogContent(
             edgeButton = edgeButton,
             title = title,
@@ -591,6 +695,10 @@ public fun AlertDialog(
  * confirm or dismiss an action. Prefer using [AlertDialog] directly, which provides built-in
  * animations and a streamlined API. This composable may be used to provide the content for an alert
  * dialog if custom animations are required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down and
+ * confirming (if using [AlertDialogDefaults.ConfirmButton]) using the primary gesture (e.g. double
+ * pinch).
  *
  * AlertDialogContent now additionally offers an equivalent overload using TransformingLazyColumn,
  * which is recommended to achieve a consistent Material 3 scrolling experience throughout your app
@@ -633,18 +741,29 @@ public fun AlertDialogContent(
         },
     content: (ScalingLazyListScope.() -> Unit)? = null,
 ) {
-    val scrollableLayout: @Composable () -> Unit = {
-        val state = rememberScalingLazyListState(initialCenterItemIndex = 0)
-        ScreenScaffold(scrollState = state, modifier = modifier, contentPadding = contentPadding) {
-            contentPadding ->
+    val scrollableLayout: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+        val scrollState = rememberScalingLazyListState(initialCenterItemIndex = 0)
+        val gestureScrollState = rememberGestureScrollState()
+
+        ScreenScaffold(
+            scrollState = scrollState,
+            modifier = scaffoldModifier,
+            contentPadding = contentPadding,
+            scrollIndicator = {
+                GestureScrollIndicator(
+                    gestureScrollState = gestureScrollState,
+                    scrollState = scrollState,
+                )
+            },
+        ) { contentPadding ->
             ScalingLazyColumn(
                 scalingParams = AlertScalingParams,
-                state = state,
+                state = scrollState,
                 contentPadding = contentPadding,
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = verticalArrangement,
                 autoCentering = null,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
             ) {
                 alertDialogCommonContent(icon = icon, title = title, text = text, content = content)
                 item {
@@ -658,21 +777,22 @@ public fun AlertDialogContent(
         }
     }
 
-    if (content != null) scrollableLayout()
-    else {
+    if (content != null) {
+        scrollableLayout(modifier)
+    } else {
         DynamicScrollableOrFixedLayout(
-            scrollableContent = scrollableLayout,
-            fixedContent = { forMeasure ->
+            modifier = modifier,
+            scrollableContent = { scrollableLayout(Modifier) },
+            fixedContent = { fixedModifier ->
                 AlertDialogContentFixedWithConfirmationButtons(
                     confirmButton = confirmButton,
                     title = title,
                     dismissButton = dismissButton,
-                    modifier = modifier,
+                    modifier = fixedModifier,
                     icon = icon,
                     text = text,
                     verticalArrangement = verticalArrangement,
                     contentPadding = contentPadding,
-                    forMeasure = forMeasure,
                 )
             },
         )
@@ -685,6 +805,10 @@ public fun AlertDialogContent(
  * Prefer using [AlertDialog] directly, which provides built-in animations and a streamlined API.
  * This composable may be used to provide the content for an alert dialog if custom animations are
  * required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down and
+ * confirming (if using [AlertDialogDefaults.ConfirmButton]) using the primary gesture (e.g. double
+ * pinch).
  *
  * @param confirmButton A slot for a [Button] indicating positive sentiment. Clicking the button
  *   must remove the dialog from the composition hierarchy. It's recommended to use
@@ -736,15 +860,27 @@ public fun AlertDialogContent(
         },
     content: (TransformingLazyColumnScope.() -> Unit)? = null,
 ) {
-    val scrollableLayout: @Composable () -> Unit = {
-        val state = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
-        ScreenScaffold(scrollState = state, modifier = modifier, contentPadding = contentPadding) {
-            contentPadding ->
+    val scrollableLayout: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+        val scrollState = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
+        val gestureScrollState = rememberGestureScrollState()
+
+        ScreenScaffold(
+            scrollState = scrollState,
+            modifier = scaffoldModifier,
+            contentPadding = contentPadding,
+            scrollIndicator = {
+                GestureScrollIndicator(
+                    gestureScrollState = gestureScrollState,
+                    scrollState = scrollState,
+                )
+            },
+        ) { contentPadding ->
             TransformingLazyColumn(
-                state = state,
+                state = scrollState,
                 contentPadding = contentPadding,
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = verticalArrangement,
+                modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
             ) {
                 alertDialogCommonContent(
                     icon = icon,
@@ -766,21 +902,22 @@ public fun AlertDialogContent(
         }
     }
 
-    if (content != null) scrollableLayout()
-    else {
+    if (content != null) {
+        scrollableLayout(modifier)
+    } else {
         DynamicScrollableOrFixedLayout(
-            scrollableContent = scrollableLayout,
-            fixedContent = { forMeasure ->
+            modifier = modifier,
+            scrollableContent = { scrollableLayout(Modifier) },
+            fixedContent = { fixedModifier ->
                 AlertDialogContentFixedWithConfirmationButtons(
                     confirmButton = confirmButton,
                     title = title,
                     dismissButton = dismissButton,
-                    modifier = modifier,
+                    modifier = fixedModifier,
                     icon = icon,
                     text = text,
                     verticalArrangement = verticalArrangement,
                     contentPadding = contentPadding,
-                    forMeasure = forMeasure,
                 )
             },
         )
@@ -794,6 +931,9 @@ public fun AlertDialogContent(
  * dedicated slots for buttons. Prefer using [AlertDialog] directly, which provides built-in
  * animations and a streamlined API. This composable may be used to provide the content for an alert
  * dialog if custom animations are required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down using the
+ * primary gesture (e.g. double pinch).
  *
  * AlertDialogContent now additionally offers an equivalent overload using TransformingLazyColumn,
  * which is recommended to achieve a consistent Material 3 scrolling experience throughout your app
@@ -828,37 +968,49 @@ public fun AlertDialogContent(
         },
     content: (ScalingLazyListScope.() -> Unit)? = null,
 ) {
-    val scrollableLayout: @Composable () -> Unit = {
-        val state = rememberScalingLazyListState(initialCenterItemIndex = 0)
-        ScreenScaffold(scrollState = state, modifier = modifier, contentPadding = contentPadding) {
-            contentPadding ->
+    val scrollableLayout: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+        val scrollState = rememberScalingLazyListState(initialCenterItemIndex = 0)
+        val gestureScrollState = rememberGestureScrollState()
+
+        ScreenScaffold(
+            scrollState = scrollState,
+            modifier = scaffoldModifier,
+            contentPadding = contentPadding,
+            scrollIndicator = {
+                GestureScrollIndicator(
+                    gestureScrollState = gestureScrollState,
+                    scrollState = scrollState,
+                )
+            },
+        ) { contentPadding ->
             ScalingLazyColumn(
                 scalingParams = AlertScalingParams,
-                state = state,
+                state = scrollState,
                 contentPadding = contentPadding,
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = verticalArrangement,
                 autoCentering = null,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
             ) {
                 alertDialogCommonContent(icon = icon, title = title, text = text, content = content)
             }
         }
     }
 
-    if (content != null) scrollableLayout()
-    else {
+    if (content != null) {
+        scrollableLayout(modifier)
+    } else {
         DynamicScrollableOrFixedLayout(
-            scrollableContent = scrollableLayout,
-            fixedContent = { forMeasure ->
+            modifier = modifier,
+            scrollableContent = { scrollableLayout(Modifier) },
+            fixedContent = { fixedModifier ->
                 AlertDialogContentFixed(
                     title = title,
+                    modifier = fixedModifier,
                     icon = icon,
                     text = text,
-                    modifier = modifier,
                     verticalArrangement = verticalArrangement,
                     contentPadding = contentPadding,
-                    forMeasure = forMeasure,
                 )
             },
         )
@@ -871,6 +1023,9 @@ public fun AlertDialogContent(
  * Prefer using [AlertDialog] directly, which provides built-in animations and a streamlined API.
  * This composable may be used to provide the content for an alert dialog if custom animations are
  * required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down using the
+ * primary gesture (e.g. double pinch).
  *
  * @param title A slot for displaying the title of the dialog. Title should contain a summary of the
  *   dialog's purpose or content and should not exceed 3 lines of text. By default,
@@ -915,19 +1070,27 @@ public fun AlertDialogContent(
     },
     content: (TransformingLazyColumnScope.() -> Unit)? = null,
 ) {
-    val scrollableLayout: @Composable () -> Unit = {
-        val state = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
+    val scrollableLayout: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+        val scrollState = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
+        val gestureScrollState = rememberGestureScrollState()
+
         ScreenScaffold(
-            scrollState = state,
-            modifier = modifier,
+            scrollState = scrollState,
+            modifier = scaffoldModifier,
             contentPadding = contentPadding(true),
+            scrollIndicator = {
+                GestureScrollIndicator(
+                    gestureScrollState = gestureScrollState,
+                    scrollState = scrollState,
+                )
+            },
         ) { contentPadding ->
             TransformingLazyColumn(
-                state = state,
+                state = scrollState,
                 contentPadding = contentPadding,
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = verticalArrangement,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
             ) {
                 alertDialogCommonContent(
                     icon = icon,
@@ -941,19 +1104,20 @@ public fun AlertDialogContent(
         }
     }
 
-    if (content != null) scrollableLayout()
-    else {
+    if (content != null) {
+        scrollableLayout(modifier)
+    } else {
         DynamicScrollableOrFixedLayout(
-            scrollableContent = scrollableLayout,
-            fixedContent = { forMeasure ->
+            modifier = modifier,
+            scrollableContent = { scrollableLayout(Modifier) },
+            fixedContent = { fixedModifier ->
                 AlertDialogContentFixed(
                     title = title,
+                    modifier = fixedModifier,
                     icon = icon,
                     text = text,
-                    modifier = modifier,
                     verticalArrangement = verticalArrangement,
                     contentPadding = contentPadding(false),
-                    forMeasure = forMeasure,
                 )
             },
         )
@@ -965,6 +1129,10 @@ public fun AlertDialogContent(
  * [EdgeButton] to confirm an action. Prefer using [AlertDialog] directly, which provides built-in
  * animations and a streamlined API. This composable may be used to provide the content for an alert
  * dialog if custom animations are required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down and
+ * confirming (if using the [AlertDialogDefaults.EdgeButton] overload with
+ * `gestureVisibilityThreshold`) using the primary gesture (e.g. double pinch).
  *
  * AlertDialogContent now additionally offers an equivalent overload using TransformingLazyColumn,
  * which is recommended to achieve a consistent Material 3 scrolling experience throughout your app
@@ -1008,25 +1176,33 @@ public fun AlertDialogContent(
     // AlertDialog + EdgeButton layout does not differentiate between scrollable/fixed content
     // (unlike the confirm/dismiss and button-stack layouts) - so DynamicScrollableOrFixedLayout
     // is not needed.
-    val state = rememberScalingLazyListState(initialCenterItemIndex = 0)
+    val scrollState = rememberScalingLazyListState(initialCenterItemIndex = 0)
+    val gestureScrollState = rememberGestureScrollState()
     val noTextAndContent = text == null && content == null
+
     ScreenScaffold(
-        scrollState = state,
+        scrollState = scrollState,
         edgeButton = edgeButton,
         modifier = modifier,
         contentPadding = contentPadding,
         edgeButtonSpacing =
             if (noTextAndContent) AlertEdgeButtonSpacingWithoutTextAndContent
             else AlertEdgeButtonSpacing,
+        scrollIndicator = {
+            GestureScrollIndicator(
+                gestureScrollState = gestureScrollState,
+                scrollState = scrollState,
+            )
+        },
     ) { contentPadding ->
         ScalingLazyColumn(
             scalingParams = AlertScalingParams,
-            state = state,
+            state = scrollState,
             contentPadding = contentPadding,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = verticalArrangement,
             autoCentering = null,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
         ) {
             alertDialogCommonContent(icon = icon, title = title, text = text, content = content)
         }
@@ -1039,6 +1215,10 @@ public fun AlertDialogContent(
  * Prefer using [AlertDialog] directly, which provides built-in animations and a streamlined API.
  * This composable may be used to provide the content for an alert dialog if custom animations are
  * required.
+ *
+ * This [AlertDialogContent] supports one-handed gestures by default, for scrolling down and
+ * confirming (if using the [AlertDialogDefaults.EdgeButton] overload with
+ * `gestureVisibilityThreshold`) using the primary gesture (e.g. double pinch).
  *
  * @param edgeButton Slot for an [EdgeButton] indicating positive sentiment. Clicking the button
  *   must remove the dialog from the composition hierarchy. It's recommended to use
@@ -1097,23 +1277,31 @@ public fun AlertDialogContent(
     /*
        AlertDialog + EdgeButton layout does not differentiate between scrollable/fixed content (unlike the confirm/dismiss and button-stack layouts) - so DynamicScrollableOrFixedLayout is not needed.
     */
-    val state = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
+    val scrollState = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
+    val gestureScrollState = rememberGestureScrollState()
     val noTextAndContent = text == null && content == null
+
     ScreenScaffold(
-        scrollState = state,
+        scrollState = scrollState,
         modifier = modifier,
         edgeButton = edgeButton,
         contentPadding = contentPadding,
         edgeButtonSpacing =
             if (noTextAndContent) AlertEdgeButtonSpacingWithoutTextAndContent
             else AlertEdgeButtonSpacing,
+        scrollIndicator = {
+            GestureScrollIndicator(
+                gestureScrollState = gestureScrollState,
+                scrollState = scrollState,
+            )
+        },
     ) { contentPadding ->
         TransformingLazyColumn(
-            state = state,
+            state = scrollState,
             contentPadding = contentPadding,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = verticalArrangement,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().gestureScroll(gestureScrollState, scrollState),
         ) {
             alertDialogCommonContent(
                 icon = icon,
@@ -1156,10 +1344,128 @@ public object AlertDialogDefaults {
     }
 
     /**
-     * Default composable for the confirm button in an [AlertDialog]. Should be used with
-     * [AlertDialog] overload which has 2 button slots to confirm or dismiss the action.
+     * Composable for the edge button in an [AlertDialog] that supports the primary one-handed
+     * gesture ([OneHandedGestureAction.Primary]). This is a medium sized [EdgeButton] and should be
+     * used with the [AlertDialog] overload that contains a single `edgeButton` slot when primary
+     * gesture activation is desired.
      *
-     * @param onClick The callback to be invoked when the button is clicked.
+     * Note: Gesture recognition can be disabled across a component hierarchy by providing `false`
+     * to [androidx.wear.compose.material3.onehandedgesture.LocalOneHandedGestureEnabled].
+     *
+     * Example of an [AlertDialog] with a bottom [EdgeButton] supporting the primary one-handed
+     * gesture:
+     *
+     * @sample androidx.wear.compose.material3.samples.AlertDialogWithEdgeButtonOneHandedGestureSample
+     * @param onClick The callback to be invoked when the button is clicked or triggered via
+     *   gesture.
+     * @param gestureVisibilityThreshold The minimum fraction of the button's height, between `0.0`
+     *   and `1.0`, that must be visible before the primary one-handed gesture is active. For values
+     *   between `0.0` and `1.0`, the gesture is active once the visible fraction of the button
+     *   exceeds the specified threshold. A value of `1f` requires the button to reach its full
+     *   height, whereas [GestureDisabled] (`0f`) disables the gesture on the button. Because
+     *   [EdgeButton] fades its content out when partially collapsed,
+     *   [EdgeButtonGestureVisibilityThreshold] (or a threshold of at least `0.5f`) is recommended
+     *   so the button content and gesture indicator are visible when triggered.
+     * @param modifier The [Modifier] to be applied to the button.
+     * @param onGestureLabel Semantic label used by accessibility services to describe the purpose
+     *   of the one-handed gesture. Defaults to localized "confirm" text to match [ConfirmIcon], and
+     *   should be customized when [content] represents a different action. This is highly
+     *   recommended for ensuring that users with screen readers understand what action will be
+     *   performed - if `null`, no accessibility announcement is made for the one-handed gesture.
+     * @param colors The [ButtonColors] to be used for the button.
+     * @param content The composable content of the button. Defaults to [ConfirmIcon].
+     */
+    @Composable
+    public fun EdgeButton(
+        onClick: () -> Unit,
+        @FloatRange(from = 0.0, to = 1.0) gestureVisibilityThreshold: Float,
+        modifier: Modifier = Modifier,
+        onGestureLabel: String? =
+            stringResource(
+                R.string.one_handed_gesture_alert_dialog_primary_action_confirm_accessibility_text
+            ),
+        colors: ButtonColors = ButtonDefaults.buttonColors(),
+        content: @Composable RowScope.() -> Unit = ConfirmIcon,
+    ) {
+        require(gestureVisibilityThreshold in 0f..1f) {
+            "gestureVisibilityThreshold should be between 0.0 and 1.0, was $gestureVisibilityThreshold"
+        }
+        val buttonSize = EdgeButtonSize.Medium
+        if (gestureVisibilityThreshold <= GestureDisabled) {
+            EdgeButton(
+                modifier = modifier,
+                onClick = onClick,
+                colors = colors,
+                buttonSize = buttonSize,
+                content = content,
+            )
+            return
+        }
+
+        val density = LocalDensity.current
+        val verticalPaddingPx = with(density) { EdgeButtonVerticalPadding.roundToPx() * 2 }
+        val fullButtonHeightPx = with(density) { buttonSize.maximumHeight.roundToPx() }
+        var isButtonVisible by remember { mutableStateOf(false) }
+
+        val interactionSource = remember { MutableInteractionSource() }
+        val gestureConfig =
+            rememberOneHandedGestureConfiguration(
+                action = OneHandedGestureAction.Primary,
+                priority = OneHandedGesturePriority.Clickable,
+            )
+        val clickIndicatorState = remember { OneHandedGestureClickIndicatorState() }
+        val coroutineScope = rememberCoroutineScope()
+
+        EdgeButton(
+            modifier =
+                modifier.onSizeChanged { size ->
+                    val visibleButtonHeight = (size.height - verticalPaddingPx).coerceAtLeast(0)
+                    isButtonVisible =
+                        visibleButtonHeight > fullButtonHeightPx * gestureVisibilityThreshold ||
+                            visibleButtonHeight >= fullButtonHeightPx
+                } then
+                    if (isButtonVisible) {
+                        Modifier.oneHandedGesture(
+                            gestureConfiguration = gestureConfig,
+                            onGestureLabel = onGestureLabel,
+                            onGestureAvailable = {
+                                coroutineScope.launch { clickIndicatorState.showIndicator() }
+                            },
+                            interactionSource = interactionSource,
+                            onGesture = onClick,
+                        )
+                    } else {
+                        Modifier
+                    },
+            interactionSource = interactionSource,
+            onClick = onClick,
+            colors = colors,
+            buttonSize = buttonSize,
+            content = {
+                OneHandedGestureClickIndicator(
+                    gestureConfiguration = gestureConfig,
+                    state = clickIndicatorState,
+                ) {
+                    // Wrap content() in a Row because EdgeButton's content parameter is
+                    // RowScope.() -> Unit.
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        content = content,
+                    )
+                }
+            },
+        )
+    }
+
+    /**
+     * Default composable for the confirm button in an [AlertDialog], which supports the primary
+     * one-handed gesture ([OneHandedGestureAction.Primary]) when the button is sufficiently
+     * visible. Should be used with [AlertDialog] overload which has 2 button slots to confirm or
+     * dismiss the action.
+     *
+     * @param onClick The callback to be invoked when the button is clicked or triggered via
+     *   gesture.
      * @param modifier The [Modifier] to be applied to the button.
      * @param colors The [IconButtonColors] to be used for the button.
      * @param content The composable content of the button. Defaults to [ConfirmIcon].
@@ -1171,16 +1477,121 @@ public object AlertDialogDefaults {
         colors: IconButtonColors = IconButtonDefaults.filledIconButtonColors(),
         content: @Composable RowScope.() -> Unit = ConfirmIcon,
     ) {
+        ConfirmButton(
+            onClick = onClick,
+            gestureVisibilityThreshold = ConfirmButtonGestureVisibilityThreshold,
+            modifier = modifier,
+            colors = colors,
+            content = content,
+        )
+    }
+
+    /**
+     * Composable for the confirm button in an [AlertDialog] with a configurable visibility
+     * threshold for the primary one-handed gesture ([OneHandedGestureAction.Primary]). Should be
+     * used with the [AlertDialog] overload which has 2 button slots to confirm or dismiss the
+     * action.
+     *
+     * Note: Gesture recognition can also be disabled across a component hierarchy by providing
+     * `false` to [androidx.wear.compose.material3.onehandedgesture.LocalOneHandedGestureEnabled].
+     *
+     * Example of an [AlertDialog] where the one-handed gesture on [ConfirmButton] is disabled by
+     * setting [gestureVisibilityThreshold] to [GestureDisabled]:
+     *
+     * @sample androidx.wear.compose.material3.samples.AlertDialogWithConfirmAndDismissGestureDisabledSample
+     * @param onClick The callback to be invoked when the button is clicked or triggered via
+     *   gesture.
+     * @param gestureVisibilityThreshold The minimum fraction of the button, between `0.0` and
+     *   `1.0`, that must be visible in the viewport before the primary one-handed gesture is
+     *   active. For values between `0.0` and `1.0`, the gesture is active once the visible fraction
+     *   of the button exceeds the specified threshold. A value of `1f` requires the entire button
+     *   to be visible, whereas [GestureDisabled] (`0f`) disables the gesture on the button.
+     *   [ConfirmButtonGestureVisibilityThreshold] is used by default in the [ConfirmButton]
+     *   overload that does not take a `gestureVisibilityThreshold` parameter.
+     * @param modifier The [Modifier] to be applied to the button.
+     * @param onGestureLabel Semantic label used by accessibility services to describe the purpose
+     *   of the one-handed gesture. Defaults to localized "confirm" text to match [ConfirmIcon], and
+     *   should be customized when [content] represents a different action. This is highly
+     *   recommended for ensuring that users with screen readers understand what action will be
+     *   performed - if `null`, no accessibility announcement is made for the one-handed gesture.
+     * @param colors The [IconButtonColors] to be used for the button.
+     * @param content The composable content of the button. Defaults to [ConfirmIcon].
+     */
+    @Composable
+    public fun ConfirmButton(
+        onClick: () -> Unit,
+        @FloatRange(from = 0.0, to = 1.0) gestureVisibilityThreshold: Float,
+        modifier: Modifier = Modifier,
+        onGestureLabel: String? =
+            stringResource(
+                R.string.one_handed_gesture_alert_dialog_primary_action_confirm_accessibility_text
+            ),
+        colors: IconButtonColors = IconButtonDefaults.filledIconButtonColors(),
+        content: @Composable RowScope.() -> Unit = ConfirmIcon,
+    ) {
+        require(gestureVisibilityThreshold in 0f..1f) {
+            "gestureVisibilityThreshold should be between 0.0 and 1.0, was $gestureVisibilityThreshold"
+        }
         val confirmWidth = 63.dp
         val confirmHeight = 54.dp
         val confirmShape = CircleShape
+
+        if (gestureVisibilityThreshold <= GestureDisabled) {
+            FilledIconButton(
+                onClick = onClick,
+                modifier = modifier.rotate(-45f).size(confirmWidth, confirmHeight),
+                colors = colors,
+                shapes = IconButtonDefaults.shapes(confirmShape),
+            ) {
+                Row(
+                    modifier = Modifier.align(Alignment.Center).graphicsLayer { rotationZ = 45f },
+                    content = content,
+                )
+            }
+            return
+        }
+
+        val interactionSource = remember { MutableInteractionSource() }
+        var buttonVisible by remember { mutableStateOf(false) }
+        val gestureConfig =
+            rememberOneHandedGestureConfiguration(
+                action = OneHandedGestureAction.Primary,
+                priority = OneHandedGesturePriority.Clickable,
+            )
+        val clickIndicatorState = remember { OneHandedGestureClickIndicatorState() }
+        val coroutineScope = rememberCoroutineScope()
+
         FilledIconButton(
             onClick = onClick,
-            modifier = modifier.rotate(-45f).size(confirmWidth, confirmHeight),
+            interactionSource = interactionSource,
+            modifier =
+                modifier
+                    .onVisibilityChanged(minFractionVisible = gestureVisibilityThreshold) {
+                        buttonVisible = it
+                    }
+                    .rotate(-45f)
+                    .size(confirmWidth, confirmHeight)
+                    .then(
+                        if (buttonVisible) {
+                            Modifier.oneHandedGesture(
+                                gestureConfiguration = gestureConfig,
+                                onGestureLabel = onGestureLabel,
+                                onGestureAvailable = {
+                                    coroutineScope.launch { clickIndicatorState.showIndicator() }
+                                },
+                                interactionSource = interactionSource,
+                                onGesture = onClick,
+                            )
+                        } else {
+                            Modifier
+                        }
+                    ),
             colors = colors,
             shapes = IconButtonDefaults.shapes(confirmShape),
         ) {
-            Row(
+            OneHandedGestureClickIndicator(
+                gestureConfiguration = gestureConfig,
+                state = clickIndicatorState,
                 modifier =
                     Modifier.semantics(mergeDescendants = true) {
                             semanticOnClick(
@@ -1191,11 +1602,10 @@ public object AlertDialogDefaults {
                             )
                             role = Role.Button
                         }
-                        .align(Alignment.Center)
-                        .graphicsLayer { rotationZ = 45f }
-                        .padding(10.dp),
-                content = content,
-            )
+                        .graphicsLayer { rotationZ = 45f },
+            ) {
+                Row(modifier = Modifier.align(Alignment.Center), content = content)
+            }
         }
     }
 
@@ -1271,7 +1681,7 @@ public object AlertDialogDefaults {
         val horizontalPadding = horizontalContentPadding()
         return PaddingValues(
             top = calculateTopPadding(hasIcon = false),
-            bottom = screenHeightFraction(noEdgeButtonBottomPaddingFraction),
+            bottom = screenWidthFraction(noEdgeButtonBottomPaddingFraction),
             start = horizontalPadding,
             end = horizontalPadding,
         )
@@ -1287,7 +1697,7 @@ public object AlertDialogDefaults {
         val horizontalPadding = horizontalContentPadding()
         return PaddingValues(
             top = calculateTopPadding(hasIcon = true),
-            bottom = screenHeightFraction(noEdgeButtonBottomPaddingFraction),
+            bottom = screenWidthFraction(noEdgeButtonBottomPaddingFraction),
             start = horizontalPadding,
             end = horizontalPadding,
         )
@@ -1305,7 +1715,7 @@ public object AlertDialogDefaults {
         return PaddingValues(
             top = calculateTopPadding(hasIcon = false),
             bottom =
-                if (isScrollable) screenHeightFraction(noEdgeButtonBottomPaddingFraction)
+                if (isScrollable) screenWidthFraction(noEdgeButtonBottomPaddingFraction)
                 else verticalContentPadding(),
             start = horizontalPadding,
             end = horizontalPadding,
@@ -1324,7 +1734,7 @@ public object AlertDialogDefaults {
         return PaddingValues(
             top = calculateTopPadding(hasIcon = true),
             bottom =
-                if (isScrollable) screenHeightFraction(noEdgeButtonBottomPaddingFraction)
+                if (isScrollable) screenWidthFraction(noEdgeButtonBottomPaddingFraction)
                 else verticalContentPadding(),
             start = horizontalPadding,
             end = horizontalPadding,
@@ -1362,9 +1772,27 @@ public object AlertDialogDefaults {
         )
     }
 
+    /**
+     * Recommended `gestureVisibilityThreshold` for [EdgeButton] when the primary one-handed gesture
+     * is enabled.
+     */
+    public const val EdgeButtonGestureVisibilityThreshold: Float = 0.9f
+
+    /**
+     * Default `gestureVisibilityThreshold` for [ConfirmButton], requiring the button to be more
+     * than 90% visible before the primary one-handed gesture is active.
+     */
+    public const val ConfirmButtonGestureVisibilityThreshold: Float = 0.9f
+
+    /**
+     * Value for `gestureVisibilityThreshold` on [EdgeButton] and [ConfirmButton] that disables the
+     * primary one-handed gesture on the button.
+     */
+    public const val GestureDisabled: Float = 0f
+
     @Composable
     private fun calculateTopPadding(hasIcon: Boolean): Dp {
-        return if (hasIcon) screenHeightFraction(iconTopPaddingFraction)
+        return if (hasIcon) screenWidthFraction(iconTopPaddingFraction)
         else verticalContentPadding()
     }
 
@@ -1374,33 +1802,224 @@ public object AlertDialogDefaults {
 }
 
 @Composable
-private fun DynamicScrollableOrFixedLayout(
-    scrollableContent: @Composable () -> Unit,
-    fixedContent: @Composable (measureStep: Boolean) -> Unit,
+internal fun DialogWithDismissGesture(
+    visible: Boolean,
+    onDismissRequest: () -> Unit,
+    properties: DialogProperties,
+    content: @Composable () -> Unit,
 ) {
-    val measurableContentLambda =
-        @Composable {
-            Box(modifier = Modifier.wrapContentHeight().clearAndSetSemantics {}) {
-                fixedContent(true)
+    val gestureConfig =
+        rememberOneHandedGestureConfiguration(action = OneHandedGestureAction.Dismiss)
+
+    Dialog(
+        visible = visible,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+        modifier =
+            Modifier.oneHandedGesture(
+                gestureConfiguration = gestureConfig,
+                onGestureLabel =
+                    stringResource(
+                        R.string.one_handed_gesture_alert_dialog_dismiss_action_accessibility_text
+                    ),
+                onGesture = onDismissRequest,
+            ),
+        content = content,
+    )
+}
+
+@Composable
+private fun rememberGestureScrollState(): GestureScrollState {
+    val gestureConfiguration =
+        rememberOneHandedGestureConfiguration(
+            action = OneHandedGestureAction.Primary,
+            priority = OneHandedGesturePriority.Scrollable,
+        )
+    val indicatorState = remember { OneHandedGestureScrollIndicatorState() }
+    val coroutineScope = rememberCoroutineScope()
+    return remember(gestureConfiguration, indicatorState, coroutineScope) {
+        GestureScrollState(gestureConfiguration, indicatorState, coroutineScope)
+    }
+}
+
+private class GestureScrollState(
+    val gestureConfiguration: OneHandedGestureConfiguration,
+    val indicatorState: OneHandedGestureScrollIndicatorState,
+    val coroutineScope: CoroutineScope,
+)
+
+@Composable
+private fun BoxScope.GestureScrollIndicator(
+    gestureScrollState: GestureScrollState,
+    scrollState: ScalingLazyListState,
+) {
+    OneHandedGestureScrollIndicator(
+        gestureConfiguration = gestureScrollState.gestureConfiguration,
+        indicatorState = gestureScrollState.indicatorState,
+        scrollState = scrollState,
+        modifier = Modifier.align(Alignment.CenterEnd),
+    )
+}
+
+@Composable
+private fun BoxScope.GestureScrollIndicator(
+    gestureScrollState: GestureScrollState,
+    scrollState: TransformingLazyColumnState,
+) {
+    OneHandedGestureScrollIndicator(
+        gestureConfiguration = gestureScrollState.gestureConfiguration,
+        indicatorState = gestureScrollState.indicatorState,
+        scrollState = scrollState,
+        modifier = Modifier.align(Alignment.CenterEnd),
+    )
+}
+
+@Composable
+private fun Modifier.gestureScroll(
+    gestureScrollState: GestureScrollState,
+    scrollState: ScalingLazyListState,
+): Modifier =
+    oneHandedGesture(
+        gestureConfiguration = gestureScrollState.gestureConfiguration,
+        onGestureLabel =
+            stringResource(
+                R.string.one_handed_gesture_alert_dialog_primary_action_scroll_accessibility_text
+            ),
+        onGestureAvailable = {
+            gestureScrollState.coroutineScope.launch {
+                gestureScrollState.indicatorState.showIndicator()
             }
-        }
-    val fixedContentLambda = @Composable { fixedContent(false) }
-    SubcomposeLayout { constraints ->
-        val fixedMeasurable =
-            subcompose("measurableContent", measurableContentLambda)
-                .first()
-                .measure(constraints.copy(maxHeight = Constraints.Infinity))
-        val isScrollable = fixedMeasurable.height > constraints.maxHeight
+        },
+        onGesture = { OneHandedGestureDefaults.scrollDown(scrollState) },
+    )
+
+@Composable
+private fun Modifier.gestureScroll(
+    gestureScrollState: GestureScrollState,
+    scrollState: TransformingLazyColumnState,
+): Modifier =
+    oneHandedGesture(
+        gestureConfiguration = gestureScrollState.gestureConfiguration,
+        onGestureLabel =
+            stringResource(
+                R.string.one_handed_gesture_alert_dialog_primary_action_scroll_accessibility_text
+            ),
+        onGestureAvailable = {
+            gestureScrollState.coroutineScope.launch {
+                gestureScrollState.indicatorState.showIndicator()
+            }
+        },
+        onGesture = { OneHandedGestureDefaults.scrollDown(scrollState) },
+    )
+
+@Composable
+private fun DynamicScrollableOrFixedLayout(
+    modifier: Modifier = Modifier,
+    scrollableContent: @Composable () -> Unit,
+    fixedContent: @Composable (Modifier) -> Unit,
+) {
+    // SubcomposeLayout keeps all slots subcomposed during the current measure pass active in the
+    // semantics tree even when unplaced. When isScrollable is true, we clear descendant semantics
+    // on fixedContent via a SemanticsModifierNode so its nodes aren't duplicated in the merged
+    // semantics tree alongside scrollableContent, without triggering a recomposition.
+    val clearSemanticsState = remember { ClearSemanticsState() }
+    val fixedContentLambda: @Composable () -> Unit = {
+        fixedContent(Modifier.clearSemanticsIf(clearSemanticsState))
+    }
+    SubcomposeLayout(modifier = modifier) { constraints ->
+        val fixedMeasurable = subcompose("fixedContent", fixedContentLambda).first()
+        val fixedPlaceable =
+            fixedMeasurable.measure(
+                if (constraints.hasBoundedHeight) {
+                    constraints.copy(
+                        minHeight = constraints.maxHeight,
+                        maxHeight = Constraints.Infinity,
+                    )
+                } else {
+                    constraints
+                }
+            )
+        val isScrollable = fixedPlaceable.height > constraints.maxHeight
+        clearSemanticsState.shouldClear = isScrollable
 
         val placeable =
-            subcompose(
-                    if (isScrollable) "scrollableContent" else "fixedContent",
-                    if (isScrollable) scrollableContent else fixedContentLambda,
-                )
-                .first()
-                .measure(constraints)
+            if (isScrollable) {
+                subcompose("scrollableContent", scrollableContent).first().measure(constraints)
+            } else {
+                fixedPlaceable
+            }
         layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
     }
+}
+
+private fun Modifier.clearSemanticsIf(state: ClearSemanticsState): Modifier =
+    this then ClearSemanticsIfElement(state)
+
+private class ClearSemanticsState {
+    var node: ClearSemanticsIfNode? = null
+    var shouldClear: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                node?.invalidateSemantics()
+            }
+        }
+}
+
+private class ClearSemanticsIfElement(val state: ClearSemanticsState) :
+    ModifierNodeElement<ClearSemanticsIfNode>() {
+    override fun create(): ClearSemanticsIfNode = ClearSemanticsIfNode(state)
+
+    override fun update(node: ClearSemanticsIfNode) {
+        if (node.state !== state) {
+            if (node.state.node === node) {
+                node.state.node = null
+            }
+            val shouldInvalidate = node.state.shouldClear != state.shouldClear
+            node.state = state
+            if (node.isAttached) {
+                state.node = node
+                if (shouldInvalidate) {
+                    node.invalidateSemantics()
+                }
+            }
+        }
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "clearSemanticsIf"
+        properties["shouldClear"] = state.shouldClear
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) {
+            return true
+        }
+        if (other !is ClearSemanticsIfElement) {
+            return false
+        }
+        return state === other.state
+    }
+
+    override fun hashCode(): Int = state.hashCode()
+}
+
+private class ClearSemanticsIfNode(var state: ClearSemanticsState) :
+    Modifier.Node(), SemanticsModifierNode {
+    override val shouldClearDescendantSemantics: Boolean
+        get() = state.shouldClear
+
+    override fun onAttach() {
+        state.node = this
+    }
+
+    override fun onDetach() {
+        if (state.node === this) {
+            state.node = null
+        }
+    }
+
+    override fun SemanticsPropertyReceiver.applySemantics() {}
 }
 
 @Composable
@@ -1413,68 +2032,87 @@ private fun AlertDialogContentFixedWithConfirmationButtons(
     text: @Composable (() -> Unit)? = null,
     verticalArrangement: Arrangement.Vertical = AlertDialogDefaults.VerticalArrangement,
     contentPadding: PaddingValues,
-    forMeasure: Boolean,
 ) {
-    Column(
-        // Ignore the incoming modifier on measuring pass. We need to know the unconstrained height.
-        modifier =
-            if (forMeasure) Modifier.padding(contentPadding).wrapContentSize()
-            else modifier.padding(contentPadding).fillMaxSize(),
-        verticalArrangement = verticalArrangement,
-    ) {
-        Column(
-            modifier =
-                Modifier.fillMaxWidth().let { modifier ->
-                    if (!forMeasure) modifier.weight(1f) else modifier
-                },
-            verticalArrangement = verticalArrangement,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (icon != null) {
-                Row { IconAlert(content = icon) }
-            }
-            Row { Title(content = title) }
-            if (text != null) {
-                Row { TextMessage(content = text) }
+    val measurePolicy =
+        remember(verticalArrangement) {
+            MeasurePolicy { measurables, constraints ->
+                val spacing = verticalArrangement.spacing.roundToPx()
+                val buttonsPlaceable =
+                    measurables[1].measure(constraints.copy(minWidth = 0, minHeight = 0))
+                val topMinHeight =
+                    (constraints.minHeight - buttonsPlaceable.height - spacing).coerceIn(
+                        0,
+                        constraints.maxHeight,
+                    )
+                val topPlaceable =
+                    measurables[0].measure(constraints.copy(minHeight = topMinHeight))
+                val width =
+                    constraints.constrainWidth(maxOf(topPlaceable.width, buttonsPlaceable.width))
+                val height =
+                    constraints.constrainHeight(
+                        (topPlaceable.height + spacing + buttonsPlaceable.height).coerceAtLeast(0)
+                    )
+                layout(width, height) {
+                    topPlaceable.place(
+                        Alignment.CenterHorizontally.align(
+                            topPlaceable.width,
+                            width,
+                            layoutDirection,
+                        ),
+                        0,
+                    )
+                    buttonsPlaceable.place(
+                        Alignment.CenterHorizontally.align(
+                            buttonsPlaceable.width,
+                            width,
+                            layoutDirection,
+                        ),
+                        topPlaceable.height + spacing,
+                    )
+                }
             }
         }
-        Box(
-            modifier = Modifier.fillMaxWidth().wrapContentHeight(),
-            contentAlignment = Alignment.Center,
-        ) {
+    Layout(
+        modifier = modifier.padding(contentPadding).fillMaxSize(),
+        content = {
+            AlertDialogContentFixed(
+                title = title,
+                icon = icon,
+                text = text,
+                verticalArrangement = verticalArrangement,
+            )
             ConfirmDismissButtons(
                 confirmButton = confirmButton,
                 dismissButton = dismissButton,
                 extraBottomPaddingEnabled = false,
             )
-        }
-    }
+        },
+        measurePolicy = measurePolicy,
+    )
 }
 
 @Composable
 private fun AlertDialogContentFixed(
     title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
     icon: @Composable (() -> Unit)? = null,
     text: @Composable (() -> Unit)? = null,
-    modifier: Modifier,
     verticalArrangement: Arrangement.Vertical = AlertDialogDefaults.VerticalArrangement,
-    contentPadding: PaddingValues,
-    forMeasure: Boolean,
+    contentPadding: PaddingValues? = null,
 ) {
     Column(
-        // Ignore the incoming modifier on measuring pass. We need to know the unconstrained height.
         modifier =
-            if (forMeasure) Modifier.padding(contentPadding).wrapContentSize()
-            else modifier.padding(contentPadding).fillMaxSize(),
+            (if (contentPadding != null) modifier.padding(contentPadding) else modifier)
+                .fillMaxSize(),
         verticalArrangement = verticalArrangement,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (icon != null) {
-            Row { IconAlert(content = icon) }
+            IconAlert(content = icon)
         }
-        Row { Title(content = title) }
+        Title(content = title)
         if (text != null) {
-            Row { TextMessage(content = text) }
+            TextMessage(content = text)
         }
     }
 }
@@ -1617,9 +2255,7 @@ private fun ConfirmDismissButtons(
         if (extraBottomPaddingEnabled)
             Spacer(
                 modifier =
-                    Modifier.height(
-                        screenHeightFraction(ConfirmDismissButtonsBottomSpacingFraction)
-                    )
+                    Modifier.height(screenWidthFraction(ConfirmDismissButtonsBottomSpacingFraction))
             )
     }
 }
@@ -1660,9 +2296,7 @@ private fun TransformingLazyColumnItemScope.ConfirmDismissButtons(
         if (extraBottomPaddingEnabled)
             Spacer(
                 modifier =
-                    Modifier.height(
-                        screenHeightFraction(ConfirmDismissButtonsBottomSpacingFraction)
-                    )
+                    Modifier.height(screenWidthFraction(ConfirmDismissButtonsBottomSpacingFraction))
             )
     }
 }

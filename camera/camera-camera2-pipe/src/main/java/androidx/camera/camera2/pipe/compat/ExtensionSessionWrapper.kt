@@ -24,13 +24,13 @@ import android.os.Build
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import androidx.camera.camera2.pipe.CameraInterop
-import androidx.camera.camera2.pipe.FrameNumber
-import androidx.camera.camera2.pipe.UnsafeWrapper
 import androidx.camera.camera2.pipe.core.Log
 import androidx.camera.camera2.pipe.internal.CameraErrorListener
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.UnsafeWrapper
+import java.util.Collections.synchronizedMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executor
-import kotlin.reflect.KClass
 import kotlinx.atomicfu.AtomicLong
 import kotlinx.atomicfu.atomic
 
@@ -150,7 +150,8 @@ internal open class AndroidCameraExtensionSession(
     override val id: CameraInterop.CameraCaptureSessionId =
         CameraInterop.nextCameraCaptureSessionId()
     private val frameNumbers: AtomicLong = atomic(0L)
-    private val extensionSessionMap: MutableMap<CameraExtensionSession, Long> = HashMap()
+    private val extensionSessionMap: MutableMap<CameraExtensionSession, Long> =
+        synchronizedMap(HashMap())
 
     override fun capture(
         request: CaptureRequest,
@@ -242,9 +243,9 @@ internal open class AndroidCameraExtensionSession(
     }
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T : Any> unwrapAs(type: KClass<T>): T? =
+    override fun <T : Any> unwrapAs(type: Class<T>): T? =
         when (type) {
-            CameraExtensionSession::class -> cameraExtensionSession as T?
+            CameraExtensionSession::class.java -> cameraExtensionSession as T?
             else -> null
         }
 
@@ -288,12 +289,13 @@ internal open class AndroidCameraExtensionSession(
 
         override fun onCaptureFailed(session: CameraExtensionSession, request: CaptureRequest) {
             val frameNumber = dequeueFrameNumber(session)
-            captureCallback.onCaptureFailed(request, FrameNumber(frameNumber))
+            captureCallback.onCaptureFailed(request, CameraFrameNumber(frameNumber))
         }
 
         override fun onCaptureSequenceCompleted(session: CameraExtensionSession, sequenceId: Int) {
-            val frameNumber = extensionSessionMap[session]
-            captureCallback.onCaptureSequenceCompleted(sequenceId, frameNumber!!)
+            val frameNumber =
+                extensionSessionMap.computeIfAbsent(session) { frameNumbers.incrementAndGet() }
+            captureCallback.onCaptureSequenceCompleted(sequenceId, frameNumber)
         }
 
         override fun onCaptureSequenceAborted(session: CameraExtensionSession, sequenceId: Int) {
@@ -306,7 +308,7 @@ internal open class AndroidCameraExtensionSession(
             result: TotalCaptureResult,
         ) {
             val frameNumber = dequeueFrameNumber(session)
-            captureCallback.onCaptureCompleted(request, result, FrameNumber(frameNumber))
+            captureCallback.onCaptureCompleted(request, result, CameraFrameNumber(frameNumber))
         }
 
         private fun incrementAndGetNextFrameNumber(session: CameraExtensionSession): Long {
@@ -356,14 +358,20 @@ internal open class AndroidCameraExtensionSession(
         ) {}
 
         override fun onCaptureFailed(session: CameraExtensionSession, request: CaptureRequest) {
-            if (captureRequestMap[request]!!.size == 1) {
-                val frameNumber = captureRequestMap[request]!![0]
-                captureCallback.onCaptureFailed(request, FrameNumber(frameNumber))
+            val frameNumbersForRequest =
+                captureRequestMap.getOrPut(request) {
+                    val frameNumber = frameNumbers.incrementAndGet()
+                    extensionSessionMap[session] = frameNumber
+                    mutableListOf(frameNumber)
+                }
+            if (frameNumbersForRequest.size == 1) {
+                val frameNumber = frameNumbersForRequest[0]
+                captureCallback.onCaptureFailed(request, CameraFrameNumber(frameNumber))
             } else {
                 Log.info {
                     "onCaptureFailed is not triggered for repeating requests. Request " +
                         "frame numbers: " +
-                        captureRequestMap[request]!!.stream()
+                        frameNumbersForRequest.joinToString()
                 }
             }
         }
@@ -377,8 +385,9 @@ internal open class AndroidCameraExtensionSession(
         }
 
         override fun onCaptureSequenceCompleted(session: CameraExtensionSession, sequenceId: Int) {
-            val frameNumber = extensionSessionMap[session]
-            captureCallback.onCaptureSequenceCompleted(sequenceId, frameNumber!!)
+            val frameNumber =
+                extensionSessionMap.computeIfAbsent(session) { frameNumbers.incrementAndGet() }
+            captureCallback.onCaptureSequenceCompleted(sequenceId, frameNumber)
         }
 
         override fun onCaptureSequenceAborted(session: CameraExtensionSession, sequenceId: Int) {

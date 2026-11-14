@@ -21,11 +21,10 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.testing.launchFragmentInContainer
 import androidx.test.filters.LargeTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Test
 
 @LargeTest
@@ -33,9 +32,13 @@ import org.junit.Test
 class WindowInfoTest {
     @Test
     fun launchFragment_windowInfo_isWindowFocused_true() {
-        runComposeUiTest(StandardTestDispatcher()) {
-            launchFragmentInContainer<TestFragment>().onFragment {
-                waitUntil("isWindowFocused", timeoutMillis = 5_000) { it.isWindowFocused == true }
+        runComposeUiTest {
+            launchFragmentInContainer<TestFragment>().use { scenario ->
+                waitUntil("isWindowFocused", timeoutMillis = 5_000) {
+                    var isWindowFocused = false
+                    scenario.onFragment { isWindowFocused = it.isWindowFocused == true }
+                    isWindowFocused
+                }
             }
         }
     }

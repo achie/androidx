@@ -23,10 +23,13 @@ import androidx.ink.brush.StockBrushes
 /** Defaults for Ink attributes. */
 internal object InkDefaults {
     /** Default ink [Color] for drawing. */
-    private const val PEN_COLOR = Color.BLACK
+    const val DEFAULT_INK_COLOR = Color.BLACK
 
     /** Default ink [Brush] size for drawing. */
-    private const val BRUSH_SIZE = 5f
+    const val DEFAULT_BRUSH_SIZE = 5f
+
+    /** Default ink [Brush] size for drawing. */
+    const val HIGHLIGHTER_ALPHA = 0x66
 
     /**
      * Default ink [Brush] epsilon for drawing.
@@ -39,8 +42,8 @@ internal object InkDefaults {
     val PEN_BRUSH =
         Brush.createWithColorIntArgb(
             family = StockBrushes.pressurePen(),
-            colorIntArgb = PEN_COLOR,
-            size = BRUSH_SIZE,
+            colorIntArgb = DEFAULT_INK_COLOR,
+            size = DEFAULT_BRUSH_SIZE,
             epsilon = EPSILON_VALUE,
         )
 }

@@ -1,0 +1,45 @@
+// Signature format: 5.0
+// - surface=restricted-atomic-group
+package androidx.glance.adaptive.appwidget {
+
+  public final class GlanceAdaptiveAppWidgetManagerKt {
+    method public static androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager GlanceAdaptiveWidgetManager(android.content.Context context);
+    method public static suspend Object? requestPin(androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager, String widgetName, optional String? widgetId, optional androidx.glance.adaptive.core.templates.GlanceAdaptiveTemplate? initialData, optional android.os.Bundle options, kotlin.coroutines.Continuation<? super java.lang.Boolean>);
+    method @BytecodeOnly public static Object! requestPin$default(androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager!, String!, String!, androidx.glance.adaptive.core.templates.GlanceAdaptiveTemplate!, android.os.Bundle!, kotlin.coroutines.Continuation!, int, Object!);
+    method public static void setConfigurationResult(androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager, android.app.Activity activity, optional String? widgetId, optional android.os.Bundle options);
+    method @BytecodeOnly public static void setConfigurationResult$default(androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager!, android.app.Activity!, String!, android.os.Bundle!, int, Object!);
+    method public static suspend Object? setPreview(androidx.glance.adaptive.core.GlanceAdaptiveWidgetManager, String widgetName, androidx.glance.adaptive.core.templates.GlanceAdaptiveTemplate previewData, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+  }
+
+  public abstract class GlanceAdaptiveWidgetReceiver extends android.appwidget.AppWidgetProvider {
+    ctor public GlanceAdaptiveWidgetReceiver();
+    method @InaccessibleFromKotlin public kotlin.coroutines.CoroutineContext getCoroutineContext();
+    method @InaccessibleFromKotlin public abstract String getWidgetName();
+    method public abstract suspend Object? onUpdate(android.content.Context context, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    property public kotlin.coroutines.CoroutineContext coroutineContext;
+    property public abstract String widgetName;
+    field public static final String ACTION_DEBUG_UPDATE = "androidx.glance.adaptive.appwidget.action.DEBUG_UPDATE";
+    field public static final androidx.glance.adaptive.appwidget.GlanceAdaptiveWidgetReceiver.Companion Companion;
+  }
+
+  public static final class GlanceAdaptiveWidgetReceiver.Companion {
+    property public static String ACTION_DEBUG_UPDATE;
+  }
+
+}
+
+package androidx.glance.adaptive.appwidget.selection {
+
+  public final class AppWidgetSurface extends androidx.glance.adaptive.core.selection.GlanceSurface {
+    field public static final androidx.glance.adaptive.appwidget.selection.AppWidgetSurface.Companion Companion;
+    field public static final androidx.glance.adaptive.appwidget.selection.AppWidgetSurface MOBILE_HOME_SCREEN;
+    field public static final androidx.glance.adaptive.appwidget.selection.AppWidgetSurface MOBILE_LOCK_SCREEN;
+  }
+
+  public static final class AppWidgetSurface.Companion {
+    property public androidx.glance.adaptive.appwidget.selection.AppWidgetSurface MOBILE_HOME_SCREEN;
+    property public androidx.glance.adaptive.appwidget.selection.AppWidgetSurface MOBILE_LOCK_SCREEN;
+  }
+
+}
+

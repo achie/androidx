@@ -16,11 +16,14 @@
 
 package androidx.build
 
+import androidx.inspection.gradle.GenerateInspectionPlatformVersionTask
 import androidx.inspection.gradle.InspectionExtension
 import androidx.inspection.gradle.InspectionPlugin
 import androidx.inspection.gradle.createConsumeInspectionConfiguration
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
+import org.gradle.kotlin.dsl.getByType
+import org.gradle.kotlin.dsl.withType
 
 /** Copies artifacts prepared by InspectionPlugin into $destDir/inspection */
 fun Project.publishInspectionArtifacts() {
@@ -31,6 +34,14 @@ fun Project.publishInspectionArtifacts() {
                 createConsumeInspectionConfiguration(),
                 "inspection",
             )
+            tasks.withType<GenerateInspectionPlatformVersionTask>().configureEach {
+                it.inspectionProjectVersion.set(
+                    extensions
+                        .getByType<AndroidXExtension>()
+                        .LibraryVersions["INSPECTION"]
+                        .toString()
+                )
+            }
         }
     }
 }
@@ -42,12 +53,11 @@ internal fun Project.publishInspectionConfiguration(
 ) {
     project.dependencies.add(configuration.name, project)
     val sync =
-        tasks.register(name, SingleFileCopy::class.java) {
-            it.dependsOn(configuration)
-            it.sourceFile.set(project.files(configuration).singleFile)
+        tasks.register(name, SingleFileCopy::class.java) { task ->
+            task.sourceFile.fileProvider(configuration.elements.map { it.single().asFile })
             val extension = project.extensions.getByType(InspectionExtension::class.java)
             val fileName = extension.name ?: "${project.name}.jar"
-            it.destinationFile.set(getDistributionDirectory().file("$dirName/$fileName"))
+            task.destinationFile.set(getDistributionDirectory().file("$dirName/$fileName"))
         }
     addToBuildOnServer(sync)
 }

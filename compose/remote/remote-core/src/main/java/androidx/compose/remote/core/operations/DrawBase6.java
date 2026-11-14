@@ -142,12 +142,12 @@ public abstract class DrawBase6 extends PaintOperation implements VariableSuppor
      */
     public static void read(
             @NonNull WireBuffer buffer, @NonNull List<Operation> operations, @NonNull Maker build) {
-        float sv1 = buffer.readFloat();
-        float sv2 = buffer.readFloat();
-        float sv3 = buffer.readFloat();
-        float sv4 = buffer.readFloat();
-        float sv5 = buffer.readFloat();
-        float sv6 = buffer.readFloat();
+        float sv1 = buffer.readNanId();
+        float sv2 = buffer.readNanId();
+        float sv3 = buffer.readNanId();
+        float sv4 = buffer.readNanId();
+        float sv5 = buffer.readNanId();
+        float sv6 = buffer.readNanId();
 
         Operation op = build.create(sv1, sv2, sv3, sv4, sv5, sv6);
         operations.add(op);
@@ -194,5 +194,65 @@ public abstract class DrawBase6 extends PaintOperation implements VariableSuppor
                 .add(v4Name, mValue4, mV4)
                 .add(v5Name, mValue5, mV5)
                 .add(v6Name, mValue6, mV6);
+    }
+
+    /** Returns {@code mV1}. */
+    public float getV1() {
+        return mV1;
+    }
+
+    /** Returns {@code mV2}. */
+    public float getV2() {
+        return mV2;
+    }
+
+    /** Returns {@code mV3}. */
+    public float getV3() {
+        return mV3;
+    }
+
+    /** Returns {@code mV4}. */
+    public float getV4() {
+        return mV4;
+    }
+
+    /** Returns {@code mV5}. */
+    public float getV5() {
+        return mV5;
+    }
+
+    /** Returns {@code mV6}. */
+    public float getV6() {
+        return mV6;
+    }
+
+    /** Returns {@code mValue1}. */
+    public float getValue1() {
+        return mValue1;
+    }
+
+    /** Returns {@code mValue2}. */
+    public float getValue2() {
+        return mValue2;
+    }
+
+    /** Returns {@code mValue3}. */
+    public float getValue3() {
+        return mValue3;
+    }
+
+    /** Returns {@code mValue4}. */
+    public float getValue4() {
+        return mValue4;
+    }
+
+    /** Returns {@code mValue5}. */
+    public float getValue5() {
+        return mValue5;
+    }
+
+    /** Returns {@code mValue6}. */
+    public float getValue6() {
+        return mValue6;
     }
 }

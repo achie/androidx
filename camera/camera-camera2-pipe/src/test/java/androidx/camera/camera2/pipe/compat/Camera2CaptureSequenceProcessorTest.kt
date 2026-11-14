@@ -16,24 +16,24 @@
 
 package androidx.camera.camera2.pipe.compat
 
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL
 import android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL
 import android.hardware.camera2.CaptureRequest
-import android.os.Build
 import android.os.Looper
 import android.util.Size
-import android.view.Surface
 import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraStream
+import androidx.camera.camera2.pipe.MemoryEstimator
 import androidx.camera.camera2.pipe.OutputStream
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.RequestTemplate
 import androidx.camera.camera2.pipe.StreamFormat
+import androidx.camera.camera2.pipe.StrictMode
 import androidx.camera.camera2.pipe.graph.StreamGraphImpl
 import androidx.camera.camera2.pipe.testing.FakeCameraDeviceWrapper
 import androidx.camera.camera2.pipe.testing.FakeCaptureSequenceListener
+import androidx.camera.camera2.pipe.testing.FakeSurfaces
 import androidx.camera.camera2.pipe.testing.FakeThreads
 import androidx.camera.camera2.pipe.testing.RobolectricCameraPipeTestRunner
 import androidx.camera.camera2.pipe.testing.RobolectricCameras
@@ -51,17 +51,13 @@ import org.robolectric.annotation.internal.DoNotInstrument
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricCameraPipeTestRunner::class)
 @DoNotInstrument
-@Config(minSdk = Build.VERSION_CODES.P, maxSdk = 29)
+@Config(maxSdk = 29)
 internal class Camera2CaptureSequenceProcessorTest {
-    // TODO: This fails with "Failed to allocate native CameraMetadata" on robolectric prior
-    //  to Android P. Update the test class to include support for older versions when a new
-    //  version of robolectric is dropped into AndroidX.
 
     private val mainLooper = Shadows.shadowOf(Looper.getMainLooper())
-    private val cameraId =
-        RobolectricCameras.create(
-            mapOf(INFO_SUPPORTED_HARDWARE_LEVEL to INFO_SUPPORTED_HARDWARE_LEVEL_FULL)
-        )
+    private val cameraId = RobolectricCameras.create {
+        set(INFO_SUPPORTED_HARDWARE_LEVEL, INFO_SUPPORTED_HARDWARE_LEVEL_FULL)
+    }
     private val testCamera = RobolectricCameras.open(cameraId)
 
     private val stream1Config = CameraStream.Config.create(Size(640, 480), StreamFormat.YUV_420_888)
@@ -96,42 +92,23 @@ internal class Camera2CaptureSequenceProcessorTest {
             sessionMode = CameraGraph.OperatingMode.HIGH_SPEED,
         )
 
-    private val streamGraph = StreamGraphImpl(testCamera.metadata, graphConfig, mock(), mock())
+    private val streamGraph =
+        StreamGraphImpl(testCamera.metadata, graphConfig, mock(), mock(), MemoryEstimator.create())
 
     private val highSpeedStreamGraph =
-        StreamGraphImpl(testCamera.metadata, highSpeedGraphConfig, mock(), mock())
-
-    private val surface1 =
-        Surface(
-            SurfaceTexture(0).also {
-                val output = stream1Config.outputs.first()
-                it.setDefaultBufferSize(output.size.width, output.size.height)
-            }
+        StreamGraphImpl(
+            testCamera.metadata,
+            highSpeedGraphConfig,
+            mock(),
+            mock(),
+            MemoryEstimator.create(),
         )
 
-    private val surface2 =
-        Surface(
-            SurfaceTexture(0).also {
-                val output = stream2Config.outputs.first()
-                it.setDefaultBufferSize(output.size.width, output.size.height)
-            }
-        )
-
-    private val surface3 =
-        Surface(
-            SurfaceTexture(0).also {
-                val output = stream3Config.outputs.first()
-                it.setDefaultBufferSize(output.size.width, output.size.height)
-            }
-        )
-
-    private val surface4 =
-        Surface(
-            SurfaceTexture(0).also {
-                val output = stream4Config.outputs.first()
-                it.setDefaultBufferSize(output.size.width, output.size.height)
-            }
-        )
+    private val fakeSurfaces = FakeSurfaces()
+    private val surface1 = fakeSurfaces.createFakeSurface(stream1Config.outputs.first().size)
+    private val surface2 = fakeSurfaces.createFakeSurface(stream2Config.outputs.first().size)
+    private val surface3 = fakeSurfaces.createFakeSurface(stream3Config.outputs.first().size)
+    private val surface4 = fakeSurfaces.createFakeSurface(stream4Config.outputs.first().size)
 
     private val stream1 = streamGraph[stream1Config]!!
     private val stream2 = streamGraph[stream2Config]!!
@@ -145,6 +122,7 @@ internal class Camera2CaptureSequenceProcessorTest {
     fun teardown() {
         mainLooper.idle()
         RobolectricCameras.clear()
+        fakeSurfaces.close()
     }
 
     @Test
@@ -171,11 +149,10 @@ internal class Camera2CaptureSequenceProcessorTest {
         val request = requestBuilder.build()
         assertThat(request).isNotNull()
 
-        // TODO: Add support for checking parameters when robolectric supports it.
-        // assertThat(request[CaptureRequest.CONTROL_AE_MODE])
-        //    .isEqualTo(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-        // assertThat(request[CaptureRequest.CONTROL_AF_MODE])
-        //    .isEqualTo(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+        assertThat(request[CaptureRequest.CONTROL_AE_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+        assertThat(request[CaptureRequest.CONTROL_AF_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
     }
 
     @Test
@@ -186,7 +163,13 @@ internal class Camera2CaptureSequenceProcessorTest {
                 FakeThreads.fromTestScope(this),
                 RequestTemplate(1),
                 mapOf(stream1.id to surface1, stream2.id to surface2),
+                outputToSurfaceMap =
+                    mapOf(
+                        stream1.outputs.single().id to surface1,
+                        stream2.outputs.single().id to surface2,
+                    ),
                 streamGraph,
+                StrictMode(true),
             )
 
         val sequence =
@@ -217,18 +200,25 @@ internal class Camera2CaptureSequenceProcessorTest {
         assertThat(fakeCaptureSessionWrapper.lastCapture).hasSize(1)
         assertThat(fakeCaptureSessionWrapper.lastRepeating).isNull()
 
+        assertThat(fakeCaptureSessionWrapper.lastCapture!![0][CaptureRequest.CONTROL_AE_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+        assertThat(fakeCaptureSessionWrapper.lastCapture!![0][CaptureRequest.CONTROL_AF_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+
         // TODO: Add support for checking parameters when robolectric supports it.
     }
 
     @Test
-    fun requestIsSubmittedWithPartialSurfaces() = runTest {
+    fun requestIsNotSubmittedWithPartialSurfaces() = runTest {
         val captureSequenceProcessor =
             Camera2CaptureSequenceProcessor(
                 fakeCaptureSessionWrapper,
                 FakeThreads.fromTestScope(this),
                 RequestTemplate(1),
                 mapOf(stream1.id to surface1),
+                mapOf(stream1.outputs.single().id to surface1),
                 streamGraph,
+                StrictMode(true),
             )
         val captureSequence =
             captureSequenceProcessor.build(
@@ -240,11 +230,7 @@ internal class Camera2CaptureSequenceProcessorTest {
                 sequenceListener = FakeCaptureSequenceListener(),
                 listeners = emptyList(),
             )
-        assertThat(captureSequence).isNotNull()
-
-        val result = captureSequenceProcessor.submit(captureSequence!!)
-        assertThat(result).isNotNull()
-        assertThat(result).isGreaterThan(0)
+        assertThat(captureSequence).isNull()
     }
 
     @Test
@@ -255,7 +241,9 @@ internal class Camera2CaptureSequenceProcessorTest {
                 FakeThreads.fromTestScope(this),
                 RequestTemplate(1),
                 mapOf(stream1.id to surface1),
+                mapOf(stream1.outputs.single().id to surface1),
                 streamGraph,
+                StrictMode(true),
             )
 
         // Key part is that only stream1 has a surface, but stream2 is requested.
@@ -281,12 +269,14 @@ internal class Camera2CaptureSequenceProcessorTest {
                 FakeThreads.fromTestScope(this),
                 RequestTemplate(1),
                 mapOf(stream1.id to surface1),
+                mapOf(stream1.outputs.single().id to surface1),
                 streamGraph,
+                StrictMode(true),
             )
         val captureSequence =
             captureSequenceProcessor.build(
                 isRepeating = false,
-                requests = listOf(Request(listOf(stream1.id, stream2.id))),
+                requests = listOf(Request(listOf(stream1.id))),
                 defaultParameters = mapOf<Any, Any?>(),
                 graphParameters = mapOf<Any, Any?>(),
                 requiredParameters = mapOf<Any, Any?>(),
@@ -296,11 +286,11 @@ internal class Camera2CaptureSequenceProcessorTest {
 
         assertThat(captureSequence).isNotNull()
         assertThat(captureSequence!!.captureMetadataList).isNotEmpty()
-        captureSequence.captureMetadataList[0].unwrapAs(CameraCaptureSession::class)
+        captureSequence.captureMetadataList[0].unwrapAs(CameraCaptureSession::class.java)
 
         assertThat(fakeCaptureSessionWrapper.unwrappedClasses.size).isEqualTo(1)
         assertThat(fakeCaptureSessionWrapper.unwrappedClasses[0])
-            .isEqualTo(CameraCaptureSession::class)
+            .isEqualTo(CameraCaptureSession::class.java)
     }
 
     @Test
@@ -311,7 +301,12 @@ internal class Camera2CaptureSequenceProcessorTest {
                 FakeThreads.fromTestScope(this),
                 RequestTemplate(1),
                 mapOf(stream3.id to surface3, stream4.id to surface4),
+                mapOf(
+                    stream3.outputs.single().id to surface3,
+                    stream4.outputs.single().id to surface4,
+                ),
                 highSpeedStreamGraph,
+                StrictMode(true),
             )
 
         val sequence =
@@ -341,6 +336,11 @@ internal class Camera2CaptureSequenceProcessorTest {
         assertThat(result).isGreaterThan(0)
         assertThat(fakeCaptureSessionWrapper.lastCapture).hasSize(1)
         assertThat(fakeCaptureSessionWrapper.lastRepeating).isNull()
+
+        assertThat(fakeCaptureSessionWrapper.lastCapture!![0][CaptureRequest.CONTROL_AE_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+        assertThat(fakeCaptureSessionWrapper.lastCapture!![0][CaptureRequest.CONTROL_AF_MODE])
+            .isEqualTo(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
 
         // TODO: Add support for checking parameters when robolectric supports it.
     }

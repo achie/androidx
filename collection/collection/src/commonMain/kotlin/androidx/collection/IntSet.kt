@@ -38,7 +38,7 @@ import kotlin.jvm.JvmField
 import kotlin.jvm.JvmOverloads
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// DO NOT MAKE CHANGES to the kotlin source file.
+// DO NOT MAKE CHANGES to the Kotlin source file.
 //
 // This file was generated from a template in the template directory.
 // Make a change to the original template and run the generateCollections.sh script
@@ -81,7 +81,9 @@ public fun mutableIntSetOf(): MutableIntSet = MutableIntSet()
 
 /** Returns a new [MutableIntSet] with only [element1] in it. */
 public fun mutableIntSetOf(element1: Int): MutableIntSet =
-    MutableIntSet(1).apply { plusAssign(element1) }
+    MutableIntSet(1).apply {
+        plusAssign(element1)
+    }
 
 /** Returns a new [MutableIntSet] with only [element1] and [element2] in it. */
 public fun mutableIntSetOf(element1: Int, element2: Int): MutableIntSet =
@@ -106,7 +108,7 @@ public fun mutableIntSetOf(vararg elements: Int): MutableIntSet =
  * Builds a new [IntSet] by populating a [MutableIntSet] using the given [builderAction].
  *
  * The set passed as a receiver to the [builderAction] is valid only inside that function. Using it
- * outside of the function produces an unspecified behavior.
+ * outside the function produces an unspecified behavior.
  *
  * @param builderAction Lambda in which the [MutableIntSet] can be populated.
  */
@@ -119,7 +121,7 @@ public inline fun buildIntSet(builderAction: MutableIntSet.() -> Unit): IntSet {
  * Builds a new [IntSet] by populating a [MutableIntSet] using the given [builderAction].
  *
  * The set passed as a receiver to the [builderAction] is valid only inside that function. Using it
- * outside of the function produces an unspecified behavior.
+ * outside the function produces an unspecified behavior.
  *
  * @param initialCapacity Hint for the expected number of elements added in the [builderAction].
  * @param builderAction Lambda in which the [MutableIntSet] can be populated.
@@ -225,24 +227,21 @@ public sealed class IntSet {
         contract { callsInPlace(block) }
         val m = metadata
         val lastIndex = m.size - 2 // We always have 0 or at least 2 elements
+        var i = 0
 
-        for (i in 0..lastIndex) {
-            var slot = m[i]
-            if (slot.maskEmptyOrDeleted() != BitmaskMsb) {
-                // Branch-less if (i == lastIndex) 7 else 8
-                // i - lastIndex returns a negative value when i < lastIndex,
-                // so 1 is set as the MSB. By inverting and shifting we get
-                // 0 when i < lastIndex, 1 otherwise.
-                val bitCount = 8 - ((i - lastIndex).inv() ushr 31)
-                for (j in 0 until bitCount) {
-                    if (isFull(slot and 0xFFL)) {
-                        val index = (i shl 3) + j
-                        block(index)
-                    }
-                    slot = slot shr 8
-                }
-                if (bitCount != 8) return
+        while (i <= lastIndex) {
+            val slot = m[i]
+            // In metadata, Empty (0x80), Deleted (0xFE), and Sentinel (0xFF) all have bit 7
+            // set; Full slots have bit 7 unset (< 0x80). Inverting the word and masking
+            // with BitmaskMsb sets bit (8j + 7) if slot j is Full. Sentinel (0xFF) at
+            // capacity index is naturally skipped since its bit 7 is set.
+            var mask = slot.inv() and BitmaskMsb
+            while (mask != 0L) {
+                val index = (i shl 3) + mask.lowestBitSet()
+                block(index)
+                mask = mask and (mask - 1L)
             }
+            i++
         }
     }
 
@@ -255,18 +254,22 @@ public sealed class IntSet {
         contract { callsInPlace(block) }
         val k = elements
 
-        forEachIndex { index -> block(k[index]) }
+        forEachIndex { index ->
+            block(k[index])
+        }
     }
 
     /**
      * Returns true if all elements match the given [predicate].
      *
-     * @param predicate called for elements in the set to determine if it returns return `true` for
-     *   all elements.
+     * @param predicate called for elements in the set to determine if it returns `true` for all
+     *   elements.
      */
     public inline fun all(predicate: (element: Int) -> Boolean): Boolean {
         contract { callsInPlace(predicate) }
-        forEach { element -> if (!predicate(element)) return false }
+        forEach { element ->
+            if (!predicate(element)) return false
+        }
         return true
     }
 
@@ -278,7 +281,9 @@ public sealed class IntSet {
      */
     public inline fun any(predicate: (element: Int) -> Boolean): Boolean {
         contract { callsInPlace(predicate) }
-        forEach { element -> if (predicate(element)) return true }
+        forEach { element ->
+            if (predicate(element)) return true
+        }
         return false
     }
 
@@ -295,7 +300,9 @@ public sealed class IntSet {
     public inline fun count(predicate: (element: Int) -> Boolean): Int {
         contract { callsInPlace(predicate) }
         var count = 0
-        forEach { element -> if (predicate(element)) count++ }
+        forEach { element ->
+            if (predicate(element)) count++
+        }
         return count
     }
 
@@ -318,7 +325,7 @@ public sealed class IntSet {
     public fun joinToString(
         separator: CharSequence = ", ",
         prefix: CharSequence = "",
-        postfix: CharSequence = "", // I know this should be suffix, but this is kotlin's name
+        postfix: CharSequence = "", // I know this should be "suffix", but this is kotlin's name
         limit: Int = -1,
         truncated: CharSequence = "...",
     ): String = buildString {
@@ -352,7 +359,7 @@ public sealed class IntSet {
     public inline fun joinToString(
         separator: CharSequence = ", ",
         prefix: CharSequence = "",
-        postfix: CharSequence = "", // I know this should be suffix, but this is kotlin's name
+        postfix: CharSequence = "", // I know this should be "suffix", but this is kotlin's name
         limit: Int = -1,
         truncated: CharSequence = "...",
         crossinline transform: (Int) -> CharSequence,
@@ -382,7 +389,9 @@ public sealed class IntSet {
     public override fun hashCode(): Int {
         var hash = 0
 
-        forEach { element -> hash += element.hashCode() }
+        forEach { element ->
+            hash += element.hashCode()
+        }
 
         return hash
     }
@@ -432,17 +441,20 @@ public sealed class IntSet {
         val probeMask = _capacity
         var probeOffset = h1(hash) and probeMask
         var probeIndex = 0
+
         while (true) {
             val g = group(metadata, probeOffset)
-            var m = g.match(hash2)
-            while (m.hasNext()) {
-                val index = (probeOffset + m.get()) and probeMask
+            var match = g.match(hash2)
+
+            while (match.hasNext()) {
+                val index = (probeOffset + match.get()) and probeMask
                 if (elements[index] == element) {
                     return index
                 }
-                m = m.next()
+                match = match.next()
             }
 
+            // An Empty slot indicates the element cannot be present further along the probe chain.
             if (g.maskEmpty() != 0L) {
                 break
             }
@@ -503,7 +515,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
             } else {
                 // Round up to the next multiple of 8 and find how many longs we need
                 val size = (((capacity + 1 + ClonedMetadataCount) + 7) and 0x7.inv()) shr 3
-                LongArray(size).apply { fill(AllEmpty) }
+                LongArray(size).apply {
+                    fill(AllEmpty)
+                }
             }
         writeRawMetadata(metadata, capacity, Sentinel)
         initializeGrowth()
@@ -556,7 +570,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
      * @param elements An array of elements to add to the set.
      */
     public operator fun plusAssign(@Suppress("ArrayReturn") elements: IntArray) {
-        elements.forEach { element -> plusAssign(element) }
+        elements.forEach { element ->
+            plusAssign(element)
+        }
     }
 
     /**
@@ -578,7 +594,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
      * @param elements A [IntSet] of elements to add to this set.
      */
     public operator fun plusAssign(elements: IntSet) {
-        elements.forEach { element -> plusAssign(element) }
+        elements.forEach { element ->
+            plusAssign(element)
+        }
     }
 
     /**
@@ -627,7 +645,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
      * @param elements An array of elements to be removed from the set.
      */
     public operator fun minusAssign(@Suppress("ArrayReturn") elements: IntArray) {
-        elements.forEach { element -> minusAssign(element) }
+        elements.forEach { element ->
+            minusAssign(element)
+        }
     }
 
     /**
@@ -648,7 +668,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
      * @param elements An [IntSet] of elements to be removed from the set.
      */
     public operator fun minusAssign(elements: IntSet) {
-        elements.forEach { element -> minusAssign(element) }
+        elements.forEach { element ->
+            minusAssign(element)
+        }
     }
 
     private fun removeElementAt(index: Int) {
@@ -662,6 +684,11 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
     /** Removes all elements from this set. */
     public fun clear() {
         _size = 0
+        // When the set was never allocated (or capacity is 0), avoid redundant array fill calls
+        if (_capacity == 0) {
+            growthLimit = 0
+            return
+        }
         if (metadata !== EmptyGroup) {
             metadata.fill(AllEmpty)
             writeRawMetadata(metadata, _capacity, Sentinel)
@@ -678,61 +705,78 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
     private fun findAbsoluteInsertIndex(element: Int): Int {
         val hash = hash(element)
         val hash1 = h1(hash)
-        val hash2 = h2(hash)
+        val hash2 = h2(hash).toLong()
 
+        // There is no `probeMask == 0` early return: an unallocated table uses [EmptyGroup]
+        // (Sentinel, Empty x7) as metadata, so the probe below terminates in its first group and
+        // the insertion sees growthLimit == 0, routing to [insertSlowPath]. No hash value is live
+        // across the probe loop: insertion takes H2 from the low byte of h2Pattern, and only the
+        // cold [insertSlowPath] recomputes the hash, which avoids register spills around equals().
         val probeMask = _capacity
+
+        val h2Pattern = BitmaskLsb * hash2
         var probeOffset = hash1 and probeMask
         var probeIndex = 0
+        var firstAvail = -1
 
         while (true) {
             val g = group(metadata, probeOffset)
-            var m = g.match(hash2)
-            while (m.hasNext()) {
-                val index = (probeOffset + m.get()) and probeMask
+            var match = g.matchWithPattern(h2Pattern)
+            while (match.hasNext()) {
+                val index = (probeOffset + match.get()) and probeMask
                 if (elements[index] == element) {
                     return index
                 }
-                m = m.next()
+                match = match.next()
             }
 
-            if (g.maskEmpty() != 0L) {
-                break
+            // Test for empty or deleted slots in the current group
+            val emptyOrDeleted = g.maskEmptyOrDeleted()
+            if (emptyOrDeleted != 0L) {
+                if (firstAvail == -1) {
+                    firstAvail = (probeOffset + emptyOrDeleted.lowestBitSet()) and probeMask
+                }
+                if (g.maskEmpty() != 0L) {
+                    break
+                }
             }
 
             probeIndex += GroupWidth
             probeOffset = (probeOffset + probeIndex) and probeMask
         }
 
-        var index = findFirstAvailableSlot(hash1)
-        if (growthLimit == 0 && !isDeleted(metadata, index)) {
-            adjustStorage()
-            index = findFirstAvailableSlot(hash1)
+        val growthLimit = growthLimit
+        // `firstAvail` is guaranteed to be `Empty` or `Deleted` when `_capacity > 0`, and wraps to
+        // slot 0 (`Sentinel`) when `_capacity == 0` (`EmptyGroup`, where `growthLimit == 0`).
+        // In both cases `!isDeleted` is equivalent to `isEmpty` (or unallocated), allowing a single
+        // metadata read to serve both the `growthLimit == 0` check and the decrement below.
+        val isDeleted = isDeleted(metadata, firstAvail)
+        if (growthLimit == 0 && !isDeleted) {
+            return insertSlowPath(element)
         }
-
-        _size += 1
-        growthLimit -= if (isEmpty(metadata, index)) 1 else 0
-        writeMetadata(metadata, _capacity, index, hash2.toLong())
-
-        return index
+        // H2 is the low byte of h2Pattern (BitmaskLsb * h2, with h2 <= 0x7F)
+        writeMetadata(metadata, _capacity, firstAvail, h2Pattern and 0x7FL)
+        _size++
+        this.growthLimit = growthLimit - if (isDeleted) 0 else 1
+        return firstAvail
     }
 
-    /**
-     * Finds the first empty or deleted slot in the set in which we can store a value without
-     * resizing the internal storage.
-     */
-    private fun findFirstAvailableSlot(hash1: Int): Int {
-        val probeMask = _capacity
-        var probeOffset = hash1 and probeMask
-        var probeIndex = 0
-        while (true) {
-            val g = group(metadata, probeOffset)
-            val m = g.maskEmptyOrDeleted()
-            if (m != 0L) {
-                return (probeOffset + m.lowestBitSet()) and probeMask
-            }
-            probeIndex += GroupWidth
-            probeOffset = (probeOffset + probeIndex) and probeMask
-        }
+    private fun insertSlowPath(element: Int): Int {
+        // Recomputing the hash here (only when storage must be adjusted) keeps it out of the
+        // probe loop's live set in the caller.
+        val hash = hash(element)
+        adjustStorage()
+        val m = metadata
+        val capacity = _capacity
+        val index = findFirstAvailableSlot(m, capacity, h1(hash))
+        // After `adjustStorage()`, `capacity > 0`, so `index` is guaranteed to be `Empty` (0x80) or
+        // `Deleted` (0xFE) (never `Full` or `Sentinel`), making `!isDeleted` equivalent to
+        // `isEmpty`.
+        val notDeleted = if (isDeleted(m, index)) 0 else 1
+        writeMetadata(m, capacity, index, h2(hash).toLong())
+        _size++
+        growthLimit -= notDeleted
+        return index
     }
 
     /**
@@ -760,8 +804,16 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
      * detailed in the implementation of abseil's `raw_hash_map`.
      */
     internal fun adjustStorage() { // Internal to prevent inlining
-        if (_capacity > GroupWidth && _size.toULong() * 32UL <= _capacity.toULong() * 25UL) {
-            dropDeletes()
+        if (_capacity > GroupWidth && _size.toLong() * 32L <= _capacity.toLong() * 25L) {
+            // Fast-path when size is 0: directly reset metadata to AllEmpty and restore Sentinel
+            // without slot-by-slot rehashing.
+            if (_size == 0) {
+                metadata.fill(AllEmpty)
+                writeRawMetadata(metadata, _capacity, Sentinel)
+                initializeGrowth()
+            } else {
+                dropDeletes()
+            }
         } else {
             resizeStorage(nextCapacity(_capacity))
         }
@@ -776,6 +828,9 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
         // Converts Sentinel and Deleted to Empty, and Full to Deleted
         convertMetadataForCleanup(metadata, capacity)
 
+        // Track remaining live elements so iteration terminates early as soon as all active
+        // entries are placed, skipping remaining empty and deleted slots.
+        var remaining = _size
         var index = 0
 
         // Drop deleted items and re-hashes surviving entries
@@ -796,7 +851,7 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
 
             val hash = hash(elements[index])
             val hash1 = h1(hash)
-            val targetIndex = findFirstAvailableSlot(hash1)
+            val targetIndex = findFirstAvailableSlot(metadata, capacity, hash1)
 
             // Test if the current index (i) and the new index (targetIndex) fall
             // within the same group based on the hash. If the group doesn't change,
@@ -810,9 +865,10 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
                 writeRawMetadata(metadata, index, hash2.toLong())
 
                 // Copies the metadata into the clone area
-                metadata[metadata.lastIndex] =
-                    (Empty shl 56) or (metadata[0] and 0x00ffffff_ffffffffL)
+                metadata[metadata.lastIndex] = metadata[0]
 
+                remaining--
+                if (remaining == 0) break
                 index++
                 continue
             }
@@ -842,8 +898,10 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
             }
 
             // Copies the metadata into the clone area
-            metadata[metadata.lastIndex] = (Empty shl 56) or (metadata[0] and 0x00ffffff_ffffffffL)
+            metadata[metadata.lastIndex] = metadata[0]
 
+            remaining--
+            if (remaining == 0) break
             index++
         }
 
@@ -854,7 +912,6 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
     internal fun resizeStorage(newCapacity: Int) {
         val previousMetadata = metadata
         val previousElements = elements
-        val previousCapacity = _capacity
 
         initializeStorage(newCapacity)
 
@@ -862,26 +919,40 @@ public class MutableIntSet(initialCapacity: Int = DefaultScatterCapacity) : IntS
         val newElements = elements
         val capacity = _capacity
 
-        for (i in 0 until previousCapacity) {
-            if (isFull(previousMetadata, i)) {
-                val previousElement = previousElements[i]
+        // Scans previous metadata in 8-slot groups using bitmasks (`slot.inv() and BitmaskMsb`)
+        // rather than probing slot-by-slot. Empty groups produce 0L and are skipped in one check.
+        val lastIndex = previousMetadata.size - 2 // We always have 0 or at least 2 entries
+        var i = 0
+        while (i <= lastIndex) {
+            val slot = previousMetadata[i]
+            var mask = slot.inv() and BitmaskMsb
+            while (mask != 0L) {
+                val previousIndex = (i shl 3) + mask.lowestBitSet()
+                val previousElement = previousElements[previousIndex]
                 val hash = hash(previousElement)
-                val index = findFirstAvailableSlot(h1(hash))
+                val index = findFirstAvailableSlot(newMetadata, capacity, h1(hash))
 
                 writeMetadata(newMetadata, capacity, index, h2(hash).toLong())
                 newElements[index] = previousElement
+
+                mask = mask and (mask - 1L)
             }
+            i++
         }
     }
 }
 
 /**
- * Returns the hash code of [k]. The hash spreads low bits to minimize collisions in high 25-bits
- * that are used for probing.
+ * Returns the hash code of [k]. The hash spreads both low and high bits to minimize collisions in
+ * both the high 25-bits used for probing and the low 7-bits used for metadata.
  */
 internal inline fun hash(k: Int): Int {
-    // scramble bits to account for collisions between similar hash values.
-    val hash = k.hashCode() * MurmurHashC1
-    // spread low bits into high bits that are used for probing
-    return hash xor (hash shl 16)
+    val h = k.hashCode()
+    // Fold high bits down so keys with zeroed low bits (e.g. floats) contribute to the multiplier
+    val folded = h xor (h ushr 16)
+    // Avalanche differences across all 32 bits using MurmurHash constant (multiplication propagates
+    // bits up)
+    val scrambled = folded * MurmurHashC1
+    // Fold scrambled high bits into low bits so H2 control tag (lower 7 bits) receives entropy
+    return scrambled xor (scrambled ushr 16)
 }

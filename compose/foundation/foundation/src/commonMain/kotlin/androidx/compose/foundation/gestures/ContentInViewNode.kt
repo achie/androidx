@@ -252,7 +252,7 @@ internal class ContentInViewNode(
                                 // TODO(b/239671493) Should this trigger nested scrolling?
                                 animationJob.cancel(
                                     "Scroll animation cancelled because scroll was not consumed " +
-                                        "($consumedScroll < $delta)"
+                                        "(|$consumedScroll| < |$delta|)"
                                 )
                             }
                         },
@@ -337,20 +337,25 @@ internal class ContentInViewNode(
                 ?: return 0f
 
         val size = viewportSize.toSize()
-        return when (orientation) {
-            Vertical ->
-                bringIntoViewSpec.calculateScrollDistance(
-                    rectangleToMakeVisible.top - viewportAdjustmentForReverseScroll.y,
-                    rectangleToMakeVisible.bottom - rectangleToMakeVisible.top,
-                    size.height,
-                )
-            Horizontal ->
-                bringIntoViewSpec.calculateScrollDistance(
-                    rectangleToMakeVisible.left - viewportAdjustmentForReverseScroll.x,
-                    rectangleToMakeVisible.right - rectangleToMakeVisible.left,
-                    size.width,
-                )
-        }
+        val delta =
+            when (orientation) {
+                Vertical ->
+                    bringIntoViewSpec.calculateScrollDistance(
+                        rectangleToMakeVisible.top - viewportAdjustmentForReverseScroll.y,
+                        rectangleToMakeVisible.bottom - rectangleToMakeVisible.top,
+                        size.height,
+                    )
+                Horizontal ->
+                    bringIntoViewSpec.calculateScrollDistance(
+                        rectangleToMakeVisible.left - viewportAdjustmentForReverseScroll.x,
+                        rectangleToMakeVisible.right - rectangleToMakeVisible.left,
+                        size.width,
+                    )
+            }
+        // Scroll positions are whole pixels, so a target between two pixels can only be reached to
+        // within half a pixel. Treat that as reached, as isMaxVisible does, or the animation chases
+        // the target forever whenever another request keeps the queue from draining.
+        return if (delta.absoluteValue <= MinScrollThreshold) 0f else delta
     }
 
     /** Find the largest BIV request that can completely fit inside the viewport. */
@@ -492,7 +497,8 @@ internal class ContentInViewNode(
     }
 }
 
-private val UnspecifiedIntSize = IntSize(-1, -1)
+private val UnspecifiedIntSize
+    get() = IntSize(-1, -1)
 
 private inline fun IntSize.takeOrElse(other: () -> IntSize) =
     if (this == UnspecifiedIntSize) other() else this

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:OptIn(androidx.core.telecom.util.ExperimentalAppActions::class)
+
 package androidx.core.telecom.test.VoipAppWithExtensions
 
 import android.app.Service
@@ -35,7 +37,6 @@ import androidx.core.telecom.extensions.toParticipant
 import androidx.core.telecom.test.ITestAppControl
 import androidx.core.telecom.test.ITestAppControlCallback
 import androidx.core.telecom.test.utils.TestUtils
-import androidx.core.telecom.util.ExperimentalAppActions
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +49,6 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
-@OptIn(ExperimentalAppActions::class)
 @RequiresApi(Build.VERSION_CODES.O)
 open class VoipAppWithExtensionsControl : Service() {
     var mCallsManager: CallsManager? = null
@@ -60,6 +60,11 @@ open class VoipAppWithExtensionsControl : Service() {
     private var raisedHandsFlow: MutableStateFlow<List<Participant>> = MutableStateFlow(emptyList())
     // TODO:: b/364316364 should be Pair(callId:String, value: Boolean)
     private var isLocallySilencedFlow: MutableSharedFlow<Boolean> =
+        MutableSharedFlow<Boolean>(
+            replay = 1, // Replay 1 to keep the *current* state
+            extraBufferCapacity = 1, // Buffer for new emissions
+        )
+    private var canUserUpdateSilenceStateFlow: MutableSharedFlow<Boolean> =
         MutableSharedFlow<Boolean>(
             replay = 1, // Replay 1 to keep the *current* state
             extraBufferCapacity = 1, // Buffer for new emissions
@@ -96,11 +101,19 @@ open class VoipAppWithExtensionsControl : Service() {
                 requestId: Int,
                 capabilities: List<Capability>,
                 isOutgoing: Boolean,
-                initLcsValue: Boolean,
+                isLocallySilenced: Boolean,
+                canUserUpdateSilence: Boolean,
             ) {
                 Log.i(TAG, "VoipAppWithExtensionsControl: addCall: request")
                 runBlocking {
-                    val call = VoipCall(mCallsManager!!, mCallback, capabilities, initLcsValue)
+                    val call =
+                        VoipCall(
+                            mCallsManager!!,
+                            mCallback,
+                            capabilities,
+                            isLocallySilenced,
+                            canUserUpdateSilence,
+                        )
                     mScope?.launch {
                         with(call) {
                             addCall(
@@ -144,6 +157,12 @@ open class VoipAppWithExtensionsControl : Service() {
                                         localCallSilenceUpdater?.updateIsLocallySilenced(it)
                                     }
                                     .launchIn(this)
+                                canUserUpdateSilenceStateFlow
+                                    .onEach {
+                                        Log.d(TAG, "adCall block: VoIP canUserUpdateSilence=[$it]")
+                                        localCallSilenceUpdater?.updateCanUserUpdateSilence(it)
+                                    }
+                                    .launchIn(this)
                                 callIconFlow
                                     .drop(1)
                                     .onEach {
@@ -175,6 +194,11 @@ open class VoipAppWithExtensionsControl : Service() {
             override fun updateIsLocallySilenced(isLocallySilenced: Boolean) {
                 Log.d(TAG, "Voip: updateIsLocallySilenced: [$isLocallySilenced]")
                 isLocallySilencedFlow.tryEmit(isLocallySilenced)
+            }
+
+            override fun updateCanUserToggleSilence(canUserUpdateSilence: Boolean) {
+                Log.d(TAG, "Voip: updateCanUserToggleSilence: [$canUserUpdateSilence]")
+                canUserUpdateSilenceStateFlow.tryEmit(canUserUpdateSilence)
             }
 
             override fun updateCallIcon(uri: Uri) {

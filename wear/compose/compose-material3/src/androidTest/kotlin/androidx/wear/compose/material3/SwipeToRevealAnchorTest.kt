@@ -27,7 +27,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.TouchInjectionScope
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
@@ -45,7 +45,6 @@ import androidx.wear.compose.material3.SwipeToRevealDefaults.SingleActionAnchorW
 import androidx.wear.compose.material3.SwipeToRevealDefaults.bidirectionalGestureInclusion
 import androidx.wear.compose.materialcore.CustomTouchSlopProvider
 import junit.framework.TestCase.assertEquals
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -60,7 +59,7 @@ import org.junit.runners.Parameterized
  */
 @RunWith(Parameterized::class)
 class SwipeToRevealAnchorTest(val testParams: TestParams) {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Before
     fun setUp() {
@@ -83,7 +82,7 @@ class SwipeToRevealAnchorTest(val testParams: TestParams) {
         val layoutDirection = if (isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
         rule.setContent {
-            ScreenConfiguration(screenSizeDp = SCREEN_SIZE_LARGE) {
+            ScreenConfiguration(desiredScreenSizeDp = SCREEN_SIZE_LARGE) {
                 CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
                     revealState = rememberRevealState(initialValue = testParams.initialRevealValue)
                     with(LocalDensity.current) { density = this.density }

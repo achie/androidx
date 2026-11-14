@@ -34,7 +34,7 @@ import androidx.compose.ui.test.CountingRetainObject
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasTextExactly
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.testing.FragmentScenario
 import androidx.fragment.app.testing.launchFragmentInContainer
@@ -49,7 +49,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Rule
 import org.junit.Test
@@ -59,7 +58,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class FragmentRetainTest {
 
-    @get:Rule val composeTestRule = createEmptyComposeRule(StandardTestDispatcher())
+    @get:Rule val composeTestRule = createEmptyComposeRule()
 
     private lateinit var fragmentScenario: FragmentScenario<*>
 

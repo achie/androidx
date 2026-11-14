@@ -173,7 +173,7 @@ public class ImageProcessingUtilTest {
         assertThat(imageProxy).isNotNull();
         ByteBuffer byteBuffer = imageProxy.getPlanes()[0].getBuffer();
         byteBuffer.rewind();
-        byte[] outputBytes = new byte[byteBuffer.capacity()];
+        byte[] outputBytes = new byte[byteBuffer.remaining()];
         byteBuffer.get(outputBytes);
 
         // Assert: the color and the dimension of the restored image.
@@ -196,7 +196,7 @@ public class ImageProcessingUtilTest {
         assertThat(imageProxy).isNotNull();
         ByteBuffer byteBuffer = imageProxy.getPlanes()[0].getBuffer();
         byteBuffer.rewind();
-        byte[] outputBytes = new byte[byteBuffer.capacity()];
+        byte[] outputBytes = new byte[byteBuffer.remaining()];
         byteBuffer.get(outputBytes);
 
         // Assert: the color and the dimension of the restored image.
@@ -209,7 +209,14 @@ public class ImageProcessingUtilTest {
 
     @Test
     public void convertYuvToJpegBytesIntoSurface_sizeAndRotationAreCorrect() throws IOException {
+        // Arrange: use 32x16 so that YuvImage.compressToJpeg() (which calls libjpeg's
+        // jpeg_write_raw_data() with 16-row vertical iMCUs for YUV 4:2:0) has a full 16-row
+        // vertical iMCU and does not leave trailing row pointers as NULL on MediaTek/OPPO devices.
+        final int width = 32;
+        final int height = 16;
         final int expectedRotation = 270;
+        closeTestResources();
+        createTestResources(width, height, expectedRotation);
 
         // Act: convert it into JPEG and write into the surface.
         ImageProcessingUtil.convertYuvToJpegBytesIntoSurface(mYUVImageProxy,
@@ -219,15 +226,15 @@ public class ImageProcessingUtilTest {
         assertThat(imageProxy).isNotNull();
         ByteBuffer byteBuffer = imageProxy.getPlanes()[0].getBuffer();
         byteBuffer.rewind();
-        byte[] outputBytes = new byte[byteBuffer.capacity()];
+        byte[] outputBytes = new byte[byteBuffer.remaining()];
         byteBuffer.get(outputBytes);
 
         // Assert: the format is JPEG and can decode,  the size is correct, the rotation in Exif
         // is correct.
         assertThat(imageProxy.getFormat()).isEqualTo(ImageFormat.JPEG);
         Bitmap bitmap = BitmapFactory.decodeByteArray(outputBytes, 0, outputBytes.length);
-        assertThat(bitmap.getWidth()).isEqualTo(WIDTH);
-        assertThat(bitmap.getHeight()).isEqualTo(HEIGHT);
+        assertThat(bitmap.getWidth()).isEqualTo(width);
+        assertThat(bitmap.getHeight()).isEqualTo(height);
         Exif exif = Exif.createFromImageProxy(imageProxy);
         assertThat(exif.getRotation()).isEqualTo(expectedRotation);
         imageProxy.close();
@@ -360,6 +367,30 @@ public class ImageProcessingUtilTest {
     @Test
     public void rotateYUV_imageRotated_0() {
         rotateYUV_imageRotated(OUTPUT_IMAGE_FORMAT_YUV_420_888, 0, true);
+    }
+
+    @Test
+    public void rotateYUV_imageRotated_0_returnsNull() {
+        // Arrange.
+        int width = 64;
+        int height = 32;
+        closeTestResources();
+        createTestResources(width, height, 0);
+
+        // Act.
+        ImageProxy yuvImageProxy = rotateYUV(
+                mYUVImageProxy,
+                mRotatedYUVImageReaderProxy,
+                ImageWriter.newInstance(
+                        mRotatedYUVImageReaderProxy.getSurface(),
+                        mRotatedYUVImageReaderProxy.getMaxImages()),
+                mYRotatedBuffer,
+                mURotatedBuffer,
+                mVRotatedBuffer,
+                /*rotation=*/0);
+
+        // Assert.
+        assertThat(yuvImageProxy).isNull();
     }
 
     @Test
@@ -563,7 +594,7 @@ public class ImageProcessingUtilTest {
         // Ignore row stride here, we don't need to be efficient, so we'll fill the padding also.
         buffer.rewind();
         while (buffer.hasRemaining()) {
-            int nextPosition = Math.min(buffer.capacity(), buffer.position() + pixelStride);
+            int nextPosition = Math.min(buffer.limit(), buffer.position() + pixelStride);
             buffer.put(value);
             buffer.position(nextPosition);
         }

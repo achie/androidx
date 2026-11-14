@@ -16,12 +16,14 @@
 
 package androidx.xr.scenecore.testapp.common.managers
 
+import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.xr.runtime.Session
+import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector3
@@ -30,6 +32,7 @@ import androidx.xr.scenecore.PanelEntity
 import androidx.xr.scenecore.ResizableComponent
 import androidx.xr.scenecore.ResizeEvent
 import androidx.xr.scenecore.Space
+import androidx.xr.scenecore.scene
 import androidx.xr.scenecore.testapp.R
 import java.util.function.Consumer
 
@@ -55,7 +58,7 @@ class PanelEntityManager(
         updateButtonEnabledState()
 
         createPanelEntityButton.setOnClickListener {
-            createPanelEntity()
+            createPanelEntity(activity)
             updateButtonEnabledState()
         }
 
@@ -65,17 +68,17 @@ class PanelEntityManager(
         }
     }
 
-    private fun createPanelEntity() {
+    private fun createPanelEntity(context: Context) {
         for (i in 1..entitiesPerClick) {
-            createOnePanelEntity()
+            createOnePanelEntity(context)
         }
     }
 
-    private fun createOnePanelEntity() {
+    private fun createOnePanelEntity(context: Context) {
         if (panelEntities.size < maxEntities) {
             val panelNumber = panelEntities.size + 1
             val mTextView =
-                TextView(session.activity).apply {
+                TextView(context).apply {
                     text = "Hello, XR World! Panel $panelNumber"
                     textSize = 24f
                     setTextColor(Color.BLACK)
@@ -97,6 +100,7 @@ class PanelEntityManager(
                                 0.2f + (panelNumber * 0.01f),
                             )
                         ),
+                    parent = session.scene.activitySpace,
                 )
 
             val movableComponent = MovableComponent.createSystemMovable(session)
@@ -113,7 +117,11 @@ class PanelEntityManager(
                     }
                 }
             val resizableComponent =
-                ResizableComponent.create(session, resizeEventListener = simpleResizeListener)
+                ResizableComponent.create(
+                    session,
+                    minimumSize = FloatSize3d(0.1f, 0.1f, 0.1f),
+                    resizeEventListener = simpleResizeListener,
+                )
             newPanel.addComponent(movableComponent)
             newPanel.addComponent(resizableComponent)
             panelEntities.add(newPanel)
@@ -124,7 +132,8 @@ class PanelEntityManager(
         for (i in 1..entitiesPerClick) {
             if (panelEntities.isNotEmpty()) {
                 val lastPanel = panelEntities.removeAt(panelEntities.lastIndex)
-                lastPanel.dispose()
+                lastPanel.removeAllComponents()
+                lastPanel.parent = null
             }
         }
     }
@@ -137,11 +146,21 @@ class PanelEntityManager(
             createPanelEntityButton.text =
                 if (currentCount == maxEntities) "Create panel Entity"
                 else
-                    "Create Panel Entity #${currentCount + 1}-#${minOf(currentCount + entitiesPerClick, maxEntities)}"
+                    "Create Panel Entity #${currentCount + 1}-#${
+                        minOf(
+                            currentCount + entitiesPerClick,
+                            maxEntities,
+                        )
+                    }"
             destroyPanelEntityButton.text =
                 if (currentCount == 0) "Destroy Panel Entity"
                 else
-                    "Destroy Panel Entity #${currentCount}-#${maxOf(currentCount - entitiesPerClick, 1)}"
+                    "Destroy Panel Entity #${currentCount}-#${
+                        maxOf(
+                            currentCount - entitiesPerClick,
+                            1,
+                        )
+                    }"
         }
     }
 }

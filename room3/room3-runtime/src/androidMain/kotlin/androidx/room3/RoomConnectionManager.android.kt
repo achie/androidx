@@ -22,6 +22,7 @@ import androidx.room3.coroutines.PassthroughConnectionPool
 import androidx.room3.coroutines.TransactionWrapper
 import androidx.room3.coroutines.newConnectionPool
 import androidx.room3.coroutines.newSingleConnectionPool
+import kotlinx.coroutines.runBlocking
 
 /**
  * An Android platform specific [RoomConnectionManager] with backwards compatibility with
@@ -44,38 +45,51 @@ internal actual class RoomConnectionManager : BaseRoomConnectionManager {
     ) {
         this.configuration = config
         this.openDelegate = openDelegate
-        this.callbacks = config.callbacks ?: emptyList()
+        this.callbacks = config.callbacks
         this.connectionPool =
             if (config.sqliteDriver.hasConnectionPool) {
                 // If the driver already has a connection pool then use a pass-through pool to
                 // support drivers such as the Android since internally it already has a
                 // thread-confined connection pool.
                 PassthroughConnectionPool(
-                    driver = DriverWrapper(config.sqliteDriver),
-                    fileName = config.name ?: ":memory:",
+                    connectionFactory =
+                        createConnectionFactory(config.sqliteDriver, config.name ?: ":memory:"),
                     transactionWrapper = transactionWrapper,
                 )
             } else if (config.name == null) {
                 // An in-memory database must use a single connection pool.
                 newSingleConnectionPool(
-                    driver = DriverWrapper(config.sqliteDriver),
-                    fileName = ":memory:",
-                    config.preparedStatementCacheSize,
+                    connectionFactory = createConnectionFactory(config.sqliteDriver, ":memory:"),
+                    statementCacheSize = config.preparedStatementCacheSize,
                 )
             } else {
-                newConnectionPool(
-                    driver = DriverWrapper(config.sqliteDriver),
-                    fileName = config.name,
-                    maxNumOfReaders = config.journalMode.getMaxNumberOfReaders(),
-                    maxNumOfWriters = config.journalMode.getMaxNumberOfWriters(),
-                    config.preparedStatementCacheSize,
-                )
+                when (val poolConfig = configuration.connectionPoolConfiguration) {
+                    is SingleConnection ->
+                        newSingleConnectionPool(
+                            connectionFactory =
+                                createConnectionFactory(config.sqliteDriver, config.name),
+                            statementCacheSize = config.preparedStatementCacheSize,
+                            timeout = configuration.connectionPoolTimeout,
+                        )
+                    is MultipleConnection ->
+                        newConnectionPool(
+                            connectionFactory =
+                                createConnectionFactory(config.sqliteDriver, config.name),
+                            maxNumOfReaders = poolConfig.numOfReaders,
+                            maxNumOfWriters = poolConfig.numOfWriters,
+                            statementCacheSize = config.preparedStatementCacheSize,
+                            timeout = configuration.connectionPoolTimeout,
+                        )
+                }
             }
     }
 
     internal fun setAutoCloser(autoCloser: AutoCloser) {
         this.autoCloser = autoCloser
-        autoCloser.setAutoOpenCallback(::configurationConnection)
+        autoCloser.setAutoOpenCallback {
+            // TODO(b/316944816): Fix me! Can we avoid this runBlocking?
+            runBlocking { configurationConnection(it) }
+        }
     }
 
     override suspend fun <R> useConnection(
@@ -94,7 +108,7 @@ internal actual class RoomConnectionManager : BaseRoomConnectionManager {
         if (fileName != ":memory:") {
             // Get database path from context, if the database name is not an absolute path, then
             // the app's database directory will be used, otherwise the given path is used.
-            configuration.context.getDatabasePath(fileName).absolutePath
+            configuration.context?.getDatabasePath(fileName)?.absolutePath ?: fileName
         } else {
             fileName
         }

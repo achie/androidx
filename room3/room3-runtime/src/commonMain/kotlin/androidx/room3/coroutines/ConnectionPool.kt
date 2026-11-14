@@ -18,8 +18,11 @@ package androidx.room3.coroutines
 
 import androidx.room3.Transactor
 import androidx.sqlite.SQLiteConnection
-import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.SQLiteException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+
+internal val DEFAULT_CONNECTION_POOL_TIMEOUT: Duration = 30.seconds
 
 /**
  * A container that manages [SQLiteConnection]s.
@@ -73,16 +76,17 @@ internal interface ConnectionPool : AutoCloseable {
  * A pool containing a single connection that is used for both reading and writing is useful for
  * in-memory databases whose schema and data are isolated to a database connection.
  *
- * @param driver The driver from which to request the connection to be opened.
- * @param fileName The database file name.
+ * @param connectionFactory The factory function from which to request the connection to be opened.
+ * @param statementCacheSize The maximum number of prepared statements to be cached.
+ * @param timeout The maximum duration to wait for a connection before timing out.
  * @return The newly created connection pool
  * @see newConnectionPool
  */
 internal fun newSingleConnectionPool(
-    driver: SQLiteDriver,
-    fileName: String,
-    preparedStatementCacheSize: Int = 25,
-): ConnectionPool = ConnectionPoolImpl(driver, fileName, preparedStatementCacheSize)
+    connectionFactory: ConnectionFactory,
+    statementCacheSize: Int = 25,
+    timeout: Duration = DEFAULT_CONNECTION_POOL_TIMEOUT,
+): ConnectionPool = ConnectionPoolImpl(connectionFactory, statementCacheSize, timeout)
 
 /**
  * Creates a new [ConnectionPool] with multiple connections separated by readers and writers.
@@ -91,30 +95,31 @@ internal fun newSingleConnectionPool(
  * of one writer and multiple readers. If the database journal mode is not WAL (e.g. TRUNCATE,
  * DELETE or PERSIST) then a single connection pool is recommended.
  *
- * @param driver The driver from which to request new connections to be opened.
- * @param fileName The database file name.
+ * @param connectionFactory The factory function from which to request the connections to be opened.
  * @param maxNumOfReaders The maximum number of connections to be opened and used as readers.
  * @param maxNumOfWriters The maximum number of connections to be opened and used as writers.
+ * @param statementCacheSize The maximum number of prepared statements to be cached.
+ * @param timeout The maximum duration to wait for a connection before timing out.
  * @return The newly created connection pool
  * @see newSingleConnectionPool
  */
 internal fun newConnectionPool(
-    driver: SQLiteDriver,
-    fileName: String,
+    connectionFactory: ConnectionFactory,
     maxNumOfReaders: Int,
     maxNumOfWriters: Int,
-    preparedStatementCacheSize: Int = 25,
+    statementCacheSize: Int = 25,
+    timeout: Duration = DEFAULT_CONNECTION_POOL_TIMEOUT,
 ): ConnectionPool =
     ConnectionPoolImpl(
-        driver,
-        fileName,
+        connectionFactory,
         maxNumOfReaders,
         maxNumOfWriters,
-        preparedStatementCacheSize,
+        statementCacheSize,
+        timeout,
     )
 
 /** Defines an object that provides 'raw' access to a connection. */
 internal interface RawConnectionAccessor {
 
-    suspend fun <R> useRawConnection(block: (SQLiteConnection) -> R): R
+    suspend fun <R> useRawConnection(block: suspend (SQLiteConnection) -> R): R
 }

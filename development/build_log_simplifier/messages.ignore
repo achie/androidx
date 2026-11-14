@@ -7,6 +7,7 @@ DIST_DIR=\$DIST_DIR
 CHECKOUT=\$CHECKOUT
 GRADLE_USER_HOME=\$GRADLE_USER_HOME
 Downloading file\:\$SUPPORT\/gradle\/wrapper\/.*
+Fetching distribution\.
 [.]+10%[.]+20%[.]+30%[.]+40%[.]+50%[.]+60%[.]+70%[.]+80%[.]+90%[.]+100%
 Daemon will be stopped at the end of the build
 \[Incubating\] Problems report is available at\:.*
@@ -37,7 +38,12 @@ Calculating task graph as no cached configuration is available for tasks.*
 Calculating task graph as configuration cache cannot be reused because the file system entry.*
 Calculating task graph as configuration cache cannot be reused because directory.*
 Calculating task graph as configuration cache cannot be reused because an input to plugin class.*
+Calculating task graph as configuration cache cannot be reused because Gradle property.*
 Calculating task graph as configuration cache cannot be reused because an input to unknown location has changed.*
+Calculating task graph as configuration cache cannot be reused because the set of Gradle properties prefixed by 'androidx.' has changed.*
+Calculating task graph as configuration cache cannot be reused because a build logic input of type 'NonGitHeadShaSource' has changed.
+Calculating task graph as configuration cache cannot be reused because a build logic input of type 'IsTerminalSmartValueSource' has changed.
+Calculating task graph as configuration cache cannot be reused because system property 'os\.version' has changed\.
 See the profiling report at\: file\:\/\/\$OUT_DIR\/androidx\/build\/reports\/profile\/profile\-[0-9]+\-[0-9]+\-[0-9]+\-[0-9]+\-[0-9]+\-[0-9]+\.html
 # > Task :lifecycle:lifecycle-common:compileJava
 Note: \$[^ ]+ uses or overrides a deprecated API\.
@@ -45,8 +51,6 @@ Note: Recompile with \-Xlint\:deprecation for details\.
 # > Task :startup:integration-tests:first-library:processDebugManifest
 \$SUPPORT/startup/integration\-tests/first\-library/src/main/AndroidManifest\.xml:[0-9]+:[0-9]+\-[0-9]+:[0-9]+ Warning:
 meta\-data\#androidx\.work\.WorkManagerInitializer was tagged at AndroidManifest\.xml\:[0-9]+ to remove other declarations but no other declaration present
-# > Task :support-slices-demos:compileDebugJavaWithJavac
-Note: \$SUPPORT/samples/SupportSliceDemos/src/main/java/com/example/androidx/slice/demos/SliceBrowser\.java uses unchecked or unsafe operations\.
 # > Task :activity:integration-tests:testapp:processDebugAndroidTestManifest
 # b/166471969
 \$SUPPORT/benchmark/integration\-tests/dry\-run\-benchmark/src/androidTest/AndroidManifest\.xml:[0-9]+:[0-9]+\-[0-9]+:[0-9]+ Warning:
@@ -58,199 +62,9 @@ See the complete report at file://.*/build/reports/configuration\-cache/[^ ]*/[^
 \$OUT_DIR/androidx/compose/ui/ui\-tooling/build/intermediates/tmp/manifest/androidTest/tempFile[0-9]+ProcessTestManifest[0-9]+\.xml:[0-9]+:[0-9]+\-[0-9]+:[0-9]+ Warning:
 # > Task :buildSrc:build UP-TO-DATE
 A fine\-grained performance profile is available\: use the \-\-scan option\.
-# > Task :docs
-WARN: .*\/unzippedJvmSources\/android\/support\/v4\/media\/session\/MediaControllerCompat\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction MediaControllerCompat
-WARN: .*\/unzippedJvmSources\/androidx\/appcompat\/app\/AppCompatDelegate\.java:[0-9]+ Missing @param tag for parameter `activity` in DFunction create
-WARN: .*\/unzippedJvmSources\/androidx\/appcompat\/app\/AppCompatDelegate\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction create
-WARN: .*\/unzippedJvmSources\/androidx\/appcompat\/app\/AppCompatDelegate\.java:[0-9]+ Missing @param tag for parameter `dialog` in DFunction create
-WARN: .*\/unzippedJvmSources\/androidx\/appcompat\/app\/AppCompatDelegate\.java:[0-9]+ Missing @param tag for parameter `window` in DFunction create
-WARN: .*\/unzippedJvmSources\/androidx\/appcompat\/graphics\/drawable\/StateListDrawableCompat\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction inflate
-WARN: .*\/unzippedJvmSources\/androidx\/appsearch\/app\/ShortcutAdapter\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction createShortcutBuilderFromDocument
-WARN: .*\/unzippedJvmSources\/androidx\/appsearch\/localstorage\/LocalStorage\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction Builder
-WARN: .*\/unzippedJvmSources\/androidx\/appsearch\/platformstorage\/PlatformStorage\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction Builder
-WARN: .*\/unzippedJvmSources\/androidx\/appsearch\/playservicesstorage\/PlayServicesStorage\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction Builder
-WARN: .*\/unzippedJvmSources\/androidx\/camera\/view\/RotationProvider\.java:[0-9]+ Missing @param tag for parameter `listener` in DFunction addListener
-WARN: .*\/unzippedJvmSources\/androidx\/car\/app\/CarToast\.java:[0-9]+ Missing @param tag for parameter `carContext` in DFunction makeText
-WARN: .*\/unzippedJvmSources\/androidx\/car\/app\/model\/AlertCallbackDelegate\.java:[0-9]+ Missing @param tag for parameter `reason` in DFunction sendCancel
-WARN: .*\/unzippedJvmSources\/androidx\/car\/app\/versioning\/CarAppApiLevels\.java\:[0-9]+ Failed to resolve See  \<a href="https:\/\/developer\.android\.com\/jetpack\/androidx\/releases\/car-app">Car App Library Release Notes<\/a> in DClass CarAppApiLevels
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/ArrayLinkedVariables\.java:[0-9]+ Missing @param tag for parameter `removeFromDefinition` in DFunction add
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/ArrayLinkedVariables\.java:[0-9]+ Missing @param tag for parameter `removeFromDefinition` in DFunction use
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/ArrayLinkedVariables\.java:[0-9]+ Missing @param tag for parameter `removeFromDefinition` in DFunction remove
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/LinearSystem\.java:[0-9]+ Missing @param tag for parameter `target` in DFunction addCenterPoint
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/LinearSystem\.java:[0-9]+ Missing @param tag for parameter `widget` in DFunction addCenterPoint
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/motion\/Motion\.java:[0-9]+ Missing @param tag for parameter `type` in DFunction getKeyFrameInfo
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/motion\/Motion\.java:[0-9]+ Missing @param tag for parameter `pointCount` in DFunction buildPath
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/motion\/utils\/KeyCycleOscillator\.java:[0-9]+ Missing @param tag for parameter `phase` in DFunction setPoint
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/motion\/utils\/KeyCycleOscillator\.java:[0-9]+ Missing @param tag for parameter `shape` in DFunction setPoint
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/motion\/utils\/KeyCycleOscillator\.java:[0-9]+ Missing @param tag for parameter `waveString` in DFunction setPoint
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/state\/CoreMotionScene\.java:[0-9]+ Missing @param tag for parameter `toJSON` in DFunction setTransitionContent
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/state\/Transition\.java:[0-9]+ Missing @param tag for parameter `currentProgress` in DFunction dragToProgress
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/widgets\/Chain\.java:[0-9]+ Missing @param tag for parameter `widgets` in DFunction applyChainConstraints
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/core\/widgets\/ConstraintWidgetContainer\.java:[0-9]+ Missing @param tag for parameter `flags` in DFunction updateChildrenFromSolver
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/motion\/widget\/DesignTool\.java:[0-9]+ Missing @param tag for parameter `len` in DFunction getAnimationPath
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/motion\/widget\/DesignTool\.java:[0-9]+ Missing @param tag for parameter `type` in DFunction getKeyFrameInfo
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/motion\/widget\/MotionController\.java:[0-9]+ Missing @param tag for parameter `type` in DFunction getKeyFrameInfo
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/widget\/ConstraintSet\.java:[0-9]+ Missing @param tag for parameter `viewId` in DFunction setApplyElevation
-WARN: .*\/unzippedJvmSources\/androidx\/constraintlayout\/widget\/ConstraintSet\.java:[0-9]+ Missing @param tag for parameter `margin` in DFunction createBarrier
-WARN: .*\/unzippedJvmSources\/androidx\/core\/content\/Context\.kt:[0-9]+ Missing @param tag for parameter `block` in DFunction withStyledAttributes
-WARN: .*\/unzippedJvmSources\/androidx\/core\/content\/Context\.kt:[0-9]+ Missing @param tag for parameter `resourceId` in DFunction withStyledAttributes
-WARN: .*\/unzippedJvmSources\/androidx\/core\/database\/sqlite\/SQLiteDatabase\.kt:[0-9]+ Missing @param tag for parameter `body` in DFunction transaction
-WARN: .*\/unzippedJvmSources\/androidx\/core\/os\/Handler\.kt:[0-9]+ Missing @param tag for parameter `action` in DFunction postAtTime
-WARN: .*\/unzippedJvmSources\/androidx\/core\/os\/Handler\.kt:[0-9]+ Missing @param tag for parameter `uptimeMillis` in DFunction postAtTime
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `horizontalGravity` in DFunction setRelativeLayoutHorizontalGravity
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `verticalGravity` in DFunction setRelativeLayoutVerticalGravity
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `night` in DFunction setSwitchThumbIcon
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `night` in DFunction setSwitchTrackIcon
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `horizontalGravity` in DFunction setLinearLayoutHorizontalGravity
-WARN: .*\/unzippedJvmSources\/androidx\/core\/widget\/RemoteViewsCompat\.kt:[0-9]+ Missing @param tag for parameter `verticalGravity` in DFunction setLinearLayoutVerticalGravity
-WARN: .*\/unzippedJvmSources\/androidx\/customview\/poolingcontainer\/PoolingContainer\.kt:[0-9]+ Missing @param tag for parameter `listener` in DFunction addPoolingContainerListener
-WARN: .*\/unzippedJvmSources\/androidx\/customview\/widget\/ViewDragHelper\.java:[0-9]+ Missing @param tag for parameter `pointerId` in DFunction isEdgeTouched
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/commonJvmMain/androidx/datastore/core/Serializer\.kt:[0-9]+ Missing @param tag for parameter `output` in DFunction writeTo
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/commonMain/androidx/datastore/preferences/core/Preferences\.kt:[0-9]+ Missing @param tag for parameter `value` in DFunction set
-WARN: .*\/unzippedJvmSources\/androidx\/datastore\/rxjava2\/RxDataStoreDelegate\.kt:[0-9]+ Missing @param tag for parameter `serializer` in DFunction rxDataStore
-WARN: .*\/unzippedJvmSources\/androidx\/datastore\/rxjava3\/RxDataStoreDelegate\.kt:[0-9]+ Missing @param tag for parameter `serializer` in DFunction rxDataStore
-WARN: .*\/unzippedJvmSources\/androidx\/documentfile\/provider\/DocumentFile\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction fromSingleUri
-WARN: .*\/unzippedJvmSources\/androidx\/documentfile\/provider\/DocumentFile\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction fromTreeUri
-WARN: .*\/unzippedJvmSources\/androidx\/draganddrop\/DropHelper\.java:[0-9]+ Failed to resolve See <a href="https:\/\/developer\.android\.com\/guide\/topics\/ui\/drag-drop">Drag and drop<\/a> in DClass DropHelper
-WARN: .*\/unzippedJvmSources\/androidx\/emoji\/text\/EmojiCompat\.java:[0-9]+ Missing @param tag for parameter `useEmojiAsDefaultStyle` in DFunction setUseEmojiAsDefaultStyle
-WARN: .*\/unzippedJvmSources\/androidx\/emoji2\/text\/EmojiCompat\.java:[0-9]+ Missing @param tag for parameter `useEmojiAsDefaultStyle` in DFunction setUseEmojiAsDefaultStyle
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/app\/SearchFragment\.java:[0-9]+ Missing @param tag for parameter `query` in DFunction createArgs
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/app\/SearchSupportFragment\.java:[0-9]+ Missing @param tag for parameter `query` in DFunction createArgs
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/DetailsOverviewRowPresenter\.java:[0-9]+ Missing @param tag for parameter `detailsPresenter` in DFunction ViewHolder
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/FullWidthDetailsOverviewRowPresenter\.java:[0-9]+ Missing @param tag for parameter `detailsPresenter` in DFunction ViewHolder
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/FullWidthDetailsOverviewRowPresenter\.java:[0-9]+ Missing @param tag for parameter `logoPresenter` in DFunction ViewHolder
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/Parallax\.java:[0-9]+ Missing @param tag for parameter `name` in DFunction createProperty
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/PlaybackControlsRow\.java:[0-9]+ Missing @param tag for parameter `id` in DFunction ThumbsAction
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/PlaybackControlsRow\.java:[0-9]+ Missing @param tag for parameter `outlineIconIndex` in DFunction ThumbsAction
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/PlaybackControlsRow\.java:[0-9]+ Missing @param tag for parameter `solidIconIndex` in DFunction ThumbsAction
-WARN: .*\/unzippedJvmSources\/androidx\/leanback\/widget\/RecyclerViewParallax\.java:[0-9]+ Missing @param tag for parameter `name` in DFunction createProperty
-WARN: .*\/unzippedJvmSources\/androidx\/lifecycle\/testing\/TestLifecycleOwner\.kt:[0-9]+ Missing @param tag for parameter `coroutineDispatcher` in DFunction TestLifecycleOwner
-WARN: .*\/unzippedJvmSources\/androidx\/media\/AudioManagerCompat\.java:[0-9]+ Missing @param tag for parameter `audioManager` in DFunction abandonAudioFocusRequest
-WARN: .*\/unzippedJvmSources\/androidx\/media\/AudioManagerCompat\.java:[0-9]+ Missing @param tag for parameter `audioManager` in DFunction getStreamMaxVolume
-WARN: .*\/unzippedJvmSources\/androidx\/media\/AudioManagerCompat\.java:[0-9]+ Missing @param tag for parameter `audioManager` in DFunction getStreamMinVolume
-WARN: .*\/unzippedJvmSources\/androidx\/media\/AudioManagerCompat\.java:[0-9]+ Missing @param tag for parameter `audioManager` in DFunction requestAudioFocus
-WARN: .*\/unzippedJvmSources\/androidx\/media2\/common\/SessionPlayer\.java:[0-9]+ Missing @param tag for parameter `metadata` in DFunction setPlaylist
-WARN: .*\/unzippedJvmSources\/androidx\/media2\/player\/MediaPlayer\.java:[0-9]+ Missing @param tag for parameter `metadata` in DFunction setPlaylist
-WARN: .*\/unzippedJvmSources\/androidx\/media2\/session\/MediaController\.java:[0-9]+ Missing @param tag for parameter `extras` in DFunction setMediaUri
-WARN: .*\/unzippedJvmSources\/androidx\/media2\/session\/MediaSession\.java:[0-9]+ Missing @param tag for parameter `controller` in DFunction sendCustomCommand
-WARN: .*\/unzippedJvmSources\/androidx\/mediarouter\/media\/RemotePlaybackClient\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction RemotePlaybackClient
-WARN: .*\/unzippedJvmSources\/androidx\/paging\/LoadStateAdapter\.kt:[0-9]+ Missing @param tag for parameter `holder` in DFunction onBindViewHolder
-WARN: .*\/unzippedJvmSources\/androidx\/palette\/graphics\/Palette\.java:[0-9]+ Missing @param tag for parameter `target` in DFunction getColorForTarget
-WARN: .*\/unzippedJvmSources\/androidx\/security\/crypto\/EncryptedSharedPreferences\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction create
-WARN: .*\/unzippedJvmSources\/androidx\/security\/crypto\/EncryptedSharedPreferences\.kt:[0-9]+ Missing @param tag for parameter `context` in DFunction EncryptedSharedPreferences
-WARN: .*\/unzippedJvmSources\/androidx\/security\/crypto\/MasterKey\.java:[0-9]+ Missing @param tag for parameter `keyAlias` in DFunction Builder
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/GridRowBuilder\.java:[0-9]+ Missing @param tag for parameter `text` in DFunction addText
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/GridRowBuilder\.java:[0-9]+ Missing @param tag for parameter `text` in DFunction addTitleText
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/GridRowBuilder\.java:[0-9]+ Missing @param tag for parameter `text` in DFunction addOverlayText
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `action` in DFunction addEndItem
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction ListBuilder
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `summary` in DFunction setSummary
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `action` in DFunction setTitleItem
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `title` in DFunction setTitle
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/builders\/ListBuilder\.java:[0-9]+ Missing @param tag for parameter `subtitle` in DFunction setSubtitle
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/SliceUtils\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction parseSlice
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/SliceViewManager\.java:[0-9]+ Missing @param tag for parameter `executor` in DFunction registerSliceCallback
-WARN: .*\/unzippedJvmSources\/androidx\/slice\/widget\/GridRowView\.java:[0-9]+ Missing @param tag for parameter `color` in DFunction addImageItem
-WARN: .*\/unzippedJvmSources\/androidx\/sqlite\/db\/SupportSQLiteDatabaseExt\.kt:[0-9]+ Missing @param tag for parameter `body` in DFunction transaction
-WARN: .*\/unzippedJvmSources\/androidx\/textclassifier\/TextClassification\.java:[0-9]+ Missing @param tag for parameter `type` in DFunction setEntityType
-WARN: .*\/unzippedJvmSources\/androidx\/textclassifier\/TextSelection\.java:[0-9]+ Missing @param tag for parameter `type` in DFunction setEntityType
-WARN: .*\/unzippedJvmSources\/androidx\/tracing\/Trace\.kt:[0-9]+ Missing @param tag for parameter `block` in DFunction traceAsync
-WARN: .*\/unzippedJvmSources\/androidx\/transition\/TransitionInflater\.java:[0-9]+ Missing @param tag for parameter `sceneRoot` in DFunction inflateTransitionManager
-WARN: .*\/unzippedJvmSources\/androidx\/tvprovider\/media\/tv\/PreviewChannelHelper\.java:[0-9]+ Missing @param tag for parameter `context` in DFunction PreviewChannelHelper
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/androidx/wear/compose/ui/tooling/preview/WearPreviewFontScales\.kt:[0-9]+ Failed to resolve See Preview\.fontScale in DAnnotation WearPreviewFontScales\. Did you mean Preview\#fontScale\?
-WARN: .*\/unzippedJvmSources\/androidx\/wear\/watchface\/client\/ListenableWatchFaceControlClient\.kt:[0-9]+ Link does not resolve for @throws ServiceStartFailureException in DFunction getOrCreateInteractiveWatchFaceClient\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedJvmSources\/androidx\/wear\/watchface\/ComplicationSlot\.kt:[0-9]+ Missing @param tag for parameter `boundingArc` in DFunction drawHighlight
-WARN: .*\/unzippedJvmSources\/androidx\/wear\/watchface\/ComplicationSlot\.kt:[0-9]+ Missing @param tag for parameter `boundingArc` in DFunction createEdgeComplicationSlotBuilder
-WARN: .*\/unzippedJvmSources\/androidx\/wear\/watchface\/ComplicationSlot\.kt:[0-9]+ Missing @param tag for parameter `complicationTapFilter` in DFunction createEdgeComplicationSlotBuilder
-WARN: .*\/unzippedJvmSources\/androidx\/wear\/watchface\/style\/CurrentUserStyleRepository\.kt:[0-9]+ Unable to find reference @param copySelectedOptions in DClass UserStyle\. Are you trying to refer to something not visible to users\?
-WARN: .*\/unzippedMultiplatformSources\/nonJvm.*Main\/androidx\/lifecycle\/LifecycleRegistry\.nonJvm\.kt\:[0-9]+ Link does not resolve for \@throws IllegalStateException in DFunction addObserver\. Is it from a package that the containing file does not import\? Are docs inherited by an un\-documented override function\, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name\, e\.g\. \`\@throws java\.io\.IOException under some conditions\`\.
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/CookieManagerCompat\.java:[0-9]+ Missing @param tag for parameter `cookieManager` in DFunction getCookieInfo
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebSettingsCompat\.java:[0-9]+ Missing @param tag for parameter `settings` in DFunction setSafeBrowsingEnabled
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebSettingsCompat\.java:[0-9]+ Missing @param tag for parameter `settings` in DFunction setDisabledActionModeMenuItems
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebSettingsCompat\.java:[0-9]+ Missing @param tag for parameter `settings` in DFunction setAlgorithmicDarkeningAllowed
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebSettingsCompat\.java:[0-9]+ Missing @param tag for parameter `settings` in DFunction setEnterpriseAuthenticationAppLinkPolicyEnabled
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebViewCompat\.java:[0-9]+ Missing @param tag for parameter `webview` in DFunction postVisualStateCallback
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebViewCompat\.java:[0-9]+ Missing @param tag for parameter `webview` in DFunction postWebMessage
-WARN: .*\/unzippedJvmSources\/androidx\/webkit\/WebViewCompat\.java:[0-9]+ Missing @param tag for parameter `webview` in DFunction removeWebMessageListener
-WARN: .*\/unzippedJvmSources\/androidx\/work\/testing\/TestListenableWorkerBuilder\.kt:[0-9]+ Missing @param tag for parameter `tags` in DFunction TestListenableWorkerBuilder
-WARN: .*\/unzippedJvmSources\/androidx\/work\/testing\/TestWorkerBuilder\.kt:[0-9]+ Missing @param tag for parameter `tags` in DFunction TestWorkerBuilder
-WARN: .*\/unzippedMultiplatformSources\/commonJvmAndroidMain\/androidx\/paging\/PageKeyedDataSource\.jvm\.kt:[0-9]+ Missing @param tag for parameter `nextPageKey` in DFunction onResult
-WARN: .*\/unzippedMultiplatformSources\/commonJvmAndroidMain\/androidx\/paging\/PageKeyedDataSource\.jvm\.kt:[0-9]+ Missing @param tag for parameter `previousPageKey` in DFunction onResult
-WARN: .*\/unzippedMultiplatformSources\/androidMain\/androidx\/compose\/animation\/graphics\/res\/AnimatedVectorPainterResources\.android\.kt:[0-9]+ Missing @param tag for parameter `animatedImageVector` in DFunction rememberAnimatedVectorPainter
-WARN: .*\/unzippedMultiplatformSources\/androidMain\/androidx\/compose\/material\/AndroidMenu\.android\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction DropdownMenuItem
-WARN: .*\/unzippedMultiplatformSources\/androidMain\/androidx\/compose\/ui\/text\/font\/AndroidFont\.android\.kt:[0-9]+ Missing @param tag for parameter `variationSettings` in DFunction AndroidFont
-WARN: .*\/unzippedMultiplatformSources\/androidMain\/androidx\/constraintlayout\/compose\/MotionCarousel\.kt:[0-9]+ Missing @param tag for parameter `motionScene` in DFunction MotionCarousel
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/collection\/LruCache\.kt:[0-9]+ Missing @param tag for parameter `key` in DFunction entryRemoved
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/collection\/LruCache\.kt:[0-9]+ Missing @param tag for parameter `oldValue` in DFunction entryRemoved
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/AnimatedVisibility\.kt:[0-9]+ Missing @param tag for parameter `label` in DFunction AnimatedVisibility
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/core\/AnimateAsState\.kt:[0-9]+ Missing @param tag for parameter `typeConverter` in DFunction animateValueAsState
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/core\/SuspendAnimation\.kt:[0-9]+ Missing @param tag for parameter `initialValue` in DFunction animate
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/core\/SuspendAnimation\.kt:[0-9]+ Missing @param tag for parameter `targetValue` in DFunction animate
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/core\/SuspendAnimation\.kt:[0-9]+ Missing @param tag for parameter `initialValue` in DFunction animateDecay
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/core\/SuspendAnimation\.kt:[0-9]+ Missing @param tag for parameter `initialVelocity` in DFunction animateDecay
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/Crossfade\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Crossfade
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/animation\/Crossfade\.kt:[0-9]+ Missing @param tag for parameter `contentKey` in DFunction Crossfade
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/foundation\/layout\/AspectRatio\.kt:[0-9]+ Missing @param tag for parameter `matchHeightConstraintsFirst` in DFunction aspectRatio
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/foundation\/layout\/Column\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Column
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/foundation\/layout\/Row\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Row
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/foundation\/lazy\/layout\/IntervalList\.kt:[0-9]+ Missing @param tag for parameter `block` in DFunction forEach
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction OutlinedButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction TextButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Button
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Card\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Card
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Chip\.kt:[0-9]+ Missing @param tag for parameter `leadingIconContentColor` in DFunction outlinedChipColors
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Chip\.kt:[0-9]+ Missing @param tag for parameter `shape` in DFunction Chip
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Divider\.kt:[0-9]+ Missing @param tag for parameter `modifier` in DFunction Divider
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/MaterialTheme\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction MaterialTheme
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/Surface\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Surface
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material\/TextFieldDefaults\.kt:[0-9]+ Missing @param tag for parameter `shape` in DFunction BorderBox
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Button
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction ElevatedButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction FilledTonalButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction OutlinedButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Button\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction TextButton
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction ElevatedCard
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction OutlinedCard
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `disabledElevation` in DFunction cardElevation
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `disabledElevation` in DFunction elevatedCardElevation
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `disabledElevation` in DFunction outlinedCardElevation
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Card\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Card
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/MaterialTheme\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction MaterialTheme
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/NavigationDrawer\.kt:[0-9]+ Missing @param tag for parameter `shape` in DFunction NavigationDrawerItem
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/material3\/Surface\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction Surface
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/layout\/Placeable\.kt:[0-9]+ Missing @param tag for parameter `position` in DFunction placeAt
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/platform\/TextToolbar\.kt:[0-9]+ Missing @param tag for parameter `onSelectAllRequested` in DFunction showMenu
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `label` in DFunction onAllNodesWithContentDescription
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `testTag` in DFunction onNodeWithTag
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `testTag` in DFunction onAllNodesWithTag
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `label` in DFunction onNodeWithContentDescription
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `text` in DFunction onNodeWithText
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/Finders\.kt:[0-9]+ Missing @param tag for parameter `text` in DFunction onAllNodesWithText
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/test\/MainTestClock\.kt:[0-9]+ Missing @param tag for parameter `condition` in DFunction advanceTimeUntil
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/text\/AnnotatedString\.kt:[0-9]+ Missing @param tag for parameter `text` in DFunction append
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/compose\/ui\/text\/AnnotatedString\.kt:[0-9]+ Missing @param tag for parameter `text` in DFunction AnnotatedString
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/datastore\/preferences\/core\/Preferences\.kt:[0-9]+ Missing @param tag for parameter `value` in DFunction set
-WARN: .*\/unzippedMultiplatformSources\/wasmJsMain\/androidx\/datastore\/core\/okio\/WebStorage\.wasmJs\.kt:[0-9]+ Link does not resolve for @throws IOException in DFunction createConnection\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/wasmJsMain\/androidx\/datastore\/core\/okio\/WebStorage\.wasmJs\.kt:[0-9]+ Link does not resolve for @throws kotlin\.IllegalArgumentException in DFunction valueOf\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/webCommonMain\/androidx\/datastore\/core\/okio\/WebStorage\.wasmJs\.kt:[0-9]+ Link does not resolve for @throws IOException in DFunction createConnection\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/webCommonMain\/androidx\/datastore\/core\/okio\/WebStorage\.wasmJs\.kt:[0-9]+ Link does not resolve for @throws kotlin\.IllegalArgumentException in DFunction valueOf\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/paging\/compose\/LazyPagingItems\.kt:[0-9]+ Failed to resolve See PagingSource\.invalidate in DFunction refresh\. Did you mean PagingSource#invalidate\?
-WARN: .*\/unzippedMultiplatformSources\/desktopMain\/androidx\/compose\/material\/DesktopMenu\.desktop\.kt:[0-9]+ Missing @param tag for parameter `content` in DFunction DropdownMenuItem
-WARN: .*\/unzippedMultiplatformSources\/commonJvmMain\/androidx\/datastore\/core\/Serializer\.kt:[0-9]+ Missing @param tag for parameter `output` in DFunction writeTo
-WARN: .*\/unzippedMultiplatformSources\/nonJvmMain\/androidx\/annotation\/RestrictTo\.nonJvm\.kt:[0-9]+ Link does not resolve for @throws kotlin\.IllegalArgumentException in DFunction valueOf\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/.*Main\/androidx\/room3?\/RoomDatabase.*\.kt:[0-9]+ Link does not resolve for @throws kotlin\.IllegalArgumentException in DFunction valueOf\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources/jvmNativeMain/androidx/room3?/RoomDatabase\.jvmNative\.kt:[0-9]+ Link does not resolve for @throws IllegalArgumentException in DFunction setQueryCoroutineContext\. Is it from a package that the containing file does not import\? Are docs inherited by an un\-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-# b/376423687
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/savedstate\/serialization\/SavedStateDecoder\.kt:[0-9]+ Link does not resolve for @throws SerializationException in DFunction decodeFromSavedState\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/savedstate\/serialization\/SavedStateEncoder\.kt:[0-9]+ Link does not resolve for @throws SerializationException in DFunction encodeToSavedState\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/savedstate\/serialization\/SavedStateDecoder\.kt:[0-9]+ Link does not resolve for @throws SerializationException in DFunction decodeFromSavedStateNullable\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: .*\/unzippedMultiplatformSources\/commonMain\/androidx\/savedstate\/serialization\/SavedStateEncoder\.kt:[0-9]+ Link does not resolve for @throws SerializationException in DFunction encodeToSavedStateNullable\. Is it from a package that the containing file does not import\? Are docs inherited by an un-documented override function, but the exception class is not in scope in the inheriting class\? The general fix for these is to fully qualify the exception name, e\.g\. `@throws java\.io\.IOException under some conditions`\.
-WARN: File location could not be determined\. Failed to resolve See <a href="https:\/\/developer\.android\.com\/training\/transitions">Transition API Guide<\/a> in DPackage androidx\.transition
+# b/512535811
 [0-9]+ cpus, so not storing build metrics.
 64 cpus, so storing build metrics.
-# b/351805708: upstream bug in Kotlin: can't have a nested class with different expect from parent
-ERROR: An attempt to write .*\/reference\/androidx\/lifecycle\/ViewModelProvider\.NewInstanceFactory\.html several times!
-ERROR: An attempt to write .*\/reference\/kotlin\/androidx\/lifecycle\/ViewModelProvider\.NewInstanceFactory\.html several times!
 # > Task :compose:ui:ui-tooling:processDebugAndroidTestManifest
 \$SUPPORT/compose/ui/ui\-tooling/src/androidDeviceTest/AndroidManifest\.xml:[0-9]+:[0-9]+\-[0-9]+:[0-9]+ Warning:
 # ./gradlew tasks warns as we have warnings present
@@ -273,17 +87,6 @@ public abstract void jvmDelete\(T t\);
 public abstract void jvmInsert\(@org\.jetbrains\.annotations\.NotNull.*
 public abstract java\.util\.List<androidx\.room3\.integration\.kotlintestapp\.test\.JvmNameInDaoTest\.JvmNameEntity> jvmQuery\(\);
 public abstract androidx\.room3\.integration\.kotlintestapp\.test\.JvmNameInDaoTest\.JvmNameDao jvmDao\(\);
-# > Task :slice:slice-builders-ktx:compileDebugKotlin
-w: file://\$SUPPORT/slice/slice\-builders\-ktx/src/main/java/androidx/slice/builders/ListBuilder\.kt:[0-9]+:[0-9]+ 'ListBuilder' is deprecated\. Deprecated in Java
-# > Task :slice:slice-builders-ktx:compileDebugAndroidTestKotlin
-w: file://\$SUPPORT/slice/slice\-builders\-ktx/src/androidTest/java/androidx/slice/builders/SliceBuildersKtxTest\.kt:[0-9]+:[0-9]+ 'SliceProvider' is deprecated\. Deprecated in Java
-w: file://\$SUPPORT/slice/slice\-builders\-ktx/src/androidTest/java/androidx/slice/builders/SliceBuildersKtxTest\.kt:[0-9]+:[0-9]+ 'SliceSpecs' is deprecated\. Deprecated in Java
-w: file://\$SUPPORT/slice/slice\-builders\-ktx/src/androidTest/java/androidx/slice/builders/SliceBuildersKtxTest\.kt:[0-9]+:[0-9]+ 'ListBuilder' is deprecated\. Deprecated in Java
-# > Task :slice:slice-benchmark:compileReleaseAndroidTestJavaWithJavac
-\$SUPPORT/slice/slice\-benchmark/src/androidTest/java/androidx/slice/SliceSerializeMetrics\.java:[0-9]+: warning: \[deprecation\] SliceHints in androidx\.slice\.core has been deprecated
-import androidx\.slice\.core\.SliceHints;
-\$SUPPORT/slice/slice\-benchmark/src/androidTest/java/androidx/slice/SliceViewMetrics\.java:[0-9]+: warning: \[deprecation\] SliceView in androidx\.slice\.widget has been deprecated
-import androidx\.slice\.widget\.SliceView;
 [0-9]+ warnings
 # When konan is downloading a dependency from another file, don't warn about it.
 .*Downloading dependency[:]? file:.*/prebuilts/androidx/konan/.*
@@ -314,17 +117,8 @@ w: file://\$SUPPORT/compose/foundation/foundation/src/androidDeviceTest/kotlin/a
 w: file://\$SUPPORT/compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupTestUtils\.kt:[0-9]+:[0-9]+ 'getter for windowLayoutParams: EspressoOptional<WindowManager\.LayoutParams!>!' is deprecated\. Deprecated in Java
 # b/271306193 remove after aosp/2589888 :emoji:emoji:spdxSbomForRelease
 spdx sboms require a version but project: noto\-emoji\-compat\-flatbuffers has no specified version
-# temporary diagnostic for b/307738543
-docs-public:docs starting
-docs-public:docs completing
-docs-tip-of-tree:docs starting
-WARN: Source sets 'main' and 'commonMain' have the common sample roots: \$OUT_DIR/androidx/docs\-(tip-of-tree|public)/build/unzippedJvmSampleSources, \$OUT_DIR/androidx/docs\-(tip-of-tree|public)/build/unzippedMultiplatformSampleSources, \$SUPPORT/samples\. Every Kotlin source file should belong to only one source set \(module\)\.
-docs-tip-of-tree:docs completing
 # > Configure project :androidx-demos
 The current default is 'false'\.
-# Investigate more b/325465332
-# buildPrivacySandboxSdkApksForDebug (b/329101823)
-Extracted sandbox SDK APK for.*
 # Building XCFrameworks (b/260140834) and iOS benchmark invocation
 .*xcodebuild.*
 # > Task :benchmark:benchmark-darwin-samples:assembleAndroidXDarwinBenchmarksReleaseXCFramework
@@ -345,21 +139,6 @@ warning Ignored scripts due to flag.
 # https://youtrack.jetbrains.com/issue/KT-69929
 e: The daemon has terminated unexpectedly on startup attempt #1 with error code: Unknown\. The daemon process output:
 1\. Kotlin compile daemon is ready
-# b/359449191
-> Transform sdk\-interface\-descriptors\.jar \(project :privacysandbox:tools:integration\-tests:testsdk\-asb\) with ExtractCompileSdkShimTransform
-WARN: Attempt to load key 'java\.correct\.class\.type\.by\.place\.resolve\.scope' for not yet loaded registry
-warning: unable to find kotlin\-stdlib\.jar in the Kotlin home directory\. Pass either '\-no\-stdlib' to prevent adding it to the classpath, or the correct '\-kotlin\-home'
-warning: unable to find kotlin\-script\-runtime\.jar in the Kotlin home directory\. Pass either '\-no\-stdlib' to prevent adding it to the classpath, or the correct '\-kotlin\-home'
-# b/388455777
-\$OUT_DIR/tmp/extract\-shim\-transform[0-9]+/androidx/privacysandbox/tools/integration/testsdk/NativeAd\.kt:[0-9]+:[0-9]+: warning: this API is experimental\. It may be changed in the future without notice\.
-\^+$
-public interface NativeAd : SharedUiAdapter
-\$OUT_DIR/tmp/extract\-shim\-transform[0-9]+/androidx/privacysandbox/tools/integration/testsdk/NativeAdClientProxy\.kt:[0-9]+:[0-9]+: warning: this API is experimental\. It may be changed in the future without notice\.
-public override fun openSession\(clientExecutor: Executor, client: SharedUiAdapter\.SessionClient\) \{
-public val sharedUiAdapter: SharedUiAdapter =
-SharedUiAdapterFactory\.createFromCoreLibInfo\(coreLibInfo\)
-client: SharedUiAdapter\.SessionClient\) \{
-sharedUiAdapter\.openSession\(clientExecutor, client\)
 # develocity plugin begign warning, reported back to Gradle
 Failed sysctl call: hw\.nperflevels, Error code: 2
 # > Task :benchmark:benchmark-macro:processReleaseAndroidTestManifest
@@ -383,11 +162,6 @@ Completed
 # https://github.com/kythe/kythe/issues/6145
 .*com.google\.devtools\.kythe\.extractors\.java\.JavaCompilationUnitExtractor.*
 ^WARNING: Empty java source file.*
-# b/359449191
-> Transform sdk\-interface\-descriptors\.jar \(project :privacysandbox:ui:integration\-tests:testsdkproviderwrapper\) with ExtractCompileSdkShimTransform
-> Transform sdk\-interface\-descriptors\.jar \(project :privacysandbox:ui:integration\-tests:mediateesdkproviderwrapper\) with ExtractCompileSdkShimTransform
-> Transform sdk\-interface\-descriptors\.jar \(project :privacysandbox:ui:macrobenchmark:testapp:testsdkproviderwrapper\) with ExtractCompileSdkShimTransform
-> Transform sdk\-interface\-descriptors\.jar \(project :privacysandbox:ui:macrobenchmark:testapp:mediateesdkproviderwrapper\) with ExtractCompileSdkShimTransform
 # > Task :room3:integration-tests:room-testapp:runErrorProneWithPreKmpCompilerRelease
 \$OUT_DIR/androidx/room3/integration\-tests/room\-testapp/build/errorProne/WithPreKmpCompilerRelease/androidx/room3/integration/testapp/database/CustomerDao_Impl\.java:[0-9]+: warning: \[removal\] finalize\(\) in Object has been deprecated and marked for removal
 protected void finalize\(\) \{
@@ -395,15 +169,6 @@ protected void finalize\(\) \{
 # b/399029837
 ^C/C\+\+: ninja: warning: build log version is too old; starting over.*
 ^C/C\+\+: ninja: warning: bad deps log signature or version; starting over.*
-# b/388455777 Warnings are thrown for classes generated by privacysandbox-tools for features behind
-# the @RequiresOptIn flag. This can be ignored for now as all required code is still generated.
-# > Task :privacysandbox:tools:integration-tests:testsdk:compileReleaseKotlin
-w: file://\$OUT_DIR/androidx/privacysandbox/tools/integration\-tests/testsdk/build/generated/ksp/release/kotlin/androidx/privacysandbox/tools/integration/testsdk/NativeAdDataConverter\.kt:[0-9]+:[0-9]+ This API is experimental\. It may be changed in the future without notice\.
-# > Task :docs-public:docs
-In Dokka K[0-9]+ it will be an error\. Also, please consider reporting your user case: https://github\.com/Kotlin/dokka/issues/[0-9]+
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/androidx/biometric/auth/CredentialAuthExtensions\.kt:[0-9]+ Failed to resolve See CredentialAuthPrompt\.authenticate in DFunction authenticate\. Did you mean CredentialAuthPrompt\#authenticate\?
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/androidx/biometric/auth/Class[0-9]+BiometricOrCredentialAuthExtensions\.kt:[0-9]+ Failed to resolve See Class[0-9]+BiometricOrCredentialAuthPrompt\.authenticate in DFunction authenticate\. Did you mean Class[0-9]+BiometricOrCredentialAuthPrompt\#authenticate\?
-WARN: \$OUT_DIR/androidx/docs\-public/build/unzippedJvmSources/androidx/biometric/auth/Class[0-9]+BiometricAuthExtensions\.kt:[0-9]+ Failed to resolve See Class[0-9]+BiometricAuthPrompt\.authenticate in DFunction authenticate\. Did you mean Class[0-9]+BiometricAuthPrompt\#authenticate\?
 # https://youtrack.jetbrains.com/issue/KT-77220
 w: file://\$SUPPORT/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/CoreTextField\.kt:[0-9]+:[0-9]+ Inconsistent target list for lambda annotation: \+androidx\.compose\.runtime\.DontMemoize \[EXPRESSION\] on androidx\.compose\.foundation\.text\.CoreTextField\$lambda\$[0-9]+
 # work/work-runtime/build.gradle b/407640603 and buildSrc:imports:binary-compatibility-validator:compileKotlin b/410631668
@@ -411,15 +176,8 @@ w: Language version 1\.9 is deprecated and its support will be removed in a futu
 # Remove when https://youtrack.jetbrains.com/issue/KT-70013 is fixed, o/w anytime a new entry is added to this list, this message will be printed.
 Calculating task graph as configuration cache cannot be reused because the set of paths ignored in file-system-check input tracking.*
 # b/414775532
-# > Task :compose-hero-benchmarks:poxedex-compose:app:kspReleaseKotlin
+# > Task :compose-hero-benchmarks:pokedex-compose:app:kspReleaseKotlin
 w: \[ksp\] LibraryGlideModules \[\] are included more than once, keeping only one\!
-# > Task :glance:glance-wear-tiles:compileReleaseKotlin
-w: file://\$SUPPORT/glance/glance\-wear\-tiles/integration.* is deprecated\. glance\-wear\-tiles is deprecated and will be removed\.
-w: file://\$SUPPORT/glance/glance\-wear\-tiles/src/.* is deprecated\. glance\-wear\-tiles is deprecated and will be removed\.
-# b/439568035
-WARNING: The option setting 'android\.newDsl=false' is deprecated\.
-The current default is 'true'\.
-It will be removed in version 10\.0 of the Android Gradle plugin\.
 # b/454595352
 WARNING: The option setting 'android\.kmp\.use\.jvm\.platform\.type=true' is experimental\.
 # b/439073627
@@ -427,8 +185,8 @@ warning Waiting for the other yarn instance to finish.*
 # Kotlinx Benchmark Plugin
 Analyzing \d+ files from .*/(kotlin|jvm|java|processedResources|sources)(.*/.*)
 Writing out Java source to .*benchmark.*
-# b/446708295, b/409324917, b/407927787, b/429040474 Tracing - Driver warnings (https://youtrack.jetbrains.com/issue/KTIJ-22326)
-w: file://\$SUPPORT/[a-zA-Z-_/]+\.kt:[0-9]+:[0-9]+ Suppression of error '(OPTIONAL_DECLARATION_USAGE_IN_NON_COMMON_SOURCE|UNSAFE_CALL|INVISIBLE_REFERENCE|WRONG_ANNOTATION_TARGET|UPPER_BOUND_VIOLATED)' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED\. Please report your use case to the Kotlin issue tracker instead: https://kotl\.in/issue
+# b/446708295 Tracing - Driver warnings (https://youtrack.jetbrains.com/issue/KTIJ-22326)
+w: file://\$SUPPORT/[a-zA-Z-_/\.]+\.kt:[0-9]+:[0-9]+ Suppression of error '(OPTIONAL_DECLARATION_USAGE_IN_NON_COMMON_SOURCE)' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED\. Please report your use case to the Kotlin issue tracker instead: https://kotl\.in/issue
 # Cannot be suppressed because the issue is in generated code
 # > Task :compose:integration-tests:hero:pokedex:pokedex-macrobenchmark-target:compileDebugKotlin
 w: file://\$OUT_DIR/androidx/compose/integration\-tests/hero/pokedex/pokedex\-macrobenchmark\-target/build/generated/ksp/debug/kotlin/com/bumptech/glide/GeneratedAppGlideModuleImpl\.kt:[0-9]+:[0-9]+ 'internal' declaration exposes 'public/\*package\*/' type 'GeneratedAppGlideModule'\. This will become an error in language version [0-9]+\.[0-9]+\. See https://youtrack\.jetbrains\.com/issue/KTLC\-[0-9]+\.
@@ -443,12 +201,94 @@ w: file://\$SUPPORT/compose/runtime/runtime/.+\.kt:[0-9]+:[0-9]+ This declaratio
 # > Task :navigationevent:navigationevent:compileKotlinWasmJs
 w: file://\$SUPPORT/navigationevent/navigationevent/src/wasmJsMain/kotlin/androidx/navigationevent/.+\.kt:[0-9]+:[0-9]+ This declaration needs opt\-in\. Its usage should be marked with '@kotlin\.js\.ExperimentalWasmJsInterop' or '@OptIn\(kotlin\.js\.ExperimentalWasmJsInterop::class\)'
 w: file://\$SUPPORT/navigationevent/navigationevent/src/wasmJsTest/kotlin/androidx/navigationevent/.+\.kt:[0-9]+:[0-9]+ This declaration needs opt\-in\. Its usage should be marked with '@kotlin\.js\.ExperimentalWasmJsInterop' or '@OptIn\(kotlin\.js\.ExperimentalWasmJsInterop::class\)'
+w: file://\$SUPPORT/navigationevent/navigationevent/src/wasmJsTest/kotlin/androidx/navigationevent/.+\.kt:[0-9]+:[0-9]+ This declaration needs opt\-in\. Its usage must be marked with '@kotlin\.ExperimentalStdlibApi' or '@OptIn\(kotlin\.ExperimentalStdlibApi::class\)'\. This will become an error in future releases
+# > Task :navigation:navigation-runtime:compileKotlinWasmJs
+w: file://\$SUPPORT/navigation/navigation-runtime/src/wasmJsMain/kotlin/androidx/navigation/.+\.kt:[0-9]+:[0-9]+ This declaration needs opt\-in\. Its usage should be marked with '@kotlin\.js\.ExperimentalWasmJsInterop' or '@OptIn\(kotlin\.js\.ExperimentalWasmJsInterop::class\)'
+w: file://\$SUPPORT/navigation/navigation-runtime/src/wasmJsTest/kotlin/androidx/navigation/.+\.kt:[0-9]+:[0-9]+ This declaration needs opt\-in\. Its usage should be marked with '@kotlin\.js\.ExperimentalWasmJsInterop' or '@OptIn\(kotlin\.js\.ExperimentalWasmJsInterop::class\)'
 # b/446708297
 # > Task :kotlinWasmToolingSetup
 \(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning: The `punycode` module is deprecated\. Please use a userland alternative instead\.
 \(Use `node \-\-trace\-deprecation \.\.\.` to show where the warning was created\)
-# > Task :kruth:kruth:compileNativeMainKotlinMetadata
-w: KLIB resolver: The same 'unique_name=kotlin\-stdlib\-common' found in more than one library: \$OUT_DIR/androidx/kruth/kruth/build/kotlinTransformedMetadataLibraries/commonMain/org\.jetbrains\.kotlin\-kotlin\-stdlib\-[0-9]+\.[0-9]+\.[0-9]+\-commonMain\-Y[0-9]+sbrw\.klib, \$OUT_DIR/androidx/kruth/kruth/build/kotlinTransformedMetadataLibraries/nonJvmMain/org\.jetbrains\.kotlin\-kotlin\-stdlib\-[0-9]+\.[0-9]+\.[0-9]+\-commonNonJvmMain\-Y[0-9]+sbrw\.klib, \$OUT_DIR/androidx/kruth/kruth/build/kotlinTransformedMetadataLibraries/nonJvmMain/org\.jetbrains\.kotlin\-kotlin\-stdlib\-[0-9]+\.[0-9]+\.[0-9]+\-webMain\-Y[0-9]+sbrw\.klib
-# > Task :wear:watchfacepush:watchfacepush:processReleaseAndroidTestManifest
-\$SUPPORT/wear/watchfacepush/watchfacepush/src/androidTest/AndroidManifest\.xml:[0-9]+:[0-9]+\-[0-9]+:[0-9]+ Warning:
-uses\-library\#wear\-sdk@android:required was tagged at AndroidManifest\.xml:[0-9]+ to replace other declarations but no other declaration present
+# > Task :appfunctions:integration-tests:multi-modules-testapp:app:compileDebugAndroidTestKotlin
+# b/472412144
+\[KOTLIN\] \[IC\] Incremental compilation was attempted but failed:
+java\.lang\.IllegalStateException: The following LookupSymbols are not yet converted to ProgramSymbols:.*
+java\.lang\.RuntimeException: Incremental compilation failed: The following LookupSymbols are not yet converted to ProgramSymbols: LookupSymbol\(name=TestFunctions[0-9]+_AppFunctionInventory, scope=androidx\.appfunctions\.integration\.testapp\.library\.\), LookupSymbol\(name=TestFunctions[0-9]+_AppFunctionInvoker, scope=androidx\.appfunctions\.integration\.testapp\.library\.\)
+(?:.*[\n\r])*.*Falling back to non\-incremental compilation \(reason = IC_FAILED_TO_COMPUTE_FILES_TO_RECOMPILE\)
+(?:.*[\n\r])*.*e: Incremental compilation failed: The following LookupSymbols are not yet converted to ProgramSymbols:.*(SchemaAppFunctionInventory_Impl|AggregatedAppFunctionInvoker_Impl)\)
+# > Task :car:app:app-automotive:compileReleaseJavaWithJavac b/316376113
+\$OUT_DIR/androidx/car/app/app\-automotive/build/generated/source/stable_aidl/release/androidx/car/app/activity/renderer/IInsetsListener\.java:[0-9]+: warning: \[dep\-ann\] deprecated item is not annotated with @Deprecated
+@Override public void onInsetsChanged\(android\.graphics\.Insets insets\) throws android\.os\.RemoteException
+\^
+# Fixed in next AGP alpha via ag/38589626
+\-\-XuseK2Uast is no longer in effect, and will be an error in the next release\.
+# b/495870981
+(?:Lint found no errors or warnings.*|[0-9]+ errors/warnings were listed in the baseline file \(\$SUPPORT/.*lint\-baseline\.xml\) but not found in the project; perhaps they have been fixed\?)
+# https://youtrack.jetbrains.com/issue/KT-85582/: Transitive peer dependency warning from Kotlin/Wasm tooling. Doesn't impact build.
+warning "webpack\-dev\-server > webpack\-dev\-middleware > memfs@[^"]+" has unmet peer dependency "tslib@2"\.
+# b/500398048: Warning from in_progress_stroke_native_helper.cc
+WARNING: Logging before InitGoogle\(\) is written to STDERR
+.*in_progress_stroke_native_helper\.cc:[0-9]+\] Triangle index data exceeds 16\-bit limit, attempting to partition into [0-9]+ partitions\.
+# > Task :appfunctions:integration-tests:multi-modules-testapp:app:compileDebugKotlin
+e: Incremental compilation failed: The following LookupSymbols are not yet converted to ProgramSymbols: LookupSymbol\(name=TestFunctions[0-9]+_AppFunctionInventory, scope=androidx\.appfunctions\.integration\.testapp\.library\.\), LookupSymbol\(name=TestFunctions[0-9]+_AppFunctionInvoker, scope=androidx\.appfunctions\.integration\.testapp\.library\.\)
+# Deprecation of lifecycle-compiler annotation processor (b/541926513)
+warning: lifecycle\-compiler is deprecated\. Use DefaultLifecycleObserver or LifecycleEventObserver instead\.
+# TODO: remove when AGP upgrades to Gradle 9.7.0
+w: .*/test/java/com/android/build/gradle/internal/fixtures/FakeGradleExecOperations\.kt:120:15 Suppression of error 'NOTHING_TO_OVERRIDE' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED.*
+# Robolectric 4.17 images logs this
+.*HWUI    : Using FreeType backend \(prop=Auto\)
+.*HWUI    : Davey! duration=.*
+# Fixed in room-generated code, other projects need to upgrade after room releases.
+w: .*\/generated\/ksp\/.*\.kt:[0-9]+:[0-9]+ This 'var' property is never written to, it can be declared as 'val'\.
+# b/554104579
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Assigned value is never read\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Initializer is redundant\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Variable is unused\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ This 'var' property is never written to, it can be declared as 'val'\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ This 'var' property is not written to more than once, it can be declared as 'val'\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Redundant string template\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Parameter '.*' is never used, consider renaming it to '_'\.
+w: .*\/compose\/remote\/.*.kt:[0-9]+:[0-9]+ Variable is never read\.
+# > Task :wear:watchface:watchface-complications-data:compileReleaseKotlin b/559189770
+w: file://\$SUPPORT/wear/watchface/watchface\-complications\-data/src/main/java/androidx/wear/watchface/complications/data/ComplicationDataEvaluator\.kt:[0-9]+:[0-9]+ Suppression of error 'MISSING_DEPENDENCY_CLASS' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED\. Please report your use case to the Kotlin issue tracker instead: https://kotl\.in/issue
+w: file://\$SUPPORT/wear/watchface/watchface\-complications\-data/src/test/java/androidx/wear/watchface/complications/data/ComplicationDataEvaluatorTest\.kt:[0-9]+:[0-9]+ Suppression of error 'MISSING_DEPENDENCY_CLASS' might compile and work, but the compiler behavior is UNSPECIFIED and WILL NOT BE PRESERVED\. Please report your use case to the Kotlin issue tracker instead: https://kotl\.in/issue
+# > Task :graphics:graphics-shapes:linkDebugTestLinuxX64
+w: The argument '\-Xannotation\-default\-target=param\-property' is redundant for the current language version 2\.4\.
+# > Task :kotlinNpmInstall
+\(node:[0-9]+\) \[DEP[0-9]+\] DeprecationWarning: `url\.parse\(\)` behavior is not standardized and prone to errors that have security implications\. Use the WHATWG URL API instead\. CVEs are not issued for `url\.parse\(\)` vulnerabilities\.
+# b/553121473
+WARNING: A terminally deprecated method in sun\.misc\.Unsafe has been called
+WARNING: sun\.misc\.Unsafe::objectFieldOffset has been called by com\.intellij\.util\.containers\.Unsafe.*
+WARNING: Please consider reporting this to the maintainers of class com\.intellij\.util\.containers\.Unsafe
+WARNING: sun\.misc\.Unsafe::objectFieldOffset will be removed in a future release
+# b/553487863
+WARNING: A restricted method in java\.lang\.System has been called
+WARNING: java\.lang\.System::load has been called by org\.sqlite\.SQLiteJDBCLoader in an unnamed module.*
+WARNING: java\.lang\.System::loadLibrary has been called by androidx\.sqlite\.driver\.bundled\.NativeLibraryLoader in an unnamed module.*
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+# TODO(aurimas): INVESTIGATE
+warning: unknown enum constant Level\.ERROR
+reason: class file for androidx\.annotation\.RequiresOptIn\$Level not found
+# TODO(aurimas): INVESTIGATE ./gradlew :compose:ui:ui-text:testAndroidHostTest
+# https://github.com/raphw/byte-buddy/issues/1803
+WARNING: sun\.misc\.Unsafe::objectFieldOffset has been called by net\.bytebuddy\.dynamic\.loading\.ClassInjector\$UsingUnsafe\$Dispatcher\$CreationAction.*
+WARNING: Please consider reporting this to the maintainers of class net\.bytebuddy\.dynamic\.loading\.ClassInjector\$UsingUnsafe\$Dispatcher\$CreationAction
+# https://github.com/google/ksp/issues/2753
+WARNING: sun\.misc\.Unsafe::objectFieldOffset has been called by ksp\.com\.intellij\.util\.containers\.Unsafe.*
+WARNING: Please consider reporting this to the maintainers of class ksp\.com\.intellij\.util\.containers\.Unsafe
+# https://github.com/protocolbuffers/protobuf/issues/20760
+WARNING: sun\.misc\.Unsafe::arrayBaseOffset has been called by .*\.UnsafeUtil\$MemoryAccessor.*
+WARNING: Please consider reporting this to the maintainers of class .*\.UnsafeUtil\$MemoryAccessor
+# https://github.com/google/guava/issues/7811
+WARNING: sun\.misc\.Unsafe::objectFieldOffset has been called by com\.google\.common\.util\.concurrent\.AbstractFuture\$UnsafeAtomicHelper.*
+WARNING: Please consider reporting this to the maintainers of class com\.google\.common\.util\.concurrent\.AbstractFuture\$UnsafeAtomicHelper
+# b/555311449
+WARNING: java\.lang\.System::load has been called by androidx.ink.nativeloader.NativeLoader in an unnamed module.*
+# TODO(aurimas): investigate
+WARNING: sun\.misc\.Unsafe::staticFieldBase has been called by org\.jetbrains\.kotlin\.kapt\.base\.util\.ModuleManipulationUtilsKt.*
+WARNING: Please consider reporting this to the maintainers of class org\.jetbrains\.kotlin\.kapt\.base\.util\.ModuleManipulationUtilsKt
+WARNING: sun\.misc\.Unsafe::staticFieldBase will be removed in a future release
+WARNING: java\.lang\.System::load has been called by org\.conscrypt\.NativeLibraryUtil in an unnamed module.*
+WARNING: sun\.misc\.Unsafe::objectFieldOffset has been called by org\.jetbrains\.kotlin\.com\.intellij\.util\.containers\.Unsafe.*
+WARNING: Please consider reporting this to the maintainers of class org\.jetbrains\.kotlin\.com\.intellij\.util\.containers\.Unsafe

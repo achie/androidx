@@ -26,10 +26,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.wear.compose.materialcore.screenHeightDp
 import kotlin.math.PI
 import kotlin.math.asin
 
@@ -43,6 +43,11 @@ import kotlin.math.asin
  * Example of indeterminate arc progress indicator:
  *
  * @sample androidx.wear.compose.material3.samples.IndeterminateProgressArcSample
+ *
+ * <video
+ * src=https://developer.android.com/wear/images/design/WearComposeM3_IndeterminateProgressArcSample_CompositeImage.mp4
+ * autoplay loop muted playsinline style=border-radius:2.4%/6.8%;overflow:hidden; />
+ *
  * @param modifier Modifier to be applied to the ArcProgressIndicator.
  * @param startAngle the start angle of this progress indicator arc (specified in degrees). It is
  *   recommended to use [ArcProgressIndicatorDefaults.IndeterminateStartAngle]. Measured clockwise
@@ -157,12 +162,13 @@ public object ArcProgressIndicatorDefaults {
      * The recommended diameter of the indeterminate arc progress indicator, which leaves room for
      * additional content such as a message above the indicator.
      */
+    @Suppress("DefaultsMissingReadOnlyComposable") // b/567058012
     public val recommendedIndeterminateDiameter: Dp
         @Composable
         get() {
-            // Calculate the recommended diameter as a percentage of screen height.
-            val screenHeight = screenHeightDp()
-            return IndeterminateArcDiameterPercentage.dp * screenHeight.toFloat()
+            // Calculate the recommended diameter as a percentage of screen width.
+            val screenWidth = LocalConfiguration.current.screenWidthDp
+            return IndeterminateArcDiameterPercentage.dp * screenWidth.toFloat()
         }
 
     /**

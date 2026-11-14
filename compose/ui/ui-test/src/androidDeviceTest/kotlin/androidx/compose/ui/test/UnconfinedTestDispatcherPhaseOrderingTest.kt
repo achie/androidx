@@ -22,7 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.util.TestCounter
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Truth.assertThat
@@ -35,10 +35,9 @@ import org.junit.Test
 @SmallTest
 class UnconfinedTestDispatcherPhaseOrderingTest {
 
-    @Suppress("ComposeTestRuleDispatcher")
     @OptIn(ExperimentalCoroutinesApi::class)
     @get:Rule
-    val rule = createComposeRule(UnconfinedTestDispatcher())
+    val rule = createComposeRule(ComposeUiTestConfig(UnconfinedTestDispatcher()))
 
     @Test
     fun singlePass() {

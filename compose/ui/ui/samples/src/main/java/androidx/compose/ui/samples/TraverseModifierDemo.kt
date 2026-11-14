@@ -27,13 +27,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.Button
-import androidx.compose.material.DropdownMenuItem
-import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.ExposedDropdownMenuBox
-import androidx.compose.material.ExposedDropdownMenuDefaults
-import androidx.compose.material.Text
-import androidx.compose.material.TextField
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -263,7 +266,6 @@ fun traverseDescendantsDemo() {
  * ⤷ Column B (TraversableBackgroundModifierNode) ⤷ Box D (NON-TRAVERSABLE Box) ⤷ Box E
  * (TraversableBackgroundModifierNode) ⤷ Box F (NON-TRAVERSABLE Box)
  */
-@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun TraverseModifierDemo() {
 
@@ -298,12 +300,12 @@ fun TraverseModifierDemo() {
     val nodeMenuOptions =
         listOf(ROOT_LABEL, COLUMN_A_LABEL, BOX_A_LABEL, BOX_C_LABEL, COLUMN_B_LABEL, BOX_E_LABEL)
     var nodeMenuExpanded by remember { mutableStateOf(false) }
-    var nodeMenuSelectedOptionText by remember { mutableStateOf(nodeMenuOptions[0]) }
+    val nodeMenuSelectedOptionState = rememberTextFieldState(nodeMenuOptions[0])
 
     // Menu options for picking the actual traversal call made on the node
     val traversalMenuOptions = listOf(ANCESTORS_LABEL, DESCENDANTS_LABEL)
     var traversalMenuExpanded by remember { mutableStateOf(false) }
-    var traversalMenuSelectedOptionText by remember { mutableStateOf(traversalMenuOptions[1]) }
+    val traversalMenuSelectedOptionState = rememberTextFieldState(traversalMenuOptions[1])
 
     Column(
         modifier =
@@ -330,9 +332,10 @@ fun TraverseModifierDemo() {
                 onExpandedChange = { nodeMenuExpanded = !nodeMenuExpanded },
             ) {
                 TextField(
+                    modifier =
+                        Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                     readOnly = true,
-                    value = nodeMenuSelectedOptionText,
-                    onValueChange = { /* No-op */ },
+                    state = nodeMenuSelectedOptionState,
                     label = { Text("Node") },
                     trailingIcon = {
                         ExposedDropdownMenuDefaults.TrailingIcon(expanded = nodeMenuExpanded)
@@ -345,13 +348,14 @@ fun TraverseModifierDemo() {
                 ) {
                     nodeMenuOptions.forEach { selectionOption ->
                         DropdownMenuItem(
+                            text = { Text(text = selectionOption) },
                             onClick = {
-                                nodeMenuSelectedOptionText = selectionOption
+                                nodeMenuSelectedOptionState.setTextAndPlaceCursorAtEnd(
+                                    selectionOption
+                                )
                                 nodeMenuExpanded = false
-                            }
-                        ) {
-                            Text(text = selectionOption)
-                        }
+                            },
+                        )
                     }
                 }
             }
@@ -364,9 +368,10 @@ fun TraverseModifierDemo() {
                 onExpandedChange = { traversalMenuExpanded = !traversalMenuExpanded },
             ) {
                 TextField(
+                    modifier =
+                        Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                     readOnly = true,
-                    value = traversalMenuSelectedOptionText,
-                    onValueChange = { /* No-op */ },
+                    state = traversalMenuSelectedOptionState,
                     label = { Text("Traversal type") },
                     trailingIcon = {
                         ExposedDropdownMenuDefaults.TrailingIcon(expanded = traversalMenuExpanded)
@@ -379,13 +384,14 @@ fun TraverseModifierDemo() {
                 ) {
                     traversalMenuOptions.forEach { selectionOption ->
                         DropdownMenuItem(
+                            text = { Text(text = selectionOption) },
                             onClick = {
-                                traversalMenuSelectedOptionText = selectionOption
+                                traversalMenuSelectedOptionState.setTextAndPlaceCursorAtEnd(
+                                    selectionOption
+                                )
                                 traversalMenuExpanded = false
-                            }
-                        ) {
-                            Text(text = selectionOption)
-                        }
+                            },
+                        )
                     }
                 }
             }
@@ -394,7 +400,7 @@ fun TraverseModifierDemo() {
                 modifier = Modifier.weight(2f),
                 onClick = {
                     val selectedNode =
-                        when (nodeMenuSelectedOptionText) {
+                        when (nodeMenuSelectedOptionState.text) {
                             ROOT_LABEL -> {
                                 rootTraversableModifierNode
                             }
@@ -420,9 +426,9 @@ fun TraverseModifierDemo() {
 
                     selectedNode?.let {
                         // Step 5: Traverse the Modifier chain when you need to find your node(s)
-                        if (traversalMenuSelectedOptionText == ANCESTORS_LABEL) {
+                        if (traversalMenuSelectedOptionState.text == ANCESTORS_LABEL) {
                             it.traverseAncestorsAndChangeColorToGreen()
-                        } else if (traversalMenuSelectedOptionText == DESCENDANTS_LABEL) {
+                        } else if (traversalMenuSelectedOptionState.text == DESCENDANTS_LABEL) {
                             it.traverseDescendantsAndChangeColorToGreen()
                         }
                     }
@@ -720,7 +726,7 @@ internal class TraversableBackgroundModifierNode(
  * need to use a custom Modifier.Node, you need to do this. You can think of this like a Virtual
  * DOM.
  */
-private data class DemoCustomTraversableModifierElement(
+private class DemoCustomTraversableModifierElement(
     private val color: Color = Color.Unspecified,
     private val brush: Brush? = null,
     private val alpha: Float,
@@ -744,6 +750,25 @@ private data class DemoCustomTraversableModifierElement(
         properties["alpha"] = alpha
         properties["shape"] = shape
         properties["block"] = block
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is DemoCustomTraversableModifierElement) return false
+        if (color != other.color) return false
+        if (brush != other.brush) return false
+        if (alpha != other.alpha) return false
+        if (shape != other.shape) return false
+        return block === other.block
+    }
+
+    override fun hashCode(): Int {
+        var result = color.hashCode()
+        result = 31 * result + (brush?.hashCode() ?: 0)
+        result = 31 * result + alpha.hashCode()
+        result = 31 * result + shape.hashCode()
+        result = 31 * result + (block?.let { System.identityHashCode(it) } ?: 0)
+        return result
     }
 }
 

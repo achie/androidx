@@ -27,6 +27,22 @@ class ScatterMapInsertBenchmark(private val dataSet: Array<String>) : Collection
     }
 }
 
+class ScatterMapPutAllBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
+    private val sourceMap = MutableScatterMap<String, String>(dataSet.size)
+
+    init {
+        for (testValue in dataSet) {
+            sourceMap[testValue] = testValue
+        }
+    }
+
+    override fun measuredBlock() {
+        // Keep the capacity as the default to ensure resizes
+        val targetMap = MutableScatterMap<String, String>()
+        targetMap.putAll(sourceMap)
+    }
+}
+
 class ScatterMapInsertBenchmarkBadHash(private val dataSet: Array<Int?>) : CollectionBenchmark {
     override fun measuredBlock() {
         val map = MutableScatterMap<Int?, Int?>(dataSet.size)
@@ -36,7 +52,7 @@ class ScatterMapInsertBenchmarkBadHash(private val dataSet: Array<Int?>) : Colle
     }
 }
 
-class ScatterHashMapReadBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
+class ScatterMapReadBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
     private val map = MutableScatterMap<String, String>()
 
     init {
@@ -52,7 +68,7 @@ class ScatterHashMapReadBenchmark(private val dataSet: Array<String>) : Collecti
     }
 }
 
-class ScatterHashMapReadBadHashBenchmark(private val dataSet: Array<Int?>) : CollectionBenchmark {
+class ScatterMapReadBadHashBenchmark(private val dataSet: Array<Int?>) : CollectionBenchmark {
     private val map = MutableScatterMap<Int?, Int?>()
 
     init {
@@ -86,6 +102,31 @@ class ScatterMapForEachBenchmark(dataSet: Array<String>) : CollectionBenchmark {
 }
 
 class ScatterMapRemoveBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
+    private val map = MutableScatterMap<String, String>(dataSet.size)
+
+    override fun prepare() {
+        for (testValue in dataSet) {
+            map[testValue] = testValue
+        }
+    }
+
+    override fun measuredBlock() {
+        for (testValue in dataSet) {
+            map.remove(testValue)
+        }
+    }
+}
+
+class ScatterMapGetOrPutInsertBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
+    override fun measuredBlock() {
+        val map = MutableScatterMap<String, String>()
+        for (testValue in dataSet) {
+            map.getOrPut(testValue) { testValue }
+        }
+    }
+}
+
+class ScatterMapGetOrPutReadBenchmark(private val dataSet: Array<String>) : CollectionBenchmark {
     private val map = MutableScatterMap<String, String>()
 
     init {
@@ -96,7 +137,7 @@ class ScatterMapRemoveBenchmark(private val dataSet: Array<String>) : Collection
 
     override fun measuredBlock() {
         for (testValue in dataSet) {
-            map.remove(testValue)
+            map.getOrPut(testValue) { testValue }
         }
     }
 }
@@ -128,7 +169,34 @@ class ScatterMapInsertRemoveBenchmark(private val dataSet: Array<Int?>) : Collec
     }
 }
 
+class ScatterMapInsertBenchmarkFloat(private val dataSet: Array<Float?>) : CollectionBenchmark {
+    override fun measuredBlock() {
+        val map = MutableScatterMap<Float?, Float?>(dataSet.size)
+        for (testValue in dataSet) {
+            map[testValue] = testValue
+        }
+    }
+}
+
+class ScatterMapReadBenchmarkFloat(private val dataSet: Array<Float?>) : CollectionBenchmark {
+    private val map = MutableScatterMap<Float?, Float?>()
+
+    init {
+        for (testValue in dataSet) {
+            map[testValue] = testValue
+        }
+    }
+
+    override fun measuredBlock() {
+        for (testValue in dataSet) {
+            map[testValue]
+        }
+    }
+}
+
 fun createDataSet(size: Int): Array<String> =
-    Array(size) { index -> (index * Random.Default.nextFloat()).toString() }
+    Array(size) { index -> (index * Random.nextFloat()).toString() }
 
 fun createBadHashDataSet(size: Int): Array<Int?> = Array(size) { it }
+
+fun createFloatDataSet(size: Int): Array<Float?> = Array(size) { index -> (index + 1) * 8.0f }

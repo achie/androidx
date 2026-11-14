@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 9.6.0-alpha01" type="baseline" client="gradle" dependencies="false" name="AGP (9.6.0-alpha01)" variant="all" version="9.6.0-alpha01">
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="                runTest { document.close() }"
+        errorLine2="                ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfDocumentTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="                runTest { document.close() }"
+        errorLine2="                ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfDocumentTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(uri) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(FAKE_URI_1, pfd) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(uri) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(FAKE_URI_1, pfd) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(FAKE_URI_1, pfd) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="KotlinRunTestResultUnused"
+        message="Result of runTest is ignored."
+        errorLine1="        runTest { loader.openDocument(uri) }"
+        errorLine2="        ~~~~~~~">
+        <location
+            file="src/androidTest/kotlin/androidx/pdf/SandboxedPdfLoaderTest.kt"/>
+    </issue>
+
+    <issue
+        id="VisibleForTests"
+        message="This method should only be accessed from tests or within private scope"
+        errorLine1="        val parcelableOperations = editsDraft.operations.map { it.toParcelable() }"
+        errorLine2="                                              ~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/androidx/pdf/SandboxedPdfDocument.kt"/>
+    </issue>
+
+</issues>

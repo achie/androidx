@@ -16,18 +16,24 @@
 
 package androidx.appfunctions.compiler.core.metadata
 
+import androidx.appfunctions.compiler.core.IntrospectionHelper.AppFunctionAccessLevelClass
+
 internal const val APP_FUNCTION_NAMESPACE = "appfunctions"
 internal const val APP_FUNCTION_ID_EMPTY = "unused"
 
 data class CompileTimeAppFunctionMetadata(
     val id: String,
-    val isEnabledByDefault: Boolean,
+    val isEnabledByDefault: Boolean? = null,
     val schema: AppFunctionSchemaMetadata?,
     val parameters: List<AppFunctionParameterMetadata>,
     val response: AppFunctionResponseMetadata,
     val components: AppFunctionComponentsMetadata = AppFunctionComponentsMetadata(),
     val description: String = "",
     val deprecation: AppFunctionDeprecationMetadata? = null,
+    val scope: String? = null,
+    val accessLevel: Int? = null,
+    val isCompatEnforcementEnabled: Boolean? = null,
+    val behaviorHints: AppFunctionBehaviorHintsMetadata? = null,
 ) {
     fun toAppFunctionMetadataDocument(): AppFunctionMetadataDocument {
         return AppFunctionMetadataDocument(
@@ -40,14 +46,28 @@ data class CompileTimeAppFunctionMetadata(
             response = response.toAppFunctionResponseMetadataDocument(),
             description = description,
             deprecation = deprecation?.toAppFunctionDeprecationMetadataDocument(),
+            scope = scope,
+            accessLevel = accessLevelToXmlValue(accessLevel),
+            isCompatEnforcementEnabled = isCompatEnforcementEnabled,
+            behaviorHints = behaviorHints?.toAppFunctionBehaviorHintsMetadataDocument(),
         )
+    }
+
+    private fun accessLevelToXmlValue(accessLevel: Int?): String? {
+        return when (accessLevel) {
+            null -> null
+            AppFunctionAccessLevelClass.SELF -> "self"
+            AppFunctionAccessLevelClass.SYSTEM -> "system"
+            AppFunctionAccessLevelClass.ANDROID_TRUSTED -> "androidTrusted"
+            else -> throw IllegalStateException("Unexpected accessLevel: $accessLevel")
+        }
     }
 }
 
 data class AppFunctionMetadataDocument(
     val namespace: String = APP_FUNCTION_NAMESPACE,
     val id: String = APP_FUNCTION_ID_EMPTY,
-    val isEnabledByDefault: Boolean,
+    val isEnabledByDefault: Boolean? = null,
     val schemaCategory: String?,
     val schemaName: String?,
     val schemaVersion: Long?,
@@ -55,4 +75,8 @@ data class AppFunctionMetadataDocument(
     val response: AppFunctionResponseMetadataDocument?,
     val description: String = "",
     val deprecation: AppFunctionDeprecationMetadataDocument? = null,
+    val scope: String? = null,
+    val accessLevel: String? = null,
+    val isCompatEnforcementEnabled: Boolean? = null,
+    val behaviorHints: AppFunctionBehaviorHintsMetadataDocument? = null,
 )

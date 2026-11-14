@@ -21,7 +21,9 @@ import android.os.Build.VERSION_CODES.O
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.KeyEvent.ACTION_DOWN
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import androidx.compose.foundation.focusable
@@ -30,10 +32,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.TextField
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.ComposeUiFlags
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
@@ -45,19 +46,24 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -67,9 +73,11 @@ import org.junit.runners.Parameterized
 @MediumTest
 @RunWith(Parameterized::class)
 class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boolean) {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var focusManager: FocusManager
+    private lateinit var windowInfo: WindowInfo
+    private lateinit var hostView: View
     private lateinit var view: View
     private lateinit var view1: View
     private lateinit var view2: View
@@ -188,11 +196,7 @@ class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boole
 
     @Test
     fun focusedComposableWithFocusableView_view_inLinearLayout() {
-        assumeTrue(
-            @OptIn(ExperimentalComposeUiApi::class) ComposeUiFlags.isPre26FocusFinderFixEnabled ||
-                SDK_INT >= 26 ||
-                !moveFocusProgrammatically
-        )
+        assumeTrue(SDK_INT >= 26 || !moveFocusProgrammatically)
 
         // Arrange.
         setTestContent {
@@ -638,6 +642,40 @@ class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boole
         rule.onNodeWithTag(composable).assertIsNotFocused()
     }
 
+    @After
+    fun tearDown() {
+        val hasFocusedEditor = rule.runOnUiThread {
+            ::hostView.isInitialized && hostView.rootView.findFocus()?.onCheckIsTextEditor() == true
+        }
+        if (hasFocusedEditor) {
+            if (SDK_INT >= 30) {
+                rule.waitUntil(5000) {
+                    rule.runOnUiThread {
+                        ViewCompat.getRootWindowInsets(hostView)
+                            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                    }
+                }
+            }
+            rule.runOnIdle {
+                val rootView = hostView.rootView
+                (rootView as? ViewGroup)?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                focusManager.clearFocus(force = true)
+                rootView.clearFocus()
+                hostView.context
+                    .getSystemService(InputMethodManager::class.java)
+                    ?.hideSoftInputFromWindow(hostView.windowToken, 0)
+            }
+            if (SDK_INT >= 30) {
+                rule.waitUntil(5000) {
+                    rule.runOnUiThread {
+                        ViewCompat.getRootWindowInsets(hostView)
+                            ?.isVisible(WindowInsetsCompat.Type.ime()) == false
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     fun focusableInTouchMode() {
         val tag = "tag"
@@ -658,7 +696,12 @@ class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boole
                         composeView =
                             ComposeView(linearLayout.context).apply {
                                 setContent {
-                                    Column { TextField("Hello World", {}, Modifier.testTag(tag)) }
+                                    Column {
+                                        TextField(
+                                            rememberTextFieldState("Hello World"),
+                                            Modifier.testTag(tag),
+                                        )
+                                    }
                                 }
                             }
                         linearLayout.addView(composeView)
@@ -682,6 +725,8 @@ class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boole
         if (moveFocusProgrammatically) {
             runOnUiThread { focusManager.moveFocus(FocusDirection.Next) }
         } else {
+            waitUntil(5000) { windowInfo.isWindowFocused }
+            waitForIdle()
             InstrumentationRegistry.getInstrumentation()
                 .sendKeySync(AndroidKeyEvent(ACTION_DOWN, Key.Tab.nativeKeyCode))
         }
@@ -690,6 +735,8 @@ class FocusSearchForwardInteropTest(private val moveFocusProgrammatically: Boole
     private fun setTestContent(composable: @Composable () -> Unit) {
         rule.setContent {
             focusManager = LocalFocusManager.current
+            windowInfo = LocalWindowInfo.current
+            hostView = LocalView.current
             composable.invoke()
         }
     }

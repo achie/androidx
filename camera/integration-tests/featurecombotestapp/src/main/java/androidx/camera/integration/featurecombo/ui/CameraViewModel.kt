@@ -13,14 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("DEPRECATION")
+
 package androidx.camera.integration.featurecombo.ui
 
 import android.content.ContentValues
 import android.content.Context
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.TotalCaptureResult
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
-import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
@@ -43,13 +50,11 @@ import androidx.camera.integration.featurecombo.DynamicRange
 import androidx.camera.integration.featurecombo.Effect
 import androidx.camera.integration.featurecombo.Fps
 import androidx.camera.integration.featurecombo.ImageFormat
-import androidx.camera.integration.featurecombo.MainActivity
 import androidx.camera.integration.featurecombo.PrimitiveCollections.distinctIntList
 import androidx.camera.integration.featurecombo.RecordingQuality
 import androidx.camera.integration.featurecombo.StabilizationMode
 import androidx.camera.integration.featurecombo.effects.BouncyLogoOverlayEffect
 import androidx.camera.integration.featurecombo.effects.BouncyLogoOverlayEffect.Companion.supportsEffect
-import androidx.camera.lifecycle.ExperimentalCameraProviderConfiguration
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.video.GroupableFeatures
@@ -66,6 +71,7 @@ import androidx.lifecycle.viewModelScope
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
 import kotlinx.coroutines.CompletableDeferred
@@ -80,15 +86,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-@androidx.annotation.OptIn(ExperimentalCameraProviderConfiguration::class)
+@OptIn(ExperimentalCamera2Interop::class)
 class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel() {
     private lateinit var appContext: Context
     private var bouncyLogoOverlayEffect: BouncyLogoOverlayEffect? = null
-
-    private val isCameraPipe: Boolean by lazy {
-        savedStateHandle.get<String>(MainActivity.INTENT_EXTRA_CAMERA_IMPLEMENTATION) ==
-            CAMERA_PIPE_IMPLEMENTATION_OPTION
-    }
 
     private val cameraProviderDeferred = CompletableDeferred<ProcessCameraProvider>()
 
@@ -96,11 +97,37 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
 
     private lateinit var cameraSelector: CameraSelector
 
-    private var preview = Preview.Builder().build()
-    private val imageCapture = ImageCapture.Builder().build()
-    private val imageAnalysis = ImageAnalysis.Builder().build()
+    private val captureFrameCount = AtomicInteger(0)
+    private val lastFrameNumber = AtomicLong(-1)
+
+    private val _cameraCaptureFps = MutableStateFlow(0)
+    val cameraCaptureFps: StateFlow<Int>
+        get() = _cameraCaptureFps
+
+    private val captureCallback =
+        object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                val currentFrame = result.frameNumber
+                if (lastFrameNumber.getAndSet(currentFrame) != currentFrame) {
+                    captureFrameCount.incrementAndGet()
+                }
+            }
+        }
+
+    private fun <T : androidx.camera.core.ExtendableBuilder<*>> T.withCaptureCallback(): T {
+        Camera2Interop.Extender(this).setSessionCaptureCallback(captureCallback)
+        return this
+    }
+
+    private var preview = Preview.Builder().withCaptureCallback().build()
+    private val imageCapture = ImageCapture.Builder().withCaptureCallback().build()
+    private val imageAnalysis = ImageAnalysis.Builder().withCaptureCallback().build()
     private val videoCapture: VideoCapture<Recorder> =
-        VideoCapture.withOutput(Recorder.Builder().build())
+        VideoCapture.Builder(Recorder.Builder().build()).withCaptureCallback().build()
 
     private val _toastMessages = MutableSharedFlow<String>()
     private var activeRecording: Recording? = null
@@ -169,13 +196,24 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
     private var imageAnalysisJob: Job? = null
 
     init {
-        ProcessCameraProvider.configureInstance(
-            if (isCameraPipe) {
-                CameraPipeConfig.defaultConfig()
-            } else {
-                Camera2Config.defaultConfig()
+        viewModelScope.launch {
+            var lastFrameCount = captureFrameCount.get()
+            var lastFpsTime = SystemClock.elapsedRealtime()
+            while (true) {
+                delay(1_000)
+                val currentTime = SystemClock.elapsedRealtime()
+                val currentFrameCount = captureFrameCount.get()
+
+                val timeDiff = currentTime - lastFpsTime
+                if (timeDiff > 0) {
+                    val frameDiff = currentFrameCount - lastFrameCount
+                    _cameraCaptureFps.value = ((frameDiff * 1000.0) / timeDiff).toInt()
+                }
+
+                lastFpsTime = currentTime
+                lastFrameCount = currentFrameCount
             }
-        )
+        }
     }
 
     fun setupCamera(applicationContext: Context, lifecycleOwner: LifecycleOwner) {
@@ -365,13 +403,12 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
                 it.close()
             }
 
-            imageAnalysisJob =
-                viewModelScope.launch {
-                    while (true) {
-                        delay(1.seconds)
-                        _imageAnalysisFrameCount.value = (frameCount.get() + 5) / 10 * 10
-                    }
+            imageAnalysisJob = viewModelScope.launch {
+                while (true) {
+                    delay(1.seconds)
+                    _imageAnalysisFrameCount.value = (frameCount.get() + 5) / 10 * 10
                 }
+            }
         } else {
             imageAnalysisJob?.cancel()
             imageAnalysis.clearAnalyzer()
@@ -670,6 +707,7 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
         if (featureTypes.contains(GroupableFeature.FEATURE_TYPE_RECORDING_QUALITY)) {
             when (recordingQuality) {
                 RecordingQuality.UHD -> features.add(GroupableFeatures.UHD_RECORDING)
+                RecordingQuality.QHD -> features.add(GroupableFeatures.QHD_RECORDING)
                 RecordingQuality.FHD -> features.add(GroupableFeatures.FHD_RECORDING)
                 RecordingQuality.HD -> features.add(GroupableFeatures.HD_RECORDING)
                 RecordingQuality.SD -> features.add(GroupableFeatures.SD_RECORDING)
@@ -727,6 +765,9 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
                 GroupableFeatures.UHD_RECORDING -> {
                     newAppFeatures = newAppFeatures.copy(recordingQuality = RecordingQuality.UHD)
                 }
+                GroupableFeatures.QHD_RECORDING -> {
+                    newAppFeatures = newAppFeatures.copy(recordingQuality = RecordingQuality.QHD)
+                }
                 GroupableFeatures.FHD_RECORDING -> {
                     newAppFeatures = newAppFeatures.copy(recordingQuality = RecordingQuality.FHD)
                 }
@@ -775,8 +816,6 @@ class CameraViewModel(private val savedStateHandle: SavedStateHandle) : ViewMode
     companion object {
         private const val TAG = "CamXFcqViewModel"
         private const val FILENAME_FORMAT = "yyyy-MM-dd-HH-mm-ss-SSS"
-
-        const val CAMERA_PIPE_IMPLEMENTATION_OPTION: String = "camera_pipe"
 
         private val DEFAULT_USE_CASES = buildMap {
             put(PREVIEW, true)

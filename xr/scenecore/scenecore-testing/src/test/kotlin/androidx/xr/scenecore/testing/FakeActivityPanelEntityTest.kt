@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION")
+
 package androidx.xr.scenecore.testing
 
 import android.app.Activity
@@ -35,6 +37,16 @@ class FakeActivityPanelEntityTest {
     @Before
     fun setUp() {
         underTest = FakeActivityPanelEntity()
+    }
+
+    @Test
+    fun name_isNotSetByDefault() {
+        assertThat(underTest.name).isEqualTo("")
+    }
+
+    @Test
+    fun name_isSet() {
+        assertThat(FakeActivityPanelEntity("test").name).isEqualTo("test")
     }
 
     @Test

@@ -44,6 +44,7 @@ import java.lang.annotation.Target;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 /**
  * Utility class for checking which WebView Support Library features are supported on the device.
@@ -122,18 +123,37 @@ public class WebViewFeature {
             DELETE_BROWSING_DATA,
             PRERENDER_WITH_URL,
             SAVE_STATE,
+            NAVIGATION_GET_WEB_RESOURCE_ERROR,
             NAVIGATION_CALLBACK_BASIC,
             NAVIGATION_LISTENER_V1,
+            NAVIGATION_LISTENER_V2,
+            NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED,
             PAYMENT_REQUEST,
             WEBVIEW_BUILDER_EXPERIMENTAL_V1,
+            WEBVIEW_BUILDER_EXPERIMENTAL_V2,
             WARM_UP_RENDERER_PROCESS,
             PRECONNECT,
             PROVIDER_WEAKLY_REF_WEBVIEW,
             HYPERLINK_CONTEXT_MENU_ITEMS,
-            ORIGIN_MATCHED_HEADERS,
             CUSTOM_REQUEST_HEADERS,
             ADD_QUIC_HINTS_V1,
-            NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED
+            PAGE_GET_URL,
+            PREFETCH_CACHE_V1,
+            SET_MAX_PRERENDERS_V1,
+            JS_INJECTION_IN_FRAME_AND_WORLD,
+            NAVIGATION_LISTENER,
+            WEBVIEW_NAVIGATE_EXPERIMENTAL_V1,
+            DOWNLOAD_FAVICONS_ENABLED,
+            HTTP_CACHE_MANAGER,
+            CROSS_ORIGIN_ISOLATED_ALLOWLIST,
+            ADD_QUIC_HINTS_WILDCARDS,
+            NAVIGATION_GET_RESPONSE_HEADERS,
+            NAVIGATION_GET_NAVIGATION_START_UPTIME_MILLIS,
+            NAVIGATION_LISTENER_NAVIGATION_STATE,
+            NAVIGATION_LISTENER_NAVIGATION_VISIBLE,
+            GOOGLE_ACCOUNTS_CALLBACK_EXPERIMENTAL_V1,
+            WEB_MESSAGE_SHARED_ARRAY_BUFFER,
+            PROFILE_SELECTED_SITE_ISOLATION_EXPERIMENTAL_V1,
     })
     @Retention(RetentionPolicy.SOURCE)
     @Target({ElementType.PARAMETER, ElementType.METHOD})
@@ -551,7 +571,7 @@ public class WebViewFeature {
     /**
      * Feature for {@link #isStartupFeatureSupported(Context, String)}.
      * This feature covers
-     * {@link ProcessGlobalConfig#setPartitionedCookiesEnabled(Context, Boolean)}
+     * {@link ProcessGlobalConfig#setPartitionedCookiesEnabled(Context, boolean)}
      */
     public static final String STARTUP_FEATURE_CONFIGURE_PARTITIONED_COOKIES =
             "STARTUP_FEATURE_CONFIGURE_PARTITIONED_COOKIES";
@@ -610,7 +630,11 @@ public class WebViewFeature {
      * This feature covers
      * {@link WebSettingsCompat#setAttributionRegistrationBehavior(WebSettings, int)}
      * {@link WebSettingsCompat#getAttributionRegistrationBehavior(WebSettings)}
+     *
+     * @deprecated In WebView version 152 and later, Attribution Reporting is no longer supported
+     * by WebView.
      */
+    @Deprecated
     public static final String ATTRIBUTION_REGISTRATION_BEHAVIOR =
             "ATTRIBUTION_REGISTRATION_BEHAVIOR";
 
@@ -659,18 +683,36 @@ public class WebViewFeature {
     /**
      * Feature for {@link #isFeatureSupported(String)}.
      * This feature covers
-     * {@link WebSettingsCompat#setBackForwardCacheSettings(WebSettings, BackForwardCacheSettings)}
+     * {@link WebSettingsCompat#setBackForwardCacheEnabled(WebSettings, boolean)}
      * {@link WebSettingsCompat#getBackForwardCacheSettings(WebSettings)}
      */
     public static final String BACK_FORWARD_CACHE_SETTINGS = "BACK_FORWARD_CACHE_SETTINGS";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link BackForwardCacheSettings#setMaxPagesInCache(int)}
+     * {@link BackForwardCacheSettings#setTimeoutSeconds(long)}
+     */
+    public static final String BACK_FORWARD_CACHE_SETTINGS_EXPERIMENTAL_V3 =
+            "BACK_FORWARD_CACHE_SETTINGS_EXPERIMENTAL_V3";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link BackForwardCacheSettings#setKeepForwardEntriesEnabled(boolean)}
+     * {@link BackForwardCacheSettings#isKeepForwardEntriesEnabled()}
+     */
+    @WebSettingsCompat.ExperimentalBackForwardCacheSettings
+    public static final String BACK_FORWARD_CACHE_SETTINGS_EXPERIMENTAL_V4 =
+            "BACK_FORWARD_CACHE_SETTINGS_EXPERIMENTAL_V4";
 
 
     /**
      * Feature for {@link #isFeatureSupported(String)}.
      * This feature covers
-     * {@link Profile#prefetchUrlAsync(String, CancellationSignal, Executor, SpeculativeLoadingParameters, OutcomeReceiverCompat)}
-     * {@link Profile#prefetchUrlAsync(String, CancellationSignal, Executor, OutcomeReceiverCompat)}
-     * {@link Profile#clearPrefetchAsync(String, Executor, OutcomeReceiverCompat)}
+     * {@link PrefetchCache#prefetchUrlAsync(String, CancellationSignal, Executor, PrefetchParameters, WebViewOutcomeReceiver)}
+     * {@link PrefetchCache#prefetchUrlAsync(String, CancellationSignal, Executor, WebViewOutcomeReceiver)}
      */
     @Profile.ExperimentalUrlPrefetch
     public static final String PROFILE_URL_PREFETCH = "PREFETCH_URL_V5";
@@ -694,7 +736,7 @@ public class WebViewFeature {
     /**
      * Feature for {@link #isFeatureSupported(String)}.
      * This feature covers
-     * {@link androidx.webkit.WebViewCompat#prerenderUrlAsync(WebView, String, CancellationSignal, Executor, PrerenderOperationCallback)}}
+     * {@link androidx.webkit.WebViewCompat#prerenderUrlAsync(WebView, String, CancellationSignal, Executor, PrerenderOperationCallback)}
      */
     public static final String PRERENDER_WITH_URL = "PRERENDER_URL_V2";
 
@@ -708,32 +750,102 @@ public class WebViewFeature {
 
     /**
      * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link PrefetchCache#setMaxPrefetches(int)}, {@link PrefetchCache#setPrefetchTtlSeconds(int)}
+     */
+    @Profile.ExperimentalUrlPrefetch
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public static final String PREFETCH_CACHE_V1 = "PREFETCH_CACHE_V1";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Profile#setMaxPrerenders(int)}
+     */
+    @Profile.ExperimentalUrlPrefetch
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public static final String SET_MAX_PRERENDERS_V1 = "SET_MAX_PRERENDERS_V1";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
      * This feature covers {@link WebViewCompat#saveState}.
      */
-    @WebViewCompat.ExperimentalSaveState
     public static final String SAVE_STATE = "SAVE_STATE";
 
     /**
-     * Feature for {@link WebViewFeature#isFeatureSupported(String)}.
-     * This feature covers {@link WebViewCompat#getWebNavigationClient(WebView)};
-     * This feature covers
-     * {@link WebViewCompat#setWebNavigationClient(WebView, WebNavigationClient)};
-     * This feature covers {@link Navigation#didCommitErrorPage()}.
-     * This feature covers {@link Navigation#getPage()}.
-     * This feature covers {@link Navigation#isBack()}.
-     * This feature covers {@link Navigation#isForward()}.
-     * This feature covers {@link Navigation#isHistory()}.
-     * This feature covers {@link Navigation#isRestore()}.
-     * This feature covers {@link Navigation#isReload()}.
-     * This feature covers {@link Navigation#wasInitiatedByPage()}.
-     * This feature covers {@link Navigation#isSameDocument()}.
-     * This feature covers {@link Navigation#didCommit()}.
-     * This feature covers the initial version of {@link Page}.
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
      */
+    @Deprecated
     public static final String NAVIGATION_CALLBACK_BASIC = "WEB_VIEW_NAVIGATION_CLIENT_BASIC_USAGE";
 
-    @WebNavigationClient.ExperimentalNavigationCallback
+    /**
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
+     */
+    @Deprecated
     public static final String NAVIGATION_LISTENER_V1 = "NAVIGATION_LISTENER_V1";
+
+    /**
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
+     */
+    @Deprecated
+    public static final String NAVIGATION_LISTENER_V2 = "NAVIGATION_LISTENER_V2";
+
+    /**
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
+     */
+    @Deprecated
+    public static final String NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED =
+            "NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED";
+
+    /**
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
+     */
+    @Deprecated
+    public static final String NAVIGATION_LISTENER_NON_NULL_PAGE_FOR_SAME_DOCUMENT_NAVIGATIONS =
+            "NAVIGATION_LISTENER_NON_NULL_PAGE_FOR_SAME_DOCUMENT_NAVIGATIONS";
+
+    /**
+     * @deprecated Use {@link #NAVIGATION_LISTENER} instead.
+     */
+    @Deprecated
+    public static final String PAGE_GET_URL = "PAGE_GET_URL";
+
+    /**
+     * Feature for {@link WebViewFeature#isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Navigation#getWebResourceError()}
+     * {@link WebResourceErrorCompat#getDebugCode()}.
+     */
+    public static final String NAVIGATION_GET_WEB_RESOURCE_ERROR =
+            "NAVIGATION_GET_WEB_RESOURCE_ERROR";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link NavigationListener#onNavigationStarted(Navigation)},
+     * {@link NavigationListener#onNavigationRedirected(Navigation)},
+     * {@link NavigationListener#onNavigationCompleted(Navigation)},
+     * {@link NavigationListener#onPageDeleted(Page)},
+     * {@link NavigationListener#onPageLoadEvent(Page)},
+     * {@link NavigationListener#onPageDomContentLoadedEvent(Page)},
+     * {@link NavigationListener#onFirstContentfulPaintMillis(Page, long)},
+     * {@link NavigationListener#onLargestContentfulPaintMillis(Page, long)},
+     * {@link NavigationListener#onPerformanceMarkMillis(Page, String, long)},
+     * {@link Navigation#getPage()},
+     * {@link Navigation#getUrl()},
+     * {@link Navigation#wasInitiatedByPage()},
+     * {@link Navigation#isSameDocument()},
+     * {@link Navigation#isReload()},
+     * {@link Navigation#isHistory()},
+     * {@link Navigation#isBack()},
+     * {@link Navigation#isForward()},
+     * {@link Navigation#didCommit()},
+     * {@link Navigation#didCommitErrorPage()},
+     * {@link Navigation#getStatusCode()},
+     * {@link Navigation#isRestore()},
+     * {@link Page#getUrl()}
+     */
+    public static final String NAVIGATION_LISTENER = "NAVIGATION_LISTENER";
 
     /**
      * Feature for {@link #isFeatureSupported(String)}.
@@ -755,6 +867,15 @@ public class WebViewFeature {
 
     /**
      * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers:
+     * {@link WebViewBuilder#applyTo(WebView)}.
+     */
+    @WebViewBuilder.Experimental
+    public static final String WEBVIEW_BUILDER_EXPERIMENTAL_V2 =
+            "WEBVIEW_BUILDER_EXPERIMENTAL_V2";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
      * This feature covers
      * {@link WebResourceResponseCompat#setCookies(List)}, as well as
      * {@link WebSettingsCompat#setCookiesIncludedInShouldInterceptRequest(WebSettings, boolean)}
@@ -769,17 +890,6 @@ public class WebViewFeature {
      */
     @Profile.ExperimentalWarmUpRendererProcess
     public static final String WARM_UP_RENDERER_PROCESS = "WARM_UP_RENDERER_PROCESS";
-
-    /**
-     * Feature for {@link WebViewFeature#isFeatureSupported(String)}.
-     * This feature covers {@link Profile#setOriginMatchedHeader(String, String, Set)},
-     * {@link Profile#hasOriginMatchedHeader(String)},
-     * {@link Profile#clearOriginMatchedHeader(String)}, and
-     * {@link Profile#clearAllOriginMatchedHeaders()}.
-     *
-     */
-    @Profile.ExperimentalOriginMatchedHeader
-    public static final String ORIGIN_MATCHED_HEADERS = "ORIGIN_MATCHED_HEADERS";
 
     /**
      * Feature for {@link WebViewFeature#isFeatureSupported(String)}.
@@ -800,7 +910,6 @@ public class WebViewFeature {
      * Feature for {@link WebViewFeature#isFeatureSupported(String)}.
      * This feature covers {@link WebViewStartUpConfig.Builder#setProfilesToLoadDuringStartup(Set)}.
      */
-    @WebViewCompat.ExperimentalAsyncStartUp
     public static final String STARTUP_FEATURE_SET_PROFILES_TO_LOAD =
             "STARTUP_FEATURE_SET_PROFILES_TO_LOAD";
 
@@ -833,10 +942,23 @@ public class WebViewFeature {
     public static final String PRECONNECT = "PRECONNECT";
 
     /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers {@link Profile#enqueuePreconnect(String)}
+     */
+    @Profile.ExperimentalPreconnect
+    public static final String ENQUEUE_PRECONNECT = "ENQUEUE_PRECONNECT";
+
+    /**
      * Feature for {@link Profile#addQuicHints(Set)}.
      */
     @Profile.ExperimentalAddQuicHints
     public static final String ADD_QUIC_HINTS_V1 = "ADD_QUIC_HINTS";
+
+    /**
+     * Feature for {@link Profile#addQuicHints(Set)} with wildcards.
+     */
+    @Profile.ExperimentalAddQuicHints
+    public static final String ADD_QUIC_HINTS_WILDCARDS = "ADD_QUIC_HINTS_WILDCARDS";
 
     /**
      * This feature covers
@@ -845,31 +967,145 @@ public class WebViewFeature {
     public static final String HYPERLINK_CONTEXT_MENU_ITEMS = "HYPERLINK_CONTEXT_MENU_ITEMS";
 
     /**
-     * When this feature is enabled, {@link NavigationListener#onNavigationCompleted} will be
-     * called even for navigations that do not commit (eg, results in 204/download/cancelled).
-     * <p>
-     * This will become the default behavior of {@link NavigationListener}.
-     */
-    @WebNavigationClient.ExperimentalNavigationCallback
-    public static final String NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED =
-            "NAVIGATION_LISTENER_ON_COMPLETED_FIRES_FOR_NON_COMMITTED";
-
-    /**
-     * When this feature is enabled, {@link Navigation#getPage()} will return non-null for committed
-     * navigations that are same document. Previously {@code null} was returned.
-     * <p>
-     * This will become the default behavior of {@link NavigationListener}.
-     */
-    @WebNavigationClient.ExperimentalNavigationCallback
-    public static final String NAVIGATION_LISTENER_NON_NULL_PAGE_FOR_SAME_DOCUMENT_NAVIGATIONS =
-            "NAVIGATION_LISTENER_NON_NULL_PAGE_FOR_SAME_DOCUMENT_NAVIGATIONS";
-
-    /**
      * This is an internal only feature that indicate whether it is safe to cache WebView Provider
      * objects for the current WebView APK.
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     public static final String PROVIDER_WEAKLY_REF_WEBVIEW = "PROVIDER_WEAKLY_REF_WEBVIEW";
+
+    /**
+     * Feature for injecting JavaScript into isolated worlds and iFrames.
+     * This feature covers:
+     * {@link WebViewCompat#addJavaScriptOnEvent(WebView, String, int, Set, JavaScriptExecutionWorld)},
+     * {@link WebViewCompat#addWebMessageListener(WebView, String, Set, JavaScriptExecutionWorld, WebViewCompat.WebMessageListener)},
+     * {@link WebViewCompat#removeWebMessageListener(WebView, JavaScriptExecutionWorld, String)}
+     * {@link WebViewCompat#getExecutionWorld(WebView, String)}, and
+     * {@link JavaScriptReplyProxy#executeJavaScript(String, WebViewOutcomeReceiver)}.
+     */
+    public static final String JS_INJECTION_IN_FRAME_AND_WORLD = "JS_INJECTION_IN_FRAME_AND_WORLD";
+
+    /**
+     * This feature covers
+     * {@link WebViewCompat#navigate(WebView, String, NavigationParameters)}.
+     */
+    @WebViewCompat.ExperimentalNavigate
+    public static final String WEBVIEW_NAVIGATE_EXPERIMENTAL_V1 =
+            "WEBVIEW_NAVIGATE_EXPERIMENTAL_V1";
+
+    /**
+     * When this feature is enabled,
+     * {@link WebViewCompat#navigate(WebView, String, NavigationParameters)}
+     * will drain the prefetch queue before navigating.
+     * <p>
+     * This will become the default behavior of
+     * {@link WebViewCompat#navigate(WebView, String, NavigationParameters)}.
+     */
+    @WebViewCompat.ExperimentalNavigate
+    public static final String WEBVIEW_NAVIGATE_DRAIN_PREFETCH =
+            "WEBVIEW_NAVIGATE_DRAIN_PREFETCH";
+
+    /**
+     * Feature for
+     * {@link WebSettingsCompat#setDownloadFaviconsEnabled(WebSettings, boolean)},
+     * {@link WebSettingsCompat#getDownloadFaviconsEnabled(WebSettings)}
+     */
+    public static final String DOWNLOAD_FAVICONS_ENABLED = "DOWNLOAD_FAVICONS_ENABLED";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Profile#getHttpCache()}
+     * {@link HttpCache#getDefaultQuotaBytes()}
+     * {@link HttpCache#isUsingDefaultQuota()}
+     * {@link HttpCache#useDefaultQuota()}
+     * {@link HttpCache#getQuotaBytes()}
+     * {@link HttpCache#setQuotaBytes(long)}
+     */
+    public static final String HTTP_CACHE_MANAGER = "HTTP_CACHE_MANAGER";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Profile#setCrossOriginIsolatedAllowlist(Set)}
+     * {@link Profile#getCrossOriginIsolatedAllowlist()}
+     */
+    public static final String CROSS_ORIGIN_ISOLATED_ALLOWLIST =
+            "CROSS_ORIGIN_ISOLATED_ALLOWLIST";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link NavigationState#getResponseHeaders()}
+     * {@link NavigationRedirectParameters#getResponseHeaders()}
+     * {@link NavigationRedirectParameters#getStatusCode()}
+     */
+    public static final String NAVIGATION_GET_RESPONSE_HEADERS = "NAVIGATION_GET_RESPONSE_HEADERS";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link NavigationState#getNavigationStartUptimeMillis()}
+     */
+    public static final String NAVIGATION_GET_NAVIGATION_START_UPTIME_MILLIS =
+            "NAVIGATION_GET_NAVIGATION_START_UPTIME_MILLIS";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Navigation#captureState()}
+     * {@link Page#captureState()}
+     */
+    public static final String NAVIGATION_LISTENER_NAVIGATION_STATE =
+            "NAVIGATION_LISTENER_NAVIGATION_STATE";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}
+     * This feature covers
+     * {@link NavigationListener#onNavigationVisible(NavigationState)}
+     */
+    @NavigationListener.ExperimentalOnNavigationVisible
+    public static final String NAVIGATION_LISTENER_NAVIGATION_VISIBLE =
+            "WEB_VIEW_NAVIGATION_LISTENER_NAVIGATION_VISIBLE";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link WebViewCompat#setGoogleAccountsCallback(WebView, String, Executor, Consumer)},
+     * {@link WebViewCompat#setGoogleAccountsCallback(WebView, String, Consumer)},
+     * {@link WebViewCompat#clearGoogleAccountsCallback(WebView)},
+     * {@link GoogleAccountsEvent#getActionType()},
+     * {@link GoogleAccountsEvent#getContinueUrl()},
+     * {@link GoogleAccountsEvent#isOutermostMainFrame()}, and
+     * {@link GoogleAccountsEvent#isNavigationRequest()}.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    @WebViewCompat.ExperimentalGoogleAccountsCallback
+    public static final String GOOGLE_ACCOUNTS_CALLBACK_EXPERIMENTAL_V1 =
+            "GOOGLE_ACCOUNTS_CALLBACK_EXPERIMENTAL_V1";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link SharedArrayBuffer#allocate(String, int)},
+     * {@link WebMessageCompat#WebMessageCompat(SharedArrayBuffer)},
+     * {@link WebMessageCompat#WebMessageCompat(SharedArrayBuffer, WebMessagePortCompat[])},
+     * {@link WebMessageCompat#getSharedArrayBuffer()},
+     * {@link SharedArrayBuffer#mapAndCreateByteBuffer()},
+     * {@link SharedArrayBuffer#getSize()},
+     * {@link JavaScriptReplyProxy#postMessage(SharedArrayBuffer)}.
+     */
+    public static final String WEB_MESSAGE_SHARED_ARRAY_BUFFER =
+            "WEB_MESSAGE_SHARED_ARRAY_BUFFER";
+
+    /**
+     * Feature for {@link #isFeatureSupported(String)}.
+     * This feature covers
+     * {@link Profile#configureIsolatedSites(Set)} and
+     * {@link Profile#canConfigureIsolatedSites()}.
+     */
+    @Profile.ExperimentalSelectedSiteIsolation
+    public static final String PROFILE_SELECTED_SITE_ISOLATION_EXPERIMENTAL_V1 =
+            "PROFILE_SELECTED_SITE_ISOLATION_EXPERIMENTAL_V1";
 
     /**
      * Return whether a feature is supported at run-time. This will check whether a feature is
@@ -914,4 +1150,5 @@ public class WebViewFeature {
             @WebViewStartupFeature @NonNull String startupFeature) {
         return WebViewFeatureInternal.isStartupFeatureSupported(startupFeature, context);
     }
+
 }

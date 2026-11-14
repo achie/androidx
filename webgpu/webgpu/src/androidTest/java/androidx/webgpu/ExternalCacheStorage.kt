@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package androidx.webgpu
 
 import android.content.Context
@@ -27,7 +26,7 @@ import java.io.FileOutputStream
  */
 class ExternalCacheStorage(private val context: Context) : Storage {
     override fun writeImage(imageName: String, bitmap: Bitmap) {
-        val outputDir = context.externalCacheDir ?: throw Exception("externalCacheDir is null")
+        val outputDir = context.cacheDir ?: throw Exception("cacheDir is null")
         if (!outputDir.exists()) {
             outputDir.mkdirs()
         }

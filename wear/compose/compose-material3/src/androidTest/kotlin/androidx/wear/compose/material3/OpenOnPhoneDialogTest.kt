@@ -17,6 +17,7 @@
 package androidx.wear.compose.material3
 
 import android.os.Build
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,22 +28,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.testutils.assertContainsColor
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeRight
 import androidx.test.filters.SdkSuppress
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert
 import org.junit.Rule
 import org.junit.Test
 
 class OpenOnPhoneDialogTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun openOnPhone_supports_testtag() {
@@ -56,6 +55,24 @@ class OpenOnPhoneDialogTest {
             )
         }
         rule.onNodeWithTag(TEST_TAG).assertExists()
+    }
+
+    @Test
+    fun openOnPhone_keepsScreenOn_whenVisible() {
+        var dialogView: View? = null
+        rule.setContentWithTheme {
+            OpenOnPhoneDialog(
+                visible = true,
+                onDismissRequest = {},
+                curvedText = null,
+                content = {
+                    dialogView = LocalView.current
+                },
+            )
+        }
+        rule.runOnIdle {
+            Assert.assertTrue(dialogView?.keepScreenOn == true)
+        }
     }
 
     @Test
@@ -76,7 +93,7 @@ class OpenOnPhoneDialogTest {
             )
         }
         rule.mainClock.advanceTimeBy(OpenOnPhoneDialogDefaults.DurationMillis / 2)
-        rule.onNodeWithTag(TEST_TAG).performTouchInput({ swipeRight() })
+        rule.swipeToDismiss()
         // Advancing time so that the dialog is dismissed
         rule.mainClock.advanceTimeBy(300)
         rule.onNodeWithTag(TEST_TAG).assertDoesNotExist()

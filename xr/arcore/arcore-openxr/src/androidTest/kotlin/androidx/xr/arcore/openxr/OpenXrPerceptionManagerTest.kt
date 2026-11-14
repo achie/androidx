@@ -16,6 +16,7 @@
 
 package androidx.xr.arcore.openxr
 
+import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -24,18 +25,34 @@ import androidx.test.filters.SdkSuppress
 import androidx.xr.arcore.runtime.AnchorInvalidUuidException
 import androidx.xr.arcore.runtime.AnchorResourcesExhaustedException
 import androidx.xr.arcore.runtime.HandJointType
+import androidx.xr.arcore.runtime.SpatialAnnotationId
+import androidx.xr.arcore.runtime.SpatialAnnotationImageFormat
+import androidx.xr.arcore.runtime.SpatialAnnotationQuadAlignment
+import androidx.xr.arcore.runtime.TrackingState
+import androidx.xr.runtime.AugmentedImageDatabase
+import androidx.xr.runtime.AugmentedImageDatabaseEntryMode
 import androidx.xr.runtime.Config
-import androidx.xr.runtime.FieldOfView
-import androidx.xr.runtime.TrackingState
+import androidx.xr.runtime.DepthEstimationMode
+import androidx.xr.runtime.DeviceTrackingMode
+import androidx.xr.runtime.ExperimentalSpatialAnnotationsApi
+import androidx.xr.runtime.PlaneTrackingMode
+import androidx.xr.runtime.QrCodeTrackingMode
+import androidx.xr.runtime.SpatialAnnotationTrackingMode
+import androidx.xr.runtime.math.FieldOfView
+import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Pose
+import androidx.xr.runtime.math.Quad
 import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Ray
+import androidx.xr.runtime.math.Vector2
 import androidx.xr.runtime.math.Vector3
 import com.google.common.truth.Truth.assertThat
 import java.nio.ByteBuffer
 import java.nio.FloatBuffer
 import java.util.UUID
-import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertThrows
 import org.junit.Before
@@ -44,9 +61,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-// TODO - b/382119583: Remove the @SdkSuppress annotation once "androidx.xr.runtime.openxr.test"
-// supports a
-// lower SDK version.
+// TODO - b/382119583: Remove the @SdkSuppress annotation once "androidx.xr.arcore.openxr.test"
+// supports a lower SDK version.
+@OptIn(ExperimentalSpatialAnnotationsApi::class)
 @SdkSuppress(minSdkVersion = 29)
 @LargeTest
 @RunWith(AndroidJUnit4::class)
@@ -54,7 +71,7 @@ class OpenXrPerceptionManagerTest {
 
     companion object {
         init {
-            System.loadLibrary("androidx.xr.runtime.openxr.test")
+            System.loadLibrary("androidx.xr.arcore.openxr.test")
         }
 
         const val XR_TIME = 50L * 1_000_000 // 50 milliseconds in nanoseconds.
@@ -62,8 +79,8 @@ class OpenXrPerceptionManagerTest {
 
     @get:Rule val activityRule = ActivityScenarioRule(ComponentActivity::class.java)
 
-    lateinit var openXrManager: OpenXrManager
-    lateinit var underTest: OpenXrPerceptionManager
+    internal lateinit var openXrRuntime: OpenXrRuntime
+    internal lateinit var underTest: OpenXrPerceptionManager
 
     @Before
     fun setUp() {
@@ -76,12 +93,11 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun createAnchor_returnsAnchorWithTheGivenPose() = initOpenXrManagerAndRunTest {
+    fun createAnchor_returnsAnchorWithTheGivenPose() = initOpenXrRuntimeAndRunTest {
         underTest.update(XR_TIME)
 
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         val pose = Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f))
         val anchor = underTest.createAnchor(pose)
 
@@ -89,7 +105,7 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun createAnchor_anchorLimitReached_throwsException() = initOpenXrManagerAndRunTest {
+    fun createAnchor_anchorLimitReached_throwsException() = initOpenXrRuntimeAndRunTest {
         underTest.update(XR_TIME)
 
         // Number of calls comes from 'kAnchorResourcesLimit' defined in
@@ -102,7 +118,7 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun detachAnchor_removesAnchorWhenItDetaches() = initOpenXrManagerAndRunTest {
+    fun detachAnchor_removesAnchorWhenItDetaches() = initOpenXrRuntimeAndRunTest {
         underTest.update(XR_TIME)
 
         val anchor = underTest.createAnchor(Pose())
@@ -114,26 +130,23 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun updatePlanes_addsIdentityPlane() = initOpenXrManagerAndRunTest {
+    fun updatePlanes_addsIdentityPlane() = initOpenXrRuntimeAndRunTest {
         // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
-        // and a
-        // fake perception library can be used mock trackables.
+        // and a fake perception library can be used mock trackables.
         underTest.updatePlanes(XR_TIME)
 
         assertThat(underTest.trackables).hasSize(1)
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         assertThat((underTest.trackables.first() as OpenXrPlane).centerPose)
             .isEqualTo(Pose(Vector3(0f, 0f, 0f), Quaternion(0f, 0f, 0f, 1.0f)))
     }
 
     @Test
-    fun updatePlanes_planeTrackingDisabled_doesNotAddPlane() = initOpenXrManagerAndRunTest {
+    fun updatePlanes_planeTrackingDisabled_doesNotAddPlane() = initOpenXrRuntimeAndRunTest {
         // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
-        // and
-        // a fake perception library can be used mock trackables.
-        openXrManager.configure(Config(planeTracking = Config.PlaneTrackingMode.DISABLED))
+        // and a fake perception library can be used mock trackables.
+        openXrRuntime.configure(Config(planeTracking = PlaneTrackingMode.DISABLED))
 
         underTest.updatePlanes(XR_TIME)
 
@@ -141,18 +154,95 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun update_updatesTrackables() = initOpenXrManagerAndRunTest {
+    @Ignore("This test requires internal clock to be mocked")
+    fun updateAugmentedImages_addsIdentityAugmentedImage() = initOpenXrRuntimeAndRunTest {
         // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
-        // and a
-        // fake perception library can be used mock trackables.
+        // and a fake perception library can be used mock trackables.
+        underTest.updateAugmentedImages(XR_TIME)
+
+        assertThat(underTest.trackables).hasSize(1)
+        // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        assertThat((underTest.trackables.first() as OpenXrAugmentedImage).centerPose)
+            .isEqualTo(Pose(Vector3(0f, 0f, 0f), Quaternion(0f, 0f, 0f, 1.0f)))
+    }
+
+    @Test
+    fun updateAugmentedImages_imageTrackingDisabled_doesNotAddAugmentedImage() =
+        initOpenXrRuntimeAndRunTest {
+            // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented
+            // properly and a fake perception library can be used mock trackables.
+            openXrRuntime.configure(Config(augmentedImageDatabase = null))
+
+            underTest.updateAugmentedImages(XR_TIME)
+
+            assertThat(underTest.trackables).hasSize(0)
+        }
+
+    @Test
+    fun updateQrCodes_addsIdentityQrCode() = initOpenXrRuntimeAndRunTest {
+        // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
+        // and a fake perception library can be used mock trackables.
+        underTest.updateQrCode(XR_TIME)
+
+        assertThat(underTest.trackables).hasSize(1)
+        // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        assertThat((underTest.trackables.first() as OpenXrQrCode).centerPose)
+            .isEqualTo(Pose(Vector3(0f, 0f, 0f), Quaternion(0f, 0f, 0f, 1.0f)))
+    }
+
+    @Test
+    fun updateQrCodes_qrCodeTrackingDisabled_doesNotAddQrCode() = initOpenXrRuntimeAndRunTest {
+        // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
+        // and a fake perception library can be used mock trackables.
+        openXrRuntime.configure(Config(qrCodeTracking = QrCodeTrackingMode.DISABLED))
+
+        underTest.updateQrCode(XR_TIME)
+
+        assertThat(underTest.trackables).hasSize(0)
+    }
+
+    @Test
+    fun update_updatesTrackables() = initOpenXrRuntimeAndRunTest {
+        // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
+        // and a fake perception library can be used mock trackables.
         underTest.updatePlanes(XR_TIME)
         underTest.update(XR_TIME)
 
         assertThat(underTest.trackables).hasSize(1)
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         assertThat((underTest.trackables.first() as OpenXrPlane).centerPose)
+            .isEqualTo(Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f)))
+    }
+
+    @Test
+    @Ignore("This test requires internal clock to be mocked")
+    fun update_updatesAugmentedImagesTrackables() = initOpenXrRuntimeAndRunTest {
+        // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
+        // and a fake perception library can be used mock trackables.
+        underTest.updateAugmentedImages(XR_TIME)
+        underTest.update(XR_TIME)
+
+        assertThat(underTest.trackables).hasSize(1)
+        // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        assertThat((underTest.trackables.first() as OpenXrAugmentedImage).centerPose)
+            .isEqualTo(Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f)))
+    }
+
+    @Test
+    fun update_updatesQrCodeTrackables() = initOpenXrRuntimeAndRunTest {
+        // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
+        // and a fake perception library can be used mock trackables.
+        underTest.updateQrCode(XR_TIME)
+        underTest.update(XR_TIME)
+
+        assertThat(underTest.trackables).hasSize(1)
+        // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        assertThat((underTest.trackables.first() as OpenXrQrCode).centerPose)
             .isEqualTo(Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f)))
     }
 
@@ -160,7 +250,7 @@ class OpenXrPerceptionManagerTest {
         "b/425697141 - Requires HEAD_TRACKING permission which is not available on Android test runners."
     )
     @Test
-    fun update_updatesHands() = initOpenXrManagerAndRunTest {
+    fun update_updatesHands() = initOpenXrRuntimeAndRunTest {
         check(underTest.xrResources.updatables.size == 3)
         check(underTest.leftHand.trackingState != TrackingState.TRACKING)
         check(underTest.rightHand.trackingState != TrackingState.TRACKING)
@@ -168,8 +258,7 @@ class OpenXrPerceptionManagerTest {
         underTest.update(XR_TIME)
 
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         val leftHandJoints = underTest.leftHand.handJoints
         assertThat(underTest.leftHand.trackingState).isEqualTo(TrackingState.TRACKING)
         assertThat(leftHandJoints).hasSize(HandJointType.values().size)
@@ -220,7 +309,7 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun update_updatesArDevice() = initOpenXrManagerAndRunTest {
+    fun update_updatesArDevice() = initOpenXrRuntimeAndRunTest {
         check(underTest.xrResources.updatables.size == 1)
         check(underTest.arDevice.devicePose == Pose())
 
@@ -234,7 +323,7 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun update_updatesRenderViewpoints() = initOpenXrManagerAndRunTest {
+    fun update_updatesRenderViewpoints() = initOpenXrRuntimeAndRunTest {
         check(underTest.xrResources.updatables.size == 1)
         check(underTest.leftRenderViewpoint != null)
         check(underTest.rightRenderViewpoint != null)
@@ -260,63 +349,63 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun update_withRawOnlyConfig_updatesRawDepthMaps() = initOpenXrManagerAndRunTest {
-        check(underTest.leftDepthMap!!.width == 0)
-        check(underTest.leftDepthMap!!.height == 0)
-        check(underTest.leftDepthMap!!.rawDepthMap == null)
-        check(underTest.leftDepthMap!!.rawConfidenceMap == null)
-        check(underTest.leftDepthMap!!.smoothDepthMap == null)
-        check(underTest.leftDepthMap!!.smoothConfidenceMap == null)
-        check(underTest.rightDepthMap!!.width == 0)
-        check(underTest.rightDepthMap!!.height == 0)
-        check(underTest.rightDepthMap!!.rawDepthMap == null)
-        check(underTest.rightDepthMap!!.rawConfidenceMap == null)
-        check(underTest.rightDepthMap!!.smoothDepthMap == null)
-        check(underTest.rightDepthMap!!.smoothConfidenceMap == null)
+    fun update_withRawOnlyConfig_updatesRawDepth() = initOpenXrRuntimeAndRunTest {
+        check(underTest.leftDepth!!.width == 0)
+        check(underTest.leftDepth!!.height == 0)
+        check(underTest.leftDepth!!.rawDepthMap == null)
+        check(underTest.leftDepth!!.rawConfidenceMap == null)
+        check(underTest.leftDepth!!.smoothDepthMap == null)
+        check(underTest.leftDepth!!.smoothConfidenceMap == null)
+        check(underTest.rightDepth!!.width == 0)
+        check(underTest.rightDepth!!.height == 0)
+        check(underTest.rightDepth!!.rawDepthMap == null)
+        check(underTest.rightDepth!!.rawConfidenceMap == null)
+        check(underTest.rightDepth!!.smoothDepthMap == null)
+        check(underTest.rightDepth!!.smoothConfidenceMap == null)
 
-        openXrManager.configure(Config(depthEstimation = Config.DepthEstimationMode.RAW_ONLY))
+        openXrRuntime.configure(Config(depthEstimation = DepthEstimationMode.RAW_ONLY))
         underTest.update(XR_TIME)
 
-        assertThat(underTest.leftDepthMap!!.width).isEqualTo(80)
-        assertThat(underTest.leftDepthMap!!.height).isEqualTo(80)
+        assertThat(underTest.leftDepth!!.width).isEqualTo(80)
+        assertThat(underTest.leftDepth!!.height).isEqualTo(80)
 
         // The expected values of the raw depth and confidence buffers come from kTestRawDepthData
         // and kTestRawDepthConfidenceData in
         // //third_party/jetpack_xr_natives/openxr/openxr_stub.cc.
         val expectedRawDepthMap: FloatBuffer = FloatBuffer.wrap(FloatArray(6400) { 8.0f })
         val expectedRawConfidenceMap: ByteBuffer = ByteBuffer.wrap(ByteArray(6400) { 100 })
-        assertThat(underTest.leftDepthMap!!.rawDepthMap).isEqualTo(expectedRawDepthMap)
-        assertThat(underTest.leftDepthMap!!.rawConfidenceMap).isEqualTo(expectedRawConfidenceMap)
-        assertThat(underTest.leftDepthMap!!.smoothDepthMap).isEqualTo(null)
-        assertThat(underTest.leftDepthMap!!.smoothConfidenceMap).isEqualTo(null)
-        assertThat(underTest.rightDepthMap!!.width).isEqualTo(80)
-        assertThat(underTest.rightDepthMap!!.height).isEqualTo(80)
-        assertThat(underTest.rightDepthMap!!.rawDepthMap).isEqualTo(expectedRawDepthMap)
-        assertThat(underTest.rightDepthMap!!.rawConfidenceMap).isEqualTo(expectedRawConfidenceMap)
-        assertThat(underTest.rightDepthMap!!.smoothDepthMap).isEqualTo(null)
-        assertThat(underTest.rightDepthMap!!.smoothConfidenceMap).isEqualTo(null)
+        assertThat(underTest.leftDepth!!.rawDepthMap).isEqualTo(expectedRawDepthMap)
+        assertThat(underTest.leftDepth!!.rawConfidenceMap).isEqualTo(expectedRawConfidenceMap)
+        assertThat(underTest.leftDepth!!.smoothDepthMap).isEqualTo(null)
+        assertThat(underTest.leftDepth!!.smoothConfidenceMap).isEqualTo(null)
+        assertThat(underTest.rightDepth!!.width).isEqualTo(80)
+        assertThat(underTest.rightDepth!!.height).isEqualTo(80)
+        assertThat(underTest.rightDepth!!.rawDepthMap).isEqualTo(expectedRawDepthMap)
+        assertThat(underTest.rightDepth!!.rawConfidenceMap).isEqualTo(expectedRawConfidenceMap)
+        assertThat(underTest.rightDepth!!.smoothDepthMap).isEqualTo(null)
+        assertThat(underTest.rightDepth!!.smoothConfidenceMap).isEqualTo(null)
     }
 
     @Test
-    fun update_withSmoothOnlyConfig_updatesSmoothDepthMaps() = initOpenXrManagerAndRunTest {
-        check(underTest.leftDepthMap!!.width == 0)
-        check(underTest.leftDepthMap!!.height == 0)
-        check(underTest.leftDepthMap!!.rawDepthMap == null)
-        check(underTest.leftDepthMap!!.rawConfidenceMap == null)
-        check(underTest.leftDepthMap!!.smoothDepthMap == null)
-        check(underTest.leftDepthMap!!.smoothConfidenceMap == null)
-        check(underTest.rightDepthMap!!.width == 0)
-        check(underTest.rightDepthMap!!.height == 0)
-        check(underTest.rightDepthMap!!.rawDepthMap == null)
-        check(underTest.rightDepthMap!!.rawConfidenceMap == null)
-        check(underTest.rightDepthMap!!.smoothDepthMap == null)
-        check(underTest.rightDepthMap!!.smoothConfidenceMap == null)
+    fun update_withSmoothOnlyConfig_updatesSmoothDepthMaps() = initOpenXrRuntimeAndRunTest {
+        check(underTest.leftDepth!!.width == 0)
+        check(underTest.leftDepth!!.height == 0)
+        check(underTest.leftDepth!!.rawDepthMap == null)
+        check(underTest.leftDepth!!.rawConfidenceMap == null)
+        check(underTest.leftDepth!!.smoothDepthMap == null)
+        check(underTest.leftDepth!!.smoothConfidenceMap == null)
+        check(underTest.rightDepth!!.width == 0)
+        check(underTest.rightDepth!!.height == 0)
+        check(underTest.rightDepth!!.rawDepthMap == null)
+        check(underTest.rightDepth!!.rawConfidenceMap == null)
+        check(underTest.rightDepth!!.smoothDepthMap == null)
+        check(underTest.rightDepth!!.smoothConfidenceMap == null)
 
-        openXrManager.configure(Config(depthEstimation = Config.DepthEstimationMode.SMOOTH_ONLY))
+        openXrRuntime.configure(Config(depthEstimation = DepthEstimationMode.SMOOTH_ONLY))
         underTest.update(XR_TIME)
 
-        assertThat(underTest.leftDepthMap!!.width).isEqualTo(80)
-        assertThat(underTest.leftDepthMap!!.height).isEqualTo(80)
+        assertThat(underTest.leftDepth!!.width).isEqualTo(80)
+        assertThat(underTest.leftDepth!!.height).isEqualTo(80)
 
         // The expected values of the smooth depth and confidence buffers come from
         // kTestSmoothDepthData and kTestSmoothDepthConfidenceData in
@@ -324,36 +413,33 @@ class OpenXrPerceptionManagerTest {
         val expectedSmoothDepthMap: FloatBuffer = FloatBuffer.wrap(FloatArray(6400) { 10.0f })
         val expectedSmoothConfidenceMap: ByteBuffer =
             ByteBuffer.wrap(ByteArray(6400) { 200.toByte() })
-        assertThat(underTest.leftDepthMap!!.rawDepthMap).isEqualTo(null)
-        assertThat(underTest.leftDepthMap!!.rawConfidenceMap).isEqualTo(null)
-        assertThat(underTest.leftDepthMap!!.smoothDepthMap).isEqualTo(expectedSmoothDepthMap)
-        assertThat(underTest.leftDepthMap!!.smoothConfidenceMap)
-            .isEqualTo(expectedSmoothConfidenceMap)
-        assertThat(underTest.rightDepthMap!!.width).isEqualTo(80)
-        assertThat(underTest.rightDepthMap!!.height).isEqualTo(80)
-        assertThat(underTest.rightDepthMap!!.rawDepthMap).isEqualTo(null)
-        assertThat(underTest.rightDepthMap!!.rawConfidenceMap).isEqualTo(null)
-        assertThat(underTest.rightDepthMap!!.smoothDepthMap).isEqualTo(expectedSmoothDepthMap)
-        assertThat(underTest.rightDepthMap!!.smoothConfidenceMap)
+        assertThat(underTest.leftDepth!!.rawDepthMap).isEqualTo(null)
+        assertThat(underTest.leftDepth!!.rawConfidenceMap).isEqualTo(null)
+        assertThat(underTest.leftDepth!!.smoothDepthMap).isEqualTo(expectedSmoothDepthMap)
+        assertThat(underTest.leftDepth!!.smoothConfidenceMap).isEqualTo(expectedSmoothConfidenceMap)
+        assertThat(underTest.rightDepth!!.width).isEqualTo(80)
+        assertThat(underTest.rightDepth!!.height).isEqualTo(80)
+        assertThat(underTest.rightDepth!!.rawDepthMap).isEqualTo(null)
+        assertThat(underTest.rightDepth!!.rawConfidenceMap).isEqualTo(null)
+        assertThat(underTest.rightDepth!!.smoothDepthMap).isEqualTo(expectedSmoothDepthMap)
+        assertThat(underTest.rightDepth!!.smoothConfidenceMap)
             .isEqualTo(expectedSmoothConfidenceMap)
     }
 
     @Test
-    fun hitTest_returnsHitResults() = initOpenXrManagerAndRunTest {
+    fun hitTest_returnsHitResults() = initOpenXrRuntimeAndRunTest {
         underTest.updatePlanes(XR_TIME)
         underTest.update(XR_TIME)
         check(underTest.trackables.isNotEmpty())
         val trackable = underTest.trackables.first() as OpenXrPlane
 
         // TODO: b/345314278 -- Add more meaningful tests once trackables are implemented properly
-        // and a
-        // fake perception library can be used to mock trackables.
+        // and a fake perception library can be used to mock trackables.
         val hitResults = underTest.hitTest(Ray(Vector3(4f, 3f, 2f), Vector3(2f, 1f, 0f)))
 
         assertThat(hitResults).hasSize(1)
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         assertThat(hitResults.first().hitPose)
             .isEqualTo(Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f)))
         assertThat(hitResults.first().trackable).isEqualTo(trackable)
@@ -361,46 +447,42 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun hitTest_planeTrackingDisabled_throwsIllegalStateException() = initOpenXrManagerAndRunTest {
-        openXrManager.configure(Config(planeTracking = Config.PlaneTrackingMode.DISABLED))
+    fun hitTest_planeTrackingDisabled_returnsEmptyList() = initOpenXrRuntimeAndRunTest {
+        openXrRuntime.configure(Config(planeTracking = PlaneTrackingMode.DISABLED))
         underTest.updatePlanes(XR_TIME)
         underTest.update(XR_TIME)
 
-        assertFailsWith<IllegalStateException> {
-            underTest.hitTest(Ray(Vector3(4f, 3f, 2f), Vector3(2f, 1f, 0f)))
-        }
+        assertThat(underTest.hitTest(Ray(Vector3(4f, 3f, 2f), Vector3(2f, 1f, 0f)))).isEmpty()
     }
 
     @Test
-    fun getPersistedAnchorUuids_returnsStubUuid() = initOpenXrManagerAndRunTest {
+    fun getPersistedAnchorUuids_returnsStubUuid() = initOpenXrRuntimeAndRunTest {
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kUuid` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kUuid` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         assertThat(underTest.getPersistedAnchorUuids())
             .containsExactly(UUID.fromString("01020304-0506-0708-090a-0b0c0d0e0f10"))
     }
 
     @Test
-    fun loadAnchor_invalidUuid_throwsException() = initOpenXrManagerAndRunTest {
+    fun loadAnchor_invalidUuid_throwsException() = initOpenXrRuntimeAndRunTest {
         assertThrows(AnchorInvalidUuidException::class.java) { underTest.loadAnchor(UUID(0L, 0L)) }
     }
 
     @Test
-    fun loadAnchor_returnsAnchorWithGivenUuidAndPose() = initOpenXrManagerAndRunTest {
+    fun loadAnchor_returnsAnchorWithGivenUuidAndPose() = initOpenXrRuntimeAndRunTest {
         // The stub doesn't care about the UUID, so we can use any UUID.
         val uuid = UUID.randomUUID()
         val anchor = underTest.loadAnchor(uuid)
 
         assertThat(anchor.uuid).isEqualTo(uuid)
         // TODO - b/346615429: Define values here using the stub's Kotlin API. For the time being
-        // they
-        // come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
+        // they come from `kPose` defined in //third_party/jetpack_xr_natives/openxr/openxr_stub.cc
         assertThat(anchor.pose)
             .isEqualTo(Pose(Vector3(0f, 0f, 2.0f), Quaternion(0f, 1.0f, 0f, 1.0f)))
     }
 
     @Test
-    fun loadAnchor_anchorLimitReached_throwsException() = initOpenXrManagerAndRunTest {
+    fun loadAnchor_anchorLimitReached_throwsException() = initOpenXrRuntimeAndRunTest {
         // Number of calls comes from 'kAnchorResourcesLimit' defined in
         // //third_party/jetpack_xr_natives/openxr/openxr_stub.cc.
         // The UUID is randomized because the manager will not create duplicate anchors for the same
@@ -413,13 +495,22 @@ class OpenXrPerceptionManagerTest {
     }
 
     @Test
-    fun unpersistAnchor_doesNotThrowIllegalStateException() = initOpenXrManagerAndRunTest {
+    fun unpersistAnchor_invalidUuid_throwsException() = initOpenXrRuntimeAndRunTest {
+        assertThrows(AnchorInvalidUuidException::class.java) {
+            underTest.unpersistAnchor(UUID(0L, 0L))
+        }
+    }
+
+    @Test
+    fun unpersistAnchor_withValidUuid_succeeds() = initOpenXrRuntimeAndRunTest {
         underTest.unpersistAnchor(UUID.randomUUID())
     }
 
     @Test
-    fun clear_clearXrResources() = initOpenXrManagerAndRunTest {
+    fun clear_clearXrResources() = initOpenXrRuntimeAndRunTest {
         underTest.updatePlanes(XR_TIME)
+        underTest.updateAugmentedImages(XR_TIME)
+        underTest.updateQrCode(XR_TIME)
         underTest.update(XR_TIME)
         underTest.createAnchor(Pose())
         check(underTest.trackables.isNotEmpty())
@@ -433,26 +524,272 @@ class OpenXrPerceptionManagerTest {
         assertThat(underTest.xrResources.updatables).isEmpty()
     }
 
-    private fun initOpenXrManagerAndRunTest(testBody: () -> Unit) {
+    @Ignore(
+        "Requires updated libandroidx.xr.arcore.openxr.test.so prebuilt with spatial annotation stub support"
+    )
+    @Test
+    fun startSpatialAnnotationTracking_singleQuad_invokesNativeMethod() =
+        initOpenXrRuntimeAndRunTest {
+            val id = SpatialAnnotationId.fromString("test_annotation")
+            val quad =
+                Quad.fromCorners(
+                    upperLeft = Vector2(-1f, 1f),
+                    upperRight = Vector2(1f, 1f),
+                    lowerRight = Vector2(1f, -1f),
+                    lowerLeft = Vector2(-1f, -1f),
+                )
+            val imageBuffer = ByteBuffer.allocateDirect(100)
+
+            runBlocking {
+                underTest.startSpatialAnnotationTracking(
+                    imageBuffer = imageBuffer,
+                    imageSize = IntSize2d(10, 10),
+                    rowStride = 10,
+                    format = SpatialAnnotationImageFormat.GRAYSCALE,
+                    alignment = SpatialAnnotationQuadAlignment.SCREEN,
+                    quads = mapOf(id to quad),
+                    timestampNanos = 1000L,
+                )
+            }
+        }
+
+    @Ignore(
+        "Requires updated libandroidx.xr.arcore.openxr.test.so prebuilt with spatial annotation stub support"
+    )
+    @Test
+    fun startSpatialAnnotationTracking_multipleQuads_invokesNativeMethod() =
+        initOpenXrRuntimeAndRunTest {
+            val id1 = SpatialAnnotationId.fromString("annotation_1")
+            val id2 = SpatialAnnotationId.fromString("annotation_2")
+            val quad1 =
+                Quad.fromCorners(
+                    upperLeft = Vector2(-1f, 1f),
+                    upperRight = Vector2(1f, 1f),
+                    lowerRight = Vector2(1f, -1f),
+                    lowerLeft = Vector2(-1f, -1f),
+                )
+            val quad2 =
+                Quad.fromCorners(
+                    upperLeft = Vector2(-2f, 2f),
+                    upperRight = Vector2(2f, 2f),
+                    lowerRight = Vector2(2f, -2f),
+                    lowerLeft = Vector2(-2f, -2f),
+                )
+            val imageBuffer = ByteBuffer.allocateDirect(100)
+
+            runBlocking {
+                underTest.startSpatialAnnotationTracking(
+                    imageBuffer = imageBuffer,
+                    imageSize = IntSize2d(10, 10),
+                    rowStride = 10,
+                    format = SpatialAnnotationImageFormat.RGBA,
+                    alignment = SpatialAnnotationQuadAlignment.OBJECT,
+                    quads = mapOf(id1 to quad1, id2 to quad2),
+                    timestampNanos = 2000L,
+                )
+            }
+
+            assertThat(underTest.xrResources.annotationConfigs).containsKey(id1)
+            assertThat(underTest.xrResources.annotationConfigs).containsKey(id2)
+            assertThat(underTest.xrResources.annotationConfigs[id1]?.alignment)
+                .isEqualTo(SpatialAnnotationQuadAlignment.OBJECT)
+            assertThat(underTest.xrResources.annotationConfigs[id2]?.alignment)
+                .isEqualTo(SpatialAnnotationQuadAlignment.OBJECT)
+        }
+
+    /**
+     * Covers the start completion callback firing after [OpenXrPerceptionManager.clear]:
+     * [OpenXrRuntime.destroy] clears the perception manager first, then `nativeDeInit()` cancels
+     * the pending native start and invokes the callback, which must fail the waiting caller with
+     * [IllegalStateException] rather than leave it suspended.
+     *
+     * The callback only comes from `nativeStartSpatialAnnotationTracking`, which is not linked in
+     * host tests, so this path can only be exercised here. It requires the stub to leave the start
+     * pending rather than completing it synchronously.
+     */
+    @Ignore(
+        "Requires updated libandroidx.xr.arcore.openxr.test.so prebuilt with spatial annotation stub support"
+    )
+    @Test
+    fun startSpatialAnnotationTracking_destroyedBeforeCompletion_failsWithIllegalStateException() =
+        initOpenXrRuntimeAndRunTest {
+            openXrRuntime.configure(
+                Config.Builder()
+                    .setSpatialAnnotationTracking(SpatialAnnotationTrackingMode.QUAD)
+                    .build()
+            )
+
+            runBlocking {
+                // UNDISPATCHED runs until the call suspends, so the native start is pending before
+                // destroy() is called on this same thread.
+                val result =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching {
+                            underTest.startSpatialAnnotationTracking(
+                                imageBuffer = ByteBuffer.allocateDirect(100),
+                                imageSize = IntSize2d(10, 10),
+                                rowStride = 10,
+                                format = SpatialAnnotationImageFormat.GRAYSCALE,
+                                alignment = SpatialAnnotationQuadAlignment.SCREEN,
+                                quads =
+                                    mapOf(
+                                        SpatialAnnotationId.fromString("test_annotation") to
+                                            Quad.fromMinMax(Vector2(-1f, -1f), Vector2(1f, 1f))
+                                    ),
+                                timestampNanos = 1000L,
+                            )
+                        }
+                    }
+
+                openXrRuntime.destroy()
+
+                val error = result.await().exceptionOrNull()
+                assertThat(error).isInstanceOf(IllegalStateException::class.java)
+                assertThat(error)
+                    .hasMessageThat()
+                    .isEqualTo(
+                        "Spatial annotation tracking was stopped because the session was destroyed."
+                    )
+            }
+        }
+
+    @Test
+    fun stopSpatialAnnotationTracking_removesTrackableAndUpdatable() = initOpenXrRuntimeAndRunTest {
+        val id = SpatialAnnotationId.fromString("test_annotation")
+        val handle = 42L
+        underTest.xrResources.addAnnotationHandle(
+            id,
+            handle,
+            SpatialAnnotationQuadAlignment.SCREEN,
+        )
+        underTest.updateSpatialAnnotations(1000L)
+        val trackable = underTest.xrResources.trackablesMap[handle]
+        checkNotNull(trackable)
+        check(underTest.xrResources.updatables.contains(trackable as Updatable))
+
+        underTest.stopSpatialAnnotationTracking(listOf(id))
+
+        assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id)
+
+        underTest.updateSpatialAnnotations(2000L)
+
+        assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(handle)
+        assertThat(underTest.xrResources.updatables).doesNotContain(trackable as Updatable)
+    }
+
+    @Test
+    fun stopSpatialAnnotationTracking_emptyList_stopsAllAnnotations() =
+        initOpenXrRuntimeAndRunTest {
+            val id1 = SpatialAnnotationId.fromString("annotation_1")
+            val id2 = SpatialAnnotationId.fromString("annotation_2")
+            underTest.xrResources.addAnnotationHandle(
+                id1,
+                101L,
+                SpatialAnnotationQuadAlignment.SCREEN,
+            )
+            underTest.xrResources.addAnnotationHandle(
+                id2,
+                102L,
+                SpatialAnnotationQuadAlignment.OBJECT,
+            )
+            underTest.updateSpatialAnnotations(1000L)
+            check(underTest.xrResources.trackablesMap.size == 2)
+            val trackable1 = underTest.xrResources.trackablesMap[101L] as Updatable
+            val trackable2 = underTest.xrResources.trackablesMap[102L] as Updatable
+            check(underTest.xrResources.updatables.contains(trackable1))
+            check(underTest.xrResources.updatables.contains(trackable2))
+
+            underTest.stopSpatialAnnotationTracking(emptyList())
+
+            assertThat(underTest.xrResources.annotationConfigs).isEmpty()
+
+            underTest.updateSpatialAnnotations(2000L)
+
+            assertThat(underTest.xrResources.trackablesMap).isEmpty()
+            assertThat(underTest.xrResources.updatables).doesNotContain(trackable1)
+            assertThat(underTest.xrResources.updatables).doesNotContain(trackable2)
+        }
+
+    @Test
+    fun stopSpatialAnnotationTracking_specificId_removesOnlyTargetAnnotation() =
+        initOpenXrRuntimeAndRunTest {
+            val id1 = SpatialAnnotationId.fromString("annotation_1")
+            val id2 = SpatialAnnotationId.fromString("annotation_2")
+            underTest.xrResources.addAnnotationHandle(
+                id1,
+                101L,
+                SpatialAnnotationQuadAlignment.SCREEN,
+            )
+            underTest.xrResources.addAnnotationHandle(
+                id2,
+                102L,
+                SpatialAnnotationQuadAlignment.OBJECT,
+            )
+            underTest.updateSpatialAnnotations(1000L)
+            val trackable1 = underTest.xrResources.trackablesMap[101L] as Updatable
+            val trackable2 = underTest.xrResources.trackablesMap[102L] as Updatable
+
+            underTest.stopSpatialAnnotationTracking(listOf(id1))
+
+            assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id1)
+            assertThat(underTest.xrResources.annotationConfigs).containsKey(id2)
+            underTest.updateSpatialAnnotations(2000L)
+            assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(101L)
+            assertThat(underTest.xrResources.trackablesMap).containsKey(102L)
+            assertThat(underTest.xrResources.updatables).doesNotContain(trackable1)
+            assertThat(underTest.xrResources.updatables).contains(trackable2)
+        }
+
+    @Test
+    fun stopSpatialAnnotationTracking_partiallyKnownIds_removesOnlyKnownId() =
+        initOpenXrRuntimeAndRunTest {
+            val id1 = SpatialAnnotationId.fromString("annotation_1")
+            val unknownId = SpatialAnnotationId.fromString("unknown")
+            underTest.xrResources.addAnnotationHandle(
+                id1,
+                101L,
+                SpatialAnnotationQuadAlignment.SCREEN,
+            )
+            underTest.updateSpatialAnnotations(1000L)
+
+            underTest.stopSpatialAnnotationTracking(listOf(id1, unknownId))
+
+            assertThat(underTest.xrResources.annotationConfigs).doesNotContainKey(id1)
+
+            underTest.updateSpatialAnnotations(2000L)
+
+            assertThat(underTest.xrResources.trackablesMap).doesNotContainKey(101L)
+        }
+
+    private fun initOpenXrRuntimeAndRunTest(testBody: () -> Unit) {
         activityRule.scenario.onActivity {
             val timeSource = OpenXrTimeSource()
-            openXrManager = OpenXrManager(it, underTest, timeSource)
-            openXrManager.create()
-            openXrManager.resume()
-            openXrManager.configure(
+
+            val augmentedImageDatabase = AugmentedImageDatabase()
+            augmentedImageDatabase.addAugmentedImageDatabaseEntry(
+                AugmentedImageDatabaseEntryMode.DYNAMIC,
+                Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888),
+            )
+
+            openXrRuntime = OpenXrRuntime(it, underTest, timeSource)
+            openXrRuntime.initialize()
+            openXrRuntime.resume()
+            openXrRuntime.configure(
                 Config(
-                    deviceTracking = Config.DeviceTrackingMode.LAST_KNOWN,
-                    planeTracking = Config.PlaneTrackingMode.HORIZONTAL_AND_VERTICAL,
+                    deviceTracking = DeviceTrackingMode.SPATIAL,
+                    planeTracking = PlaneTrackingMode.HORIZONTAL_AND_VERTICAL,
                     //                    handTracking = Config.HandTrackingMode.BOTH,
+                    augmentedImageDatabase = augmentedImageDatabase,
+                    qrCodeTracking = QrCodeTrackingMode.DYNAMIC,
                 )
             )
 
             testBody()
 
-            // Pause and stop the OpenXR manager here in lieu of an @After method to ensure that the
-            // calls to the OpenXR manager are coming from the same thread.
-            openXrManager.pause()
-            openXrManager.stop()
+            // Pause and stop the OpenXR runtime here in lieu of an @After method to ensure that the
+            // calls to the OpenXR runtime are coming from the same thread.
+            openXrRuntime.pause()
+            openXrRuntime.destroy()
         }
     }
 }

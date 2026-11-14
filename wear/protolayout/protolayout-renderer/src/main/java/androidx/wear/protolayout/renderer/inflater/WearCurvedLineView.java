@@ -38,6 +38,7 @@ import android.util.AttributeSet;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.VisibleForTesting;
 import androidx.wear.protolayout.proto.LayoutElementProto.ArcDirection;
 import androidx.wear.protolayout.renderer.R;
 import androidx.wear.widget.ArcLayout;
@@ -63,6 +64,8 @@ import java.util.List;
  */
 public class WearCurvedLineView extends View implements ArcLayout.Widget {
     public static final float SWEEP_ANGLE_WRAP_LENGTH = -1;
+
+    static final float MAX_STROKE_CAP_SHADOW_BLUR_RADIUS_PX = 64f;
 
     private static final String TAG = "WearCurvedLineView";
     private static final int DEFAULT_THICKNESS_PX = 0;
@@ -295,9 +298,21 @@ public class WearCurvedLineView extends View implements ArcLayout.Widget {
 
     /** Sets the parameters for the stroke cap shadow. */
     public void setStrokeCapShadow(float blurRadius, int color) {
-        this.mCapShadow = new StrokeCapShadow(blurRadius, color);
+        if (!Float.isFinite(blurRadius) || blurRadius <= 0f) {
+            this.mCapShadow = null;
+        } else {
+            this.mCapShadow =
+                    new StrokeCapShadow(
+                            min(blurRadius, MAX_STROKE_CAP_SHADOW_BLUR_RADIUS_PX), color);
+        }
         // Re-set color.
         this.setColor(mBasePaint.getColor());
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Float getStrokeCapShadowBlurRadius() {
+        return mCapShadow != null ? mCapShadow.mBlurRadius : null;
     }
 
     @Override
@@ -517,12 +532,12 @@ public class WearCurvedLineView extends View implements ArcLayout.Widget {
      *
      * <p>All other lower layers of the line are not visible so they are not drawn.
      */
-    static class ArcDrawableImpl implements ArcDrawable {
+    private static class ArcDrawableImpl implements ArcDrawable {
         // The list of segments that compose the ArcDrawable, in the order that they should be
         // drawn.
         private final @NonNull List<Segment> mSegments = new ArrayList<>();
 
-        ArcDrawableImpl(
+        private ArcDrawableImpl(
                 @NonNull RectF bounds,
                 float sweepAngle,
                 float thicknessPx,
@@ -653,7 +668,7 @@ public class WearCurvedLineView extends View implements ArcLayout.Widget {
      * canvas.drawPath}, because {@code canvas.drawPath} implementation has a bug when the path is
      * an Arc which causes the aliasing issue (b/393971851)
      */
-    static class ArcDrawableLegacy implements ArcDrawable {
+    private static class ArcDrawableLegacy implements ArcDrawable {
 
         private final @NonNull Paint mPaint;
         private final RectF mBounds;

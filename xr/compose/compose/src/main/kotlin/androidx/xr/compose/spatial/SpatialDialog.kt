@@ -16,7 +16,8 @@
 
 package androidx.xr.compose.spatial
 
-import android.view.ViewParent
+import android.content.Context
+import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloat
@@ -25,18 +26,22 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.ZeroCornerSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionContext
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.RememberObserver
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.currentCompositeKeyHashCode
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCompositionContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
@@ -45,21 +50,28 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.viewtree.setViewTreeDisjointParent
 import androidx.xr.compose.R
 import androidx.xr.compose.platform.LocalDialogManager
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.platform.findNearestParentEntity
+import androidx.xr.compose.platform.getActivity
+import androidx.xr.compose.platform.isEmbedded
+import androidx.xr.compose.subspace.MAX_SAFE_PANEL_HEIGHT_PX
+import androidx.xr.compose.subspace.MAX_SAFE_PANEL_WIDTH_PX
+import androidx.xr.compose.subspace.SpatialComposeView
+import androidx.xr.compose.subspace.layout.CoreEntity
 import androidx.xr.compose.subspace.layout.CorePanelEntity
-import androidx.xr.compose.subspace.layout.SpatialRoundedCornerShape
-import androidx.xr.compose.subspace.rememberComposeView
+import androidx.xr.compose.subspace.spatialComposeView
 import androidx.xr.compose.unit.IntVolumeSize
-import androidx.xr.compose.unit.Meter.Companion.meters
-import androidx.xr.compose.unit.toMeter
+import androidx.xr.compose.unit.toMeters
+import androidx.xr.runtime.Session
 import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Pose
+import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.PanelEntity
+import androidx.xr.scenecore.PixelDensity
+import androidx.xr.scenecore.scene
 
 /**
  * Properties for configuring a [SpatialDialog].
@@ -135,13 +147,16 @@ private fun SpatialDialogProperties.toBaseDialogProperties() =
         usePlatformDefaultWidth = usePlatformDefaultWidth,
     )
 
+private val EmptyContent: @Composable () -> Unit = {}
+
 /**
  * [SpatialDialog] is a dialog that is elevated above the activity.
  *
  * When spatial dialogs are displayed the dialog appears on top of the content at the base elevation
  * level.
  *
- * In non-spatialized environments, a standard Compose Dialog is utilized to display the content.
+ * In non-spatialized environments or embedded activities, a standard Compose [Dialog] is utilized
+ * to display the content.
  *
  * @param onDismissRequest a callback to be invoked when the dialog should be dismissed.
  * @param properties the dialog properties.
@@ -153,8 +168,11 @@ public fun SpatialDialog(
     properties: SpatialDialogProperties = SpatialDialogProperties(),
     content: @Composable () -> Unit,
 ) {
+    val activity = LocalContext.current.getActivity()
     val movableContent = remember { movableContentOf(content) }
-    if (LocalSpatialCapabilities.current.isSpatialUiEnabled) {
+    val isActivityEmbedded = activity?.isEmbedded() ?: false
+
+    if (!isActivityEmbedded && LocalSpatialCapabilities.current.isSpatialUiEnabled) {
         LayoutSpatialDialog(onDismissRequest, properties, movableContent)
     } else {
         Dialog(
@@ -177,8 +195,9 @@ private fun LayoutSpatialDialog(
     val session = checkNotNull(LocalSession.current) { "session must be initialized" }
     val parentView = LocalView.current
     val parentEntity = findNearestParentEntity()
-    val view = rememberComposeView()
-    val density = LocalDensity.current
+    val context = LocalContext.current
+    val compositionContext = rememberCompositionContext()
+    val localId = currentCompositeKeyHashCode
 
     BackHandler {
         if (properties.dismissOnBackPress) {
@@ -208,54 +227,137 @@ private fun LayoutSpatialDialog(
         Spacer(Modifier.size(1.dp))
     }
 
-    var contentSize: IntSize by remember { mutableStateOf(IntSize.Zero) }
-
+    val density = LocalDensity.current
+    val pixelDensity = session.scene.virtualPixelDensity
     val zDepth by
         updateTransition(targetState = spatialElevationLevel, label = "restingLevelTransition")
             .animateFloat(
                 transitionSpec = { properties.backgroundContentAnimationSpec },
                 label = "zDepth",
             ) { state ->
-                state.toMeter().toM()
+                state.toMeters(density, pixelDensity)
             }
 
-    val panelEntity: CorePanelEntity = remember {
-        CorePanelEntity(
-                PanelEntity.create(
-                    session = session,
-                    view = view,
-                    pixelDimensions = contentSize.run { IntSize2d(width, height) },
-                    name = "ElevatedPanel:${view.id}",
-                )
+    val holder =
+        remember(parentView, session) {
+            SpatialDialogRenderer(
+                localId = localId,
+                context = context,
+                session = session,
+                parentView = parentView,
+                onDismissRequest = onDismissRequest,
+                properties = properties,
+                compositionContext = compositionContext,
+                pixelDensity = pixelDensity,
             )
-            .also {
-                it.setShape(SpatialRoundedCornerShape(ZeroCornerSize), density)
-                view.setTag(R.id.compose_xr_local_view_entity, it)
+        }
+
+    SideEffect {
+        holder.parentEntity = parentEntity
+        holder.poseInMeters = Pose(translation = Vector3(z = zDepth))
+        holder.content = content
+    }
+}
+
+/**
+ * A holder class that manages the lifecycle of a spatial dialog's rendering elements: a
+ * Compose-backed [View] and its corresponding [CorePanelEntity] in the XR scene.
+ *
+ * This class implements [RememberObserver] to manage resource allocation ([onRemembered]) and
+ * cleanup ([onForgotten]) within the Compose lifecycle. It acts as the bridge between the ephemeral
+ * Compose state and the persistent native scene entity.
+ *
+ * All external configuration changes (pose, parent, content) are synchronized to the internal state
+ * and the [CorePanelEntity].
+ */
+private class SpatialDialogRenderer(
+    private val localId: Long,
+    private val context: Context,
+    private val session: Session,
+    private val parentView: View,
+    private val onDismissRequest: () -> Unit,
+    private val properties: SpatialDialogProperties,
+    private val compositionContext: CompositionContext,
+    private val pixelDensity: PixelDensity,
+) : RememberObserver {
+
+    private var panelEntity: CorePanelEntity? = null
+    private var view: SpatialComposeView? = null
+
+    var parentEntity: CoreEntity? = null
+        set(value) {
+            if (field != value) {
+                field = value
+                panelEntity?.parent = value
             }
-    }
+        }
 
-    SideEffect { view.setViewTreeDisjointParent(parentView as? ViewParent ?: parentView.parent) }
+    var poseInMeters: Pose = Pose.Identity
+        set(value) {
+            if (field != value) {
+                field = value
+                panelEntity?.poseInMeters = value
+            }
+        }
 
-    LaunchedEffect(density) {
-        panelEntity.setShape(SpatialRoundedCornerShape(ZeroCornerSize), density)
-    }
+    var content: @Composable () -> Unit by mutableStateOf(EmptyContent)
 
-    view.setContent {
-        Box(modifier = Modifier.constrainTo(Constraints()).onSizeChanged { contentSize = it }) {
-            content()
+    override fun onRemembered() {
+        val view = spatialComposeView(parentView, context, compositionContext, localId)
+        this.view = view
+        panelEntity =
+            CorePanelEntity(
+                    pixelDensity = pixelDensity,
+                    entity =
+                        PanelEntity.create(
+                            session = session,
+                            view = view,
+                            pixelDimensions = IntSize2d(IntSize.Zero.width, IntSize.Zero.height),
+                            name = "ElevatedPanel:${view.id}",
+                            parent = session.scene.activitySpace,
+                        ),
+                )
+                .apply {
+                    parent = parentEntity
+                    view.setTag(R.id.compose_xr_local_view_entity, this)
+                }
+
+        view.setContent {
+            Box(
+                modifier =
+                    Modifier.onClickOutside(
+                            enabled = true,
+                            onClickOutside = {
+                                if (properties.dismissOnClickOutside) {
+                                    onDismissRequest()
+                                }
+                            },
+                        )
+                        .constrainTo(
+                            Constraints(
+                                maxWidth = MAX_SAFE_PANEL_WIDTH_PX,
+                                maxHeight = MAX_SAFE_PANEL_HEIGHT_PX,
+                            )
+                        )
+                        .onSizeChanged {
+                            panelEntity?.size =
+                                IntVolumeSize(width = it.width, height = it.height, depth = 0)
+                        }
+            ) {
+                content()
+            }
         }
     }
 
-    DisposableEffect(panelEntity) { onDispose { panelEntity.dispose() } }
-
-    SideEffect {
-        panelEntity.poseInMeters = Pose(translation = MeterPosition(z = zDepth.meters).toVector3())
+    override fun onForgotten() {
+        panelEntity?.dispose()
+        panelEntity = null
+        view?.setContent {}
+        view?.disposeComposition()
     }
 
-    LaunchedEffect(contentSize) {
-        panelEntity.size =
-            IntVolumeSize(width = contentSize.width, height = contentSize.height, depth = 0)
+    override fun onAbandoned() {
+        // No-op. If resources were created during 'init' (constructor),
+        // they should be released here since onRemembered() was never called.
     }
-
-    LaunchedEffect(parentEntity) { panelEntity.parent = parentEntity }
 }

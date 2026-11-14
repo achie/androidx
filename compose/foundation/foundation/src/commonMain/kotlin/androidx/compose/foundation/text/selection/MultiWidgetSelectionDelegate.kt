@@ -16,13 +16,17 @@
 
 package androidx.compose.foundation.text.selection
 
+import androidx.compose.foundation.ComposeFoundationFlags
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.platform.makeSynchronizedObject
 import androidx.compose.foundation.platform.synchronized
+import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.text.getLineHeight
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -32,6 +36,8 @@ internal class MultiWidgetSelectionDelegate(
     override val selectableId: Long,
     private val coordinatesCallback: () -> LayoutCoordinates?,
     private val layoutResultCallback: () -> TextLayoutResult?,
+    private val pinnableContainerCallback: () -> PinnableContainer? = { null },
+    override val bringIntoViewRequester: BringIntoViewRequester? = null,
 ) : Selectable {
     private val lock = makeSynchronizedObject(this)
 
@@ -39,6 +45,9 @@ internal class MultiWidgetSelectionDelegate(
 
     // previously calculated `lastVisibleOffset` for the `_previousTextLayoutResult`
     private var _previousLastVisibleOffset: Int = -1
+
+    override val pinnableContainer: PinnableContainer?
+        get() = pinnableContainerCallback()
 
     /**
      * TextLayoutResult is not expected to change repeatedly in a BasicText composable. At least
@@ -76,13 +85,40 @@ internal class MultiWidgetSelectionDelegate(
                 _previousLastVisibleOffset
             }
 
-    override fun appendSelectableInfoToBuilder(builder: SelectionLayoutBuilder) {
+    override fun appendSelectableInfoToBuilder(builder: SelectionLayoutBuilder, isLast: Boolean) {
         val layoutCoordinates = getLayoutCoordinates() ?: return
         val textLayoutResult = layoutResultCallback() ?: return
 
         val relativePosition =
             builder.containerCoordinates.localPositionOf(layoutCoordinates, Offset.Zero)
         val localPosition = builder.currentPosition - relativePosition
+
+        // `localPreviousHandlePosition` below is used by `appendSelectableInfo` to compute
+        // `SelectableInfo.rawPreviousHandleOffset`.
+        // Unfortunately, if the selectable has moved (relative to the container) since the
+        // "previous" SelectionLayout was created, it's not possible to compute
+        // `SelectableInfo.rawPreviousHandleOffset` correctly from just `previousHandlePosition`.
+        // `localPreviousHandlePosition` below will be incorrect in this case because it's computed
+        // by converting the previous position (in container coordinates) via the *current*
+        // selectable coordinates, but what is needed is a conversion via the *previous* selectable
+        // coordinates.
+        // Luckily, during a sequence of selection changes, we have access to the actual
+        // previous SelectionLayout (except for the first change, but there the selectable hasn't
+        // moved), so we can just take the `SelectableInfo.rawPreviousHandleOffset` from there and
+        // avoid the computation altogether.
+        val rawPreviousHandleOffset =
+            @OptIn(ExperimentalFoundationApi::class)
+            if (ComposeFoundationFlags.isSelectionAutoScrollEnabled) {
+                val selectableInfo = builder.previousLayout?.infoForSelectable(selectableId)
+                if (selectableInfo != null) {
+                    if (builder.isStartHandle) {
+                        selectableInfo.rawStartHandleOffset
+                    } else {
+                        selectableInfo.rawEndHandleOffset
+                    }
+                } else -1
+            } else -1
+
         val localPreviousHandlePosition =
             if (builder.previousHandlePosition.isUnspecified) {
                 Offset.Unspecified
@@ -93,8 +129,10 @@ internal class MultiWidgetSelectionDelegate(
         builder.appendSelectableInfo(
             textLayoutResult = textLayoutResult,
             localPosition = localPosition,
+            givenRawPreviousHandleOffset = rawPreviousHandleOffset,
             previousHandlePosition = localPreviousHandlePosition,
             selectableId = selectableId,
+            isLast = isLast,
         )
     }
 
@@ -214,14 +252,19 @@ internal class MultiWidgetSelectionDelegate(
  * @param textLayoutResult the [TextLayoutResult] for the selectable
  * @param localPosition the position of the current handle if not being dragged or the drag position
  *   if it is
+ * @param givenRawPreviousHandleOffset the raw handle offset of the previous handle; -1 if and needs
+ *   to be recomputed from [previousHandlePosition]
  * @param previousHandlePosition the position of the previous handle
  * @param selectableId the selectableId for the selectable
+ * @param isLast whether this is the last selectable in the layout
  */
 internal fun SelectionLayoutBuilder.appendSelectableInfo(
     textLayoutResult: TextLayoutResult,
     localPosition: Offset,
+    givenRawPreviousHandleOffset: Int,
     previousHandlePosition: Offset,
     selectableId: Long,
+    isLast: Boolean,
 ) {
     val bounds =
         Rect(
@@ -234,9 +277,35 @@ internal fun SelectionLayoutBuilder.appendSelectableInfo(
     val currentXDirection = getXDirection(localPosition, bounds)
     val currentYDirection = getYDirection(localPosition, bounds)
 
-    fun otherDirection(anchor: Selection.AnchorInfo?): Direction =
-        anchor?.let { getDirectionById(it.selectableId, selectableId) }
-            ?: resolve2dDirection(currentXDirection, currentYDirection)
+    // Computes the direction for the "other" (non-dragged) handle
+    fun otherDirection(forStartSlot: Boolean): Direction {
+        // If there is no previous selection then we're just starting a selection gesture, so both
+        // handles are in the same spot.
+        val previousSelection =
+            previousSelection ?: return resolve2dDirection(currentXDirection, currentYDirection)
+
+        // If there is a previous selection, examine it to find the direction
+        val anchor = if (forStartSlot) previousSelection.start else previousSelection.end
+
+        // Check selectable order first
+        val directionBySelectables = getDirectionById(anchor.selectableId, selectableId)
+        if ((directionBySelectables != Direction.ON) || !allowSelectionBetweenSelectables) {
+            // When allowSelectionBetweenSelectables is false, this resolution is enough
+            return directionBySelectables
+        }
+
+        // When on the same selectable, check the slot in the previous layout to get better
+        // resolution
+        val previousLayout = previousLayout ?: return Direction.ON
+        val handleSlot = if (forStartSlot) previousLayout.startSlot else previousLayout.endSlot
+        val selectableSlot =
+            (if (forStartSlot) previousLayout.startInfo else previousLayout.endInfo).slot
+        return when {
+            handleSlot < selectableSlot -> Direction.BEFORE
+            handleSlot > selectableSlot -> Direction.AFTER
+            else -> Direction.ON
+        }
+    }
 
     val otherDirection: Direction
     val startXHandleDirection: Direction
@@ -244,21 +313,42 @@ internal fun SelectionLayoutBuilder.appendSelectableInfo(
     val endXHandleDirection: Direction
     val endYHandleDirection: Direction
     if (isStartHandle) {
-        otherDirection = otherDirection(previousSelection?.end)
+        otherDirection = otherDirection(forStartSlot = false)
         startXHandleDirection = currentXDirection
         startYHandleDirection = currentYDirection
         endXHandleDirection = otherDirection
         endYHandleDirection = otherDirection
     } else {
-        otherDirection = otherDirection(previousSelection?.start)
+        otherDirection = otherDirection(forStartSlot = true)
         startXHandleDirection = otherDirection
         startYHandleDirection = otherDirection
         endXHandleDirection = currentXDirection
         endYHandleDirection = currentYDirection
     }
 
-    if (!isSelected(resolve2dDirection(currentXDirection, currentYDirection), otherDirection)) {
-        return
+    val currentDirection = resolve2dDirection(currentXDirection, currentYDirection)
+
+    if (allowSelectionBetweenSelectables) {
+        // Ignore all selectables before the selection, unless we've reached the end
+        if (
+            (currentDirection == Direction.AFTER) && (otherDirection == Direction.AFTER) && !isLast
+        ) {
+            return
+        }
+        // Ignore selectables after the selection, unless nothing has been added yet (which means
+        // both handles are right before the current selectable), in which case append this one
+        // because we have to have at least one.
+        if (
+            (currentDirection == Direction.BEFORE) &&
+                (otherDirection == Direction.BEFORE) &&
+                !isEmpty
+        ) {
+            return
+        }
+    } else {
+        if (!isSelected(currentDirection, otherDirection)) {
+            return
+        }
     }
 
     val textLength = textLayoutResult.layoutInput.text.length
@@ -287,9 +377,10 @@ internal fun SelectionLayoutBuilder.appendSelectableInfo(
     }
 
     val rawPreviousHandleOffset =
-        if (previousHandlePosition.isUnspecified) -1
-        else {
-            getOffsetForPosition(previousHandlePosition, textLayoutResult)
+        when {
+            givenRawPreviousHandleOffset != -1 -> givenRawPreviousHandleOffset
+            previousHandlePosition.isUnspecified -> -1
+            else -> getOffsetForPosition(previousHandlePosition, textLayoutResult)
         }
 
     appendInfo(

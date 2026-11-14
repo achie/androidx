@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
+import androidx.compose.ui.util.fastFilteredMap
 import androidx.compose.ui.util.fastMap
 
 /**
@@ -115,7 +116,20 @@ internal val AnnotatedStringSaver =
 
 private val AnnotationRangeListSaver =
     Saver<List<AnnotatedString.Range<out Any>>, Any>(
-        save = { it.fastMap { range -> save(range, AnnotationRangeSaver, this) } },
+        save = { list ->
+            list
+                .fastFilteredMap({ range ->
+                    val item = range.item
+                    when (item) {
+                        is Bullet -> false
+                        is DrawAnnotation -> item !is CombinedDrawAnnotation && canBeSaved(item)
+                        else -> true
+                    }
+                }) { range ->
+                    save(range, AnnotationRangeSaver, this)
+                }
+                .ifEmpty { null }
+        },
         restore = {
             @Suppress("UNCHECKED_CAST") val list = it as List<Any>
             list.fastMap { item ->
@@ -133,14 +147,50 @@ private enum class AnnotationType {
     Link, // LinkAnnotation.Url
     Clickable,
     String,
+    Draw,
 }
 
 @OptIn(ExperimentalTextApi::class)
 private val AnnotationRangeSaver =
     Saver<AnnotatedString.Range<out Any>, Any>(
         save = {
+            val savedAnnotation = save(it.item as AnnotatedString.Annotation, AnnotationSaver, this)
+            arrayListOf(savedAnnotation, save(it.start), save(it.end), save(it.tag))
+        },
+        restore = {
+            @Suppress("UNCHECKED_CAST") val list = it as List<Any>
+            val item: AnnotatedString.Annotation = restore(list[0], AnnotationSaver)!!
+            val start = restore<Int>(list[1])!!
+            val end = restore<Int>(list[2])!!
+            val tag = restore<String>(list[3])!!
+            AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
+        },
+    )
+
+/**
+ * Saves and restores [AnnotatedString.Annotation] objects.
+ *
+ * Supports the following annotation types:
+ * - [ParagraphStyle]
+ * - [SpanStyle]
+ * - [VerbatimTtsAnnotation]
+ * - [UrlAnnotation]
+ * - [LinkAnnotation.Url]
+ * - [LinkAnnotation.Clickable]
+ * - [StringAnnotation]
+ * - [DrawAnnotation] subclasses that satisfy [SaverScope.canBeSaved] (such as `Parcelable` `data
+ *   class`es on Android)
+ *
+ * Note: This [Saver] does not preserve the [LinkInteractionListener] of [LinkAnnotation]s,
+ * [BackgroundAnnotation]s, lambda-backed [DrawAnnotation] instances, or [Bullet] annotations. If
+ * you need to restore them, you must handle saving and restoring them manually.
+ */
+@OptIn(ExperimentalTextApi::class)
+internal val AnnotationSaver: Saver<AnnotatedString.Annotation, Any> =
+    Saver(
+        save = { annotation ->
             val marker =
-                when (it.item) {
+                when (annotation) {
                     is ParagraphStyle -> AnnotationType.Paragraph
                     is SpanStyle -> AnnotationType.Span
                     is VerbatimTtsAnnotation -> AnnotationType.VerbatimTts
@@ -148,66 +198,48 @@ private val AnnotationRangeSaver =
                     is LinkAnnotation.Url -> AnnotationType.Link
                     is LinkAnnotation.Clickable -> AnnotationType.Clickable
                     is StringAnnotation -> AnnotationType.String
+                    is DrawAnnotation ->
+                        if (annotation !is CombinedDrawAnnotation && canBeSaved(annotation)) {
+                            AnnotationType.Draw
+                        } else {
+                            throw UnsupportedOperationException()
+                        }
                     else -> throw UnsupportedOperationException()
                 }
 
-            val item =
+            val savedItem =
                 when (marker) {
                     AnnotationType.Paragraph ->
-                        save(it.item as ParagraphStyle, ParagraphStyleSaver, this)
-                    AnnotationType.Span -> save(it.item as SpanStyle, SpanStyleSaver, this)
+                        save(annotation as ParagraphStyle, ParagraphStyleSaver, this)
+                    AnnotationType.Span -> save(annotation as SpanStyle, SpanStyleSaver, this)
                     AnnotationType.VerbatimTts ->
-                        save(it.item as VerbatimTtsAnnotation, VerbatimTtsAnnotationSaver, this)
-                    AnnotationType.Url -> save(it.item as UrlAnnotation, UrlAnnotationSaver, this)
-                    AnnotationType.Link -> save(it.item as LinkAnnotation.Url, LinkSaver, this)
+                        save(annotation as VerbatimTtsAnnotation, VerbatimTtsAnnotationSaver, this)
+                    AnnotationType.Url ->
+                        save(annotation as UrlAnnotation, UrlAnnotationSaver, this)
+                    AnnotationType.Link -> save(annotation as LinkAnnotation.Url, LinkSaver, this)
                     AnnotationType.Clickable ->
-                        save(it.item as LinkAnnotation.Clickable, ClickableSaver, this)
-                    AnnotationType.String -> save((it.item as StringAnnotation).value)
+                        save(annotation as LinkAnnotation.Clickable, ClickableSaver, this)
+                    AnnotationType.String -> save((annotation as StringAnnotation).value)
+                    AnnotationType.Draw -> save(annotation as DrawAnnotation)
                 }
 
-            arrayListOf(save(marker), item, save(it.start), save(it.end), save(it.tag))
+            arrayListOf(save(marker), savedItem)
         },
         restore = {
             @Suppress("UNCHECKED_CAST") val list = it as List<Any>
             val marker: AnnotationType = restore(list[0])!!
-            val start: Int = restore(list[2])!!
-            val end: Int = restore(list[3])!!
-            val tag: String = restore(list[4])!!
-
             when (marker) {
-                AnnotationType.Paragraph -> {
-                    val item: ParagraphStyle = restore(list[1], ParagraphStyleSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
-                AnnotationType.Span -> {
-                    val item: SpanStyle = restore(list[1], SpanStyleSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
-                AnnotationType.VerbatimTts -> {
-                    val item: VerbatimTtsAnnotation = restore(list[1], VerbatimTtsAnnotationSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
-                AnnotationType.Url -> {
-                    val item: UrlAnnotation = restore(list[1], UrlAnnotationSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
-                AnnotationType.Link -> {
-                    val item: LinkAnnotation.Url = restore(list[1], LinkSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
-                AnnotationType.Clickable -> {
-                    val item: LinkAnnotation.Clickable = restore(list[1], ClickableSaver)!!
-                    AnnotatedString.Range(item = item, start = start, end = end, tag = tag)
-                }
+                AnnotationType.Paragraph -> restore(list[1], ParagraphStyleSaver)!!
+                AnnotationType.Span -> restore(list[1], SpanStyleSaver)!!
+                AnnotationType.VerbatimTts -> restore(list[1], VerbatimTtsAnnotationSaver)!!
+                AnnotationType.Url -> restore(list[1], UrlAnnotationSaver)!!
+                AnnotationType.Link -> restore(list[1], LinkSaver)!!
+                AnnotationType.Clickable -> restore(list[1], ClickableSaver)!!
                 AnnotationType.String -> {
                     val item: String = restore(list[1])!!
-                    AnnotatedString.Range(
-                        item = StringAnnotation(item),
-                        start = start,
-                        end = end,
-                        tag = tag,
-                    )
+                    StringAnnotation(item)
                 }
+                AnnotationType.Draw -> restore<DrawAnnotation>(list[1])!!
             }
         },
     )

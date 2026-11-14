@@ -17,40 +17,17 @@
 package androidx.compose.ui.text.intl
 
 import android.os.LocaleList as AndroidLocaleList
-import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.compose.ui.text.platform.makeSynchronizedObject
-import java.util.Locale as JavaLocale
 
-private val TAG = "Locale"
-
-/** An Android implementation of LocaleDelegate object for API 23 */
-internal class AndroidLocaleDelegateAPI23 : PlatformLocaleDelegate {
-
-    override val current: LocaleList
-        get() = LocaleList(listOf(Locale(JavaLocale.getDefault())))
-
-    override fun parseLanguageTag(languageTag: String): PlatformLocale {
-        val platformLocale = JavaLocale.forLanguageTag(languageTag)
-        if (platformLocale.toLanguageTag() == "und") {
-            Log.e(
-                TAG,
-                "The language tag $languageTag is not well-formed. Locale is resolved " +
-                    "to Undetermined. Note that underscore '_' is not a valid subtags delimiter and " +
-                    "must be replaced with '-'.",
-            )
-        }
-        return platformLocale
-    }
-}
-
-/** An Android implementation of LocaleDelegate object for API 24 and later */
-@RequiresApi(api = 24)
 internal class AndroidLocaleDelegateAPI24 : PlatformLocaleDelegate {
     private var lastPlatformLocaleList: AndroidLocaleList? = null
     private var lastLocaleList: LocaleList? = null
     private val lock = makeSynchronizedObject()
 
+    @Deprecated(
+        "This method of accessing locale isn't backed by snapshot state, meaning " +
+            "that updates to the locale won't notify reading this API."
+    )
     override val current: LocaleList
         get() {
             val platformLocaleList = AndroidLocaleList.getDefault()
@@ -70,17 +47,4 @@ internal class AndroidLocaleDelegateAPI24 : PlatformLocaleDelegate {
                 localeList
             }
         }
-
-    override fun parseLanguageTag(languageTag: String): PlatformLocale {
-        val platformLocale = JavaLocale.forLanguageTag(languageTag)
-        if (platformLocale.toLanguageTag() == "und") {
-            Log.e(
-                TAG,
-                "The language tag $languageTag is not well-formed. Locale is resolved " +
-                    "to Undetermined. Note that underscore '_' is not a valid subtag delimiter and " +
-                    "must be replaced with '-'.",
-            )
-        }
-        return platformLocale
-    }
 }

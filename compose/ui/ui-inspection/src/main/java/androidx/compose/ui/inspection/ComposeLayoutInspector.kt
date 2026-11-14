@@ -31,6 +31,7 @@ import androidx.compose.ui.inspection.framework.flatten
 import androidx.compose.ui.inspection.framework.hasSlotTable
 import androidx.compose.ui.inspection.framework.isAndroidComposeView
 import androidx.compose.ui.inspection.framework.signature
+import androidx.compose.ui.inspection.inspector.InlineClassConverter
 import androidx.compose.ui.inspection.inspector.InspectorNode
 import androidx.compose.ui.inspection.inspector.LayoutInspectorTree
 import androidx.compose.ui.inspection.inspector.NodeParameterReference
@@ -50,6 +51,9 @@ import androidx.inspection.Connection
 import androidx.inspection.Inspector
 import androidx.inspection.InspectorEnvironment
 import androidx.inspection.InspectorFactory
+import androidx.savedstate.SavedStateContainer
+import androidx.savedstate.SavedStateValue
+import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import com.google.protobuf.ByteString
 import com.google.protobuf.InvalidProtocolBufferException
 import kotlin.collections.removeLast as removeLastKt
@@ -79,6 +83,10 @@ internal const val SPAM_LOG_TAG = "studio.$LOG_TAG"
 private const val LAYOUT_INSPECTION_ID = "layoutinspector.compose.inspection"
 private const val MAX_RECURSIONS = 2
 private const val MAX_ITERABLE_SIZE = 5
+
+// The key prefix of the SaveableStateRegistry containers of the AndroidComposeViews in the
+// SavedStateRegistry. See DisposableSaveableStateRegistry in compose:ui:ui.
+private const val SAVEABLE_STATE_REGISTRY_KEY_PREFIX = "SaveableStateRegistry:"
 
 // created by java.util.ServiceLoader
 class ComposeLayoutInspectorFactory :
@@ -128,8 +136,10 @@ class ComposeLayoutInspector(
 
     private val rootsDetector = RootsDetector(environment)
     private val anchorMap = AnchorMap()
-    private val layoutInspectorTree = LayoutInspectorTree(anchorMap)
-    private val recompositionHandler = StateReadHandler(environment.artTooling(), anchorMap)
+    private val inlineClassConverter = InlineClassConverter()
+    private val layoutInspectorTree = LayoutInspectorTree(anchorMap, inlineClassConverter)
+    private val recompositionHandler =
+        StateReadHandler(environment.artTooling(), anchorMap, inlineClassConverter)
     private var delayParameterExtractions = false
     // Reduce the protobuf nesting of ComposableNode by storing nested nodes with only 1 child each
     // as children under the top node. This limits the stack used when computing the protobuf size.
@@ -158,7 +168,7 @@ class ComposeLayoutInspector(
     override fun onDispose() {
         disposed = true
         recompositionHandler.dispose()
-        cachedNodes.clear()
+        _cachedNodes.clear()
     }
 
     override fun onReceiveCommand(data: ByteArray, callback: CommandCallback) {
@@ -209,6 +219,16 @@ class ComposeLayoutInspector(
         getComposablesCommand: GetComposablesCommand,
         callback: CommandCallback,
     ) {
+        if (
+            getComposablesCommand.allowEmptyIfUnchanged &&
+                !recompositionHandler.hasNewRecompositions
+        ) {
+            callback.reply {
+                getComposablesResponse =
+                    GetComposablesResponse.newBuilder().apply { unchanged = true }.build()
+            }
+            return
+        }
         val data =
             getComposableNodes(
                 getComposablesCommand.rootViewId,
@@ -366,18 +386,17 @@ class ComposeLayoutInspector(
             getCachedComposableNodes(getParameterDetailsCommand.rootViewId)
                 ?.lookup
                 ?.get(getParameterDetailsCommand.reference.composableId)
-        val expanded =
-            foundComposable?.let { composable ->
-                layoutInspectorTree.expandParameter(
-                    getParameterDetailsCommand.rootViewId,
-                    semanticsNode ?: composable,
-                    reference,
-                    getParameterDetailsCommand.startIndex,
-                    getParameterDetailsCommand.maxElements,
-                    getParameterDetailsCommand.maxRecursions.orElse(MAX_RECURSIONS),
-                    getParameterDetailsCommand.maxInitialIterableSize.orElse(MAX_ITERABLE_SIZE),
-                )
-            }
+        val expanded = foundComposable?.let { composable ->
+            layoutInspectorTree.expandParameter(
+                getParameterDetailsCommand.rootViewId,
+                semanticsNode ?: composable,
+                reference,
+                getParameterDetailsCommand.startIndex,
+                getParameterDetailsCommand.maxElements,
+                getParameterDetailsCommand.maxRecursions.orElse(MAX_RECURSIONS),
+                getParameterDetailsCommand.maxInitialIterableSize.orElse(MAX_ITERABLE_SIZE),
+            )
+        }
 
         callback.reply {
             getParameterDetailsResponse =
@@ -428,7 +447,7 @@ class ComposeLayoutInspector(
                 getRecompositionStateReadCommand.anchorHash,
                 getRecompositionStateReadCommand.recompositionNumberStart,
                 getRecompositionStateReadCommand.recompositionNumberEnd,
-                includeExtra = getRecompositionStateReadCommand.includeExtra,
+                getRecompositionStateReadCommand.includeExtra,
             )
 
         val stringTable = StringTable()
@@ -586,7 +605,7 @@ class ComposeLayoutInspector(
                     if (slotTablesAdded > 0) {
                         // The slot tables added to existing views will be empty until the
                         // composables are reloaded. Do that now:
-                        hotReload()
+                        hotReload(composeViews)
                     }
                 }
             }
@@ -595,10 +614,32 @@ class ComposeLayoutInspector(
     /**
      * Perform a hot reload after adding SlotTable storage.
      *
-     * This will populate the slot tables that were just added.
+     * This will populate the slot tables that were just added, while preserving the state saved by
+     * `rememberSaveable` (such as navigation state).
      */
     @Suppress("BanUncheckedReflection")
-    private fun hotReload() {
+    private fun hotReload(composeViews: List<View>) {
+        // The hot reload clears the content of the compositions, which drops the state saved by
+        // rememberSaveable. Save and restore the containers of the SaveableStateRegistries of the
+        // AndroidComposeViews. Do not save the whole SavedStateRegistry: that would run all the
+        // registered SavedStateProviders (e.g. FragmentManager would mark its state as saved).
+        val containers =
+            composeViews
+                .mapNotNull {
+                    it.findViewTreeSavedStateRegistryOwner()?.savedStateRegistry?.asContainer()
+                }
+                .distinct()
+                .flatMap { parent ->
+                    parent
+                        .keys()
+                        .filter { it.startsWith(SAVEABLE_STATE_REGISTRY_KEY_PREFIX) }
+                        .mapNotNull { key ->
+                            parent.getSavedStateValue<Any?, SavedStateValue<Any?>>(key)?.value
+                                as? SavedStateContainer
+                        }
+                }
+        val savedStates = containers.map { it to it.saveState() }
+
         val hotReload = Class.forName("androidx.compose.runtime.HotReloader")
         val companion = hotReload.getField("Companion").get(null)
         val save = companion.javaClass.getDeclaredMethod("saveStateAndDispose", Any::class.java)
@@ -613,6 +654,7 @@ class ComposeLayoutInspector(
                 .apply { isAccessible = true }
                 .invoke(null)
         val state = save(companion, context)
+        savedStates.forEach { (container, savedState) -> container.restoreState(savedState) }
         load(companion, state)
     }
 

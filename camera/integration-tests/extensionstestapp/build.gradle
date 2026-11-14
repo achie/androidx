@@ -16,10 +16,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 import androidx.build.ApkCopyHelperKt
@@ -30,7 +29,7 @@ plugins {
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
 
     defaultConfig {
         applicationId = "androidx.camera.integration.extensions"
@@ -38,10 +37,10 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            testProguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            optimization {
+                enable = true
+            }
+            testProguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
     namespace = "androidx.camera.integration.extensions"
@@ -51,7 +50,6 @@ dependencies {
     api(libs.jspecify)
     // Internal library
     implementation(project(":camera:camera-camera2"))
-    implementation(project(":camera:camera-camera2-pipe-integration"))
     implementation(project(":camera:camera-extensions"))
     implementation(project(":camera:camera-lifecycle"))
     implementation(project(":camera:camera-view"))
@@ -62,7 +60,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.2.0")
     implementation("androidx.concurrent:concurrent-futures:1.1.0")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.3.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation(libs.espressoIdlingResource)
 
     // Guava
@@ -86,18 +84,17 @@ dependencies {
     }
 
     androidTestImplementation(project(":internal-testutils-runtime"))
-    androidTestCompileOnly(project(":camera:camera-extensions-stub"))
 
     // Transitive dependencies
-    implementation 'androidx.core:core-ktx:1.1.0'
-    implementation 'androidx.fragment:fragment:1.1.0'
-    implementation 'androidx.lifecycle:lifecycle-common:2.3.1'
-    implementation 'androidx.lifecycle:lifecycle-livedata-core:2.3.1'
-    implementation 'androidx.recyclerview:recyclerview:1.1.0'
+    implementation "androidx.core:core-ktx:1.1.0"
+    implementation "androidx.fragment:fragment:1.1.0"
+    implementation "androidx.lifecycle:lifecycle-common:2.10.0"
+    implementation "androidx.lifecycle:lifecycle-livedata-core:2.10.0"
+    implementation "androidx.recyclerview:recyclerview:1.1.0"
     implementation libs.androidx.annotation
     implementation libs.androidx.core
     implementation libs.kotlinCoroutinesCore
-    implementation project(':camera:camera-core')
+    implementation project(":camera:camera-core")
     androidTestImplementation libs.hamcrestCore
     androidTestImplementation libs.junit
     androidTestImplementation libs.testMonitor
@@ -106,6 +103,7 @@ dependencies {
     implementation(project(":camera:camera-testing")) {
         // Ensure camera-testing does not pull in androidx.test dependencies
         exclude(group:"androidx.test")
+        exclude(group:"androidx.test.espresso", module:"espresso-core")
         // Exclude JUnit to avoid R8 errors in release builds.
         exclude(group: "junit", module: "junit")
         // Exclude Truth to avoid R8 errors in release builds.

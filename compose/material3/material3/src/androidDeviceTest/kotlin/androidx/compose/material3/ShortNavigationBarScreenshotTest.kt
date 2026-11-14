@@ -22,6 +22,7 @@ import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
@@ -39,7 +40,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -50,7 +51,6 @@ import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,7 +60,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class ShortNavigationBarScreenshotTest {
 
-    @get:Rule val composeTestRule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val composeTestRule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(GOLDEN_MATERIAL3)
 
@@ -132,7 +132,7 @@ class ShortNavigationBarScreenshotTest {
         composeTestRule.setMaterialContent(lightColorScheme()) {
             scope = rememberCoroutineScope()
             Box(Modifier.semantics(mergeDescendants = true) {}.testTag(Tag)) {
-                ShortNavigationBar {
+                ShortNavigationBar(windowInsets = NoWindowInsets) {
                     ShortNavigationBarItem(
                         selected = true,
                         onClick = {},
@@ -304,7 +304,10 @@ class ShortNavigationBarScreenshotTest {
         composeTestRule.setContentWithSimulatedSize(600.dp, 100.dp, lightColorScheme()) {
             scope = rememberCoroutineScope()
             Box(Modifier.semantics(mergeDescendants = true) {}.testTag(Tag)) {
-                ShortNavigationBar(arrangement = ShortNavigationBarArrangement.Centered) {
+                ShortNavigationBar(
+                    arrangement = ShortNavigationBarArrangement.Centered,
+                    windowInsets = NoWindowInsets,
+                ) {
                     ShortNavigationBarItem(
                         selected = true,
                         onClick = {},
@@ -467,7 +470,7 @@ private fun DefaultShortNavigationBar(
     iconPosition: NavigationItemIconPosition = NavigationItemIconPosition.Top,
 ) {
     Box(modifier.semantics(mergeDescendants = true) {}.testTag(Tag)) {
-        ShortNavigationBar(arrangement = arrangement) {
+        ShortNavigationBar(arrangement = arrangement, windowInsets = NoWindowInsets) {
             ShortNavigationBarItem(
                 icon = { Icon(Icons.Filled.Favorite, null) },
                 iconPosition = iconPosition,
@@ -521,3 +524,5 @@ private fun ComposeContentTestRule.setContentWithSimulatedSize(
 }
 
 private const val Tag = "ShortNavigationBar"
+
+private val NoWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp)

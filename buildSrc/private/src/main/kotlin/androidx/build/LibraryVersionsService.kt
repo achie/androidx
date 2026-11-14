@@ -16,44 +16,79 @@
 
 package androidx.build
 
+import androidx.build.pinneddependencies.DependencyExemption
+import androidx.build.pinneddependencies.EXEMPTIONS_FILE_NAME
+import androidx.build.pinneddependencies.parseDependencyExemptions
+import kotlin.collections.forEach
 import org.gradle.api.GradleException
 import org.gradle.api.Project
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
-import org.tomlj.Toml
-import org.tomlj.TomlParseResult
-import org.tomlj.TomlTable
+import tools.jackson.core.JacksonException
+import tools.jackson.databind.JsonNode
+import tools.jackson.dataformat.toml.TomlMapper
 
 /** Loads Library groups and versions from a specified TOML file. */
 abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Parameters> {
     interface Parameters : BuildServiceParameters {
-        var tomlFileName: String
-        var tomlFileContents: Provider<String>
+        val tomlFileName: Property<String>
+        val tomlFileContents: Property<String>
+        val dependencyExemptionsFileContents: Property<String>
+        val allPossibleProjects: ListProperty<IncludedProject>
     }
 
-    private val parsedTomlFile: TomlParseResult by lazy {
-        val result = Toml.parse(parameters.tomlFileContents.get())
-        if (result.hasErrors()) {
-            val issues =
-                result.errors().joinToString(separator = "\n") {
-                    "${parameters.tomlFileName}:${it.position()}: ${it.message}"
+    private val parsedTomlFile: JsonNode by lazy {
+        val fileName = parameters.tomlFileName.get()
+        try {
+            TomlMapper().readTree(parameters.tomlFileContents.get())
+        } catch (e: JacksonException) {
+            val location = e.location
+            val locationDesc =
+                if (location != null && location.lineNr != -1) {
+                    "line ${location.lineNr}, column ${location.columnNr}: "
+                } else {
+                    ""
                 }
-            throw Exception("${parameters.tomlFileName} file has issues.\n$issues")
+            throw Exception(
+                "$fileName file has issues.\n" +
+                    "$fileName:$locationDesc${e.originalMessage ?: e.message}",
+                e,
+            )
         }
-        result
     }
 
-    private fun getTable(key: String): TomlTable {
-        return parsedTomlFile.getTable(key)
-            ?: throw GradleException("Library versions toml file is missing [$key] table")
+    /**
+     * Exemptions declared in [EXEMPTIONS_FILE_NAME], parsed only if something reads them.
+     *
+     * An absent file parses to an empty list rather than failing, so that a checkout without it, or
+     * a build that never consults it, behaves as though nothing is exempted.
+     */
+    private val dependencyExemptionsByLibrary: Map<String, List<DependencyExemption>> by lazy {
+        parseDependencyExemptions(parameters.dependencyExemptionsFileContents.orNull).groupBy {
+            it.library
+        }
+    }
+
+    /** Returns only the exemptions for the library published at [libraryCoordinate]. */
+    internal fun exemptionsFor(libraryCoordinate: String): List<DependencyExemption> =
+        dependencyExemptionsByLibrary[libraryCoordinate] ?: emptyList()
+
+    private fun getTable(key: String): JsonNode {
+        val table = parsedTomlFile.get(key)
+        if (table == null || !table.isObject) {
+            throw GradleException("Library versions toml file is missing [$key] table")
+        }
+        return table
     }
 
     // map from name of constant to Version
     val libraryVersions: Map<String, Version> by lazy {
         val versions = getTable("versions")
-        versions.keySet().associateWith { versionName ->
-            val versionValue = versions.getString(versionName)!!
+        versions.propertyNames().associateWith { versionName ->
+            val versionValue = versions.get(versionName)!!.asString()
             Version.parseOrNull(versionValue)
                 ?: throw GradleException(
                     "$versionName does not match expected format - $versionValue"
@@ -70,8 +105,83 @@ abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Para
         result
     }
 
+    val mavenCoordinatesToProjectPathMap: Map<String, String> by lazy {
+        val newProjectMap: MutableMap<String, String> = mutableMapOf()
+        parameters.allPossibleProjects.get().forEach {
+            val group =
+                overrideLibraryGroupsByProjectPath[it.gradlePath]
+                    ?: getLibraryGroupFromProjectPath(it.gradlePath, null)
+            if (group != null) {
+                newProjectMap["${group.group}:${substringAfterLastColon(it.gradlePath)}"] =
+                    it.gradlePath
+            }
+        }
+        newProjectMap
+    }
+
+    private fun substringBeforeLastColon(projectPath: String): String {
+        val lastColonIndex = projectPath.lastIndexOf(":")
+        return projectPath.substring(0, lastColonIndex)
+    }
+
+    private fun substringAfterLastColon(projectPath: String): String {
+        val lastColonIndex = projectPath.lastIndexOf(":")
+        return projectPath.substring(lastColonIndex + 1)
+    }
+
+    /** @return the library group from the project path, including special cases */
+    fun getLibraryGroupFromProjectPath(
+        projectPath: String,
+        explanationBuilder: MutableList<String>? = null,
+    ): LibraryGroup? {
+        val overridden = overrideLibraryGroupsByProjectPath[projectPath]
+        explanationBuilder?.add(
+            "Library group (in libraryversions.toml) having" +
+                " overrideInclude=[\"$projectPath\"] is $overridden"
+        )
+        if (overridden != null) return overridden
+
+        val result = getStandardLibraryGroupFromProjectPath(projectPath, explanationBuilder)
+        if (result != null) return result
+
+        // samples are allowed to be nested deeper
+        if (projectPath.contains("samples")) {
+            val parentPath = substringBeforeLastColon(projectPath)
+            return getLibraryGroupFromProjectPath(parentPath, explanationBuilder)
+        }
+        return null
+    }
+
+    // simple function to get the library group from the project path, without special cases
+    private fun getStandardLibraryGroupFromProjectPath(
+        projectPath: String,
+        explanationBuilder: MutableList<String>?,
+    ): LibraryGroup? {
+        // Get the text of the library group, something like "androidx.core"
+        val parentPath = substringBeforeLastColon(projectPath)
+
+        if (parentPath == "") {
+            explanationBuilder?.add("Parent path for $projectPath is empty")
+            return null
+        }
+        // convert parent project path to groupId
+        val groupIdText =
+            if (projectPath.startsWith(":external")) {
+                projectPath.replace(":external:", "")
+            } else {
+                "androidx.${parentPath.substring(1).replace(':', '.')}"
+            }
+
+        // get the library group having that text
+        val result = libraryGroupsByGroupId[groupIdText]
+        explanationBuilder?.add(
+            "Library group (in libraryversions.toml) having group=\"$groupIdText\" is $result"
+        )
+        return result
+    }
+
     // map of library groups keyed by group name
-    val libraryGroupsByGroupId: Map<String, LibraryGroup> by lazy {
+    internal val libraryGroupsByGroupId: Map<String, LibraryGroup> by lazy {
         val result = mutableMapOf<String, LibraryGroup>()
         for (association in libraryGroupAssociations) {
             // Check for duplicate groups
@@ -103,21 +213,79 @@ abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Para
     }
 
     // map from project name to group override if applicable
-    val overrideLibraryGroupsByProjectPath: Map<String, LibraryGroup> by lazy {
+    internal val overrideLibraryGroupsByProjectPath: Map<String, LibraryGroup> by lazy {
         val result = mutableMapOf<String, LibraryGroup>()
         for (association in libraryGroupAssociations) {
+            val baseGroup = libraryGroupsByGroupId[association.libraryGroup.group]
+            // Only mark requireSameVersion = false when the override specifies a different
+            // atomicGroupVersion than the base group (as opposed to using overrideInclude to map
+            // a project from another directory into a single group, or an edge case where an
+            // override entry's version matches the base group's version).
+            val isVersionOverride =
+                baseGroup != null &&
+                    association.libraryGroup.atomicGroupVersion != baseGroup.atomicGroupVersion
+            val effectiveGroup =
+                if (isVersionOverride) {
+                    association.libraryGroup.copy(requireSameVersion = false)
+                } else {
+                    association.libraryGroup
+                }
             for (overridePath in association.overrideIncludeInProjectPaths) {
-                result[overridePath] = association.libraryGroup
+                result[overridePath] = effectiveGroup
             }
         }
         result
     }
 
+    /**
+     * Name of the set of libraries that share a version, keyed by Maven group id.
+     *
+     * This is the group's `atomicGroupVersion` reference when it has one, and null when it does not
+     * (meaning libraries in the group version independently). Deliberately the *reference* name
+     * rather than the resolved version: several groups reference `versions.COMPOSE` and so always
+     * ship together, while two unrelated groups that happen to both sit at 1.0.0-alpha01 do not.
+     */
+    private val versionGroupByGroupId: Map<String, String?> by lazy {
+        val result = mutableMapOf<String, String?>()
+        for (association in libraryGroupAssociations) {
+            if (association.overrideIncludeInProjectPaths.isNotEmpty()) continue
+            result[association.libraryGroup.group] = association.versionGroupName
+        }
+        result
+    }
+
+    /** Version group names for projects whose group is set by `overrideInclude`. */
+    private val versionGroupByProjectPath: Map<String, String?> by lazy {
+        val result = mutableMapOf<String, String?>()
+        for (association in libraryGroupAssociations) {
+            for (path in association.overrideIncludeInProjectPaths) {
+                result[path] = association.versionGroupName
+            }
+        }
+        result
+    }
+
+    /**
+     * The version group [projectPath] belongs to, or null if it versions on its own schedule.
+     *
+     * [mavenVersionGroup] wins, because a project's own `mavenVersion` overrides its group's. Next,
+     * `overrideInclude` wins over the group id, because it exists precisely to put a project in a
+     * different version group from the rest of its Maven group.
+     */
+    fun versionGroupFor(
+        projectPath: String,
+        groupId: String?,
+        mavenVersionGroup: String?,
+    ): String? =
+        mavenVersionGroup
+            ?: versionGroupByProjectPath[projectPath]
+            ?: groupId?.let { versionGroupByGroupId[it] }
+
     private val libraryGroupAssociations: List<LibraryGroupAssociation> by lazy {
         val groups = getTable("groups")
 
-        fun readGroupVersion(groupDefinition: TomlTable, groupName: String, key: String): Version? {
-            val versionRef = groupDefinition.getString(key) ?: return null
+        fun readGroupVersion(groupDefinition: JsonNode, groupName: String, key: String): Version? {
+            val versionRef = groupDefinition.get(key)?.asString() ?: return null
             if (!versionRef.startsWith(VersionReferencePrefix)) {
                 throw GradleException(
                     "Group entry $key is expected to start with $VersionReferencePrefix"
@@ -131,10 +299,12 @@ abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Para
                         "doesn't exist"
                 )
         }
-        groups.keySet().sorted().map { name ->
+        groups.propertyNames().sorted().map { name ->
             // get group name
-            val groupDefinition = groups.getTable(name)!!
-            val groupName = groupDefinition.getString("group")!!
+            val groupDefinition = groups.get(name)!!
+            val groupName =
+                groupDefinition.get("group")?.asString()
+                    ?: throw GradleException("Group entry $name is missing 'group' field")
 
             // get group version, if any
             val atomicGroupVersion =
@@ -144,12 +314,21 @@ abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Para
                     key = AtomicGroupVersion,
                 )
             val overrideApplyToProjects =
-                (groupDefinition.getArray("overrideInclude")?.toList() ?: listOf()).map {
-                    it as String
-                }
+                groupDefinition.get("overrideInclude")?.values()?.map { it.asString() }
+                    ?: emptyList()
 
             val group = LibraryGroup(groupName, atomicGroupVersion)
-            LibraryGroupAssociation(name, group, overrideApplyToProjects)
+            val atomicGroupVersionName =
+                groupDefinition
+                    .get(AtomicGroupVersion)
+                    ?.asString()
+                    ?.removePrefix(VersionReferencePrefix)
+            LibraryGroupAssociation(
+                declarationName = name,
+                libraryGroup = group,
+                overrideIncludeInProjectPaths = overrideApplyToProjects,
+                versionGroupName = atomicGroupVersionName,
+            )
         }
     }
 
@@ -157,13 +336,19 @@ abstract class LibraryVersionsService : BuildService<LibraryVersionsService.Para
         internal fun registerOrGet(project: Project): Provider<LibraryVersionsService> {
             val tomlFileName = "libraryversions.toml"
             val toml = project.lazyReadFile(tomlFileName)
+            val exemptions = project.lazyReadFile(EXEMPTIONS_FILE_NAME)
+            val listProjectsService = ListProjectsService.registerOrGet(project)
 
             return project.gradle.sharedServices.registerIfAbsent(
                 "libraryVersionsService",
                 LibraryVersionsService::class.java,
             ) { spec ->
-                spec.parameters.tomlFileName = tomlFileName
-                spec.parameters.tomlFileContents = toml
+                spec.parameters.tomlFileName.set(tomlFileName)
+                spec.parameters.tomlFileContents.set(toml)
+                spec.parameters.dependencyExemptionsFileContents.set(exemptions)
+                spec.parameters.allPossibleProjects.set(
+                    listProjectsService.map { it.allPossibleProjects }
+                )
             }
         }
     }
@@ -177,6 +362,8 @@ private data class LibraryGroupAssociation(
     val libraryGroup: LibraryGroup,
     // the paths of any additional projects that this group should be assigned to
     val overrideIncludeInProjectPaths: List<String>,
+    // the name identifying the set of libraries that release together with this group
+    val versionGroupName: String?,
 )
 
 private const val VersionReferencePrefix = "versions."

@@ -37,14 +37,16 @@ import androidx.core.telecom.test.utils.TestPermissionUtils.createBluetoothPermi
 import androidx.core.telecom.test.utils.TestUtils
 import androidx.core.telecom.test.utils.TestUtils.ALL_CALL_CAPABILITIES
 import androidx.core.telecom.test.utils.TestUtils.OUTGOING_NAME
-import androidx.core.telecom.util.ExperimentalAppActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.filters.SmallTest
 import androidx.test.rule.GrantPermissionRule
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
@@ -113,6 +115,7 @@ class CallsManagerTest : BaseTelecomTest() {
         }
     }
 
+    @Suppress("DEPRECATION")
     @SmallTest
     @Test
     fun testRegisterPhoneAccount() {
@@ -147,6 +150,7 @@ class CallsManagerTest : BaseTelecomTest() {
      * Register all the capabilities currently exposed by the CallsManager class and verify they are
      * re-mapped to the correct platform capabilities.
      */
+    @Suppress("DEPRECATION")
     @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
     @SmallTest
     @Test
@@ -168,6 +172,7 @@ class CallsManagerTest : BaseTelecomTest() {
      * Ensure all backwards compat builds can register video capabilities and the values are
      * re-mapped to the correct platform capabilities.
      */
+    @Suppress("DEPRECATION")
     @SdkSuppress(minSdkVersion = VERSION_CODES.O)
     @SmallTest
     @Test
@@ -206,7 +211,6 @@ class CallsManagerTest : BaseTelecomTest() {
     }
 
     @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
-    @OptIn(ExperimentalAppActions::class)
     @SmallTest
     @Test
     fun testPauseExecutionOrThrow_Transactional() {
@@ -218,7 +222,6 @@ class CallsManagerTest : BaseTelecomTest() {
     }
 
     @SdkSuppress(minSdkVersion = VERSION_CODES.O)
-    @OptIn(ExperimentalAppActions::class)
     @SmallTest
     @Test
     fun testPauseExecutionOrThrow_BackwardsCompat() {
@@ -420,6 +423,32 @@ class CallsManagerTest : BaseTelecomTest() {
         assertEquals(mTestClassName, handle.componentName.className)
     }
 
+    @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @SmallTest
+    @Test
+    fun testRegister_withOptOutOfPremiumNetwork_setsCorrectCapability() {
+        mCallsManager.registerAppWithTelecom(CallsManager.CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK)
+        val phoneAccount = mCallsManager.getBuiltPhoneAccount()!!
+        assertTrue(
+            phoneAccount.hasCapabilities(
+                0x200000 /* PLATFORM_CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK */
+            )
+        )
+    }
+
+    @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @SmallTest
+    @Test
+    fun testRegister_withoutOptOutOfPremiumNetwork_doesNotSetCapability() {
+        mCallsManager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+        val phoneAccount = mCallsManager.getBuiltPhoneAccount()!!
+        assertFalse(
+            phoneAccount.hasCapabilities(
+                0x200000 /* PLATFORM_CAPABILITY_OPT_OUT_OF_PREMIUM_NETWORK */
+            )
+        )
+    }
+
     private suspend fun assertStartingCallEndpoint(coroutineContext: CoroutineContext) {
         mCallsManager.registerAppWithTelecom(
             CallsManager.CAPABILITY_SUPPORTS_VIDEO_CALLING or
@@ -444,8 +473,9 @@ class CallsManagerTest : BaseTelecomTest() {
             initialEndpointsJob.await()
             Log.i(TAG, "initialEndpointsJob COMPLETED")
             val initialEndpoints = initialEndpointsJob.getCompleted()
-            val earpieceEndpoint =
-                initialEndpoints.find { it.type == CallEndpointCompat.TYPE_EARPIECE }
+            val earpieceEndpoint = initialEndpoints.find {
+                it.type == CallEndpointCompat.TYPE_EARPIECE
+            }
             if (initialEndpoints.size > 1 && earpieceEndpoint != null) {
                 Log.i(TAG, "found 2 endpoints, including TYPE_EARPIECE")
                 mCallsManager.addCall(
@@ -467,11 +497,10 @@ class CallsManagerTest : BaseTelecomTest() {
                         val waitUntilEarpieceEndpointJob = CompletableDeferred<CallEndpointCompat>()
 
                         val flowsJob = launch {
-                            val earpieceFlow =
-                                currentCallEndpoint.filter {
-                                    Log.i(TAG, "currentCallEndpoint: e=[$it]")
-                                    it.type == CallEndpointCompat.TYPE_EARPIECE
-                                }
+                            val earpieceFlow = currentCallEndpoint.filter {
+                                Log.i(TAG, "currentCallEndpoint: e=[$it]")
+                                it.type == CallEndpointCompat.TYPE_EARPIECE
+                            }
 
                             earpieceFlow.collect {
                                 Log.i(TAG, "earpieceFlow.collect=[$it]")
@@ -521,8 +550,9 @@ class CallsManagerTest : BaseTelecomTest() {
                 val waitUntilSpeakerEndpointJob = CompletableDeferred<CallEndpointCompat>()
 
                 val flowsJob = launch {
-                    val speakerFlow =
-                        currentCallEndpoint.filter { it.type == CallEndpointCompat.TYPE_SPEAKER }
+                    val speakerFlow = currentCallEndpoint.filter {
+                        it.type == CallEndpointCompat.TYPE_SPEAKER
+                    }
 
                     speakerFlow.collect {
                         Log.i(TAG, "speakerFlow.collect=[$it]")
@@ -546,6 +576,123 @@ class CallsManagerTest : BaseTelecomTest() {
                 Log.i(TAG, " flowsJob.cancel()")
             }
         }
+    }
+
+    @SmallTest
+    @Test
+    fun testAddCallRejectedWhenSetupInFlight() = runBlocking {
+        try {
+            mCallsManager.mIsCallSetupInFlight.set(true)
+            val exception =
+                assertThrows(androidx.core.telecom.CallException::class.java) {
+                    runBlocking {
+                        mCallsManager.addCall(
+                            TestUtils.OUTGOING_CALL_ATTRIBUTES,
+                            TestUtils.mOnAnswerLambda,
+                            TestUtils.mOnDisconnectLambda,
+                            TestUtils.mOnSetActiveLambda,
+                            TestUtils.mOnSetInActiveLambda,
+                        ) {}
+                    }
+                }
+            assertEquals(
+                androidx.core.telecom.CallException.ERROR_CALL_NOT_PERMITTED_AT_PRESENT_TIME,
+                exception.code,
+            )
+        } finally {
+            mCallsManager.mIsCallSetupInFlight.set(false)
+        }
+    }
+
+    @SmallTest
+    @Test
+    fun testSetupInFlightIsFalseDuringActiveSession() = runBlocking {
+        assertWithinTimeout_addCall(TestUtils.OUTGOING_CALL_ATTRIBUTES) {
+            launch {
+                assertFalse(mCallsManager.mIsCallSetupInFlight.get())
+                disconnect(DisconnectCause(DisconnectCause.LOCAL))
+            }
+        }
+        assertFalse(mCallsManager.mIsCallSetupInFlight.get())
+    }
+
+    @LargeTest
+    @Test
+    fun testConcurrentAddCallThrowsCallExceptionForSecondCall() = runBlocking {
+        val completedCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        val rejectedCalls = java.util.concurrent.atomic.AtomicInteger(0)
+
+        Log.i(TAG, "testConcurrentAddCallThrowsCallExceptionForSecondCall: starting call1 async")
+        val call1 = async {
+            Log.i(TAG, "call1: entering addCall")
+            try {
+                mCallsManager.addCall(
+                    TestUtils.OUTGOING_CALL_ATTRIBUTES,
+                    TestUtils.mOnAnswerLambda,
+                    TestUtils.mOnDisconnectLambda,
+                    TestUtils.mOnSetActiveLambda,
+                    TestUtils.mOnSetInActiveLambda,
+                ) {
+                    Log.i(
+                        TAG,
+                        "call1: inside CallControlScope block, completing and disconnecting...",
+                    )
+                    completedCalls.incrementAndGet()
+                    launch { disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
+                }
+                Log.i(TAG, "call1: addCall finished cleanly")
+            } catch (e: androidx.core.telecom.CallException) {
+                Log.i(TAG, "call1: addCall threw an exception. code=${e.code}")
+                if (
+                    e.code ==
+                        androidx.core.telecom.CallException.ERROR_CALL_NOT_PERMITTED_AT_PRESENT_TIME
+                ) {
+                    rejectedCalls.incrementAndGet()
+                } else throw e
+            }
+        }
+
+        Log.i(TAG, "testConcurrentAddCallThrowsCallExceptionForSecondCall: starting call2 async")
+        val call2 = async {
+            Log.i(TAG, "call2: entering addCall")
+            try {
+                mCallsManager.addCall(
+                    TestUtils.OUTGOING_CALL_ATTRIBUTES,
+                    TestUtils.mOnAnswerLambda,
+                    TestUtils.mOnDisconnectLambda,
+                    TestUtils.mOnSetActiveLambda,
+                    TestUtils.mOnSetInActiveLambda,
+                ) {
+                    Log.i(
+                        TAG,
+                        "call2: inside CallControlScope block, completing and disconnecting...",
+                    )
+                    completedCalls.incrementAndGet()
+                    launch { disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
+                }
+                Log.i(TAG, "call2: addCall finished cleanly")
+            } catch (e: androidx.core.telecom.CallException) {
+                Log.i(TAG, "call2: addCall threw an exception. code=${e.code}")
+                if (
+                    e.code ==
+                        androidx.core.telecom.CallException.ERROR_CALL_NOT_PERMITTED_AT_PRESENT_TIME
+                ) {
+                    rejectedCalls.incrementAndGet()
+                } else throw e
+            }
+        }
+
+        Log.i(
+            TAG,
+            "testConcurrentAddCallThrowsCallExceptionForSecondCall: awaiting both calls (awaitAll)",
+        )
+        awaitAll(call1, call2)
+        Log.i(TAG, "testConcurrentAddCallThrowsCallExceptionForSecondCall: awaitAll completed")
+
+        // Only one call should succeed and fully connect, the precise overlapping
+        // invocation should fast-fail and be rejected during transitory setup.
+        assertEquals(1, completedCalls.get())
+        assertEquals(1, rejectedCalls.get())
     }
 
     private fun setTestBuildVersion(sdk: Int) {

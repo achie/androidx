@@ -79,4 +79,18 @@ public interface RCDoc {
      */
     @Nullable
     RemoteDocument getDoc();
+
+    /**
+     * Return the document as a byte array
+     * @return
+     */
+    default byte @Nullable [] getBytes() {
+        return null;
+    }
+
+    /**
+     * Return the time to create the document
+     * @return time in ms
+     */
+    float getBuildTime();
 }

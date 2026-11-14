@@ -25,6 +25,7 @@ import android.media.MediaRouter;
 import android.util.Log;
 
 import androidx.collection.ArrayMap;
+import androidx.collection.MutableObjectIntMap;
 import androidx.mediarouter.media.MediaRouteDescriptor;
 import androidx.mediarouter.media.MediaRouteProvider;
 import androidx.mediarouter.media.MediaRouteProviderDescriptor;
@@ -143,7 +144,7 @@ public final class SampleDynamicGroupMediaRouteProvider extends SampleMediaRoute
 
     @Override
     protected void initializeRoutes() {
-        mVolumes = new ArrayMap<>();
+        mVolumes = new MutableObjectIntMap<>();
         mRouteDescriptors = new HashMap<>();
         Intent settingsIntent = new Intent(Intent.ACTION_MAIN);
         settingsIntent
@@ -253,9 +254,9 @@ public final class SampleDynamicGroupMediaRouteProvider extends SampleMediaRoute
             Log.d(TAG, mRouteId + ": Controller created.");
         }
 
-        //////////////////////////////////////////////
+        // -------------------------------------- //
         // Overrides DynamicGroupRouteController
-        //////////////////////////////////////////////
+        // -------------------------------------- //
 
         @Override
         public String getGroupableSelectionTitle() {
@@ -380,9 +381,9 @@ public final class SampleDynamicGroupMediaRouteProvider extends SampleMediaRoute
             return true;
         }
 
-        //////////////////////////////////////////////
+        //------------------------//
         // Overrides RouteController
-        //////////////////////////////////////////////
+        //------------------------//
 
         @Override
         public void onRelease() {

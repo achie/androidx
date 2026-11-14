@@ -20,8 +20,8 @@ import android.content.Context
 import androidx.work.Configuration
 import androidx.work.Logger
 import androidx.work.impl.background.systemalarm.RescheduleReceiver
-import androidx.work.impl.utils.PackageManagerHelper
 import androidx.work.impl.utils.isDefaultProcess
+import androidx.work.impl.utils.setReceiverEnabled
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -49,25 +49,29 @@ internal fun CoroutineScope.maybeLaunchUnfinishedWorkListener(
     db: WorkDatabase,
 ) {
     // Only register this in the designated process.
-    if (isDefaultProcess(appContext, configuration)) {
-        db.workSpecDao()
-            .hasUnfinishedWorkFlow()
-            .retryWhen { throwable, attempt ->
-                Logger.get().error(TAG, "Cannot check for unfinished work", throwable)
-                // Linear backoff is good enough here.
-                val delayBy = minOf(attempt * DELAY_MS, MAX_DELAY_MS)
-                delay(delayBy)
-                true
-            }
-            .conflate()
-            .distinctUntilChanged()
-            .onEach { hasUnfinishedWork ->
-                PackageManagerHelper.setComponentEnabled(
-                    appContext,
-                    RescheduleReceiver::class.java,
-                    hasUnfinishedWork,
-                )
-            }
-            .launchIn(this)
+    if (!isDefaultProcess(appContext, configuration)) {
+        return
     }
+    val unfinishedWorkFlow =
+        if (configuration.isJobSchedulerPersistenceEffective(appContext)) {
+            // JobScheduler does not support persisting jobs with content URI triggers, so we still
+            // need RescheduleReceiver enabled when there are unfinished content URI trigger jobs.
+            db.workSpecDao().hasUnfinishedContentUriTriggerWorkFlow()
+        } else {
+            db.workSpecDao().hasUnfinishedWorkFlow()
+        }
+    unfinishedWorkFlow
+        .retryWhen { throwable, attempt ->
+            Logger.get().error(TAG, "Cannot check for unfinished work", throwable)
+            // Linear backoff is good enough here.
+            val delayBy = minOf(attempt * DELAY_MS, MAX_DELAY_MS)
+            delay(delayBy)
+            true
+        }
+        .conflate()
+        .distinctUntilChanged()
+        .onEach { hasUnfinishedWork ->
+            setReceiverEnabled(appContext, RescheduleReceiver::class.java, hasUnfinishedWork)
+        }
+        .launchIn(this)
 }

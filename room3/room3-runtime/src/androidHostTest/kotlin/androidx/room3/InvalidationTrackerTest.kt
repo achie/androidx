@@ -20,14 +20,12 @@ import androidx.annotation.RequiresApi
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
 import androidx.room3.concurrent.AtomicBoolean
-import androidx.room3.migration.AutoMigrationSpec
-import androidx.room3.migration.Migration
+import androidx.room3.coroutines.DEFAULT_CONNECTION_POOL_TIMEOUT
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.SQLiteStatement
 import java.util.Locale
 import kotlin.collections.removeFirst as removeFirstKt
-import kotlin.reflect.KClass
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
@@ -73,19 +71,23 @@ class InvalidationTrackerTest {
                     context = mock(),
                     name = null,
                     migrationContainer = RoomDatabase.MigrationContainer(),
-                    callbacks = null,
+                    callbacks = emptyList(),
                     allowMainThreadQueries = true,
                     journalMode = RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING,
                     multiInstanceInvalidationServiceIntent = null,
-                    requireMigration = true,
+                    isMigrationRequired = true,
                     allowDestructiveMigrationOnDowngrade = false,
                     migrationNotRequiredFrom = null,
                     prepackagedDatabaseCallback = null,
-                    typeConverters = emptyList(),
+                    columnTypeConverters = emptyList(),
+                    daoReturnTypeConverters = emptyList(),
                     autoMigrationSpecs = emptyList(),
                     allowDestructiveMigrationForAllTables = false,
                     sqliteDriver = sqliteDriver,
                     queryCoroutineContext = testCoroutineScope.coroutineContext,
+                    connectionPoolConfiguration = SingleConnection,
+                    connectionPoolTimeout = DEFAULT_CONNECTION_POOL_TIMEOUT,
+                    allowDataLossOnRecovery = false,
                 )
                 .apply { this.preparedStatementCacheSize = 0 }
         )
@@ -305,14 +307,13 @@ class InvalidationTrackerTest {
         // Validates that a slow observer will finish notification after database closing
         val invalidatedLatch = CompletableDeferred<Unit>()
         val invalidated = AtomicBoolean(false)
-        val job =
-            backgroundScope.launch {
-                tracker.createFlow("a", emitInitialState = false).collect {
-                    invalidatedLatch.complete(Unit)
-                    assertThat(invalidated.compareAndSet(false, true)).isTrue()
-                    delay(100)
-                }
+        val job = backgroundScope.launch {
+            tracker.createFlow("a", emitInitialState = false).collect {
+                invalidatedLatch.complete(Unit)
+                assertThat(invalidated.compareAndSet(false, true)).isTrue()
+                delay(100)
             }
+        }
         sqliteDriver.setInvalidatedTables(0)
         tracker.refreshAsync()
         testScheduler.advanceUntilIdle()
@@ -407,16 +408,6 @@ class InvalidationTrackerTest {
     }
 
     @Test
-    fun createLiveDataWithNoExistingTable() {
-        // Validate that sending a bad createLiveData table name fails quickly
-        assertThrows<IllegalArgumentException> {
-                tracker.createLiveData(tableNames = arrayOf("x"), inTransaction = false) {}
-            }
-            .hasMessageThat()
-            .isEqualTo("There is no table with name x")
-    }
-
-    @Test
     fun addAndRemoveObserver() = runTest {
         val invalidations = tracker.createFlow("a", emitInitialState = false).produceIn(this)
 
@@ -483,12 +474,28 @@ class InvalidationTrackerTest {
         }
     }
 
-    private fun runTest(testBody: suspend TestScope.() -> Unit) =
-        testCoroutineScope.runTest {
-            testBody.invoke(this)
-            testScheduler.advanceUntilIdle()
-            roomDatabase.close()
-        }
+    @Test
+    fun throwIfDatabaseIsClosed() = runTest {
+        roomDatabase.close()
+
+        assertThrows<IllegalStateException> { tracker.createFlow("x").singleOrNull() }
+            .hasMessageThat()
+            .contains("Database is closed")
+
+        assertThrows<IllegalStateException> { tracker.sync() }
+            .hasMessageThat()
+            .contains("Database is closed")
+
+        assertThrows<IllegalStateException> { tracker.refresh("x") }
+            .hasMessageThat()
+            .contains("Database is closed")
+    }
+
+    private fun runTest(testBody: suspend TestScope.() -> Unit) = testCoroutineScope.runTest {
+        testBody.invoke(this)
+        testScheduler.advanceUntilIdle()
+        roomDatabase.close()
+    }
 
     /**
      * Start invalidation async and await for it to be done.
@@ -519,38 +526,24 @@ class InvalidationTrackerTest {
 
         override fun createOpenDelegate(): RoomOpenDelegateMarker {
             return object : RoomOpenDelegate(0, "", "") {
-                override fun onCreate(connection: SQLiteConnection) {}
+                override suspend fun onCreate(connection: SQLiteConnection) {}
 
-                override fun onPreMigrate(connection: SQLiteConnection) {}
+                override suspend fun onPreMigrate(connection: SQLiteConnection) {}
 
-                override fun onValidateSchema(connection: SQLiteConnection) =
+                override suspend fun onValidateSchema(connection: SQLiteConnection) =
                     ValidationResult(true, null)
 
-                override fun onPostMigrate(connection: SQLiteConnection) {}
+                override suspend fun onPostMigrate(connection: SQLiteConnection) {}
 
-                override fun onOpen(connection: SQLiteConnection) {}
+                override suspend fun onOpen(connection: SQLiteConnection) {}
 
-                override fun createAllTables(connection: SQLiteConnection) {}
+                override suspend fun createAllTables(connection: SQLiteConnection) {}
 
-                override fun dropAllTables(connection: SQLiteConnection) {}
+                override suspend fun dropAllTables(connection: SQLiteConnection) {}
             }
         }
 
-        override fun clearAllTables() {}
-
-        override fun createAutoMigrations(
-            autoMigrationSpecs: Map<KClass<out AutoMigrationSpec>, AutoMigrationSpec>
-        ): List<Migration> {
-            return emptyList()
-        }
-
-        override fun getRequiredAutoMigrationSpecClasses(): Set<KClass<out AutoMigrationSpec>> {
-            return emptySet()
-        }
-
-        override fun getRequiredTypeConverterClasses(): Map<KClass<*>, List<KClass<*>>> {
-            return emptyMap()
-        }
+        override suspend fun clearAllTables() {}
     }
 
     private class FakeSQLiteDriver : SQLiteDriver {
@@ -585,7 +578,7 @@ class InvalidationTrackerTest {
             override fun close() {}
         }
 
-        private inner class FakeSQLiteStatement(private val invalidateTables: IntArray?) :
+        private class FakeSQLiteStatement(private val invalidateTables: IntArray?) :
             SQLiteStatement {
 
             private var position = -1

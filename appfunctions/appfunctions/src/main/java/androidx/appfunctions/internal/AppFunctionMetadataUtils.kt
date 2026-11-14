@@ -13,42 +13,52 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:OptIn(ExperimentalAppFunctionsApi::class)
 
 package androidx.appfunctions.internal
 
 import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.appfunctions.AppFunctionName
+import androidx.appfunctions.ExperimentalAppFunctionsApi
 import androidx.appfunctions.metadata.AppFunctionMetadata
+import androidx.appfunctions.metadata.AppFunctionPackageMetadata
 
-@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 internal object AppFunctionMetadataUtils {
 
     /**
      * Finds [AppFunctionMetadata] for the given [functionIdentifier], return nulls if metadata is
      * not found.
      *
-     * This function first tries to find the metadata from [Dependencies.appFunctionInventory], if
-     * no inventory is present it queries AppSearch to find the metadata using
-     * [AppSearchAppFunctionReader].
+     * This function first tries to find the metadata from [inventory], if no inventory is present
+     * it queries AppSearch to find the metadata using [AppSearchAppFunctionReader].
      */
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     suspend fun getAppFunctionMetadata(
         context: Context,
+        inventory: AppFunctionInventory?,
         functionIdentifier: String,
     ): AppFunctionMetadata? {
-        val inventory = Dependencies.appFunctionInventory
         if (inventory != null) {
             val compileTimeAppFunctionMetadata =
                 inventory.functionIdToMetadataMap[functionIdentifier] ?: return null
             return AppFunctionMetadata(
-                id = compileTimeAppFunctionMetadata.id,
-                packageName = context.packageName,
-                isEnabled = compileTimeAppFunctionMetadata.isEnabledByDefault,
+                name = AppFunctionName(context.packageName, compileTimeAppFunctionMetadata.id),
                 schema = compileTimeAppFunctionMetadata.schema,
                 parameters = compileTimeAppFunctionMetadata.parameters,
                 response = compileTimeAppFunctionMetadata.response,
-                components = inventory.componentsMetadata,
+                packageMetadata =
+                    AppFunctionPackageMetadata(
+                        packageName = context.packageName,
+                        components = inventory.componentsMetadata,
+                    ),
                 description = compileTimeAppFunctionMetadata.description,
+                scope = compileTimeAppFunctionMetadata.scope,
+                accessLevel = compileTimeAppFunctionMetadata.accessLevel,
+                isCompatEnforcementEnabled =
+                    compileTimeAppFunctionMetadata.isCompatEnforcementEnabled,
+                behaviorHints = compileTimeAppFunctionMetadata.behaviorHints,
             )
         }
 

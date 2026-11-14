@@ -16,6 +16,10 @@
 
 package androidx.camera.camera2.impl
 
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CaptureRequest
+import android.util.Range
+import androidx.camera.camera2.adapter.CameraSessionLifecycleAdapter
 import androidx.camera.camera2.adapter.CameraStateAdapter
 import androidx.camera.camera2.adapter.CaptureConfigAdapter
 import androidx.camera.camera2.adapter.GraphStateToCameraStateAdapter
@@ -24,8 +28,8 @@ import androidx.camera.camera2.adapter.ZslControlNoOpImpl
 import androidx.camera.camera2.compat.workaround.NoOpTemplateParamsOverride
 import androidx.camera.camera2.compat.workaround.NotUseFlashModeTorchFor3aUpdate
 import androidx.camera.camera2.compat.workaround.NotUseTorchAsFlash
-import androidx.camera.camera2.config.UseCaseGraphContext
-import androidx.camera.camera2.pipe.FrameNumber
+import androidx.camera.camera2.config.UseCaseCameraContext
+import androidx.camera.camera2.pipe.GraphState
 import androidx.camera.camera2.pipe.StreamId
 import androidx.camera.camera2.pipe.testing.FakeFrameInfo
 import androidx.camera.camera2.pipe.testing.FakeRequestFailure
@@ -37,11 +41,14 @@ import androidx.camera.camera2.testing.FakeState3AControlCreator
 import androidx.camera.camera2.testing.FakeSurface
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
 import androidx.camera.camera2.testing.FakeUseCaseSurfaceManager
+import androidx.camera.common.CameraFrameNumber
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
 import androidx.camera.core.ImageCapture.FLASH_MODE_OFF
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.impl.CaptureConfig
+import androidx.camera.core.impl.SessionConfig
+import androidx.camera.testing.impl.fakes.FakeUseCase
 import com.google.common.truth.Truth.assertThat
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.ExecutionException
@@ -77,21 +84,23 @@ class StillCaptureRequestControlTest {
     }
     private val fakeCameraProperties = FakeCameraProperties()
     private val fakeSurface = FakeSurface()
-    private val cameraStateAdapter = CameraStateAdapter()
+    private val cameraSessionLifecycleAdapter = CameraSessionLifecycleAdapter()
+    private val cameraStateAdapter = CameraStateAdapter(cameraSessionLifecycleAdapter)
 
     private lateinit var fakeCameraGraphSession: FakeCameraGraphSession
     private lateinit var fakeCameraGraph: FakeCameraGraph
-    private lateinit var fakeUseCaseGraphContext: UseCaseGraphContext
+    private lateinit var fakeUseCaseCameraContext: UseCaseCameraContext
 
     private lateinit var fakeConfigAdapter: CaptureConfigAdapter
     private lateinit var fakeUseCaseCameraState: UseCaseCameraState
 
     private val fakeState3AControl: State3AControl =
         FakeState3AControlCreator.createState3AControl(
-            requestControl = FakeUseCaseCameraRequestControl()
+            requestControl = FakeUseCaseCameraRequestControl(),
+            threads = fakeUseCaseThreads,
         )
 
-    private lateinit var useCaseCameraRequestControl: UseCaseCameraRequestControl
+    private lateinit var useCaseCameraRequestControl: UseCaseCameraRequestControlImpl
 
     private val stillCaptureRequestControl =
         StillCaptureRequestControl(
@@ -103,6 +112,7 @@ class StillCaptureRequestControlTest {
                 NotUseFlashModeTorchFor3aUpdate,
             ),
             fakeUseCaseThreads,
+            cameraSessionLifecycleAdapter,
         )
 
     private val captureConfigList =
@@ -193,6 +203,54 @@ class StillCaptureRequestControlTest {
         }
 
     @Test
+    fun pendingCaptureRequestsSubmittedAfterRepeatingRequest_whenNewDeferredCameraIsSet() =
+        runTest(testDispatcher) {
+            stillCaptureRequestControl.requestControl = null
+            stillCaptureRequestControl.issueCaptureRequests()
+            advanceUntilIdle()
+
+            initUseCaseCameraScopeObjects(CompletableDeferred(true))
+            val deferredRequestControl =
+                DeferredUseCaseCameraRequestControl(
+                    { useCaseCameraRequestControl },
+                    fakeUseCaseThreads,
+                )
+
+            // Simulate UseCaseManager.beginComponentCreation order:
+            // 1. A prior control queues work that initializes DeferredUseCaseCameraRequestControl
+            fakeState3AControl.requestControl = deferredRequestControl
+            // 2. StillCaptureRequestControl is attached and queues trySubmitPendingRequests()
+            stillCaptureRequestControl.requestControl = deferredRequestControl
+            // 3. updateRunningUseCases queues updateRepeatingRequestAsync() with SessionConfig
+            val expectedFpsRange = Range(15, 15)
+            val fakeUseCase =
+                FakeUseCase().apply {
+                    updateSessionConfigForTesting(
+                        SessionConfig.Builder()
+                            .setTemplateType(CameraDevice.TEMPLATE_PREVIEW)
+                            .addSurface(fakeSurface)
+                            .setExpectedFrameRateRange(expectedFpsRange)
+                            .build()
+                    )
+                }
+            deferredRequestControl.updateRepeatingRequestAsync(
+                isPrimary = true,
+                runningUseCases = listOf(fakeUseCase),
+            )
+
+            advanceUntilIdle()
+
+            // Verify repeating request ran and populated SESSION_CONFIG before capture submission
+            assertThat(fakeCameraGraphSession.repeatingRequests).isNotEmpty()
+            assertThat(fakeCameraGraphSession.submittedRequests).hasSize(captureConfigList.size)
+            assertThat(
+                    fakeCameraGraphSession.submittedRequests
+                        .first()[CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE]
+                )
+                .isEqualTo(expectedFpsRange)
+        }
+
+    @Test
     fun captureRequestsComplete_onTotalCaptureOfAllRequests(): Unit =
         runTest(testDispatcher) {
             val requestFuture = stillCaptureRequestControl.issueCaptureRequests()
@@ -204,7 +262,7 @@ class StillCaptureRequestControlTest {
                 request.listeners.forEach { listener ->
                     listener.onTotalCaptureResult(
                         FakeRequestMetadata(),
-                        FrameNumber(0),
+                        CameraFrameNumber(0),
                         FakeFrameInfo(),
                     )
                 }
@@ -226,7 +284,7 @@ class StillCaptureRequestControlTest {
                 request.listeners.forEach { listener ->
                     listener.onTotalCaptureResult(
                         FakeRequestMetadata(),
-                        FrameNumber(0),
+                        CameraFrameNumber(0),
                         FakeFrameInfo(),
                     )
                 }
@@ -241,7 +299,7 @@ class StillCaptureRequestControlTest {
         runTest(testDispatcher) {
             val requestFuture = stillCaptureRequestControl.issueCaptureRequests()
             val fakeRequestMetadata = FakeRequestMetadata()
-            val frameNumber = FrameNumber(0)
+            val frameNumber = CameraFrameNumber(0)
 
             advanceUntilIdle()
             assumeTrue(fakeCameraGraphSession.submittedRequests.size == captureConfigList.size)
@@ -304,6 +362,97 @@ class StillCaptureRequestControlTest {
             // since new camera has not been set, no other request should have been submitted
             advanceUntilIdle()
             assertThat(fakeCameraGraphSession.submittedRequests.size).isEqualTo(0)
+        }
+
+    @Test
+    fun captureRequestsSubmittedToSameCamera_onAbortedAndSessionRestarted(): Unit =
+        runTest(testDispatcher) {
+            stillCaptureRequestControl.issueCaptureRequests()
+
+            // waits for requests to be submitted before camera session is aborted
+            advanceUntilIdle()
+            assumeTrue(fakeCameraGraphSession.submittedRequests.size == captureConfigList.size)
+            val submittedRequests = fakeCameraGraphSession.submittedRequests.toList()
+
+            // clear previous request submission info
+            fakeCameraGraphSession.submittedRequests.clear()
+
+            // simulates onAborted being invoked due to in-place session disconnect (e.g.
+            // ERROR_CAMERA_DEVICE recovery)
+            submittedRequests.first().let { request ->
+                request.listeners.forEach { listener -> listener.onAborted(request) }
+            }
+
+            // before session restarts, no request should have been resubmitted
+            advanceUntilIdle()
+            assertThat(fakeCameraGraphSession.submittedRequests.size).isEqualTo(0)
+
+            // simulates the same CameraGraph restarting and entering GraphStateStarted
+            cameraStateAdapter.onGraphStateUpdated(fakeCameraGraph, GraphState.GraphStateStarted)
+
+            // the pending request should now be resubmitted to the same camera
+            advanceUntilIdle()
+            assertThat(fakeCameraGraphSession.submittedRequests.size)
+                .isEqualTo(captureConfigList.size)
+        }
+
+    @Test
+    fun captureRequestsSubmittedToSameCamera_whenSessionRestartedBeforeOnAbortedDispatched(): Unit =
+        runTest(testDispatcher) {
+            stillCaptureRequestControl.issueCaptureRequests()
+
+            // waits for requests to be submitted before camera session is aborted
+            advanceUntilIdle()
+            assumeTrue(fakeCameraGraphSession.submittedRequests.size == captureConfigList.size)
+            val submittedRequests = fakeCameraGraphSession.submittedRequests.toList()
+            fakeCameraGraphSession.submittedRequests.clear()
+
+            // Simulate a fast in-place session restart where GraphStateStarted (onSessionStarted)
+            // fires before or concurrently with onAborted (without draining the sequential
+            // executor in between).
+            cameraStateAdapter.onGraphStateUpdated(fakeCameraGraph, GraphState.GraphStateStarted)
+            submittedRequests.first().let { request ->
+                request.listeners.forEach { listener -> listener.onAborted(request) }
+            }
+
+            advanceUntilIdle()
+            assertThat(fakeCameraGraphSession.submittedRequests.size)
+                .isEqualTo(captureConfigList.size)
+        }
+
+    @Test
+    fun captureRequestsNotImmediatelyRetriedWhenSessionStopped_afterInitialSessionStart(): Unit =
+        runTest(testDispatcher) {
+            // Capture is submitted right after surface setup (during GraphStateStarting, before
+            // the initial GraphStateStarted increments sessionStartCount from 0 to 1).
+            stillCaptureRequestControl.issueCaptureRequests()
+            advanceUntilIdle()
+            assumeTrue(fakeCameraGraphSession.submittedRequests.size == captureConfigList.size)
+            val submittedRequests = fakeCameraGraphSession.submittedRequests.toList()
+            fakeCameraGraphSession.submittedRequests.clear()
+
+            // Initial session finishes starting (sessionStartCount becomes 1, isSessionStarted =
+            // true).
+            cameraStateAdapter.onGraphStateUpdated(fakeCameraGraph, GraphState.GraphStateStarted)
+            advanceUntilIdle()
+
+            // The session later stops and aborts the capture with ERROR_CAMERA_CLOSED.
+            cameraStateAdapter.onGraphStateUpdated(fakeCameraGraph, GraphState.GraphStateStopped)
+            submittedRequests.first().let { request ->
+                request.listeners.forEach { listener -> listener.onAborted(request) }
+            }
+
+            // Even though submittedSessionStartCount (0) != sessionStartCount (1), the session is
+            // currently stopped, so it must wait in pendingRequests instead of retrying
+            // immediately.
+            advanceUntilIdle()
+            assertThat(fakeCameraGraphSession.submittedRequests.size).isEqualTo(0)
+
+            // When the session starts again, the pending request is retried.
+            cameraStateAdapter.onGraphStateUpdated(fakeCameraGraph, GraphState.GraphStateStarted)
+            advanceUntilIdle()
+            assertThat(fakeCameraGraphSession.submittedRequests.size)
+                .isEqualTo(captureConfigList.size)
         }
 
     @Test
@@ -434,17 +583,19 @@ class StillCaptureRequestControlTest {
     private fun initUseCaseCameraScopeObjects(isSurfaceSetupSuccessful: Deferred<Boolean>) {
         fakeCameraGraphSession = FakeCameraGraphSession()
         fakeCameraGraph = FakeCameraGraph(fakeCameraGraphSession = fakeCameraGraphSession)
-        fakeUseCaseGraphContext =
-            UseCaseGraphContext(
-                cameraGraphProvider = { fakeCameraGraph },
-                cameraStateAdapter = cameraStateAdapter,
-                graphStateToCameraStateAdapter = GraphStateToCameraStateAdapter(cameraStateAdapter),
-                streamConfigMapProvider = { emptyMap() },
-                defaultSurfaceToStreamMap = mapOf(fakeSurface to StreamId(0)),
-            )
+        fakeUseCaseCameraContext =
+            UseCaseCameraContext(
+                    cameraGraphProvider = { fakeCameraGraph },
+                    cameraStateAdapter = cameraStateAdapter,
+                    graphStateToCameraStateAdapter =
+                        GraphStateToCameraStateAdapter(cameraStateAdapter),
+                    streamConfigMapProvider = { emptyMap() },
+                    defaultSurfaceToStreamMap = mapOf(fakeSurface to StreamId(0)),
+                )
+                .apply { configureCameraStateListener() }
         fakeConfigAdapter =
             CaptureConfigAdapter(
-                useCaseGraphContext = fakeUseCaseGraphContext,
+                useCaseCameraContext = fakeUseCaseCameraContext,
                 cameraProperties = fakeCameraProperties,
                 zslControl = ZslControlNoOpImpl(),
                 threads = fakeUseCaseThreads,
@@ -452,7 +603,7 @@ class StillCaptureRequestControlTest {
             )
         fakeUseCaseCameraState =
             UseCaseCameraState(
-                useCaseGraphContext = fakeUseCaseGraphContext,
+                useCaseCameraContext = fakeUseCaseCameraContext,
                 templateParamsOverride = NoOpTemplateParamsOverride,
             )
         val torchControl =
@@ -464,15 +615,15 @@ class StillCaptureRequestControlTest {
             )
         useCaseCameraRequestControl =
             UseCaseCameraRequestControlImpl(
-                capturePipeline =
+                capturePipelineProvider = {
                     CapturePipelineImpl(
                         configAdapter = fakeConfigAdapter,
                         cameraProperties = fakeCameraProperties,
                         requestListener = ComboRequestListener(),
                         threads = fakeUseCaseThreads,
                         torchControl = torchControl,
-                        useCaseGraphContext = fakeUseCaseGraphContext,
-                        useCaseCameraState = fakeUseCaseCameraState,
+                        useCaseCameraContext = fakeUseCaseCameraContext,
+                        useCaseCameraStateProvider = { fakeUseCaseCameraState },
                         useTorchAsFlash = NotUseTorchAsFlash,
                         flashControl =
                             FlashControl(
@@ -483,10 +634,11 @@ class StillCaptureRequestControlTest {
                                 useFlashModeTorchFor3aUpdate = NotUseFlashModeTorchFor3aUpdate,
                             ),
                         videoUsageControl = VideoUsageControl(),
-                    ),
-                state = fakeUseCaseCameraState,
-                useCaseGraphContext = fakeUseCaseGraphContext,
-                useCaseSurfaceManager = useCaseSurfaceManager,
+                    )
+                },
+                useCaseCameraStateProvider = { fakeUseCaseCameraState },
+                useCaseCameraContext = fakeUseCaseCameraContext,
+                useCaseSurfaceManagerProvider = { useCaseSurfaceManager },
                 threads = fakeUseCaseThreads,
             )
     }

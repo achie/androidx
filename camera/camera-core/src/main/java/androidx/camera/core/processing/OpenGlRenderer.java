@@ -102,6 +102,12 @@ public class OpenGlRenderer {
     protected @NonNull Map<InputFormat, Program2D> mProgramHandles = Collections.emptyMap();
     protected @Nullable Program2D mCurrentProgram = null;
     protected @NonNull InputFormat mCurrentInputformat = InputFormat.UNKNOWN;
+    // Whether the input texture is full range. Only used by the default HDR YUV shader. Defaults
+    // to limited range because it's the common range of 10-bit HDR video (BT.2100), and it's the
+    // range the HDR YUV shader always assumed before the range was read from the input data
+    // space. It's also kept when the data space is unavailable (below API 33) or doesn't specify
+    // the range.
+    protected boolean mIsInputFullRange = false;
 
     private int mExternalTextureId = -1;
 
@@ -112,7 +118,7 @@ public class OpenGlRenderer {
      * shader overrides. Default shaders will be used for the dynamic range specified.
      */
     public @NonNull GraphicDeviceInfo init(@NonNull DynamicRange dynamicRange) {
-        return init(dynamicRange, Collections.emptyMap());
+        return init(dynamicRange, Collections.emptyMap(), /* hasAdvancedStyling */ false);
     }
 
     /**
@@ -134,6 +140,30 @@ public class OpenGlRenderer {
      */
     public @NonNull GraphicDeviceInfo init(@NonNull DynamicRange dynamicRange,
             @NonNull Map<InputFormat, ShaderProvider> shaderOverrides) {
+        return init(dynamicRange, shaderOverrides, /* hasAdvancedStyling */ false);
+    }
+
+    /**
+     * Initializes the OpenGLRenderer with composition enabled
+     *
+     * <p>Initialization must be done before calling other methods, otherwise an
+     * {@link IllegalStateException} will be thrown. Following methods must run on the same
+     * thread as this method, so called GL thread, otherwise an {@link IllegalStateException}
+     * will be thrown.
+     *
+     * @param dynamicRange    the dynamic range used to select default shaders.
+     * @param shaderOverrides specific shader overrides for fragment shaders
+     *                        per {@link InputFormat}.
+     * @param hasAdvancedStyling to determine if advanced styling is enabled or not.
+     * @return Info about the initialized graphics device.
+     * @throws IllegalStateException    if the renderer is already initialized or failed to be
+     *                                  initialized.
+     * @throws IllegalArgumentException if the ShaderProvider fails to create shader or provides
+     *                                  invalid shader string.
+     */
+    public @NonNull GraphicDeviceInfo init(@NonNull DynamicRange dynamicRange,
+            @NonNull Map<InputFormat, ShaderProvider> shaderOverrides,
+            boolean hasAdvancedStyling) {
         checkInitializedOrThrow(mInitialized, false);
         GraphicDeviceInfo.Builder infoBuilder = GraphicDeviceInfo.builder();
         try {
@@ -153,7 +183,7 @@ public class OpenGlRenderer {
             createTempSurface();
             makeCurrent(mTempSurface);
             infoBuilder.setGlVersion(getGlVersionNumber());
-            mProgramHandles = createPrograms(dynamicRange, shaderOverrides);
+            mProgramHandles = createPrograms(dynamicRange, shaderOverrides, hasAdvancedStyling);
             mExternalTextureId = createTexture();
             useAndConfigureProgramWithTexture(mExternalTextureId);
         } catch (IllegalStateException | IllegalArgumentException e) {
@@ -236,6 +266,34 @@ public class OpenGlRenderer {
         if (mCurrentInputformat != inputFormat) {
             mCurrentInputformat = inputFormat;
             useAndConfigureProgramWithTexture(mExternalTextureId);
+        }
+    }
+
+    /**
+     * Sets whether the input texture is full range or limited range.
+     *
+     * <p>This is used by the default HDR YUV shader to select the YUV to RGB conversion. It has
+     * no effect on other shaders. The default is limited range.
+     *
+     * @param isFullRange {@code true} if the input is full range, {@code false} if it is limited
+     *                    range or unknown.
+     * @throws IllegalStateException if the renderer is not initialized or the caller doesn't run
+     *                               on the GL thread.
+     */
+    public void setInputFullRange(boolean isFullRange) {
+        checkInitializedOrThrow(mInitialized, true);
+        checkGlThreadOrThrow(mGlThread);
+
+        if (mIsInputFullRange != isFullRange) {
+            Logger.d(TAG, "Input color range changed to " + (isFullRange ? "full" : "limited"));
+            mIsInputFullRange = isFullRange;
+            updateInputFullRangeOfCurrentProgram();
+        }
+    }
+
+    private void updateInputFullRangeOfCurrentProgram() {
+        if (mCurrentProgram instanceof SamplerShaderProgram) {
+            ((SamplerShaderProgram) mCurrentProgram).updateInputFullRange(mIsInputFullRange);
         }
     }
 
@@ -502,6 +560,8 @@ public class OpenGlRenderer {
         if (mCurrentProgram != program) {
             mCurrentProgram = program;
             mCurrentProgram.use();
+            // Uniforms are per program, so re-apply the input range to the new program.
+            updateInputFullRangeOfCurrentProgram();
             Log.d(TAG, "Using program for input format " + mCurrentInputformat + ": "
                     + mCurrentProgram);
         }
@@ -552,6 +612,7 @@ public class OpenGlRenderer {
         mEglConfig = null;
         mExternalTextureId = -1;
         mCurrentInputformat = InputFormat.UNKNOWN;
+        mIsInputFullRange = false;
         mCurrentSurface = null;
         mGlThread = null;
     }

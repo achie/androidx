@@ -11,18 +11,10 @@ set -e
 # --------- androidx specific code needed for build server. ------------------
 
 SCRIPT_PATH="$(cd $(dirname $0) && pwd -P)"
-if [ -n "$OUT_DIR" ] ; then
-    mkdir -p "$OUT_DIR"
-    OUT_DIR="$(cd $OUT_DIR && pwd -P)"
-    export TMPDIR="$OUT_DIR/tmp"
-elif [[ $SCRIPT_PATH == /google/cog/* ]] ; then
-    export OUT_DIR="$HOME/androidxout"
-else
-    CHECKOUT_ROOT="$(cd $SCRIPT_PATH/../.. && pwd -P)"
-    export OUT_DIR="$CHECKOUT_ROOT/out"
-fi
-export GRADLE_USER_HOME="$OUT_DIR/.gradle"
-export KONAN_DATA_DIR="$OUT_DIR/.konan"
+
+# Establish build environment variables: OUT_DIR and the directories
+# derived from it, prebuilts JDK and SDK, and local.properties.
+. "$SCRIPT_PATH/development/build-environment/build-environment.sh"
 
 ORG_GRADLE_JVMARGS="$(cd $SCRIPT_PATH && grep org.gradle.jvmargs gradle.properties | sed 's/^/-D/')"
 if [ -n "$DIST_DIR" ]; then
@@ -35,9 +27,6 @@ if [ -n "$DIST_DIR" ]; then
     # We don't set a default DIST_DIR in an else clause here because Studio doesn't use gradlew
     # and doesn't set DIST_DIR and we want gradlew and Studio to match
 fi
-
-# unset ANDROID_BUILD_TOP so that Lint doesn't think we're building the platform itself
-unset ANDROID_BUILD_TOP
 # ----------------------------------------------------------------------------
 
 # Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
@@ -74,11 +63,6 @@ case "`uname`" in
     msys=true
     ;;
 esac
-platform_suffix="x86"
-case "$(arch)" in
-  arm64* )
-    platform_suffix="arm64"
-esac
 # Attempt to set APP_HOME
 # Resolve links: $0 may be a link
 PRG="$0"
@@ -96,39 +80,6 @@ SAVED="`pwd`"
 cd "`dirname \"$PRG\"`/" >/dev/null
 APP_HOME="`pwd -P`"
 cd "$SAVED" >/dev/null
-
-CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
-
-# --------- androidx specific code needed for lint and java. ------------------
-
-# Pick the correct fullsdk for this OS.
-if [ $darwin == "true" ]; then
-    plat="darwin"
-else
-    plat="linux"
-fi
-
-# Tests for lint checks default to using sdk defined by this variable. This removes a lot of
-# setup from each lint module.
-export ANDROID_HOME="$APP_HOME/../../prebuilts/fullsdk-$plat"
-# override JAVA_HOME, because CI machines have it and it points to very old JDK
-export ANDROIDX_JDK21="$APP_HOME/../../prebuilts/jdk/jdk21/$plat-$platform_suffix"
-export JAVA_HOME=$ANDROIDX_JDK21
-export STUDIO_GRADLE_JDK=$JAVA_HOME
-
-# Warn developers if they try to build top level project without the full checkout
-[ ! -d "$JAVA_HOME" ] && echo "Failed to find: $JAVA_HOME
-
-Typically, this means either:
-1. You are using the standalone AndroidX checkout, e.g. GitHub, which only supports
-   building a subset of projects. See CONTRIBUTING.md for details.
-2. You are using the repo checkout, but the last repo sync failed. Use repo status
-   to check for projects which are partially-synced, e.g. showing ***NO BRANCH***." && exit -1
-
-# Creates/overwrites local.properties with sdk.dir and cmake.dir to avoid invalidating configuration cache
-$APP_HOME/development/write_sdk_path.sh
-
-# ----------------------------------------------------------------------------
 
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then
@@ -173,10 +124,29 @@ if $darwin; then
     GRADLE_OPTS="$GRADLE_OPTS \"-Xdock:name=$APP_NAME\" \"-Xdock:icon=$APP_HOME/media/gradle.icns\""
 fi
 
+# Some build machines (b/576281048) can only reach the internet over IPv6, but Java tries IPv4
+# first, so connecting to the remote build cache times out. These machines may still have an IPv4
+# default route that goes nowhere, so test whether IPv4 actually connects instead of checking for
+# a route. Prefer IPv6 only if IPv4 fails and IPv6 works: Java won't fall back to IPv4 if IPv6
+# fails, which would break machines with broken IPv6.
+# The setting only works on the java command line, and Gradle doesn't put -D values from
+# org.gradle.jvmargs there, so pass it via a file instead. The Kotlin daemon needs it too.
+# TODO(fsladkey): remove once gcp-gradle-build-cache falls back between address families.
+preferIpv6=false
+if $darwin; then
+    probeHost=storage.googleapis.com
+    if ! /usr/bin/nc -4 -z -G 2 "$probeHost" 443 >/dev/null 2>&1 &&
+            /usr/bin/nc -6 -z -G 2 "$probeHost" 443 >/dev/null 2>&1; then
+        preferIpv6=true
+    fi
+fi
+if [ "$preferIpv6" = "true" ]; then
+    ORG_GRADLE_JVMARGS="$(echo $ORG_GRADLE_JVMARGS | sed "s|$| @$SCRIPT_PATH/development/build-environment/prefer-ipv6.jvmargs|; s|-Dkotlin.daemon.jvm.options=|&-Djava.net.preferIPv6Addresses=true,|")"
+fi
+
 # For Cygwin, switch paths to Windows format before running java
 if $cygwin ; then
     APP_HOME=`cygpath --path --mixed "$APP_HOME"`
-    CLASSPATH=`cygpath --path --mixed "$CLASSPATH"`
     JAVACMD=`cygpath --unix "$JAVACMD"`
 
     # We build the pattern for arguments to be converted via cygpath
@@ -243,6 +213,62 @@ else
   disableCi=false
 fi
 
+function setGradleAndKotlinDaemonMemoryLimits() {
+  local is_running_in_ci="$1"
+  OS_NAME=$(uname -s)
+  TOTAL_SYSTEM_MEM_GB=0
+
+  if [[ "${OS_NAME}" == "Linux" ]]; then
+    # Get total memory in KB on the machine
+    TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    TOTAL_SYSTEM_MEM_GB=$(( TOTAL_MEM_KB / 1024 / 1024 ))
+  elif [[ "${OS_NAME}" == "Darwin" ]]; then
+    # Get total memory in bytes on macOS using sysctl, then convert to GB
+    TOTAL_MEM_BYTES=$(sysctl -n hw.memsize)
+    TOTAL_SYSTEM_MEM_GB=$(( TOTAL_MEM_BYTES / 1024 / 1024 / 1024 ))
+  fi
+
+  if (( TOTAL_SYSTEM_MEM_GB > 0 )); then
+    # calculate 40% of system memory
+    CALCULATED_MEM_GB=$(( TOTAL_SYSTEM_MEM_GB * 40 / 100 ))
+
+    # clamp between min 8 GB and max 38 GB
+    if (( CALCULATED_MEM_GB < 8 )); then
+      GRADLE_MEM_GB=8
+    elif (( CALCULATED_MEM_GB > 38 )); then
+      GRADLE_MEM_GB=38
+    else
+      GRADLE_MEM_GB=${CALCULATED_MEM_GB}
+    fi
+
+    KOTLIN_MEM_GB=$(( GRADLE_MEM_GB / 2 ))
+
+    if (( KOTLIN_MEM_GB > 16 )); then
+      KOTLIN_MEM_GB=16
+    fi
+
+    GRADLE_MEMORY_OVERRIDE="${GRADLE_MEM_GB}g"
+    KOTLIN_MEMORY_OVERRIDE="${KOTLIN_MEM_GB}g"
+
+    # If we are running in CI, we want to additionally set
+    if [[ "$is_running_in_ci" = "true" ]]; then
+      # Set the initial heap size to match the max heap size,
+      # by replacing a string like "-Xmx1g" with one like "-Xms1g -Xmx1g"
+      # First sed command replaces Gradle daemon -Xmx and second replaces Kotlin compiler daemon -Xmx
+      ORG_GRADLE_JVMARGS="$(echo "${ORG_GRADLE_JVMARGS}" | sed "s/-Xmx\([^ ]*\)/-Xms${GRADLE_MEMORY_OVERRIDE} -Xmx${GRADLE_MEMORY_OVERRIDE}/" | sed "s/,-Xmx\([^, ]*\)/,-Xms${KOTLIN_MEMORY_OVERRIDE},-Xmx${KOTLIN_MEMORY_OVERRIDE}/")"
+    else
+      # If we are not running in CI, we want to only set the max heap size for gradle and kotlin daemons.
+      ORG_GRADLE_JVMARGS="$(echo "${ORG_GRADLE_JVMARGS}" | sed "s/-Xmx\([^ ]*\)/-Xmx${GRADLE_MEMORY_OVERRIDE}/" | sed "s/,-Xmx\([^, ]*\)/,-Xmx${KOTLIN_MEMORY_OVERRIDE}/")"
+    fi
+  fi
+}
+
+if [[ " ${@} " =~ " --ci " ]]; then
+  setGradleAndKotlinDaemonMemoryLimits "true"
+else
+  setGradleAndKotlinDaemonMemoryLimits "false"
+fi
+
 # Expand some arguments
 for compact in "--ci" "--strict" "--clean" "--no-ci"; do
   expanded=""
@@ -253,9 +279,8 @@ for compact in "--ci" "--strict" "--clean" "--no-ci"; do
        -Pandroidx.summarizeStderr\
        -Pandroidx.enableAffectedModuleDetection\
        -Pandroidx.printTimestamps\
-       --no-watch-fs\
-       -Pandroidx.highMemory\
-       --profile"
+       -Pandroid.experimental.forceDeterministicApk=true\
+       --no-watch-fs"
     fi
   fi
   if [ "$compact" == "--strict" ]; then
@@ -301,34 +326,6 @@ for compact in "--ci" "--strict" "--clean" "--no-ci"; do
     done
   fi
 done
-
-# workaround for https://github.com/gradle/gradle/issues/18386
-if [[ " ${@} " =~ " --profile " ]]; then
-  mkdir -p reports
-fi
-
-raiseMemory=false
-if [[ " ${@} " =~ " -Pandroidx.highMemory " ]]; then
-    raiseMemory=true
-fi
-if [[ " ${@} " =~ " -Pandroidx.lowMemory " ]]; then
-  if [ "$raiseMemory" == "true" ]; then
-    echo "androidx.lowMemory overriding androidx.highMemory"
-    echo
-  fi
-  raiseMemory=false
-fi
-
-if [ "$raiseMemory" == "true" ]; then
-  # Set the initial heap size to match the max heap size,
-  # by replacing a string like "-Xmx1g" with one like "-Xms1g -Xmx1g"
-  MAX_MEM=38g
-  # First sed command replaces Gradle daemon -Xmx and second replaces Kotlin compliler deamon -Xmx
-  ORG_GRADLE_JVMARGS="$(echo $ORG_GRADLE_JVMARGS | sed "s/-Xmx\([^ ]*\)/-Xms$MAX_MEM -Xmx$MAX_MEM/" | sed "s/,-Xmx\([^ ]*\)/,-Xms$MAX_MEM,-Xmx$MAX_MEM/")"
-
-  # Increase the compiler cache size: b/260643754 . Remove when updating to JDK 20 ( https://bugs.openjdk.org/browse/JDK-8295724 )
-  ORG_GRADLE_JVMARGS="$(echo $ORG_GRADLE_JVMARGS | sed "s|$| -XX:ReservedCodeCacheSize=576M|")"
-fi
 
 # check whether the user has requested profiling via yourkit
 yourkitArgPrefix="androidx.profile.yourkitAgentPath"
@@ -436,14 +433,14 @@ function runGradle() {
   fi
 
   RETURN_VALUE=0
-  set -- "$@" -Dorg.gradle.projectcachedir="$OUT_DIR/gradle-project-cache"
+  set -- "$@" -Dorg.gradle.projectcachedir="$ANDROIDX_PROJECT_CACHE_DIR"
   # Disabled in Studio until these errors become shown (b/268380971) or computed more quickly (https://github.com/gradle/gradle/issues/23272)
   if [[ " ${@} " =~ " --dependency-verification=" ]]; then
     VERIFICATION_ARGUMENT="" # already specified by caller
   else
     VERIFICATION_ARGUMENT=--dependency-verification=strict
   fi
-  if $wrapper "$JAVACMD" "${JVM_OPTS[@]}" $TMPDIR_ARG -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain $HOME_SYSTEM_PROPERTY_ARGUMENT $TMPDIR_ARG $VERIFICATION_ARGUMENT "$ORG_GRADLE_JVMARGS" "$@"; then
+  if $wrapper "$JAVACMD" "${JVM_OPTS[@]}" $TMPDIR_ARG -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" $HOME_SYSTEM_PROPERTY_ARGUMENT $TMPDIR_ARG $VERIFICATION_ARGUMENT "$ORG_GRADLE_JVMARGS" "$@"; then
     RETURN_VALUE=0
   else
     # Print AndroidX-specific help message if build fails
@@ -503,6 +500,12 @@ if [[ "$DISALLOW_TASK_EXECUTION" != "" ]]; then
   echo "Setting 'DISALLOW_TASK_EXECUTION' directly is forbidden. Did you mean -Pandroidx.verifyUpToDate ?"
   echo "See TaskUpToDateValidator.java for more information"
   exit 1
+fi
+
+# Unless ALLOW_PUBLIC_REPOS is set, the Gradle daemon gets the agent that stops it from looking up
+# host names that aren't on its allowlist, and AndroidXImplPlugin passes it on to host tests.
+if [ -z "${ALLOW_PUBLIC_REPOS+set}" ]; then
+  ORG_GRADLE_JVMARGS="$ORG_GRADLE_JVMARGS $("$SCRIPT_PATH/development/host-allowlist/javaagent-arg.sh")"
 fi
 
 runGradle "$@"

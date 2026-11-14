@@ -24,6 +24,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.collection.mutableObjectListOf
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.Divider
 import androidx.compose.material.IconButton
 import androidx.compose.material.Text
@@ -42,7 +44,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collection.mutableVectorOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
@@ -83,9 +84,8 @@ fun PlatformTextInputAdapterDemo() {
     val textFieldState = remember { WackyTextState("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row {
-            var value by remember { mutableStateOf("") }
             Text("Standard text field: ")
-            TextField(value = value, onValueChange = { value = it })
+            TextField(rememberTextFieldState())
         }
         Divider()
         Row {
@@ -200,37 +200,36 @@ private class WackyTextFieldModifierNode(private val state: WackyTextState) :
         if (isFocused == focusState.isFocused) return
         isFocused = focusState.isFocused
         if (isFocused) {
-            job =
-                coroutineScope.launch {
+            job = coroutineScope.launch {
 
-                    // In a real app, creating this session would be platform-specific code.
-                    // This will cancel any previous request.
-                    establishTextInputSession {
-                        val imm =
-                            view.context.getSystemService(Context.INPUT_METHOD_SERVICE)
-                                as InputMethodManager
+                // In a real app, creating this session would be platform-specific code.
+                // This will cancel any previous request.
+                establishTextInputSession {
+                    val imm =
+                        view.context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                            as InputMethodManager
 
-                        launch {
-                            snapshotFlow { state.selection }
-                                .collectLatest { selection ->
-                                    imm.updateSelection(view, selection.start, selection.end, 0, 0)
-                                }
-                        }
+                    launch {
+                        snapshotFlow { state.selection }
+                            .collectLatest { selection ->
+                                imm.updateSelection(view, selection.start, selection.end, 0, 0)
+                            }
+                    }
 
-                        startInputMethod { outAttrs ->
-                            Log.d(TAG, "creating input connection for $state")
+                    startInputMethod { outAttrs ->
+                        Log.d(TAG, "creating input connection for $state")
 
-                            outAttrs.initialSelStart = state.buffer.length
-                            outAttrs.initialSelEnd = state.buffer.length
-                            outAttrs.inputType = InputType.TYPE_CLASS_TEXT
-                            EditorInfoCompat.setInitialSurroundingText(outAttrs, state.toString())
-                            outAttrs.imeOptions =
-                                EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
-                            state.refresh = Unit
-                            WackyInputConnection(state, view)
-                        }
+                        outAttrs.initialSelStart = state.buffer.length
+                        outAttrs.initialSelEnd = state.buffer.length
+                        outAttrs.inputType = InputType.TYPE_CLASS_TEXT
+                        EditorInfoCompat.setInitialSurroundingText(outAttrs, state.toString())
+                        outAttrs.imeOptions =
+                            EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
+                        state.refresh = Unit
+                        WackyInputConnection(state, view)
                     }
                 }
+            }
         } else {
             job?.cancel()
             job = null
@@ -270,7 +269,7 @@ private class WackyInputConnection(private val state: WackyTextState, view: View
     private var composition: TextRange? = null
 
     private var batchLevel = 0
-    private val batch = mutableVectorOf<() -> Unit>()
+    private val batch = mutableObjectListOf<() -> Unit>()
 
     // region InputConnection
 
@@ -299,8 +298,8 @@ private class WackyInputConnection(private val state: WackyTextState, view: View
                     state.buffer.replace(composition!!.start, composition!!.end, text)
                     TextRange(composition!!.end)
                 } else {
-                    state.buffer.replace(state.selection.start, state.selection.end, text)
-                    TextRange(state.selection.start + text.length)
+                    state.buffer.replace(state.selection.min, state.selection.max, text)
+                    TextRange(state.selection.min + text.length)
                 }
         }
         return true
@@ -329,12 +328,11 @@ private class WackyInputConnection(private val state: WackyTextState, view: View
                 }
                 state.selection = TextRange(composition!!.end)
             } else {
-                state.buffer.replace(state.selection.start, state.selection.end, text)
+                state.buffer.replace(state.selection.min, state.selection.max, text)
                 if (text.isNotEmpty()) {
-                    composition =
-                        TextRange(state.selection.start, state.selection.start + text.length)
+                    composition = TextRange(state.selection.min, state.selection.min + text.length)
                 }
-                state.selection = TextRange(state.selection.start + text.length)
+                state.selection = TextRange(state.selection.min + text.length)
             }
         }
         return true
@@ -347,12 +345,12 @@ private class WackyInputConnection(private val state: WackyTextState, view: View
         )
         withBatch {
             state.buffer.delete(
-                state.selection.end.coerceIn(0, state.buffer.length),
-                (state.selection.end + afterLength).coerceIn(0, state.buffer.length),
+                state.selection.max.coerceIn(0, state.buffer.length),
+                (state.selection.max + afterLength).coerceIn(0, state.buffer.length),
             )
             state.buffer.delete(
-                (state.selection.start - beforeLength).coerceIn(0, state.buffer.length),
-                state.selection.start.coerceIn(0, state.buffer.length),
+                (state.selection.min - beforeLength).coerceIn(0, state.buffer.length),
+                state.selection.min.coerceIn(0, state.buffer.length),
             )
         }
         return false

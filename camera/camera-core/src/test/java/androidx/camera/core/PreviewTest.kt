@@ -39,6 +39,7 @@ import androidx.camera.core.Preview.SurfaceProvider
 import androidx.camera.core.SurfaceRequest.TransformationInfo
 import androidx.camera.core.impl.CameraFactory
 import androidx.camera.core.impl.CameraThreadConfig
+import androidx.camera.core.impl.ImageOutputConfig.ROTATION_NOT_SPECIFIED
 import androidx.camera.core.impl.MutableOptionsBundle
 import androidx.camera.core.impl.SessionConfig
 import androidx.camera.core.impl.SessionConfig.SESSION_TYPE_HIGH_SPEED
@@ -283,14 +284,14 @@ class PreviewTest {
     @Test
     fun defaultMirrorModeIsOnFrontOnly() {
         val preview = Preview.Builder().build()
-        assertThat(preview.mirrorModeInternal).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
     }
 
     @Config(minSdk = 33)
     @Test
     fun setMirrorMode_OnFrontOnly() {
         val preview = createPreview()
-        assertThat(preview.mirrorModeInternal).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
 
         val sessionConfig = preview.sessionConfig
         assertThat(sessionConfig.outputConfigs[0].mirrorMode).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
@@ -300,7 +301,7 @@ class PreviewTest {
     @Test
     fun setMirrorMode_On() {
         val preview = createPreview(mirrorMode = MIRROR_MODE_ON)
-        assertThat(preview.mirrorModeInternal).isEqualTo(MIRROR_MODE_ON)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON)
 
         val sessionConfig = preview.sessionConfig
         assertThat(sessionConfig.outputConfigs[0].mirrorMode).isEqualTo(MIRROR_MODE_ON)
@@ -310,10 +311,55 @@ class PreviewTest {
     @Test
     fun setMirrorMode_Off() {
         val preview = createPreview(mirrorMode = MIRROR_MODE_OFF)
-        assertThat(preview.mirrorModeInternal).isEqualTo(MIRROR_MODE_OFF)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_OFF)
 
         val sessionConfig = preview.sessionConfig
         assertThat(sessionConfig.outputConfigs[0].mirrorMode).isEqualTo(MIRROR_MODE_OFF)
+    }
+
+    @Config(minSdk = 33)
+    @Test
+    fun setMirrorMode_withEffect_sessionConfigMirrorModeIsUnspecified() {
+        val preview = createPreview(effect = effect, mirrorMode = MIRROR_MODE_ON)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON)
+        assertThat(preview.cameraEdge.isMirroring).isTrue()
+
+        val sessionConfig = preview.sessionConfig
+        assertThat(sessionConfig.outputConfigs[0].mirrorMode)
+            .isEqualTo(MirrorMode.MIRROR_MODE_UNSPECIFIED)
+    }
+
+    @Config(minSdk = 33)
+    @Test
+    fun setMirrorMode_notifyReset() {
+        // Arrange: create Preview with MIRROR_MODE_OFF
+        val preview = createPreview(mirrorMode = MIRROR_MODE_OFF)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_OFF)
+        assertThat(preview.sessionConfig.outputConfigs[0].mirrorMode).isEqualTo(MIRROR_MODE_OFF)
+
+        // Act: set mirror mode to ON.
+        preview.setMirrorMode(MIRROR_MODE_ON)
+
+        // Assert.
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON)
+        assertThat(backCamera.useCaseResetHistory).containsExactly(preview)
+        assertThat(preview.sessionConfig.outputConfigs[0].mirrorMode).isEqualTo(MIRROR_MODE_ON)
+    }
+
+    @Config(maxSdk = 32)
+    @Test
+    fun setMirrorMode_belowSdk33_isNoOp() {
+        // Arrange & Act: create Preview with MIRROR_MODE_ON (which should be no-op)
+        val preview = createPreview(mirrorMode = MIRROR_MODE_ON)
+
+        // Assert: mirrorMode remains default (MIRROR_MODE_ON_FRONT_ONLY)
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
+
+        // Act: set mirror mode dynamically (which should also be no-op)
+        preview.setMirrorMode(MIRROR_MODE_OFF)
+
+        // Assert: mirrorMode remains default
+        assertThat(preview.mirrorMode).isEqualTo(MIRROR_MODE_ON_FRONT_ONLY)
     }
 
     @Test
@@ -474,6 +520,135 @@ class PreviewTest {
         shadowOf(getMainLooper()).idle()
         // Assert: the rotation of the SettableFuture is updated based on ROTATION_90.
         assertThat(preview.cameraEdge.rotationDegrees).isEqualTo(180)
+    }
+
+    @Test
+    fun setTargetRotationWithEffect_sendsRemainingRotationWithoutRecreating() =
+        setTargetRotationWithEffect_sendsRemainingRotationWithoutRecreating(backCamera)
+
+    @Test
+    fun setTargetRotationWithEffectOnFrontCamera_sendsRemainingRotationWithoutRecreating() =
+        setTargetRotationWithEffect_sendsRemainingRotationWithoutRecreating(frontCamera)
+
+    private fun setTargetRotationWithEffect_sendsRemainingRotationWithoutRecreating(
+        camera: FakeCamera
+    ) {
+        // Arrange.
+        var transformationInfo: TransformationInfo? = null
+        val preview =
+            createPreview(
+                effect,
+                camera,
+                targetRotation = ROTATION_90,
+                surfaceProvider = { request ->
+                    request.setTransformationInfoListener(directExecutor()) {
+                        transformationInfo = it
+                    }
+                },
+            )
+        shadowOf(getMainLooper()).idle()
+        assertThat(requireNotNull(transformationInfo).rotationDegrees).isEqualTo(0)
+        val cameraEdgeBefore = preview.cameraEdge
+        val surfaceRequestBefore = preview.mCurrentSurfaceRequest
+        val nodeSurfaceRequestBefore = processor.surfaceRequest
+        assertThat(nodeSurfaceRequestBefore).isNotNull()
+
+        // Act.
+        preview.targetRotation = Surface.ROTATION_0
+        shadowOf(getMainLooper()).idle()
+
+        // Assert: the pipeline is kept and the camera is not reset.
+        assertThat(preview.cameraEdge).isSameInstanceAs(cameraEdgeBefore)
+        assertThat(preview.mCurrentSurfaceRequest).isSameInstanceAs(surfaceRequestBefore)
+        assertThat(processor.surfaceRequest).isSameInstanceAs(nodeSurfaceRequestBefore)
+        assertThat(camera.useCaseResetHistory).isEmpty()
+        // Assert: the consumer gets the remaining rotation, i.e. the display rotation change from
+        // ROTATION_90 to ROTATION_0, regardless of the lens facing and the mirroring applied by
+        // the effect node.
+        val updatedInfo = requireNotNull(transformationInfo)
+        assertThat(updatedInfo.rotationDegrees).isEqualTo(90)
+        assertThat(updatedInfo.hasCameraTransform()).isFalse()
+        // The effect applied the mirroring and the target rotation is no longer useful.
+        assertThat(updatedInfo.isMirroring).isFalse()
+        assertThat(updatedInfo.targetRotation).isEqualTo(ROTATION_NOT_SPECIFIED)
+    }
+
+    @Test
+    fun setTargetRotationWithoutCameraTransform_sendsRotationWithoutReset() =
+        // Back camera with sensor rotation 0: ROTATION_90 -> 270 degrees, ROTATION_270 -> 90.
+        setTargetRotationWithoutCameraTransform_sendsRotationWithoutReset(backCamera, 270, 90)
+
+    @Test
+    fun setTargetRotationWithoutCameraTransformOnFrontCamera_sendsFlippedRotation() =
+        // Front camera with sensor rotation 0: ROTATION_90 -> 90 degrees, flipped to 270 since
+        // the parent mirrored the stream; ROTATION_270 -> 270 degrees, flipped to 90.
+        setTargetRotationWithoutCameraTransform_sendsRotationWithoutReset(frontCamera, 270, 90)
+
+    private fun setTargetRotationWithoutCameraTransform_sendsRotationWithoutReset(
+        camera: FakeCamera,
+        expectedRotationBefore: Int,
+        expectedRotationAfter: Int,
+        newTargetRotation: Int = Surface.ROTATION_270,
+    ) {
+        // Arrange: e.g. a Preview attached to a VirtualCamera under StreamSharing.
+        camera.hasTransform = false
+        var transformationInfo: TransformationInfo? = null
+        val preview =
+            createPreview(
+                camera = camera,
+                targetRotation = ROTATION_90,
+                surfaceProvider = { request ->
+                    request.setTransformationInfoListener(directExecutor()) {
+                        transformationInfo = it
+                    }
+                },
+            )
+        shadowOf(getMainLooper()).idle()
+        assertThat(requireNotNull(transformationInfo).rotationDegrees)
+            .isEqualTo(expectedRotationBefore)
+        val surfaceRequestBefore = preview.mCurrentSurfaceRequest
+
+        // Act.
+        preview.targetRotation = newTargetRotation
+        shadowOf(getMainLooper()).idle()
+
+        // Assert: the consumer applies the rotation, so the Surface is not reconnected.
+        assertThat(camera.useCaseResetHistory).isEmpty()
+        assertThat(preview.mCurrentSurfaceRequest).isSameInstanceAs(surfaceRequestBefore)
+        val updatedInfo = requireNotNull(transformationInfo)
+        assertThat(updatedInfo.targetRotation).isEqualTo(newTargetRotation)
+        assertThat(updatedInfo.rotationDegrees).isEqualTo(expectedRotationAfter)
+        assertThat(updatedInfo.hasCameraTransform()).isFalse()
+        assertThat(updatedInfo.isMirroring).isFalse()
+    }
+
+    @Test
+    fun setSameTargetRotationWithEffect_keepsPipelineWithoutReset() {
+        // Arrange.
+        var transformationInfoCount = 0
+        val preview =
+            createPreview(
+                effect,
+                targetRotation = ROTATION_90,
+                surfaceProvider = { request ->
+                    request.setTransformationInfoListener(directExecutor()) {
+                        transformationInfoCount++
+                    }
+                },
+            )
+        shadowOf(getMainLooper()).idle()
+        val cameraEdgeBefore = preview.cameraEdge
+        val countBefore = transformationInfoCount
+        assertThat(countBefore).isEqualTo(1)
+
+        // Act.
+        preview.targetRotation = ROTATION_90
+        shadowOf(getMainLooper()).idle()
+
+        // Assert.
+        assertThat(preview.cameraEdge).isSameInstanceAs(cameraEdgeBefore)
+        assertThat(backCamera.useCaseResetHistory).isEmpty()
+        assertThat(transformationInfoCount).isEqualTo(countBefore)
     }
 
     @Test
@@ -678,7 +853,7 @@ class PreviewTest {
         preview.setSurfaceProvider { request ->
             request.setTransformationInfoListener(
                 CameraXExecutors.directExecutor(),
-                SurfaceRequest.TransformationInfoListener { receivedTransformationInfo = it },
+                SurfaceRequest.TransformationInfoListener {},
             )
             receivedSurfaceRequest = request
         }
@@ -865,7 +1040,7 @@ class PreviewTest {
             null,
             previewToDetach.getDefaultConfig(
                 true,
-                cameraXConfig.getUseCaseConfigFactoryProvider(null)!!.newInstance(context),
+                cameraXConfig.getUseCaseConfigFactoryProvider(null)!!.newInstance(context, false),
             ),
         )
 

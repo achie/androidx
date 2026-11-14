@@ -17,6 +17,8 @@ com.google.errorprone.bugpatterns.inlineme
 com.google.errorprone.bugpatterns.javadoc
 com.google.errorprone.bugpatterns.nullness
 com.google.errorprone.bugpatterns.overloading
+com.google.errorprone.bugpatterns.restrictedapi
+com.google.errorprone.bugpatterns.testparameterinjector
 com.google.errorprone.bugpatterns.threadsafety
 com.google.errorprone.bugpatterns.time
 com.google.errorprone.dataflow
@@ -24,10 +26,10 @@ com.google.errorprone.dataflow.nullnesspropagation
 com.google.errorprone.dataflow.nullnesspropagation.inference
 com.google.errorprone.fixes
 com.google.errorprone.matchers
+com.google.errorprone.matchers.field
 com.google.errorprone.matchers.method
 com.google.errorprone.names
 com.google.errorprone.predicates
-com.google.errorprone.predicates.type
 com.google.errorprone.refaster
 com.google.errorprone.refaster.annotation
 com.google.errorprone.scanner

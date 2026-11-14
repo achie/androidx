@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
+@file:Suppress("DEPRECATION") // b/552879150
+
 package androidx.compose.foundation.text.selection
 
 import android.os.Build
 import androidx.compose.foundation.internal.ClipboardUtils
 import androidx.compose.foundation.text.HandleState
 import androidx.compose.foundation.text.LegacyTextFieldState
+import androidx.compose.foundation.text.TEST_LOCALE_LIST
 import androidx.compose.foundation.text.TextDelegate
 import androidx.compose.foundation.text.TextLayoutResultProxy
 import androidx.compose.foundation.text.contextmenu.test.ContextMenuFlagFlipperRunner
@@ -132,6 +135,7 @@ class TextFieldSelectionManagerTest {
                     density = density,
                     layoutDirection = LayoutDirection.Ltr,
                     fontFamilyResolver = mock(),
+                    defaultLocaleList = TEST_LOCALE_LIST,
                     constraints = Constraints(),
                 )
             )
@@ -198,7 +202,7 @@ class TextFieldSelectionManagerTest {
         assertThat(state.handleState).isEqualTo(HandleState.None)
         assertThat(state.showFloatingToolbar).isFalse()
         assertThat(value.selection).isEqualTo(fakeTextRange)
-        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.LongPress)
 
         verify(focusRequester, times(1)).requestFocus()
     }
@@ -217,7 +221,7 @@ class TextFieldSelectionManagerTest {
         assertThat(state.handleState).isEqualTo(HandleState.None)
         assertThat(state.showFloatingToolbar).isFalse()
         assertThat(value.selection).isEqualTo(TextRange(fakeLineEnd))
-        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.LongPress)
 
         verify(focusRequester, times(1)).requestFocus()
     }
@@ -232,7 +236,8 @@ class TextFieldSelectionManagerTest {
         assertThat(state.handleState).isEqualTo(HandleState.None)
         assertThat(value.selection).isEqualTo(TextRange(0, text.length))
         assertThat(state.showFloatingToolbar).isFalse()
-        verify(hapticFeedback, times(2)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.LongPress)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
     @Test
@@ -247,7 +252,8 @@ class TextFieldSelectionManagerTest {
         assertThat(state.handleState).isEqualTo(HandleState.Selection)
         assertThat(value.selection).isEqualTo(TextRange(0, text.length))
         assertThat(state.showFloatingToolbar).isTrue()
-        verify(hapticFeedback, times(2)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.LongPress)
+        verify(hapticFeedback, times(1)).performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
     @Test

@@ -20,6 +20,7 @@ import android.app.Instrumentation
 import android.content.Context
 import androidx.room3.DatabaseConfiguration
 import androidx.room3.RoomDatabase
+import androidx.room3.SingleConnection
 import androidx.room3.migration.AutoMigrationSpec
 import androidx.room3.migration.Migration
 import androidx.room3.migration.bundle.SchemaBundle
@@ -31,6 +32,7 @@ import java.io.FileNotFoundException
 import java.lang.ref.WeakReference
 import kotlin.reflect.KClass
 import kotlin.reflect.cast
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
@@ -97,6 +99,7 @@ import org.junit.runner.Description
  * See also
  * [Room's Test Migrations Documentation](https://developer.android.com/training/data-storage/room/migrating-db-versions#test)
  */
+@Suppress("KmpModifierMismatch") // the expect is not open
 public actual open class MigrationTestHelper : TestWatcher {
     private val delegate: AndroidMigrationTestHelper
 
@@ -167,7 +170,7 @@ public actual open class MigrationTestHelper : TestWatcher {
      * @return A database connection of the newly created database.
      * @throws IllegalStateException If a new database was not created.
      */
-    public actual fun createDatabase(version: Int): SQLiteConnection {
+    public actual suspend fun createDatabase(version: Int): SQLiteConnection {
         check(delegate is SQLiteDriverMigrationTestHelper) {
             "MigrationTestHelper functionality returning a SQLiteConnection is not possible " +
                 "because a SupportSQLiteOpenHelper was provided during configuration (i.e. no " +
@@ -193,7 +196,7 @@ public actual open class MigrationTestHelper : TestWatcher {
      * @return A database connection of the migrated database.
      * @throws IllegalStateException If the schema validation fails.
      */
-    public actual fun runMigrationsAndValidate(
+    public actual suspend fun runMigrationsAndValidate(
         version: Int,
         migrations: List<Migration>,
     ): SQLiteConnection {
@@ -274,19 +277,23 @@ private sealed class AndroidMigrationTestHelper(
             context = instrumentation.targetContext,
             name = databaseFileName,
             migrationContainer = container,
-            callbacks = null,
+            callbacks = emptyList(),
             allowMainThreadQueries = true,
             journalMode = RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING,
             multiInstanceInvalidationServiceIntent = null,
-            requireMigration = true,
+            isMigrationRequired = true,
             allowDestructiveMigrationOnDowngrade = false,
             migrationNotRequiredFrom = emptySet(),
             prepackagedDatabaseCallback = null,
-            typeConverters = emptyList(),
+            columnTypeConverters = emptyList(),
+            daoReturnTypeConverters = emptyList(),
             autoMigrationSpecs = emptyList(),
             allowDestructiveMigrationForAllTables = false,
             sqliteDriver = sqliteDriver,
             queryCoroutineContext = Dispatchers.IO,
+            connectionPoolConfiguration = SingleConnection,
+            connectionPoolTimeout = 30.seconds,
+            allowDataLossOnRecovery = false,
         )
 }
 
@@ -303,7 +310,7 @@ private class SQLiteDriverMigrationTestHelper(
 
     private val databaseInstance = databaseClass.cast(databaseFactory.invoke())
 
-    fun createDatabase(version: Int): SQLiteConnection {
+    suspend fun createDatabase(version: Int): SQLiteConnection {
         val schemaBundle = loadSchema(version)
         val connection =
             createDatabaseCommon(
@@ -314,7 +321,10 @@ private class SQLiteDriverMigrationTestHelper(
         return connection
     }
 
-    fun runMigrationsAndValidate(version: Int, migrations: List<Migration>): SQLiteConnection {
+    suspend fun runMigrationsAndValidate(
+        version: Int,
+        migrations: List<Migration>,
+    ): SQLiteConnection {
         val schemaBundle = loadSchema(version)
         val connection =
             runMigrationsAndValidateCommon(

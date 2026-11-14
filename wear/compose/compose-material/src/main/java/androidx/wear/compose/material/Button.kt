@@ -192,7 +192,7 @@ public fun Button(
  * An [OutlinedButton] has a transparent background and a thin border by default with content taking
  * the theme primary color.
  *
- * Example of a [OutlinedButton] displaying an icon:
+ * Example of an [OutlinedButton] displaying an icon:
  *
  * @sample androidx.wear.compose.material.samples.OutlinedButtonWithIcon
  *
@@ -366,8 +366,8 @@ public fun CompactButton(
  * Wear Material [OutlinedCompactButton] that offers a single slot to take any content (text, icon
  * or image).
  *
- * The [OutlinedCompactButton] has background size [ButtonDefaults.ExtraSmallButtonSize]. There is
- * an transparent padding around the background, defaulted to
+ * The [OutlinedCompactButton] has background size [ButtonDefaults.ExtraSmallButtonSize]. There is a
+ * transparent padding around the background, defaulted to
  * [ButtonDefaults.CompactButtonBackgroundPadding], which increases the clickable area. Icon content
  * should have size [ButtonDefaults.SmallIconSize].
  *
@@ -453,13 +453,12 @@ public interface ButtonColors {
 /** Represents the border stroke used in a [Button] in different states. */
 @Stable
 public interface ButtonBorder {
-    @Composable
     /**
      * Represents the border stroke for this border, depending on [enabled] or null if no border
      *
      * @param enabled Whether the button is enabled
      */
-    public fun borderStroke(enabled: Boolean): State<BorderStroke?>
+    @Composable public fun borderStroke(enabled: Boolean): State<BorderStroke?>
 }
 
 /** Contains the default values used by [Button]. */

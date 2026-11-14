@@ -16,7 +16,7 @@
 
 package androidx.compose.ui.node
 
-import androidx.compose.runtime.collection.MutableVector
+import androidx.collection.MutableObjectList
 import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.Placeable
@@ -95,7 +95,7 @@ internal class LayoutNodeLayoutDelegate(internal val layoutNode: LayoutNode) {
      * Tracks whether another measure pass is needed for the LayoutNodeLayoutDelegate. Mutation to
      * [measurePending] is confined to LayoutNodeLayoutDelegate. It can only be set true from
      * outside of this class via [markMeasurePending]. It is cleared (i.e. set false) during the
-     * measure pass (i.e. in [measurePassDelegate.performMeasure]).
+     * measure pass (i.e. in [MeasurePassDelegate.performMeasure]).
      */
     internal val measurePending: Boolean
         get() = measurePassDelegate.measurePending
@@ -158,8 +158,10 @@ internal class LayoutNodeLayoutDelegate(internal val layoutNode: LayoutNode) {
 
     /** Marks the layoutNode dirty for another lookahead layout pass. */
     internal fun markLookaheadLayoutPending() {
+        if (lookaheadLayoutPending && lookaheadLayoutPendingForAlignment) return
         lookaheadLayoutPending = true
         lookaheadLayoutPendingForAlignment = true
+        layoutNode.forEachCoordinator { it.lookaheadDelegate?.layoutPendingForAlignment = true }
     }
 
     /** Marks the layoutNode dirty for another lookahead measure pass. */
@@ -385,7 +387,7 @@ internal val LayoutNode.isOutMostLookaheadRoot: Boolean
             (parent?.lookaheadRoot == null || layoutDelegate.detachedFromParentLookaheadPass)
 
 internal inline fun <T : Measurable> LayoutNode.updateChildMeasurables(
-    destination: MutableVector<T>,
+    destination: MutableObjectList<T>,
     transform: (LayoutNode) -> T,
 ) {
     forEachChildIndexed { i, layoutNode ->
@@ -413,6 +415,12 @@ internal const val MeasuredTwiceErrorMessage: String =
  * measure/layout pass.
  */
 internal interface AlignmentLinesOwner : Measurable {
+
+    /**
+     * Whether the [AlignmentLinesOwner] is currently laying out its children only for the purposes
+     * of calculating the alignment lines. See [LookaheadCapablePlaceable.isPlacingForAlignment].
+     */
+    var isPlacingForAlignment: Boolean
 
     val placeOrder: Int
 

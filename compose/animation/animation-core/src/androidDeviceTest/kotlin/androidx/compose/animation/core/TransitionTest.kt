@@ -41,7 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
@@ -52,7 +52,6 @@ import junit.framework.TestCase.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import leakcanary.DetectLeaksAfterTestSuccess
 import org.junit.Rule
 import org.junit.Test
@@ -62,7 +61,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @LargeTest
 class TransitionTest {
-    private val rule = createComposeRule(StandardTestDispatcher())
+    private val rule = createComposeRule()
 
     // Detect leaks BEFORE and AFTER compose rule work
     @get:Rule
@@ -364,7 +363,6 @@ class TransitionTest {
         assertTrue(playTime >= 800 * MillisToNanos)
     }
 
-    @OptIn(ExperimentalTransitionApi::class)
     @Test
     fun testMutableTransitionStateIsIdle() {
         val mutableTransitionState = MutableTransitionState(false)
@@ -404,7 +402,7 @@ class TransitionTest {
         assertTrue(mutableTransitionState.isIdle)
     }
 
-    @OptIn(ExperimentalTransitionApi::class, InternalAnimationApi::class)
+    @OptIn(InternalAnimationApi::class)
     @Test
     fun testCreateChildTransition() {
         val intState = mutableStateOf(1)
@@ -467,7 +465,6 @@ class TransitionTest {
         }
     }
 
-    @OptIn(ExperimentalTransitionApi::class)
     @Test
     fun addAnimationToCompletedChildTransition() {
         rule.mainClock.autoAdvance = false
@@ -657,7 +654,6 @@ class TransitionTest {
         }
     }
 
-    @OptIn(ExperimentalTransitionApi::class)
     @Test
     fun childTransitionStartsUninterrupted_usingTransitionState() {
 
@@ -753,7 +749,6 @@ class TransitionTest {
         rule.onNodeWithTag("currentStateText").assertTextEquals("3")
     }
 
-    @OptIn(ExperimentalTransitionApi::class)
     @Test
     fun childTransitionStartsUninterrupted_usingSeekableTransition() {
         val transitionState = SeekableTransitionState(0)
@@ -952,5 +947,183 @@ class TransitionTest {
         assertEquals(AnimStates.To, transitionState.targetState)
         assertEquals(AnimStates.From, transitionState.currentState)
         rule.onNodeWithTag("text").assertTextEquals("2.5")
+    }
+
+    @Test
+    fun testLazyChildTransitionLabel() {
+        lateinit var parentWithoutLabel: Transition<Int>
+        lateinit var defaultChildOfUnlabeledParent: Transition<Boolean>
+        lateinit var customChildOfUnlabeledParent: Transition<Boolean>
+        lateinit var parentWithLabel: Transition<Int>
+        lateinit var defaultChildOfLabeledParent: Transition<Boolean>
+        lateinit var customChildOfLabeledParent: Transition<Boolean>
+        lateinit var grandchild: Transition<Boolean>
+
+        rule.setContent {
+            parentWithoutLabel = updateTransition(1)
+            defaultChildOfUnlabeledParent = parentWithoutLabel.createChildTransition { it == 1 }
+            customChildOfUnlabeledParent =
+                parentWithoutLabel.createChildTransition("CustomChild") { it == 1 }
+
+            parentWithLabel = updateTransition(1, label = "Parent")
+            defaultChildOfLabeledParent = parentWithLabel.createChildTransition { it == 1 }
+            customChildOfLabeledParent =
+                parentWithLabel.createChildTransition("CustomChild") { it == 1 }
+            grandchild = customChildOfLabeledParent.createChildTransition("Grandchild") { it }
+        }
+
+        rule.runOnIdle {
+            // Parent without label
+            assertThat(parentWithoutLabel.label).isNull()
+            // Child of parent without label should not have "null > " prefix
+            assertThat(defaultChildOfUnlabeledParent.label).isEqualTo("ChildTransition")
+            assertThat(customChildOfUnlabeledParent.label).isEqualTo("CustomChild")
+
+            // Parent with label
+            assertThat(parentWithLabel.label).isEqualTo("Parent")
+            assertThat(defaultChildOfLabeledParent.label).isEqualTo("Parent > ChildTransition")
+            assertThat(customChildOfLabeledParent.label).isEqualTo("Parent > CustomChild")
+
+            // Grandchild
+            assertThat(grandchild.label).isEqualTo("Parent > CustomChild > Grandchild")
+        }
+    }
+
+    @Test
+    fun interruptionAwareAnimationSpec_preservedOnInterruption() {
+        var recordedInitialValue = Float.NaN
+        var recordedInitialVelocity = Float.NaN
+        var specInvocationsAfterInterruption = 0
+        var isInterruptedPhase = false
+
+        val customInterruptibleSpec =
+            InterruptionAwareAnimationSpec(
+                object : FiniteAnimationSpec<Float> {
+                    override fun <V : AnimationVector> vectorize(
+                        converter: TwoWayConverter<Float, V>
+                    ): VectorizedFiniteAnimationSpec<V> {
+                        val delegate = FloatSpringSpec().vectorize(converter)
+                        return object : VectorizedFiniteAnimationSpec<V> by delegate {
+                            override fun getValueFromNanos(
+                                playTimeNanos: Long,
+                                initialValue: V,
+                                targetValue: V,
+                                initialVelocity: V,
+                            ): V {
+                                if (isInterruptedPhase) {
+                                    specInvocationsAfterInterruption++
+                                    recordedInitialValue = initialValue[0]
+                                    recordedInitialVelocity = initialVelocity[0]
+                                }
+                                return delegate.getValueFromNanos(
+                                    playTimeNanos,
+                                    initialValue,
+                                    targetValue,
+                                    initialVelocity,
+                                )
+                            }
+                        }
+                    }
+                }
+            )
+
+        var targetState by mutableStateOf(false)
+        var interruptibleValue = 0f
+
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val transition = updateTransition(targetState, label = "InterruptibleTest")
+            interruptibleValue =
+                transition
+                    .animateFloat(
+                        transitionSpec = { customInterruptibleSpec },
+                        label = "Interruptible",
+                    ) {
+                        if (it) 100f else 0f
+                    }
+                    .value
+        }
+
+        // Start initial transition (false -> true)
+        targetState = true
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeBy(64L)
+
+        // Interrupt mid-flight (true -> false). Note: advanceTimeByFrame() runs Choreographer
+        // frame callbacks before recomposition, so the interruption occurs during recomposition
+        // at the end of this frame.
+        targetState = false
+        rule.mainClock.advanceTimeByFrame()
+
+        val valueAtInterruption = interruptibleValue
+        assertThat(valueAtInterruption).isGreaterThan(0f)
+        assertThat(valueAtInterruption).isLessThan(100f)
+
+        isInterruptedPhase = true
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeBy(32L)
+
+        // InterruptionAwareAnimationSpec must continue to be used on interruption
+        // and receive the exact in-flight value and velocity
+        assertThat(specInvocationsAfterInterruption).isGreaterThan(0)
+        assertThat(recordedInitialValue).isEqualTo(valueAtInterruption)
+        assertThat(recordedInitialVelocity).isGreaterThan(0f)
+    }
+
+    @Test
+    fun interruptionAwareAnimationSpec_usesInterruptionSpecOnInterruption() {
+        var targetState by mutableStateOf(false)
+        var currentValue = 0f
+
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val transition = updateTransition(targetState, label = "FactoryInterruptibleTest")
+            currentValue =
+                transition
+                    .animateFloat(
+                        transitionSpec = {
+                            InterruptionAwareAnimationSpec(
+                                animationSpec = tween(durationMillis = 200, easing = LinearEasing),
+                                interruptionSpec =
+                                    tween(durationMillis = 100, easing = LinearEasing),
+                            )
+                        },
+                        label = "Value",
+                    ) {
+                        if (it) 100f else 0f
+                    }
+                    .value
+        }
+
+        // 1. Start initial transition (false -> true): uses 200ms animationSpec
+        targetState = true
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
+        // 64ms into 200ms tween -> 32f (100ms tween would be 64f)
+        rule.mainClock.advanceTimeBy(64L)
+        assertThat(currentValue).isWithin(0.1f).of(32f)
+
+        // 2. Interrupt mid-flight (true -> false): switches to 100ms interruptionSpec
+        targetState = false
+        rule.mainClock.advanceTimeByFrame()
+        val valueAtInterruption = currentValue
+        assertThat(valueAtInterruption).isWithin(0.1f).of(40f)
+
+        // 64ms into 100ms tween -> 36% of valueAtInterruption
+        rule.mainClock.advanceTimeBy(64L)
+        assertThat(currentValue).isWithin(0.1f).of(valueAtInterruption * 0.36f)
+
+        // >100ms total -> finished at 0f (200ms tween would still be running)
+        rule.mainClock.advanceTimeBy(48L)
+        assertThat(currentValue).isEqualTo(0f)
+
+        // 3. Start again from rest (false -> true): switches back to 200ms animationSpec
+        targetState = true
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
+        // 64ms into 200ms tween -> 32f (100ms tween would be 64f)
+        rule.mainClock.advanceTimeBy(64L)
+        assertThat(currentValue).isWithin(0.1f).of(32f)
     }
 }

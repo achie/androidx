@@ -16,6 +16,7 @@
 
 package androidx.room3.processor
 
+import androidx.room3.DaoReturnTypeConverters
 import androidx.room3.Delete
 import androidx.room3.Insert
 import androidx.room3.Query
@@ -227,10 +228,9 @@ class DaoProcessor(
             }
 
         val constructors = element.getConstructors()
-        val goodConstructor =
-            constructors.firstOrNull {
-                it.parameters.singleOrNull()?.type?.isAssignableFrom(dbType) == true
-            }
+        val goodConstructor = constructors.firstOrNull {
+            it.parameters.singleOrNull()?.type?.isAssignableFrom(dbType) == true
+        }
         val constructorParamType =
             if (goodConstructor != null) {
                 goodConstructor.parameters[0].type.asTypeName()
@@ -257,6 +257,14 @@ class DaoProcessor(
         invalidAnnotatedFunctions.forEach {
             context.logger.e(it, ProcessorErrors.INVALID_ANNOTATION_COUNT_IN_DAO_FUNCTION)
         }
+        allFunctions
+            .filter {
+                (!it.isAbstract() || it.hasKotlinDefaultImpl()) &&
+                    it.hasAnnotation(DaoReturnTypeConverters::class)
+            }
+            .forEach {
+                context.logger.e(it, ProcessorErrors.DAO_RETURN_TYPE_CONVERTER_ON_NON_DAO_OPERATION)
+            }
 
         return Dao(
             element = element,
@@ -293,42 +301,40 @@ class DaoProcessor(
     private fun matchKotlinBoxedPrimitiveFunctions(
         unannotatedFunctions: List<XMethodElement>,
         annotatedFunctions: List<XMethodElement>,
-    ) =
-        unannotatedFunctions.mapNotNull { unannotated ->
-            annotatedFunctions
-                .firstOrNull {
-                    if (it.jvmName != unannotated.jvmName) {
-                        return@firstOrNull false
-                    }
-                    if (it.parameters.size != unannotated.parameters.size) {
-                        return@firstOrNull false
+    ) = unannotatedFunctions.mapNotNull { unannotated ->
+        annotatedFunctions
+            .firstOrNull {
+                if (it.jvmName != unannotated.jvmName) {
+                    return@firstOrNull false
+                }
+                if (it.parameters.size != unannotated.parameters.size) {
+                    return@firstOrNull false
+                }
+
+                // Get unannotated as a member of annotated's enclosing type before comparing
+                // in case unannotated contains type parameters that need to be resolved.
+                val annotatedEnclosingType = it.enclosingElement.type
+                val unannotatedType =
+                    if (annotatedEnclosingType == null) {
+                        unannotated.executableType
+                    } else {
+                        unannotated.asMemberOf(annotatedEnclosingType)
                     }
 
-                    // Get unannotated as a member of annotated's enclosing type before comparing
-                    // in case unannotated contains type parameters that need to be resolved.
-                    val annotatedEnclosingType = it.enclosingElement.type
-                    val unannotatedType =
-                        if (annotatedEnclosingType == null) {
-                            unannotated.executableType
-                        } else {
-                            unannotated.asMemberOf(annotatedEnclosingType)
-                        }
-
-                    if (!it.returnType.boxed().isSameType(unannotatedType.returnType.boxed())) {
+                if (!it.returnType.boxed().isSameType(unannotatedType.returnType.boxed())) {
+                    return@firstOrNull false
+                }
+                for (i in it.parameters.indices) {
+                    if (
+                        it.parameters[i].type.boxed() != unannotatedType.parameterTypes[i].boxed()
+                    ) {
                         return@firstOrNull false
                     }
-                    for (i in it.parameters.indices) {
-                        if (
-                            it.parameters[i].type.boxed() !=
-                                unannotatedType.parameterTypes[i].boxed()
-                        ) {
-                            return@firstOrNull false
-                        }
-                    }
-                    return@firstOrNull true
                 }
-                ?.let { matchingFunction ->
-                    KotlinBoxedPrimitiveFunctionDelegate(unannotated, matchingFunction)
-                }
-        }
+                return@firstOrNull true
+            }
+            ?.let { matchingFunction ->
+                KotlinBoxedPrimitiveFunctionDelegate(unannotated, matchingFunction)
+            }
+    }
 }

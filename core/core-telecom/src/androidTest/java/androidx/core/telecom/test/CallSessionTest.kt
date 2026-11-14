@@ -16,9 +16,11 @@
 
 package androidx.core.telecom.test
 
+import android.media.ToneGenerator
 import android.os.Build.VERSION_CODES
 import android.os.ParcelUuid
 import android.telecom.CallEndpoint
+import android.telecom.DisconnectCause
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.internal.BluetoothDeviceChecker
@@ -29,7 +31,6 @@ import androidx.core.telecom.test.utils.BaseTelecomTest
 import androidx.core.telecom.test.utils.TestUtils
 import androidx.core.telecom.test.utils.TestUtils.OUTGOING_NAME
 import androidx.core.telecom.test.utils.TestUtils.TEST_ADDRESS
-import androidx.core.telecom.util.ExperimentalAppActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.filters.SmallTest
@@ -38,6 +39,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -52,7 +54,7 @@ import org.junit.runner.RunWith
  * [androidx.core.telecom.internal.CallSession] object.
  */
 @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE /* api=34 */)
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, ExperimentalAppActions::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 class CallSessionTest : BaseTelecomTest() {
     private val mEarAndSpeakerEndpoints = listOf(mEarpieceEndpoint, mSpeakerEndpoint)
@@ -275,11 +277,12 @@ class CallSessionTest : BaseTelecomTest() {
     private fun initCallSession(
         coroutineContext: CoroutineContext,
         callChannels: CallChannels,
+        attributes: CallAttributesCompat = TestUtils.INCOMING_CALL_ATTRIBUTES,
     ): CallSession {
         return CallSession(
             FakeBluetoothDeviceChecker(),
             coroutineContext,
-            TestUtils.INCOMING_CALL_ATTRIBUTES,
+            attributes,
             TestUtils.mOnAnswerLambda,
             TestUtils.mOnDisconnectLambda,
             TestUtils.mOnSetActiveLambda,
@@ -288,6 +291,16 @@ class CallSessionTest : BaseTelecomTest() {
             MutableSharedFlow(),
             { _, _ -> },
             CompletableDeferred(Unit),
+        )
+    }
+
+    private fun createAudioCallAttributes(): CallAttributesCompat {
+        return CallAttributesCompat(
+            OUTGOING_NAME,
+            TEST_ADDRESS,
+            CallAttributesCompat.DIRECTION_OUTGOING,
+            CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+            CallAttributesCompat.SUPPORTS_STREAM,
         )
     }
 
@@ -303,5 +316,295 @@ class CallSessionTest : BaseTelecomTest() {
 
     private fun getRandomParcelUuid(): ParcelUuid {
         return ParcelUuid.fromString(UUID.randomUUID().toString())
+    }
+
+    /**
+     * Verifies that when the platform unexpectedly upgrades an audio call to a video call, the
+     * Jetpack layer intercepts this, remains in an audio call state, and forces the audio route
+     * back to the earpiece.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.VANILLA_ICE_CREAM, maxSdkVersion = 36)
+    @SmallTest
+    @Test
+    fun testUnrequestedVideoStateUpgrade_AudioCall() {
+        runBlocking {
+            val callChannels = CallChannels()
+            val attributes = createAudioCallAttributes()
+            val callSession = initCallSession(coroutineContext, callChannels, attributes)
+
+            // Set initial state
+            callSession.setAvailableCallEndpoints(mEarAndSpeakerEndpoints)
+            callSession.setCurrentCallEndpoint(mSpeakerEndpoint)
+
+            // Wait for coroutines to execute
+            yield()
+
+            // Simulate platform upgrading to video unexpectedly
+            callSession.onVideoStateChanged(CallAttributesCompat.CALL_TYPE_VIDEO_CALL)
+
+            // Wait for coroutines to execute
+            yield()
+
+            val lastEndpoint = callSession.mLastClientRequestedEndpoint
+
+            // Should fall back to EARPIECE
+            assertNotNull(lastEndpoint)
+            assertEquals(CallEndpointCompat.TYPE_EARPIECE, lastEndpoint?.type)
+
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that if the user explicitly requested the speaker endpoint, the fallback to earpiece
+     * does not occur even during an unrequested video upgrade.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.VANILLA_ICE_CREAM, maxSdkVersion = 36)
+    @SmallTest
+    @Test
+    fun testUnrequestedVideoStateUpgrade_UserRequestedSpeaker() {
+        runBlocking {
+            val callChannels = CallChannels()
+            val attributes = createAudioCallAttributes()
+            val callSession = initCallSession(coroutineContext, callChannels, attributes)
+
+            // Set initial state
+            callSession.setAvailableCallEndpoints(mEarAndSpeakerEndpoints)
+            callSession.setCurrentCallEndpoint(mSpeakerEndpoint)
+
+            // Simulate user explicitly requesting speaker
+            callSession.mLastClientRequestedEndpoint = mSpeakerEndpoint
+
+            // Simulate platform upgrading to video unexpectedly
+            callSession.onVideoStateChanged(CallAttributesCompat.CALL_TYPE_VIDEO_CALL)
+
+            // Wait for coroutines to execute
+            yield()
+
+            // Should NOT fallback to EARPIECE because user requested speaker
+            val lastEndpoint = callSession.mLastClientRequestedEndpoint
+            assertEquals(CallEndpointCompat.TYPE_SPEAKER, lastEndpoint?.type)
+
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that if the application initiates the video state upgrade, the fallback logic is not
+     * triggered.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.VANILLA_ICE_CREAM)
+    @SmallTest
+    @Test
+    fun testAppInitiatedVideoStateUpgrade_DoesNotFallback() {
+        runBlocking {
+            val callChannels = CallChannels()
+            val attributes = createAudioCallAttributes()
+            val callSession = initCallSession(coroutineContext, callChannels, attributes)
+
+            // Set initial state
+            callSession.setAvailableCallEndpoints(mEarAndSpeakerEndpoints)
+            callSession.setCurrentCallEndpoint(mSpeakerEndpoint)
+
+            // App requests video upgrade
+            callSession.requestVideoState(CallAttributesCompat.CALL_TYPE_VIDEO_CALL)
+
+            // Simulate platform upgrading to video as expected
+            callSession.onVideoStateChanged(CallAttributesCompat.CALL_TYPE_VIDEO_CALL)
+
+            // Wait for coroutines to execute
+            yield()
+
+            // Tracking should be false since it was app initiated
+            assertFalse(callSession.mUnrequestedVideoManager.mTrackingUnrequestedVideoStateUpgrade)
+
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that if the platform upgrades the video state without request, and subsequently
+     * changes the audio route to SPEAKER, the Jetpack layer catches it and forces the route back to
+     * EARPIECE.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.VANILLA_ICE_CREAM, maxSdkVersion = 36)
+    @SmallTest
+    @Test
+    fun testUnrequestedVideoStateUpgrade_EndpointChangedToSpeakerAfterwards() {
+        runBlocking {
+            val callChannels = CallChannels()
+            val attributes = createAudioCallAttributes()
+            val callSession = initCallSession(coroutineContext, callChannels, attributes)
+
+            // Set initial state
+            callSession.setAvailableCallEndpoints(mEarAndSpeakerEndpoints)
+            callSession.setCurrentCallEndpoint(mEarpieceEndpoint)
+
+            // Wait for coroutines to execute
+            yield()
+
+            // Simulate first audio state flow emission
+            callSession.onVideoStateChanged(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
+
+            // Simulate platform upgrading to video unexpectedly
+            callSession.onVideoStateChanged(CallAttributesCompat.CALL_TYPE_VIDEO_CALL)
+
+            // Now platform changes endpoint to SPEAKER
+            val platformSpeaker =
+                CallEndpoint(
+                    mSpeakerEndpoint.name,
+                    CallEndpoint.TYPE_SPEAKER,
+                    getRandomParcelUuid(),
+                )
+            callSession.onCallEndpointChanged(platformSpeaker)
+
+            // Wait for coroutines to execute
+            yield()
+
+            // Should fall back to EARPIECE
+            val reqEndpoint = callSession.mLastClientRequestedEndpoint
+            assertEquals(CallEndpointCompat.TYPE_EARPIECE, reqEndpoint?.type)
+
+            // Tracking should be cleared
+            assertFalse(callSession.mUnrequestedVideoManager.mTrackingUnrequestedVideoStateUpgrade)
+
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that [CallSession.launchStartingEndpointSwitch] launches asynchronously in the
+     * background so call setup can return immediately without waiting for starting endpoint
+     * resolution.
+     */
+    @Test
+    fun testLaunchStartingEndpointSwitch_runsAsynchronouslyWithoutBlocking() {
+        runBlocking {
+            val callChannels = CallChannels()
+            val attributes = createAudioCallAttributes()
+            val callSession = initCallSession(coroutineContext, callChannels, attributes)
+
+            // Launch starting endpoint switch with a preferred endpoint.
+            // Because mIsAvailableEndpointsSet is NOT completed yet, this job is GUARANTEED to stay
+            // suspended at awaitAll() without finishing!
+            callSession.launchStartingEndpointSwitch(mEarpieceEndpoint)
+
+            // Verify that launchStartingEndpointSwitch returned immediately and
+            // mStartingEndpointJob
+            // is actively running in the background.
+            val audioJob = callSession.mStartingEndpointJob
+            assertNotNull("mStartingEndpointJob should have been launched", audioJob)
+            assertTrue(
+                "launchStartingEndpointSwitch must return immediately while audio setup job suspends in background!",
+                audioJob!!.isActive,
+            )
+
+            // Cleanup
+            audioJob.cancel()
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that when the platform invokes [CallSession.onDisconnect] with
+     * [DisconnectCause.UNKNOWN] (e.g., on API 34-36 during local Call.disconnect()), the Jetpack
+     * layer normalizes the cause code to [DisconnectCause.LOCAL] to match [CallSessionLegacy] while
+     * preserving metadata.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @SmallTest
+    @Test
+    fun testOnDisconnect_remapsUnknownToLocal() {
+        runBlocking {
+            val callChannels = CallChannels()
+            var receivedCause: DisconnectCause? = null
+            val completionDeferred = CompletableDeferred<Boolean>()
+            val callSession =
+                CallSession(
+                    FakeBluetoothDeviceChecker(),
+                    coroutineContext,
+                    TestUtils.INCOMING_CALL_ATTRIBUTES,
+                    TestUtils.mOnAnswerLambda,
+                    { cause -> receivedCause = cause },
+                    TestUtils.mOnSetActiveLambda,
+                    TestUtils.mOnSetInActiveLambda,
+                    callChannels,
+                    MutableSharedFlow(),
+                    { _, _ -> },
+                    CompletableDeferred(Unit),
+                )
+
+            val unknownCause =
+                DisconnectCause(
+                    DisconnectCause.UNKNOWN,
+                    "label",
+                    "description",
+                    "reason",
+                    ToneGenerator.TONE_PROP_BEEP,
+                )
+            callSession.onDisconnect(unknownCause) { completed ->
+                completionDeferred.complete(completed)
+            }
+
+            assertTrue(completionDeferred.await())
+            assertNotNull(receivedCause)
+            assertEquals(DisconnectCause.LOCAL, receivedCause?.code)
+            assertEquals("label", receivedCause?.label)
+            assertEquals("description", receivedCause?.description)
+            assertEquals("reason", receivedCause?.reason)
+            assertEquals(ToneGenerator.TONE_PROP_BEEP, receivedCause?.tone)
+            callChannels.closeAllChannels()
+        }
+    }
+
+    /**
+     * Verifies that when the platform invokes [CallSession.onDisconnect] with an explicit
+     * non-UNKNOWN [DisconnectCause] (such as [DisconnectCause.REJECTED]), the cause is passed
+     * through unchanged.
+     */
+    @SdkSuppress(minSdkVersion = VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @SmallTest
+    @Test
+    fun testOnDisconnect_preservesNonUnknownDisconnectCause() {
+        runBlocking {
+            val callChannels = CallChannels()
+            var receivedCause: DisconnectCause? = null
+            val completionDeferred = CompletableDeferred<Boolean>()
+            val callSession =
+                CallSession(
+                    FakeBluetoothDeviceChecker(),
+                    coroutineContext,
+                    TestUtils.INCOMING_CALL_ATTRIBUTES,
+                    TestUtils.mOnAnswerLambda,
+                    { cause -> receivedCause = cause },
+                    TestUtils.mOnSetActiveLambda,
+                    TestUtils.mOnSetInActiveLambda,
+                    callChannels,
+                    MutableSharedFlow(),
+                    { _, _ -> },
+                    CompletableDeferred(Unit),
+                )
+
+            val rejectedCause =
+                DisconnectCause(
+                    DisconnectCause.REJECTED,
+                    "label",
+                    "description",
+                    "reason",
+                    ToneGenerator.TONE_PROP_BEEP,
+                )
+            callSession.onDisconnect(rejectedCause) { completed ->
+                completionDeferred.complete(completed)
+            }
+
+            assertTrue(completionDeferred.await())
+            assertNotNull(receivedCause)
+            assertEquals(DisconnectCause.REJECTED, receivedCause?.code)
+            assertEquals("label", receivedCause?.label)
+            assertEquals("description", receivedCause?.description)
+            assertEquals("reason", receivedCause?.reason)
+            assertEquals(ToneGenerator.TONE_PROP_BEEP, receivedCause?.tone)
+            callChannels.closeAllChannels()
+        }
     }
 }

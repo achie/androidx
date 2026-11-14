@@ -1,4 +1,5 @@
-// Signature format: 4.0
+// Signature format: 5.0
+// - surface=restricted-atomic-group
 package androidx.palette.graphics {
 
   public final class Palette {
@@ -59,6 +60,10 @@ package androidx.palette.graphics {
     method public int getPopulation();
     method @ColorInt public int getRgb();
     method @ColorInt public int getTitleTextColor();
+  }
+
+  public final class PaletteKt {
+    method public static inline operator androidx.palette.graphics.Palette.Swatch? get(androidx.palette.graphics.Palette, androidx.palette.graphics.Target target);
   }
 
   public final class Target {

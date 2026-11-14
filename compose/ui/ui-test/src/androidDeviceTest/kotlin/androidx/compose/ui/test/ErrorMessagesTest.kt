@@ -34,14 +34,13 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.util.expectErrorMessage
 import androidx.compose.ui.test.util.expectErrorMessageStartsWith
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.DpSize
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,7 +49,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ErrorMessagesTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun findByTag_assertHasClickAction() {
@@ -65,8 +64,8 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed: assertExists.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
+            Failed: assertExists.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
             """
                 .trimIndent()
         ) {
@@ -80,8 +79,8 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to inject touch input.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
+            Failed to inject touch input.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
             """
                 .trimIndent()
         ) {
@@ -95,8 +94,8 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to inject touch input.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: ((TestTag = 'MyButton3') && (OnClick is defined))
+            Failed to inject touch input.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: ((TestTag = 'MyButton3') && (OnClick is defined))
             """
                 .trimIndent()
         ) {
@@ -110,10 +109,10 @@ class ErrorMessagesTest {
 
         expectErrorMessageStartsWith(
             """
-                Failed to inject touch input.
-                Reason: Expected exactly '1' node but found '2' nodes that satisfy: (Text + InputText + EditableText contains 'Toggle' (ignoreCase: false))
-                Nodes found:
-                1) Node #X at (l=X, t=X, r=X, b=X)px, Tag: 'MyButton'
+            Failed to inject touch input.
+            Reason: Expected exactly '1' node but found '2' nodes that satisfy: (Text + InputText + EditableText contains 'Toggle' (ignoreCase: false))
+            Nodes found:
+            1) Node #X at (l=X, t=X, r=X, b=X)px, Tag: 'MyButton'
             """
                 .trimIndent()
         ) {
@@ -127,8 +126,8 @@ class ErrorMessagesTest {
 
         expectErrorMessageStartsWith(
             """
-                Failed to perform OnClick action.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
+            Failed to perform OnClick action.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (TestTag = 'MyButton3')
             """
                 .trimIndent()
         ) {
@@ -142,10 +141,10 @@ class ErrorMessagesTest {
 
         expectErrorMessageStartsWith(
             """
-                Failed: assertDoesNotExist.
-                Reason: Did not expect any node but found '1' node that satisfies: (TestTag = 'MyButton')
-                Node found:
-                Node #X at (l=X, t=X, r=X, b=X)px, Tag: 'MyButton'
+            Failed: assertDoesNotExist.
+            Reason: Did not expect any node but found '1' node that satisfies: (TestTag = 'MyButton')
+            Node found:
+            Node #X at (l=X, t=X, r=X, b=X)px, Tag: 'MyButton'
             """
                 .trimIndent()
         ) {
@@ -159,10 +158,10 @@ class ErrorMessagesTest {
 
         expectErrorMessageStartsWith(
             """
-                Failed to assert count of nodes.
-                Reason: Expected '3' nodes but found '2' nodes that satisfy: (Text + InputText + EditableText contains 'Toggle' (ignoreCase: false))
-                Nodes found:
-                1) Node #X at (l=X, t=X, r=X, b=X)px
+            Failed to assert count of nodes.
+            Reason: Expected '3' nodes but found '2' nodes that satisfy: (Text + InputText + EditableText contains 'Toggle' (ignoreCase: false))
+            Nodes found:
+            1) Node #X at (l=X, t=X, r=X, b=X)px
             """
                 .trimIndent()
         ) {
@@ -176,8 +175,8 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to assert count of nodes.
-                Reason: Expected '3' nodes but could not find any node that satisfies: (Text + InputText + EditableText contains 'Toggle2' (ignoreCase: false))
+            Failed to assert count of nodes.
+            Reason: Expected '3' nodes but could not find any node that satisfies: (Text + InputText + EditableText contains 'Toggle2' (ignoreCase: false))
             """
                 .trimIndent()
         ) {
@@ -195,13 +194,13 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to inject touch input.
-                The node is no longer in the tree, last known semantics:
-                Node #X at (l=X, t=X, r=X, b=X)px
-                Text = '[Hello]'
-                Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
-                Has 1 sibling
-                Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
+            Failed to inject touch input.
+            The node is no longer in the tree, last known semantics:
+            Node #X at (l=X, t=X, r=X, b=X)px
+            Text = '[Hello]'
+            Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
+            Has 1 sibling
+            Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
             """
                 .trimIndent()
         ) {
@@ -220,13 +219,13 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed: assertExists.
-                The node is no longer in the tree, last known semantics:
-                Node #X at (l=X, t=X, r=X, b=X)px
-                Text = '[Hello]'
-                Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
-                Has 1 sibling
-                Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
+            Failed: assertExists.
+            The node is no longer in the tree, last known semantics:
+            Node #X at (l=X, t=X, r=X, b=X)px
+            Text = '[Hello]'
+            Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
+            Has 1 sibling
+            Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
             """
                 .trimIndent()
         ) {
@@ -245,13 +244,13 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to assert the following: (OnClick is defined)
-                The node is no longer in the tree, last known semantics:
-                Node #X at (l=X, t=X, r=X, b=X)px
-                Text = '[Hello]'
-                Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
-                Has 1 sibling
-                Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
+            Failed to assert the following: (OnClick is defined)
+            The node is no longer in the tree, last known semantics:
+            Node #X at (l=X, t=X, r=X, b=X)px
+            Text = '[Hello]'
+            Actions = [ClearTextSubstitution, GetTextLayoutResult, SetTextSubstitution, ShowTextSubstitution]
+            Has 1 sibling
+            Original selector: Text + InputText + EditableText contains 'Hello' (ignoreCase: false)
             """
                 .trimIndent()
         ) {
@@ -265,9 +264,9 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed: assertExists.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
-                However, the unmerged tree contains '1' node that matches. Are you missing `useUnmergedNode = true` in your finder?
+            Failed: assertExists.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
+            However, the unmerged tree contains '1' node that matches. Are you missing `useUnmergedNode = true` in your finder?
             """
                 .trimIndent()
         ) {
@@ -281,9 +280,9 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed: assertExists.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
-                However, the unmerged tree contains '5' nodes that match. Are you missing `useUnmergedNode = true` in your finder?
+            Failed: assertExists.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
+            However, the unmerged tree contains '5' nodes that match. Are you missing `useUnmergedNode = true` in your finder?
             """
                 .trimIndent()
         ) {
@@ -297,9 +296,9 @@ class ErrorMessagesTest {
 
         expectErrorMessage(
             """
-                Failed to inject touch input.
-                Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
-                However, the unmerged tree contains '1' node that matches. Are you missing `useUnmergedNode = true` in your finder?
+            Failed to inject touch input.
+            Reason: Expected exactly '1' node but could not find any node that satisfies: (Text + InputText + EditableText contains 'Banana' (ignoreCase: false))
+            However, the unmerged tree contains '1' node that matches. Are you missing `useUnmergedNode = true` in your finder?
             """
                 .trimIndent()
         ) {

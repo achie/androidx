@@ -34,14 +34,17 @@ import androidx.xr.scenecore.runtime.RenderingRuntime
  * done by calling the [close] method or letting it get garbage collected.
  */
 public interface Material : AutoCloseable {
-    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public val material: RtMaterial
+    @get:Suppress("HiddenAbstractMethodInInterface")
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public val material: RtMaterial
 
     /**
      * Closes the given [Material].
      *
      * The [Material] can be explicitly closed at anytime or garbage collected. In both cases, its
-     * resources are freed and an exception will be thrown if the [Material] is used after being
-     * closed.
+     * resources are freed.
+     *
+     * @throws IllegalStateException if the material has already been closed.
      */
     @MainThread override public fun close()
 }
@@ -131,9 +134,7 @@ internal constructor(
             session: Session,
         ): KhronosUnlitMaterial {
             val material =
-                renderingRuntime.createKhronosPbrMaterialAsync(
-                    alphaMode.toRtKhronosUnlitMaterialSpec()
-                )
+                renderingRuntime.createKhronosPbrMaterial(alphaMode.toRtKhronosUnlitMaterialSpec())
             return KhronosUnlitMaterial(material, alphaMode, session)
         }
 

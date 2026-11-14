@@ -26,23 +26,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
 import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.LocalRippleThemeConfiguration
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.RippleDefaults
 import androidx.wear.compose.material3.SCREENSHOT_GOLDEN_PATH
 import androidx.wear.compose.material3.Slider
 import androidx.wear.compose.material3.SliderDefaults
 import androidx.wear.compose.material3.TEST_TAG
 import androidx.wear.compose.material3.setContentWithTheme
 import androidx.wear.compose.material3.verifyScreenshot
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
@@ -53,7 +60,7 @@ import org.junit.runner.RunWith
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 class SliderScreenshotTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(SCREENSHOT_GOLDEN_PATH)
 
@@ -250,6 +257,113 @@ class SliderScreenshotTest {
                 steps = 2,
             )
         }
+    }
+
+    @Test
+    fun slider_steps_overload_min_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = 1,
+                steps = 4,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_steps_overload_max_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                value = 4,
+                steps = 4,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_float_show_minimum_segment_min_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                valueRange = 0f..4f,
+                value = 0f,
+                steps = 3,
+                showMinimumSegment = true,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_float_show_minimum_segment_max_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                valueRange = 0f..4f,
+                value = 4f,
+                steps = 3,
+                showMinimumSegment = true,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_int_show_minimum_segment_min_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                valueProgression = 1..4,
+                value = 1,
+                showMinimumSegment = true,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_int_show_minimum_segment_max_value() {
+        verifyScreenshot {
+            Slider(
+                modifier = Modifier.testTag(TEST_TAG),
+                valueProgression = 1..4,
+                value = 4,
+                showMinimumSegment = true,
+                onValueChange = {},
+            )
+        }
+    }
+
+    @Test
+    fun slider_inset_focus_ring() {
+        lateinit var inputModeManager: InputModeManager
+        rule.setContentWithTheme {
+            inputModeManager = LocalInputModeManager.current
+            CompositionLocalProvider(
+                LocalRippleThemeConfiguration provides
+                    RippleDefaults.InsetFocusRingThemeConfiguration
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                ) {
+                    Slider(
+                        modifier = Modifier.testTag(TEST_TAG),
+                        value = 2f,
+                        segmented = true,
+                        onValueChange = {},
+                        valueRange = 1f..4f,
+                        steps = 2,
+                    )
+                }
+            }
+        }
+        rule.runOnIdle { inputModeManager.requestInputMode(InputMode.Keyboard) }
+        rule.onAllNodes(hasClickAction()).onFirst().requestFocus()
+        rule.verifyScreenshot(testName, screenshotRule)
     }
 
     private fun verifyScreenshot(content: @Composable () -> Unit) {

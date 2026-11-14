@@ -21,11 +21,12 @@ import static androidx.annotation.RestrictTo.Scope.LIBRARY;
 import android.util.Log;
 import android.view.MotionEvent;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.input.motionprediction.common.Configuration;
 import androidx.input.motionprediction.kalman.matrix.DVector2;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.LinkedList;
 import java.util.List;
@@ -92,6 +93,7 @@ public class SinglePointerPredictor implements KalmanPredictor {
     private double mPressure = 0;
     private double mLastOrientation = 0;
     private double mLastTilt = 0;
+    private double mLastAxisRz = 0;
 
     private final boolean mPredictLift;
     private final int mStrategy;
@@ -116,7 +118,7 @@ public class SinglePointerPredictor implements KalmanPredictor {
     }
 
     private void update(float x, float y, float pressure, float orientation,
-            float tilt, long eventTime) {
+            float tilt, float axisRz, long eventTime) {
         if (x == mLastPosition.a1
                 && y == mLastPosition.a2
                 && (eventTime <= (mLastSeenEventTime + EVENT_TIME_IGNORED_THRESHOLD_MS))) {
@@ -135,6 +137,7 @@ public class SinglePointerPredictor implements KalmanPredictor {
         mLastPosition.a2 = y;
         mLastOrientation = orientation;
         mLastTilt = tilt;
+        mLastAxisRz = axisRz;
 
         // Calculate average report rate over the first 20 samples. Most sensors will not
         // provide reliable timestamps and do not report at an even interval, so this is just
@@ -190,7 +193,8 @@ public class SinglePointerPredictor implements KalmanPredictor {
             MotionEvent.PointerCoords pointerCoords = ev.coords[pointerIndex];
             update(pointerCoords.x, pointerCoords.y, pointerCoords.pressure,
                     pointerCoords.orientation,
-                    pointerCoords.getAxisValue(MotionEvent.AXIS_TILT), ev.timeMs);
+                    pointerCoords.getAxisValue(MotionEvent.AXIS_TILT),
+                    pointerCoords.getAxisValue(MotionEvent.AXIS_RZ), ev.timeMs);
         }
         return true;
     }
@@ -296,6 +300,7 @@ public class SinglePointerPredictor implements KalmanPredictor {
             coords[0].pressure = (float) mPressure;
             coords[0].orientation = (float) mLastOrientation;
             coords[0].setAxisValue(MotionEvent.AXIS_TILT, (float) mLastTilt);
+            coords[0].setAxisValue(MotionEvent.AXIS_RZ, (float) mLastAxisRz);
             if (predictedEvent == null) {
                 predictedEvent =
                         MotionEvent.obtain(

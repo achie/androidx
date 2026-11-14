@@ -18,7 +18,7 @@ package androidx.camera.testing.impl
 import android.os.Build
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.UiDevice
+import kotlinx.coroutines.runBlocking
 import org.junit.AssumptionViolatedException
 import org.junit.rules.TestRule
 import org.junit.runner.Description
@@ -55,14 +55,24 @@ public class IgnoreProblematicDeviceRule : TestRule {
         private const val EMULATOR_HARDWARE_GCE = "gce_x86"
         private val emulatorHardwareNames: Set<String> =
             setOf(EMULATOR_HARDWARE_GOLDFISH, EMULATOR_HARDWARE_RANCHU, EMULATOR_HARDWARE_GCE)
-        private var avdName: String =
-            getPropSanitized("ro.kernel.qemu.avd_name").ifEmpty {
-                getPropSanitized("ro.boot.qemu.avd_name")
+
+        internal fun resolveAvdName(
+            isEmulatorDevice: Boolean,
+            propReader: (String) -> String = ::getPropSanitized,
+        ): String {
+            if (!isEmulatorDevice) {
+                return ""
             }
+            return propReader("ro.kernel.qemu.avd_name").ifEmpty {
+                propReader("ro.boot.qemu.avd_name")
+            }
+        }
 
         public fun getPropSanitized(propKey: String): String {
             return try {
-                val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+                val device = runBlocking {
+                    RequireForegroundRule.getUiDevice(InstrumentationRegistry.getInstrumentation())
+                }
                 device.executeShellCommand("getprop $propKey")?.filter { it.isLetterOrDigit() }
                     ?: ""
             } catch (e: Exception) {
@@ -72,21 +82,27 @@ public class IgnoreProblematicDeviceRule : TestRule {
         }
 
         public val isEmulator: Boolean = emulatorHardwareNames.contains(Build.HARDWARE.lowercase())
+        private val avdName: String by
+            lazy(LazyThreadSafetyMode.PUBLICATION) { resolveAvdName(isEmulator) }
         public val isPixel2Api26Emulator: Boolean =
             isEmulator &&
-                avdName.contains("Pixel2", ignoreCase = true) &&
-                Build.VERSION.SDK_INT == Build.VERSION_CODES.O
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.O &&
+                avdName.contains("Pixel2", ignoreCase = true)
         public val isPixel2Api28Emulator: Boolean =
             isEmulator &&
-                avdName.contains("Pixel2", ignoreCase = true) &&
-                Build.VERSION.SDK_INT == Build.VERSION_CODES.P
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.P &&
+                avdName.contains("Pixel2", ignoreCase = true)
         public val isPixel2Api30Emulator: Boolean =
             isEmulator &&
-                avdName.contains("Pixel2", ignoreCase = true) &&
-                Build.VERSION.SDK_INT == Build.VERSION_CODES.R
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.R &&
+                avdName.contains("Pixel2", ignoreCase = true)
+        public val isMediumPhoneApi26Emulator: Boolean =
+            isEmulator &&
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.O &&
+                avdName.contains("MediumPhone", ignoreCase = true)
         public val isMediumPhoneApi35Emulator: Boolean =
             isEmulator &&
-                avdName.contains("MediumPhone", ignoreCase = true) &&
-                Build.VERSION.SDK_INT == 35
+                Build.VERSION.SDK_INT == 35 &&
+                avdName.contains("MediumPhone", ignoreCase = true)
     }
 }

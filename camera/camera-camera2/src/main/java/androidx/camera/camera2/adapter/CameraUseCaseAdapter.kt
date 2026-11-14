@@ -20,6 +20,7 @@ import android.app.Application
 import android.content.Context
 import android.hardware.camera2.CameraCaptureSession.CaptureCallback
 import android.hardware.camera2.CameraDevice
+import android.os.Build
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.camera.camera2.compat.quirk.DeviceQuirks
@@ -52,7 +53,10 @@ import androidx.camera.core.impl.UseCaseConfigFactory.CaptureType
  * and aspect ratios for the display.
  */
 @Suppress("DEPRECATION")
-public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
+public class CameraUseCaseAdapter(
+    context: Context,
+    private val isPreviewResolutionBypassEnabled: Boolean = false,
+) : UseCaseConfigFactory {
     private val displayInfoManager = DisplayInfoManager.getInstance(context)
 
     init {
@@ -133,7 +137,7 @@ public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
             DefaultSessionOptionsUnpacker,
         )
 
-        if (captureType == CaptureType.PREVIEW) {
+        if (captureType == CaptureType.PREVIEW && !isPreviewResolutionBypassEnabled) {
             val previewSize = displayInfoManager.getPreviewSize()
             mutableConfig.insertOption(ImageOutputConfig.OPTION_MAX_RESOLUTION, previewSize)
         }
@@ -174,13 +178,34 @@ public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
             // Apply template type
             builder.templateType = camera2Config.getCaptureRequestTemplate(templateType)
 
-            // Add extension callbacks
-            camera2Config.getSessionCaptureCallback()?.let {
-                builder.addCameraCaptureCallback(CaptureCallbackContainer.create(it))
-            }
-
             // Copy extension keys
             builder.addImplementationOptions(camera2Config.captureRequestOptions)
+
+            camera2Config.getSessionCaptureCallback()?.let { callback ->
+                builder.addCameraCaptureCallback(CaptureCallbackContainer.create(callback))
+            }
+            camera2Config.getSessionRepeatingCaptureCallback()?.let { callback ->
+                builder.addCameraCaptureCallback(CaptureCallbackContainer.create(callback))
+            }
+
+            // Copy still capture request options if present
+            for (opt in config.listOptions()) {
+                if (opt.id.startsWith(Camera2ImplConfig.STILL_CAPTURE_REQUEST_ID_STEM)) {
+                    val value = config.retrieveOption(opt)
+                    if (value != null) {
+                        @Suppress("UNCHECKED_CAST")
+                        builder.addImplementationOption(opt as Config.Option<Any>, value)
+                    }
+                }
+            }
+
+            // Copy still capture callback option if present
+            if (config.containsOption(Camera2ImplConfig.STILL_CAPTURE_CALLBACK_OPTION)) {
+                builder.addImplementationOption(
+                    Camera2ImplConfig.STILL_CAPTURE_CALLBACK_OPTION,
+                    config.retrieveOption(Camera2ImplConfig.STILL_CAPTURE_CALLBACK_OPTION)!!,
+                )
+            }
         }
 
         public companion object {
@@ -246,6 +271,9 @@ public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
             camera2Config.getSessionCaptureCallback()?.let {
                 builder.addCameraCaptureCallback(CaptureCallbackContainer.create(it))
             }
+            camera2Config.getSessionRepeatingCaptureCallback()?.let {
+                builder.addRepeatingCameraCaptureCallback(CaptureCallbackContainer.create(it))
+            }
 
             builder.setPreviewStabilization(config.previewStabilizationMode)
             builder.setVideoStabilization(config.videoStabilizationMode)
@@ -263,6 +291,21 @@ public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
                     camera2Config.getStreamUseCase()?.let { streamUseCase ->
                         insertOption(Camera2ImplConfig.STREAM_USE_CASE_OPTION, streamUseCase)
                     }
+
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        camera2Config.getSensorPixelModesUsed()?.let { sensorPixelModes ->
+                            insertOption(
+                                Camera2ImplConfig.SENSOR_PIXEL_MODES_USED_OPTION,
+                                sensorPixelModes,
+                            )
+                        }
+                    }
+
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        camera2Config.getColorSpace()?.let { colorSpace ->
+                            insertOption(Camera2ImplConfig.SESSION_COLOR_SPACE_OPTION, colorSpace)
+                        }
+                    }
                 }
             builder.addImplementationOptions(extendedConfig)
 
@@ -279,6 +322,14 @@ public class CameraUseCaseAdapter(context: Context) : UseCaseConfigFactory {
     private constructor(val captureCallback: CaptureCallback) : CameraCaptureCallback() {
         // TODO(b/192980959): Find a way to receive the CameraCaptureSession signal
         //  from the camera-pipe library and redirect to the [captureCallback].
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is CaptureCallbackContainer) return false
+            return captureCallback == other.captureCallback
+        }
+
+        override fun hashCode(): Int = captureCallback.hashCode()
+
         companion object {
             fun create(captureCallback: CaptureCallback): CaptureCallbackContainer {
                 return CaptureCallbackContainer(captureCallback)

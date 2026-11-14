@@ -17,15 +17,19 @@
 package androidx.camera.camera2.impl
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_OFF
+import android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_ON
 import android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
 import android.hardware.camera2.CameraMetadata.CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.CaptureResult.CONTROL_AE_MODE
 import android.hardware.camera2.CaptureResult.CONTROL_LOW_LIGHT_BOOST_STATE
 import android.os.Build
+import android.os.Looper.getMainLooper
 import androidx.camera.camera2.adapter.RobolectricCameraPipeTestRunner
 import androidx.camera.camera2.compat.workaround.NoOpAutoFlashAEModeDisabler
 import androidx.camera.camera2.config.CameraConfig
-import androidx.camera.camera2.pipe.CameraId
-import androidx.camera.camera2.pipe.FrameNumber
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
 import androidx.camera.camera2.pipe.testing.FakeFrameInfo
 import androidx.camera.camera2.pipe.testing.FakeFrameMetadata
@@ -33,6 +37,8 @@ import androidx.camera.camera2.pipe.testing.FakeRequestMetadata
 import androidx.camera.camera2.testing.FakeCameraProperties
 import androidx.camera.camera2.testing.FakeState3AControlCreator
 import androidx.camera.camera2.testing.FakeUseCaseCameraRequestControl
+import androidx.camera.common.CameraFrameNumber
+import androidx.camera.common.CameraId
 import androidx.camera.core.CameraControl
 import androidx.camera.core.LowLightBoostState.ACTIVE
 import androidx.camera.core.LowLightBoostState.INACTIVE
@@ -57,6 +63,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.internal.DoNotInstrument
 
@@ -77,13 +84,7 @@ class LowLightBoostControlTest {
         }
     }
 
-    private val metadata =
-        FakeCameraMetadata(
-            mapOf(
-                CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES to
-                    intArrayOf(CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY)
-            )
-        )
+    private val metadata = FakeCameraMetadata.fromTemplate()
 
     private val fakeCameraProperties =
         CameraPipeCameraProperties(CameraConfig(CameraId(DEFAULT_CAMERA_ID)), metadata)
@@ -100,16 +101,22 @@ class LowLightBoostControlTest {
 
     private val comboRequestListener = ComboRequestListener()
 
+    private lateinit var state3AControl: State3AControl
     private lateinit var lowLightBoostControl: LowLightBoostControl
 
     @Before
     fun setUp() {
+        state3AControl =
+            State3AControl(
+                    fakeCameraProperties,
+                    NoOpAutoFlashAEModeDisabler,
+                    fakeUseCaseThreads,
+                )
+                .apply { requestControl = fakeUseCaseCameraRequestControl }
         lowLightBoostControl =
             LowLightBoostControl(
                 fakeCameraProperties.metadata,
-                State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                    requestControl = fakeUseCaseCameraRequestControl
-                },
+                state3AControl,
                 fakeUseCaseThreads,
                 comboRequestListener,
             )
@@ -119,13 +126,16 @@ class LowLightBoostControlTest {
     fun enableLowLightBoost_whenIsNotSupported(): Unit = runBlocking {
         assertThrows<IllegalStateException> {
             // Creates camera properties without low-light boost support
-            val fakeCameraProperties = FakeCameraProperties()
+            val fakeCameraProperties = createCameraPropertiesWithoutLowLightBoost()
 
             LowLightBoostControl(
                     fakeCameraProperties.metadata,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                     comboRequestListener,
                 )
@@ -138,14 +148,17 @@ class LowLightBoostControlTest {
     @Test
     fun getLowLightBoostState_whenIsNotSupported() {
         // Creates camera properties without low-light boost support
-        val fakeCameraProperties = FakeCameraProperties()
+        val fakeCameraProperties = createCameraPropertiesWithoutLowLightBoost()
 
         val lowLightBoostState =
             LowLightBoostControl(
                     fakeCameraProperties.metadata,
-                    State3AControl(fakeCameraProperties, NoOpAutoFlashAEModeDisabler).apply {
-                        requestControl = fakeUseCaseCameraRequestControl
-                    },
+                    State3AControl(
+                            fakeCameraProperties,
+                            NoOpAutoFlashAEModeDisabler,
+                            fakeUseCaseThreads,
+                        )
+                        .apply { requestControl = fakeUseCaseCameraRequestControl },
                     fakeUseCaseThreads,
                     comboRequestListener,
                 )
@@ -202,8 +215,14 @@ class LowLightBoostControlTest {
 
     private fun simulateLowLightBoostStateUpdate(state: Int? = null) =
         comboRequestListener.onTotalCaptureResult(
-            FakeRequestMetadata(),
-            FrameNumber(0L),
+            FakeRequestMetadata(
+                requestParameters =
+                    mapOf(
+                        CaptureRequest.CONTROL_AE_MODE to
+                            CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
+                    )
+            ),
+            CameraFrameNumber(0L),
             FakeFrameInfo(
                 FakeFrameMetadata(
                     state?.let { mapOf(CONTROL_LOW_LIGHT_BOOST_STATE to state) } ?: emptyMap()
@@ -333,10 +352,237 @@ class LowLightBoostControlTest {
         activateLowLightBoost()
         val deferred =
             lowLightBoostControl
-                .also { it.setLowLightBoostDisabledByUseCaseSessionConfig(true) }
+                .also { it.checkFrameRateJob = CompletableDeferred(true) }
                 .setLowLightBoostAsync(true)
 
         assertThrows<IllegalStateException> { deferred.await() }
+    }
+
+    @Test
+    fun disableForFlashCaptureAsync_clearsPreferredAeMode_andFreezesState(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+        simulateLowLightBoostStateUpdate(CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE)
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(ACTIVE)
+        Truth.assertThat(state3AControl.preferredAeMode)
+            .isEqualTo(CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY)
+
+        lowLightBoostControl.disableForFlashCaptureAsync().await()
+
+        Truth.assertThat(state3AControl.preferredAeMode).isNull()
+        // State remains ACTIVE (frozen, not OFF)
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(ACTIVE)
+
+        // Simulating a hardware result reporting OFF while disabled should be ignored
+        simulateLowLightBoostStateUpdate(0)
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(ACTIVE)
+    }
+
+    @Test
+    fun restoreAfterFlashCaptureAsync_restoresPreferredAeMode(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+        lowLightBoostControl.disableForFlashCaptureAsync().await()
+        Truth.assertThat(state3AControl.preferredAeMode).isNull()
+
+        lowLightBoostControl.restoreAfterFlashCaptureAsync().await()
+
+        Truth.assertThat(state3AControl.preferredAeMode)
+            .isEqualTo(CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY)
+        Truth.assertThat(lowLightBoostControl.isLowLightBoostOn).isTrue()
+    }
+
+    @Test
+    fun multipleDisableAndRestoreForFlashCaptureAsync_handlesRefCounting(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+
+        lowLightBoostControl.disableForFlashCaptureAsync().await()
+        lowLightBoostControl.disableForFlashCaptureAsync().await()
+        Truth.assertThat(state3AControl.preferredAeMode).isNull()
+
+        // First restore does not yet restore preferredAeMode because count is still 1
+        lowLightBoostControl.restoreAfterFlashCaptureAsync().await()
+        Truth.assertThat(state3AControl.preferredAeMode).isNull()
+
+        // Second restore restores preferredAeMode
+        lowLightBoostControl.restoreAfterFlashCaptureAsync().await()
+        Truth.assertThat(state3AControl.preferredAeMode)
+            .isEqualTo(CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY)
+    }
+
+    @Test
+    fun setLowLightBoostOff_resetsFlashOverrideState(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+        lowLightBoostControl.disableForFlashCaptureAsync().await()
+        Truth.assertThat(lowLightBoostControl.isTemporarilyDisabledForFlash).isTrue()
+
+        lowLightBoostControl.setLowLightBoostAsync(false).await()
+        Truth.assertThat(lowLightBoostControl.isTemporarilyDisabledForFlash).isFalse()
+        Truth.assertThat(lowLightBoostControl.isLowLightBoostOn).isFalse()
+    }
+
+    @Test
+    fun onTotalCaptureResult_whenControlAeModeOnReported_setsLowLightBoostStateOff(): Unit =
+        runBlocking {
+            activateLowLightBoost()
+            lowLightBoostControl.setLowLightBoostAsync(true).await()
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value)
+                .isEqualTo(INACTIVE)
+
+            // Simulate HAL reporting CONTROL_AE_MODE_ON when
+            // CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY was requested
+            comboRequestListener.onTotalCaptureResult(
+                FakeRequestMetadata(
+                    requestParameters =
+                        mapOf(
+                            CaptureRequest.CONTROL_AE_MODE to
+                                CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
+                        )
+                ),
+                CameraFrameNumber(0L),
+                FakeFrameInfo(
+                    FakeFrameMetadata(
+                        mapOf(
+                            CONTROL_AE_MODE to CONTROL_AE_MODE_ON,
+                            CONTROL_LOW_LIGHT_BOOST_STATE to 0,
+                        )
+                    )
+                ),
+            )
+
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(OFF)
+        }
+
+    @Test
+    fun onTotalCaptureResult_whenOtherFallbackAeModeReported_setsLowLightBoostStateOff(): Unit =
+        runBlocking {
+            activateLowLightBoost()
+            lowLightBoostControl.setLowLightBoostAsync(true).await()
+            simulateLowLightBoostStateUpdate(CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE)
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value)
+                .isEqualTo(ACTIVE)
+
+            // Simulate HAL falling back to an AE mode other than CONTROL_AE_MODE_ON when
+            // CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY was requested
+            simulateCaptureResultForLowLightBoostRequest(CONTROL_AE_MODE_OFF)
+
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(OFF)
+        }
+
+    @Test
+    fun onTotalCaptureResult_whenResultAeModeAbsent_usesLowLightBoostState(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(INACTIVE)
+
+        // A result that omits CONTROL_AE_MODE must not be treated as a fallback
+        simulateCaptureResultForLowLightBoostRequest(
+            resultAeMode = null,
+            lowLightBoostState = CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE,
+        )
+
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(ACTIVE)
+    }
+
+    private fun simulateCaptureResultForLowLightBoostRequest(
+        resultAeMode: Int?,
+        lowLightBoostState: Int = 0,
+    ) =
+        comboRequestListener.onTotalCaptureResult(
+            FakeRequestMetadata(
+                requestParameters =
+                    mapOf(
+                        CaptureRequest.CONTROL_AE_MODE to
+                            CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY
+                    )
+            ),
+            CameraFrameNumber(0L),
+            FakeFrameInfo(
+                FakeFrameMetadata(
+                    buildMap<CaptureResult.Key<*>, Any?> {
+                        resultAeMode?.let { put(CONTROL_AE_MODE, it) }
+                        put(CONTROL_LOW_LIGHT_BOOST_STATE, lowLightBoostState)
+                    }
+                )
+            ),
+        )
+
+    @Test
+    fun onTotalCaptureResult_whenPreLowLightBoostRequestArrivesWithControlAeModeOn_ignoresFrame():
+        Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(INACTIVE)
+
+        // Simulate an older in-flight request that had CONTROL_AE_MODE_ON before LLB was requested
+        comboRequestListener.onTotalCaptureResult(
+            FakeRequestMetadata(
+                requestParameters = mapOf(CaptureRequest.CONTROL_AE_MODE to CONTROL_AE_MODE_ON)
+            ),
+            CameraFrameNumber(0L),
+            FakeFrameInfo(
+                FakeFrameMetadata(
+                    mapOf(
+                        CONTROL_AE_MODE to CONTROL_AE_MODE_ON,
+                        CONTROL_LOW_LIGHT_BOOST_STATE to 0,
+                    )
+                )
+            ),
+        )
+
+        // State remains INACTIVE because the request had not yet asked for LLB AE mode
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(INACTIVE)
+    }
+
+    @Test
+    fun onTotalCaptureResult_whenRequestHasNullAeModeWithControlAeModeOn_ignoresFrame(): Unit =
+        runBlocking {
+            activateLowLightBoost()
+            lowLightBoostControl.setLowLightBoostAsync(true).await()
+            simulateLowLightBoostStateUpdate(CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE)
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value)
+                .isEqualTo(ACTIVE)
+
+            // Simulate a single capture request where CONTROL_AE_MODE is not explicitly set (null)
+            // and the result reports CONTROL_AE_MODE_ON
+            comboRequestListener.onTotalCaptureResult(
+                FakeRequestMetadata(),
+                CameraFrameNumber(0L),
+                FakeFrameInfo(
+                    FakeFrameMetadata(
+                        mapOf(
+                            CONTROL_AE_MODE to CONTROL_AE_MODE_ON,
+                            CONTROL_LOW_LIGHT_BOOST_STATE to 0,
+                        )
+                    )
+                ),
+            )
+
+            // State remains ACTIVE and does not flicker to OFF
+            Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value)
+                .isEqualTo(ACTIVE)
+        }
+
+    @Test
+    fun backgroundFrameBeforeMainThreadDisable_doesNotOverwriteOffState(): Unit = runBlocking {
+        activateLowLightBoost()
+        lowLightBoostControl.setLowLightBoostAsync(true).await()
+
+        // Simulate a capture result arriving on a background callback thread while the main looper
+        // has not yet run the posted runnable
+        val backgroundThread = Thread {
+            simulateLowLightBoostStateUpdate(CONTROL_LOW_LIGHT_BOOST_STATE_ACTIVE)
+        }
+        backgroundThread.start()
+        backgroundThread.join()
+
+        // Main thread disables Low Light Boost before the queued main-looper runnable executes
+        lowLightBoostControl.setLowLightBoostAsync(false).await()
+        shadowOf(getMainLooper()).idle()
+
+        Truth.assertThat(lowLightBoostControl.lowLightBoostStateLiveData.value).isEqualTo(OFF)
     }
 
     private suspend fun <T> Deferred<T>.awaitWithTimeout(
@@ -356,9 +602,18 @@ class LowLightBoostControlTest {
                 FakeState3AControlCreator.createState3AControl(
                     fakeCameraProperties,
                     neverCompleteLowLightBoostRequestControl,
+                    fakeUseCaseThreads,
                 ),
                 fakeUseCaseThreads,
                 comboRequestListener,
             )
     }
+
+    private fun createCameraPropertiesWithoutLowLightBoost() =
+        FakeCameraProperties(
+            FakeCameraMetadata.fromTemplate(
+                characteristicsOverrides =
+                    mapOf(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES to null)
+            )
+        )
 }

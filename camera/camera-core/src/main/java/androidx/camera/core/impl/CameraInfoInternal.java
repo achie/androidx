@@ -21,6 +21,7 @@ import static androidx.camera.core.impl.utils.RangeUtil.filterFixedRanges;
 import static androidx.core.util.Preconditions.checkArgument;
 
 import static java.util.Collections.emptySet;
+import static java.util.Collections.unmodifiableSet;
 
 import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
@@ -38,17 +39,22 @@ import androidx.camera.core.CameraSelector;
 import androidx.camera.core.CameraUseCaseAdapterProvider;
 import androidx.camera.core.DynamicRange;
 import androidx.camera.core.ExperimentalLensFacing;
+import androidx.camera.core.ExperimentalZeroShutterLag;
 import androidx.camera.core.Logger;
+import androidx.camera.core.Preview;
 import androidx.camera.core.SessionConfig;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.featuregroup.GroupableFeature;
 import androidx.camera.core.featuregroup.impl.ResolvedFeatureGroup;
 import androidx.camera.core.internal.CalculatedUseCaseInfo;
 import androidx.camera.core.internal.CameraUseCaseAdapter;
+import androidx.camera.core.internal.FastSwitchSupportChecker;
+import androidx.camera.core.internal.StreamSpecQueryResult;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -104,6 +110,28 @@ public interface CameraInfoInternal extends CameraInfo {
      * {@link #addSessionCaptureCallback(Executor, CameraCaptureCallback)}.
      */
     void removeSessionCaptureCallback(@NonNull CameraCaptureCallback callback);
+
+    /**
+     * Adds a {@link CameraSessionLifecycleCallback} which will be invoked when the camera
+     * capture session lifecycle changes.
+     *
+     * <p>The callback will be invoked on the specified {@link Executor}.
+     *
+     * @param executor The executor on which the callback will be invoked.
+     * @param callback The callback to add.
+     */
+    default void addSessionLifecycleCallback(@NonNull Executor executor,
+            @NonNull CameraSessionLifecycleCallback callback) {
+    }
+
+    /**
+     * Removes the {@link CameraSessionLifecycleCallback} which was added in
+     * {@link #addSessionLifecycleCallback(Executor, CameraSessionLifecycleCallback)}.
+     *
+     * @param callback The callback to remove.
+     */
+    default void removeSessionLifecycleCallback(@NonNull CameraSessionLifecycleCallback callback) {
+    }
 
     /** Returns a list of quirks related to the camera. */
     @NonNull Quirks getCameraQuirks();
@@ -182,37 +210,70 @@ public interface CameraInfoInternal extends CameraInfo {
     @NonNull
     Rect getSensorRect();
 
-    @SuppressWarnings("MixedMutabilityReturnType")
     @Override
     default @NonNull Set<Range<Integer>> getSupportedFrameRateRanges(
             @NonNull SessionConfig sessionConfig) {
-        int maxSupportedFrameRate;
-        try {
-            CalculatedUseCaseInfo info = UseCaseAdditionSimulator.simulateAddUseCases(this,
-                    sessionConfig, /*findMaxSupportedFrameRate=*/ true);
-            maxSupportedFrameRate = info.getPrimaryStreamSpecResult().getMaxSupportedFrameRate();
-        } catch (Throwable t) {
-            Logger.w("CameraInfoInternal",
-                    "Failed to get max supported frameRate by SessionConfig: " + sessionConfig, t);
+        boolean isFastSwitchSession = sessionConfig.isInitialEnabledUseCasesSet();
+        if (isFastSwitchSession && !FastSwitchSupportChecker.isFastSwitchPreconditionsMet(
+                this, sessionConfig)) {
             return emptySet();
         }
 
-        Set<Range<Integer>> allSupportedFrameRates =
+        Set<Range<Integer>> streamSpecSupportedFrameRateRanges;
+        try {
+            CalculatedUseCaseInfo info = UseCaseAdditionSimulator.simulateAddUseCases(this,
+                    sessionConfig, /*findSupportedFrameRateRanges=*/ true);
+            StreamSpecQueryResult streamSpecQueryResult = info.getPrimaryStreamSpecResult();
+            streamSpecSupportedFrameRateRanges =
+                    streamSpecQueryResult.getSupportedFrameRateRanges();
+        } catch (Throwable t) {
+            Logger.w("CameraInfoInternal",
+                    "Failed to get supported frame rate ranges by SessionConfig: "
+                            + sessionConfig, t);
+            return emptySet();
+        }
+
+        Set<Range<Integer>> deviceSupportedFrameRates =
                 sessionConfig.getSessionType() == SESSION_TYPE_HIGH_SPEED
                         ? filterFixedRanges(getSupportedHighSpeedFrameRateRanges())
                         : getSupportedFrameRateRanges();
 
-        if (allSupportedFrameRates.isEmpty()) {
+        if (deviceSupportedFrameRates.isEmpty()) {
             return emptySet();
         }
 
-        LinkedHashSet<Range<Integer>> filteredFrameRates = new LinkedHashSet<>();
-        for (Range<Integer> frameRate : allSupportedFrameRates) {
-            if (frameRate.getUpper() <= maxSupportedFrameRate) {
-                filteredFrameRates.add(frameRate);
+        // Null means the stream spec query didn't calculate the ranges, e.g. there were no new
+        // use cases to configure, so there is no additional constraint to apply.
+        Set<Range<Integer>> candidateFrameRates;
+        if (streamSpecSupportedFrameRateRanges == null) {
+            candidateFrameRates = deviceSupportedFrameRates;
+        } else {
+            LinkedHashSet<Range<Integer>> filteredFrameRates = new LinkedHashSet<>();
+            for (Range<Integer> frameRate : deviceSupportedFrameRates) {
+                if (streamSpecSupportedFrameRateRanges.contains(frameRate)) {
+                    filteredFrameRates.add(frameRate);
+                }
             }
+            candidateFrameRates = filteredFrameRates;
         }
-        return filteredFrameRates;
+
+        if (isFastSwitchSession) {
+            return unmodifiableSet(
+                    FastSwitchSupportChecker.filterFastSwitchSupportedFrameRates(
+                            this, sessionConfig, candidateFrameRates));
+        }
+        return unmodifiableSet(candidateFrameRates);
+    }
+
+    /**
+     * Checks whether ZSL can be supported with the given list of sizes.
+     *
+     * @param sizes a list of sizes
+     * @return true if ZSL can be supported, false otherwise
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    default boolean canSupportZsl(@NonNull List<Size> sizes) {
+        return isZslSupported();
     }
 
     /**
@@ -326,8 +387,18 @@ public interface CameraInfoInternal extends CameraInfo {
                 }
             }
 
-            UseCaseAdditionSimulator.simulateAddUseCases(this,
-                    sessionConfig, /*findMaxSupportedFrameRate=*/ false);
+            boolean isFastSwitchSession = sessionConfig.isInitialEnabledUseCasesSet();
+            if (isFastSwitchSession && !FastSwitchSupportChecker.isFastSwitchPreconditionsMet(
+                    this, sessionConfig)) {
+                return false;
+            }
+
+            CalculatedUseCaseInfo info = UseCaseAdditionSimulator.simulateAddUseCases(this,
+                    sessionConfig, /*findSupportedFrameRateRanges=*/ false);
+            if (isFastSwitchSession) {
+                return FastSwitchSupportChecker.isSessionConfigFastSwitchSupported(
+                        this, sessionConfig, info);
+            }
             return true;
         } catch (IllegalArgumentException | CameraUseCaseAdapter.CameraException e) {
             Logger.d("CameraInfoInternal",
@@ -335,6 +406,65 @@ public interface CameraInfoInternal extends CameraInfo {
         }
 
         return false;
+    }
+
+    /**
+     * Returns whether the camera implementation forces a repeating stream (e.g.
+     * {@code MeteringRepeating}) to be attached when only non-repeating use cases are running.
+     */
+    default boolean isRepeatingStreamForced() {
+        return true;
+    }
+
+    /**
+     * Resolves the internal repeating stream (e.g. {@code MeteringRepeating}) that would be
+     * attached alongside the given {@code streams} if the combination is supported by the camera,
+     * or returns {@code null} if the combination with the internal repeating stream is not
+     * supported.
+     *
+     * <p>By default, this falls back to checking {@link #isUseCaseCombinationSupported} with an
+     * extra {@link Preview} use case for non-camera2 implementations (such as test fakes).
+     */
+    default @Nullable ResolvedStreamInfo resolveRepeatingStream(
+            @NonNull CalculatedUseCaseInfo unionInfo,
+            @NonNull List<@NonNull ResolvedStreamInfo> streams) {
+        CameraConfig cameraConfig = (this instanceof AdapterCameraInfo)
+                ? ((AdapterCameraInfo) this).getCameraConfig()
+                : CameraConfigs.defaultConfig();
+        List<UseCase> useCasesWithMetering = new ArrayList<>(unionInfo.getCameraUseCases());
+        Preview placeholderPreview = new Preview.Builder().build();
+        useCasesWithMetering.add(placeholderPreview);
+        if (!isUseCaseCombinationSupported(
+                useCasesWithMetering,
+                CameraMode.DEFAULT,
+                /* isFeatureComboInvocation= */ false,
+                cameraConfig)) {
+            return null;
+        }
+        UseCaseConfig<?> config = placeholderPreview.mergeConfigs(
+                getImplementation(), null, null);
+        return new ResolvedStreamInfo(
+                config,
+                StreamSpec.builder(new Size(640, 480)).build());
+    }
+
+    /**
+     * Queries the camera device whether it supports a session configured with the given streams,
+     * e.g. with {@code CameraDevice.CameraDeviceSetup#isSessionConfigurationSupported}.
+     *
+     * <p>This is used by {@link #isSessionConfigSupported(SessionConfig)} after the stream
+     * combination of the union of all use cases has been validated against the stream combination
+     * tables, to also catch configurations that the tables allow but the device rejects.
+     *
+     * @param config  The {@link SessionConfig} being checked, which provides the session level
+     *                settings, e.g. the frame rate range.
+     * @param streams The streams of the union of all use cases, as resolved by the simulation.
+     * @return {@link HardwareConfigQueryResult#UNKNOWN} by default, i.e. if the query is not
+     * available.
+     */
+    default @NonNull HardwareConfigQueryResult queryFastSwitchHardwareSupport(
+            @NonNull SessionConfig config, @NonNull List<ResolvedStreamInfo> streams) {
+        return HardwareConfigQueryResult.UNKNOWN;
     }
 
     /**
@@ -354,6 +484,12 @@ public interface CameraInfoInternal extends CameraInfo {
     default boolean isResolvedFeatureGroupSupported(
             @NonNull ResolvedFeatureGroup resolvedFeatureGroup,
             @NonNull SessionConfig sessionConfig) {
+        if (sessionConfig.isInitialEnabledUseCasesSet()
+                && (!resolvedFeatureGroup.getFeatures().isEmpty()
+                        || !FastSwitchSupportChecker.isFastSwitchPreconditionsMet(
+                                this, sessionConfig))) {
+            return false;
+        }
         for (GroupableFeature feature : resolvedFeatureGroup.getFeatures()) {
             if (!feature.isSupportedIndividually(this, sessionConfig)) {
                 Logger.d("CameraInfoInternal", feature + " is not supported.");
@@ -362,9 +498,13 @@ public interface CameraInfoInternal extends CameraInfo {
         }
 
         try {
-            UseCaseAdditionSimulator.simulateAddUseCases(this,
-                    sessionConfig, /*findMaxSupportedFrameRate=*/ false,
+            CalculatedUseCaseInfo info = UseCaseAdditionSimulator.simulateAddUseCases(this,
+                    sessionConfig, /*findSupportedFrameRateRanges=*/ false,
                     resolvedFeatureGroup);
+            if (sessionConfig.isInitialEnabledUseCasesSet()) {
+                return FastSwitchSupportChecker.isSessionConfigFastSwitchSupported(
+                        this, sessionConfig, info);
+            }
             return true;
         } catch (IllegalArgumentException | CameraUseCaseAdapter.CameraException e) {
             Logger.d("CameraInfoInternal",
@@ -404,5 +544,34 @@ public interface CameraInfoInternal extends CameraInfo {
     @OptIn(markerClass = ExperimentalLensFacing.class)
     default boolean isExternalCamera() {
         return getLensFacing() == CameraSelector.LENS_FACING_EXTERNAL;
+    }
+
+    /**
+     * Returns the supported extension modes for this camera.
+     */
+    default @NonNull Set<Integer> getSupportedExtensions() {
+        return Collections.emptySet();
+    }
+
+    /**
+     * Returns true if the extension mode is supported by the camera device.
+     *
+     * <p>This method can return true for modes not included in {@link #getSupportedExtensions()}
+     * (e.g. vendor-defined hidden modes). Implementations with hidden modes must override this
+     * default implementation.
+     */
+    default boolean isExtensionSupported(int extensionMode) {
+        return getSupportedExtensions().contains(extensionMode);
+    }
+
+    /**
+     * Returns the camera extension capabilities for the specified extension mode.
+     *
+     * @param extensionMode the extension mode
+     * @return the camera extension capabilities, or null if the extension mode is not supported
+     */
+    default @Nullable CameraExtensionCapabilities getCameraExtensionCapabilities(
+            int extensionMode) {
+        return null;
     }
 }

@@ -16,39 +16,117 @@
 
 package androidx.wear.compose.remote.material3
 
-import androidx.compose.remote.creation.compose.capture.RemoteDrawScope
-import androidx.compose.remote.creation.compose.capture.painter.RemotePainter
-import androidx.compose.remote.creation.compose.capture.shaders.RemoteBrush
+import androidx.compose.remote.creation.compose.layout.RemoteContentScale
+import androidx.compose.remote.creation.compose.layout.RemoteDrawScope
 import androidx.compose.remote.creation.compose.layout.RemoteSize
+import androidx.compose.remote.creation.compose.painter.RemotePainter
+import androidx.compose.remote.creation.compose.shaders.RemoteBrush
+import androidx.compose.remote.creation.compose.shaders.image
+import androidx.compose.remote.creation.compose.shapes.RemoteShape
+import androidx.compose.remote.creation.compose.shapes.drawOutline
 import androidx.compose.remote.creation.compose.state.RemoteFloat
+import androidx.compose.remote.creation.compose.state.RemoteImageBitmap
+import androidx.compose.remote.creation.compose.state.RemotePaint
+import androidx.compose.remote.creation.compose.state.rf
 
-@Suppress("RestrictedApiAndroidX")
 internal fun remoteContainerPainter(
-    painter: RemotePainter,
-    scrim: RemoteBrush? = null,
+    image: RemoteImageBitmap,
     alpha: RemoteFloat,
-): RemotePainter = DefaultRemoteContainerPainter(painter, scrim, alpha)
+    shape: RemoteShape,
+    contentScale: RemoteContentScale,
+    scrim: RemoteBrush? = null,
+): RemotePainter =
+    DefaultRemoteContainerPainter(
+        ShapedBitmapPainter(shape, image, contentScale, alpha),
+        scrim,
+        alpha,
+        shape,
+    )
 
-@Suppress("RestrictedApiAndroidX")
 private class DefaultRemoteContainerPainter(
-    private val painter: RemotePainter,
+    private val painter: ShapedBitmapPainter,
     private val scrim: RemoteBrush?,
     private val alpha: RemoteFloat,
+    private val shape: RemoteShape,
     override val intrinsicSize: RemoteSize? = painter.intrinsicSize,
 ) : RemotePainter() {
+    fun withAlphaMultiplier(multiplier: RemoteFloat): DefaultRemoteContainerPainter {
+        val combinedAlpha = alpha * multiplier
+        return DefaultRemoteContainerPainter(
+            painter =
+                ShapedBitmapPainter(shape, painter.image, painter.contentScale, combinedAlpha),
+            scrim = scrim,
+            alpha = combinedAlpha,
+            shape = shape,
+            intrinsicSize = intrinsicSize,
+        )
+    }
+
     override fun RemoteDrawScope.onDraw() {
-        with(painter) { draw(alpha = alpha) }
-        scrim?.let { drawRect(brush = scrim, alpha = alpha) }
+        // Draw Shaped image
+        with(painter) { onDraw() }
+
+        // Draw shaped scrim
+        scrim?.let {
+            val paint = RemotePaint {
+                with(it) { applyTo(this@RemotePaint, size) }
+                color = color.copy(alpha = color.alpha * this@DefaultRemoteContainerPainter.alpha)
+            }
+            val outline =
+                shape.createOutline(
+                    size = size,
+                    layoutDirection = layoutDirection,
+                    density = remoteDensity,
+                )
+            drawOutline(outline, paint)
+        }
     }
 }
 
-@Suppress("RestrictedApiAndroidX")
+/** Paints [image] and clips with [shape]. */
+internal class ShapedBitmapPainter(
+    val shape: RemoteShape,
+    val image: RemoteImageBitmap,
+    val contentScale: RemoteContentScale,
+    val alpha: RemoteFloat = 1f.rf,
+) : RemotePainter() {
+    override fun RemoteDrawScope.onDraw() {
+        val paint = RemotePaint {
+            with(RemoteBrush.image(image, contentScale = contentScale)) {
+                applyTo(this@RemotePaint, size)
+            }
+            color = color.copy(alpha = color.alpha * this@ShapedBitmapPainter.alpha)
+        }
+
+        val outline =
+            shape.createOutline(
+                size = size,
+                layoutDirection = layoutDirection,
+                density = remoteDensity,
+            )
+        drawOutline(outline, paint)
+    }
+
+    override val intrinsicSize: RemoteSize
+        get() = RemoteSize(image.width, image.height)
+}
+
 internal fun disabledRemoteContainerPainter(
     painter: RemotePainter,
     alpha: RemoteFloat,
-): RemotePainter = DefaultDisabledRemoteContainerPainter(painter, alpha)
+): RemotePainter =
+    when (painter) {
+        is DefaultRemoteContainerPainter -> painter.withAlphaMultiplier(alpha)
+        is ShapedBitmapPainter ->
+            ShapedBitmapPainter(
+                shape = painter.shape,
+                image = painter.image,
+                contentScale = painter.contentScale,
+                alpha = painter.alpha * alpha,
+            )
+        else -> DefaultDisabledRemoteContainerPainter(painter, alpha)
+    }
 
-@Suppress("RestrictedApiAndroidX")
 private class DefaultDisabledRemoteContainerPainter(
     private val painter: RemotePainter,
     private val alpha: RemoteFloat,

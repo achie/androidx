@@ -24,6 +24,7 @@ import androidx.camera.camera2.compat.Api35Compat
 import androidx.camera.camera2.compat.workaround.isFlashAvailable
 import androidx.camera.camera2.config.CameraScope
 import androidx.camera.camera2.pipe.AeMode
+import androidx.camera.camera2.pipe.CameraGraph
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.defaultTorchStrengthLevel
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.maxTorchStrengthLevel
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.supportsTorchStrength
@@ -68,10 +69,12 @@ constructor(
         }
 
     override fun reset() {
-        updateTorchState(TorchMode.OFF)
         stopRunningTaskInternal()
-        setTorchAsync(false)
-        torchMode = null
+        if (torchMode != null) {
+            updateTorchState(TorchMode.OFF)
+            setTorchAsync(false)
+            torchMode = null
+        }
     }
 
     private val hasFlashUnit: Boolean = cameraProperties.isFlashAvailable()
@@ -117,6 +120,7 @@ constructor(
         mode: TorchMode,
         cancelPreviousTask: Boolean = true,
         ignoreFlashUnitAvailability: Boolean = false,
+        session: CameraGraph.Session? = null,
     ): Deferred<Unit> {
         Camera2Logger.debug { "TorchControl#setTorchAsync: torch mode = $mode" }
 
@@ -143,8 +147,10 @@ constructor(
             // Hold the internal AE mode to ON while the torch is turned ON. If torch is OFF, a
             // value of null will make the state3AControl calculate the correct AE mode based on
             // other settings.
-            state3AControl.preferredAeMode =
-                if (isFlashUnitOn(mode)) CaptureRequest.CONTROL_AE_MODE_ON else null
+            state3AControl.setPreferredTorchAeModeAsync(
+                if (isFlashUnitOn(mode)) CaptureRequest.CONTROL_AE_MODE_ON else null,
+                session = session,
+            )
             val aeMode: AeMode =
                 AeMode.fromIntOrNull(state3AControl.getFinalSupportedAeMode())
                     ?: run {
@@ -161,20 +167,19 @@ constructor(
                     if (mode == TorchMode.ON) {
                         // Only set the torch strength if torch is explicitly turned on as torch
                         // purpose.
-                        torchStrengthLiveData.value?.let { updateTorchStrengthLevelAsync(it) }
+                        torchStrengthLiveData.value?.let {
+                            updateTorchStrengthLevelAsync(it, session = session)
+                        }
                     } else {
                         // Use the default torch strength if torch is turned on as flash purpose.
-                        updateTorchStrengthLevelAsync(defaultTorchStrength)
+                        updateTorchStrengthLevelAsync(defaultTorchStrength, session = session)
                     }
 
-                    requestControl.setTorchOnAsync()
-                } else requestControl.setTorchOffAsync(aeMode)
-            deferred.propagateTo(signal) {
-                // TODO: b/209757083 - handle the failed result of the setTorchAsync().
-                //   Since we are not handling the result here, signal is completed with Unit
-                //   value here without exception when source deferred completes (returning Unit
-                //   explicitly is redundant and thus this block looks empty)
-            }
+                    requestControl.setTorchOnAsync(session)
+                } else {
+                    requestControl.setTorchOffAsync(aeMode, session)
+                }
+            deferred.invokeOnCompletion { signal.complete(Unit) }
         }
             ?: run {
                 signal.createFailureResult(
@@ -211,7 +216,10 @@ constructor(
         } else CompletableDeferred(Unit)
     }
 
-    private fun updateTorchStrengthLevelAsync(level: Int): Deferred<Unit> {
+    private fun updateTorchStrengthLevelAsync(
+        level: Int,
+        session: CameraGraph.Session? = null,
+    ): Deferred<Unit> {
         val signal = CompletableDeferred<Unit>()
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM &&
@@ -226,7 +234,9 @@ constructor(
 
             val parameters: MutableMap<CaptureRequest.Key<*>, Any> = mutableMapOf()
             Api35Compat.setFlashStrengthLevel(parameters, level)
-            requestControl?.setParametersAsync(values = parameters)?.propagateTo(signal)
+            val setParametersDeferred =
+                requestControl?.setParametersAsync(values = parameters, session = session)
+            setParametersDeferred?.invokeOnCompletion { signal.complete(Unit) }
                 ?: run {
                     signal.createFailureResult(
                         CameraControl.OperationCanceledException("Camera is not active.")

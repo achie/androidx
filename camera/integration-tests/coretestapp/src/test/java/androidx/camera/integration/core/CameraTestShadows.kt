@@ -29,12 +29,13 @@ import android.util.Log
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import java.util.concurrent.Executor
-import org.mockito.Mockito
-import org.mockito.invocation.InvocationOnMock
+import java.util.concurrent.atomic.AtomicBoolean
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowCameraDeviceImpl
 import org.robolectric.shadows.ShadowCameraManager
+import org.robolectric.util.ReflectionHelpers
 
 const val TAG = "ShadowWrapper"
 
@@ -53,6 +54,14 @@ private fun getAgent(): ShadowCameraAgent =
  */
 @Implements(CameraManager::class)
 class TestShadowCameraManager : ShadowCameraManager() {
+
+    private fun incrementOpenAttempts() {
+        try {
+            getAgent().incrementOpenAttempts()
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "ShadowCameraAgent not ready, cannot increment open attempts.")
+        }
+    }
 
     /**
      * This wrapper intercepts callbacks from the base shadow, notifies our agent, and then passes
@@ -90,10 +99,10 @@ class TestShadowCameraManager : ShadowCameraManager() {
     }
 
     /**
-     * Checks if an error should be injected. If so, it creates a mock device, fires the onError
-     * callback, and returns the mock.
+     * Checks if an error should be injected. If so, it creates a shadow-backed device, fires the
+     * onError callback, and returns the device.
      *
-     * @return A mock [CameraDevice] if an error was injected, or `null` to proceed normally.
+     * @return A [CameraDevice] if an error was injected, or `null` to proceed normally.
      */
     private fun handlePendingError(
         cameraId: String,
@@ -107,23 +116,19 @@ class TestShadowCameraManager : ShadowCameraManager() {
         if (pendingError != null) {
             Log.d(TAG, "Injecting open-camera error code: ${pendingError.errorCode}")
 
-            // As requested, create a MOCK CameraDevice instead of using internal methods.
-            val mockDevice = Mockito.mock(CameraDevice::class.java)
-            Mockito.`when`(mockDevice.id).thenReturn(cameraId)
-
-            // Define the behavior for the close() method on the mock.
-            // When close() is called, it should trigger the onClosed callback.
-            Mockito.doAnswer { _: InvocationOnMock ->
-                    Log.d(TAG, "Mock CameraDevice closed. Firing onClosed callback.")
-                    realExecutor.execute { realCallback.onClosed(mockDevice) }
-                    null // close() returns void.
-                }
-                .`when`(mockDevice)
-                .close()
+            val errorDevice =
+                Shadow.newInstanceOf("android.hardware.camera2.impl.CameraDeviceImpl")
+                    as CameraDevice
+            ReflectionHelpers.setField(errorDevice, "mCameraId", cameraId)
+            val shadowDevice = Shadow.extract<TestShadowCameraDeviceImpl>(errorDevice)
+            shadowDevice.setCustomCloseAction {
+                Log.d(TAG, "Error CameraDevice closed. Firing onClosed callback.")
+                realExecutor.execute { realCallback.onClosed(errorDevice) }
+            }
 
             // Fire the onError callback directly without opening a real device.
-            realExecutor.execute { realCallback.onError(mockDevice, pendingError.errorCode) }
-            return mockDevice
+            realExecutor.execute { realCallback.onError(errorDevice, pendingError.errorCode) }
+            return errorDevice
         }
 
         // No error to inject, return null to proceed.
@@ -138,6 +143,7 @@ class TestShadowCameraManager : ShadowCameraManager() {
         uid: Int,
         oomScoreOffset: Int,
     ): CameraDevice {
+        incrementOpenAttempts()
         // Return mock device if an error is injected
         handlePendingError(cameraId, callback, executor)?.let {
             return it
@@ -163,6 +169,7 @@ class TestShadowCameraManager : ShadowCameraManager() {
         executor: Executor,
         uid: Int,
     ): CameraDevice {
+        incrementOpenAttempts()
         // Return mock device if an error is injected
         handlePendingError(cameraId, callback, executor)?.let {
             return it
@@ -187,6 +194,7 @@ class TestShadowCameraManager : ShadowCameraManager() {
         handler: Handler,
         uid: Int,
     ): CameraDevice {
+        incrementOpenAttempts()
         val executor = Executor { handler.post(it) }
 
         // Return mock device if an error is injected
@@ -212,6 +220,7 @@ class TestShadowCameraManager : ShadowCameraManager() {
         callback: CameraDevice.StateCallback,
         handler: Handler,
     ): CameraDevice {
+        incrementOpenAttempts()
         val executor = Executor { handler.post(it) }
 
         // Return mock device if an error is injected
@@ -241,7 +250,7 @@ class TestShadowCameraManager : ShadowCameraManager() {
     }
 
     @Implementation
-    fun registerAvailabilityCallback(
+    override fun registerAvailabilityCallback(
         executor: Executor,
         callback: CameraManager.AvailabilityCallback,
     ) {
@@ -257,6 +266,25 @@ class TestShadowCameraManager : ShadowCameraManager() {
 /** This shadow forwards all session creation to the agent. */
 @Implements(className = "android.hardware.camera2.impl.CameraDeviceImpl", isInAndroidSdk = false)
 class TestShadowCameraDeviceImpl : ShadowCameraDeviceImpl() {
+
+    @Volatile private var customCloseAction: (() -> Unit)? = null
+    private val isCustomClosed = AtomicBoolean(false)
+
+    fun setCustomCloseAction(onClose: () -> Unit) {
+        customCloseAction = onClose
+    }
+
+    @Implementation
+    override fun close() {
+        val closeAction = customCloseAction
+        if (closeAction != null) {
+            if (isCustomClosed.compareAndSet(false, true)) {
+                closeAction.invoke()
+            }
+            return
+        }
+        super.close()
+    }
 
     private fun createSessionWithAgent(
         outputs: List<Surface>,

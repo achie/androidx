@@ -16,8 +16,6 @@
 
 package androidx.appsearch.localstorage.converter;
 
-import static androidx.appsearch.localstorage.util.PrefixUtil.removePrefixesFromDocument;
-
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertThrows;
@@ -31,6 +29,7 @@ import androidx.appsearch.localstorage.LocalStorageIcingOptionsConfig;
 import androidx.appsearch.localstorage.SchemaCache;
 import androidx.appsearch.localstorage.UnlimitedLimitConfig;
 import androidx.appsearch.localstorage.util.PrefixUtil;
+import androidx.collection.ArraySet;
 
 import com.google.android.icing.proto.DocumentProto;
 import com.google.android.icing.proto.SchemaTypeConfigProto;
@@ -41,6 +40,7 @@ import com.google.common.collect.ImmutableMap;
 import org.junit.Test;
 
 import java.util.Map;
+import java.util.Set;
 
 public class SearchResultToProtoConverterTest {
     @Test
@@ -101,10 +101,10 @@ public class SearchResultToProtoConverterTest {
                 ));
         SchemaCache schemaCache = new SchemaCache(schemaMap);
 
-        removePrefixesFromDocument(documentProtoBuilder);
-        removePrefixesFromDocument(joinedDocProtoBuilder);
+        Set<String> resultSchemas = new ArraySet<>();
         SearchResultPage searchResultPage = SearchResultToProtoConverter.toSearchResultPage(
-                searchResultProto, schemaCache, config);
+                searchResultProto, schemaCache, config, resultSchemas);
+        assertThat(resultSchemas).containsExactly("schema");
         assertThat(searchResultPage.getResults()).hasSize(1);
         SearchResult result = searchResultPage.getResults().get(0);
         assertThat(result.getPackageName()).isEqualTo("com.package.foo");
@@ -181,12 +181,12 @@ public class SearchResultToProtoConverterTest {
         Map<String, Map<String, SchemaTypeConfigProto>> schemaMap = ImmutableMap.of(prefix,
                 ImmutableMap.of(schemaType, schemaTypeConfigProto));
 
-        removePrefixesFromDocument(documentProtoBuilder);
         Exception e = assertThrows(AppSearchException.class,
                 () -> SearchResultToProtoConverter.toSearchResultPage(searchResultProto,
                         new SchemaCache(schemaMap),
                         new AppSearchConfigImpl(new UnlimitedLimitConfig(),
-                                new LocalStorageIcingOptionsConfig())));
+                                new LocalStorageIcingOptionsConfig()),
+                        /*resultsPrefixedSchemasOut=*/ new ArraySet<>()));
         assertThat(e.getMessage())
                 .isEqualTo("Nesting joined results within joined results not allowed.");
     }

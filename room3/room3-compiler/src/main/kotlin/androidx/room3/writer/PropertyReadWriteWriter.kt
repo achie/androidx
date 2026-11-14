@@ -73,19 +73,19 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
             val allParents = getAllParents(propertiesWithIndices.map { it.property })
             val rootNode = Node(rootVar, null)
             rootNode.directProperties = propertiesWithIndices.filter { it.property.parent == null }
-            val parentNodes =
-                allParents.associateWith {
-                    Node(
-                        varName = scope.getTmpVar("_tmp${it.property.name.capitalize(Locale.US)}"),
-                        propertyParent = it,
-                    )
-                }
+            val parentNodes = allParents.associateWith {
+                Node(
+                    varName = scope.getTmpVar("_tmp${it.property.name.capitalize(Locale.US)}"),
+                    propertyParent = it,
+                )
+            }
             parentNodes.values.forEach { node ->
                 val propertyParent = node.propertyParent!!
                 val grandParent = propertyParent.parent
                 val grandParentNode = grandParent?.let { parentNodes[it] } ?: rootNode
-                node.directProperties =
-                    propertiesWithIndices.filter { it.property.parent == propertyParent }
+                node.directProperties = propertiesWithIndices.filter {
+                    it.property.parent == propertyParent
+                }
                 node.parentNode = grandParentNode
                 grandParentNode.subNodes.add(node)
             }
@@ -160,24 +160,49 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
                 }
                 return
             }
-            val variableNames =
+            val paramValues =
                 constructor.params.map { param ->
-                    when (param) {
-                        is Constructor.Param.PropertyParam ->
-                            localVariableNames.entries
-                                .firstOrNull { it.value.property === param.property }
-                                ?.key
-                        is Constructor.Param.EmbeddedParam ->
-                            localEmbeddeds
-                                .firstOrNull { it.propertyParent == param.embedded }
-                                ?.varName
-                        is Constructor.Param.RelationParam ->
-                            localRelations.entries
-                                .firstOrNull { it.value === param.relation.property }
-                                ?.key
-                    }
+                    val valueVarName =
+                        when (param) {
+                            is Constructor.Param.PropertyParam ->
+                                localVariableNames.entries
+                                    .firstOrNull { it.value.property === param.property }
+                                    ?.key
+                            is Constructor.Param.EmbeddedParam ->
+                                localEmbeddeds
+                                    .firstOrNull { it.propertyParent == param.embedded }
+                                    ?.varName
+                            is Constructor.Param.RelationParam ->
+                                localRelations.entries
+                                    .firstOrNull { it.value === param.relation.property }
+                                    ?.key
+                            is Constructor.Param.UnmatchedDefaultValueParam -> null
+                        }
+                    param to valueVarName
                 }
-            val args = variableNames.joinToString(",") { it ?: "null" }
+
+            val emitNamedArguments = paramValues.any { (param, valueVarName) ->
+                valueVarName == null && param.hasDefaultValue
+            }
+            val args =
+                if (emitNamedArguments) {
+                    check(scope.language == CodeLanguage.KOTLIN) {
+                        "Cannot emit named constructor arguments when generating Java code."
+                    }
+                    paramValues
+                        .mapNotNull { (param, valueVarName) ->
+                            if (valueVarName != null) {
+                                "${param.name} = $valueVarName"
+                            } else if (param.hasDefaultValue) {
+                                null
+                            } else {
+                                "${param.name} = null"
+                            }
+                        }
+                        .joinToString(",")
+                } else {
+                    paramValues.joinToString(",") { it.second ?: "null" }
+                }
             constructor.writeConstructor(outVar, args, scope.builder)
         }
 
@@ -197,11 +222,11 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
                     val constructorProperties =
                         node.directProperties
                             .filter { it.property.setter.callType == CallType.CONSTRUCTOR }
-                            .associateBy { fwi ->
-                                PropertyReadWriteWriter(fwi)
+                            .associateBy { pwi ->
+                                PropertyReadWriteWriter(pwi)
                                     .readIntoTmpVar(
                                         stmtVar,
-                                        fwi.property.setter.type.asTypeName(),
+                                        pwi.property.setter.type.asTypeName(),
                                         scope,
                                     )
                             }
@@ -244,8 +269,8 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
                     // ready any property that was not part of the constructor
                     node.directProperties
                         .filterNot { it.property.setter.callType == CallType.CONSTRUCTOR }
-                        .forEach { fwi ->
-                            PropertyReadWriteWriter(fwi)
+                        .forEach { pwi ->
+                            PropertyReadWriteWriter(pwi)
                                 .readFromStatement(
                                     ownerVar = node.varName,
                                     stmtVar = stmtVar,
@@ -316,8 +341,8 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
     }
 
     /**
-     * @param ownerVar The entity / pojo variable that owns this property. It must own this
-     *   property! (not the container pojo)
+     * @param ownerVar The entity / data class variable that owns this property. It must own this
+     *   property! (not the container data class)
      * @param stmtParamVar The statement variable
      * @param scope The code generation scope
      */
@@ -327,8 +352,8 @@ class PropertyReadWriteWriter(propertyWithIndex: PropertyWithIndex) {
     }
 
     /**
-     * @param ownerVar The entity / pojo variable that owns this property. It must own this property
-     *   (not the container pojo)
+     * @param ownerVar The entity / data class variable that owns this property. It must own this
+     *   property (not the container data class)
      * @param stmtVar The statement variable
      * @param scope The code generation scope
      */

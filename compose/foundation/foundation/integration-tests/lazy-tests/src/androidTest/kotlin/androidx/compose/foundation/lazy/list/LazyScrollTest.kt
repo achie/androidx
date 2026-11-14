@@ -38,7 +38,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Dp
 import androidx.test.filters.MediumTest
@@ -50,7 +50,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withContext
 import org.junit.Before
 import org.junit.Rule
@@ -61,8 +60,8 @@ import org.junit.runners.Parameterized
 @MediumTest
 @RunWith(Parameterized::class)
 class LazyScrollTest(private val orientation: Orientation) {
-    val testDispatcher = StandardTestDispatcher()
-    @get:Rule val rule = createComposeRule(testDispatcher)
+
+    @get:Rule val rule = createComposeRule()
 
     private val lazyListTag = "LazyList"
 
@@ -443,7 +442,7 @@ class LazyScrollTest(private val orientation: Orientation) {
     fun overScrollingBackShouldIgnoreBeforeContentPadding() =
         testScroll(beforeContentPaddingPx = 5) {
             val floatItemSize = itemSizePx.toFloat()
-            var consumed: Float
+            val consumed: Float
             withContext(Dispatchers.Main) {
                 // scroll to next item
                 state.scrollBy(floatItemSize)
@@ -472,7 +471,7 @@ class LazyScrollTest(private val orientation: Orientation) {
 
         scope.launch { state.animateScrollToItem(toIndex, toOffset) }
 
-        testDispatcher.scheduler.runCurrent()
+        rule.mainClock.scheduler.runCurrent()
 
         while (!state.isScrollInProgress) {
             Thread.sleep(5)

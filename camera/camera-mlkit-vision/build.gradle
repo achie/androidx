@@ -28,11 +28,11 @@ dependencies {
     api("androidx.annotation:annotation:1.8.1")
     api("com.google.mlkit:vision-interfaces:16.0.0") {
         version {
-            prefer '16.0.0'
+            prefer "16.0.0"
         }
     }
     implementation("androidx.annotation:annotation-experimental:1.4.1")
-    implementation("com.google.android.gms:play-services-tasks:18.0.1")
+    implementation("com.google.android.gms:play-services-tasks:18.2.1")
     implementation(libs.playServicesBasement)
 
     testImplementation(libs.mockitoCore4)
@@ -41,13 +41,11 @@ dependencies {
     testImplementation(libs.testRules)
     testImplementation(libs.testCore)
     testImplementation(project(":camera:camera-testing"))
-    testImplementation("org.robolectric:annotations:4.14")
-    testImplementation("org.robolectric:shadowapi:4.14")
     testImplementation(libs.junit)
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
 
     lint {
         enable.add("CameraXQuirksClassDetector")

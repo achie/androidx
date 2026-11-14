@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 The Android Open Source Project
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+  -->
+<!--
+  One cell of an icon grid, as the design draws a dashboard action: a filled tile with its glyph at
+  the top start, and beneath it its label and optional subtitle when the grid shows labels. The
+  label wraps to two lines and the subtitle is drawn at half opacity; the builder trims both to the
+  lines the row has room for. The cells of a row share its width equally, and the gap after each
+  but the last is set at runtime on the cell, so the tile inside it keeps the gap clear. The builder
+  hides the tile of an empty cell, and sets the click and the content description on the tile,
+  giving a click only to a tile with an action.
+
+  The glyph uses android:tint, not app:tint: the host inflates a platform ImageView, not AppCompat.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile_cell"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1">
+
+    <LinearLayout
+        android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/glance_adaptive_appwidget_remoteviews_tile_background"
+        android:gravity="top|start"
+        android:orientation="vertical"
+        android:paddingStart="4dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="8dp">
+
+        <ImageView
+            android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile_glyph"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:adjustViewBounds="true"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter"
+            android:tint="@color/glance_adaptive_appwidget_remoteviews_on_primary_container"
+            tools:ignore="UseAppTint" />
+
+        <LinearLayout
+            android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="vertical"
+            android:paddingHorizontal="4dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile_label"
+                style="@style/GlanceAdaptiveAppwidgetRemoteviews.Text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="start"
+                android:importantForAccessibility="no"
+                android:maxLines="2"
+                android:textAppearance="@style/GlanceAdaptiveAppwidgetRemoteviews.TextAppearance.SemiBold"
+                android:textColor="@color/glance_adaptive_appwidget_remoteviews_on_primary_container" />
+
+            <TextView
+                android:id="@+id/glance_adaptive_appwidget_remoteviews_icon_tile_subtitle"
+                style="@style/GlanceAdaptiveAppwidgetRemoteviews.Text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:alpha="0.5"
+                android:gravity="start"
+                android:importantForAccessibility="no"
+                android:textAppearance="@style/GlanceAdaptiveAppwidgetRemoteviews.TextAppearance.SemiBold"
+                android:textColor="@color/glance_adaptive_appwidget_remoteviews_on_primary_container"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

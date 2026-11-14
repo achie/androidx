@@ -16,33 +16,62 @@
 
 package androidx.wear.compose.remote.material3
 
+import android.content.Context
+import android.graphics.Typeface
+import androidx.compose.remote.creation.compose.capture.RemoteCreationDisplayInfo
+import androidx.compose.remote.creation.compose.layout.RemoteBox
 import androidx.compose.remote.creation.compose.layout.RemoteColumn
+import androidx.compose.remote.creation.compose.layout.RemoteComposable
+import androidx.compose.remote.creation.compose.layout.RemoteIntrinsicSize
+import androidx.compose.remote.creation.compose.layout.RemoteRow
 import androidx.compose.remote.creation.compose.modifier.RemoteModifier
+import androidx.compose.remote.creation.compose.modifier.background
+import androidx.compose.remote.creation.compose.modifier.fillMaxHeight
 import androidx.compose.remote.creation.compose.modifier.fillMaxSize
 import androidx.compose.remote.creation.compose.modifier.fillMaxWidth
+import androidx.compose.remote.creation.compose.modifier.height
+import androidx.compose.remote.creation.compose.modifier.padding
+import androidx.compose.remote.creation.compose.modifier.size
+import androidx.compose.remote.creation.compose.modifier.width
 import androidx.compose.remote.creation.compose.state.RemoteColor
 import androidx.compose.remote.creation.compose.state.RemoteString
-import androidx.compose.remote.creation.compose.state.rememberRemoteColor
-import androidx.compose.remote.creation.compose.state.rememberRemoteString
+import androidx.compose.remote.creation.compose.state.RemoteTextUnit
+import androidx.compose.remote.creation.compose.state.rdp
 import androidx.compose.remote.creation.compose.state.rf
-import androidx.compose.remote.player.compose.test.utils.screenshot.TargetPlayer
-import androidx.compose.remote.player.compose.test.utils.screenshot.rule.RemoteComposeScreenshotTestRule
+import androidx.compose.remote.creation.compose.state.rs
+import androidx.compose.remote.creation.compose.state.rsp
+import androidx.compose.remote.creation.compose.state.toRemoteString
+import androidx.compose.remote.creation.compose.text.RemoteFontFamily
+import androidx.compose.remote.creation.compose.text.RemoteFontStyle
+import androidx.compose.remote.creation.compose.text.RemoteFontVariation
+import androidx.compose.remote.creation.compose.text.RemoteHyphens
+import androidx.compose.remote.creation.compose.text.RemoteLineBreak
+import androidx.compose.remote.creation.compose.text.RemoteTextAlign
+import androidx.compose.remote.creation.compose.text.RemoteTextDecoration
+import androidx.compose.remote.creation.compose.text.RemoteTextOverflow
+import androidx.compose.remote.creation.compose.text.RemoteTextStyle
+import androidx.compose.remote.player.compose.test.utils.ComposableWrappers
+import androidx.compose.remote.player.compose.test.utils.DownloadableTypefaceResolver
+import androidx.compose.remote.player.compose.test.utils.FallbackCreateTypefaceResolver
+import androidx.compose.remote.player.compose.test.utils.R
+import androidx.compose.remote.player.compose.test.utils.RemappingTypefaceResolver
+import androidx.compose.remote.player.compose.test.utils.RemoteScreenshotTestRule
+import androidx.compose.remote.player.compose.test.utils.createMockContextWithFont
+import androidx.compose.remote.player.compose.test.utils.createMockContextWithFonts
+import androidx.compose.remote.player.core.platform.FontInstance
+import androidx.compose.remote.player.core.platform.TypefaceResolver
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontVariation
-import androidx.compose.ui.text.font.FontVariation.Setting
-import androidx.compose.ui.text.font.FontVariation.Settings
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
-import androidx.wear.compose.material3.LocalTextStyle
+import androidx.test.screenshot.matchers.MSSIMMatcher
+import androidx.wear.compose.remote.material3.util.SCREENSHOT_GOLDEN_DIRECTORY
+import androidx.wear.compose.remote.material3.util.TestProfiles
 import java.text.DecimalFormat
-import kotlin.test.Ignore
 import kotlin.test.Test
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
@@ -53,181 +82,416 @@ import org.junit.runners.JUnit4
 class RemoteTextTest {
     @get:Rule
     val remoteComposeTestRule =
-        RemoteComposeScreenshotTestRule(
+        RemoteScreenshotTestRule(
             moduleDirectory = SCREENSHOT_GOLDEN_DIRECTORY,
-            targetPlayer = TargetPlayer.View,
-            profile = TestProfiles.androidXWithCoreText,
+            context = ApplicationProvider.getApplicationContext(),
+            matcher = MSSIMMatcher(threshold = 0.999),
         )
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun remoteText_customRemoteFontFamily() {
+        val width = 400
+        val height = 120
+        val mockContext =
+            createMockContextWithFont(
+                baseContext = context,
+                fontInputStream = context.resources.openRawResource(R.font.inconsolata_regular),
+            )
+        val resolver =
+            DownloadableTypefaceResolver(
+                context = mockContext,
+                next = FallbackCreateTypefaceResolver(),
+                isBlocking = true,
+            )
+
+        remoteComposeTestRule.runScreenshotTest(
+            remoteCreationDisplayInfo =
+                RemoteCreationDisplayInfo(
+                    width,
+                    height,
+                    context.resources.displayMetrics.densityDpi,
+                    context.resources.configuration.fontScale,
+                ),
+            playComposableWrapper = ComposableWrappers.blackBackground,
+            typefaceResolver = resolver,
+        ) {
+            RemoteColumn(modifier = RemoteModifier.size(width.rdp, height.rdp)) {
+                RemoteText(
+                    text = "Hello Default!".rs,
+                    color = RemoteColor.White,
+                    fontFamily = RemoteFontFamily.Default,
+                    fontSize = 14.rsp,
+                )
+                RemoteText(
+                    text = "Hello Inconsolata!".rs,
+                    color = RemoteColor.White,
+                    fontFamily = RemoteFontFamily.Named("google:inconsolata"),
+                    fontSize = 14.rsp,
+                )
+            }
+        }
+    }
 
     @Test
     fun text_withDefaultColor() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString { "text_withDefaultColor" }
-            RemoteText(text, fontSize = 32.sp)
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = "text_withDefaultColor".rs
+            RemoteText(text, fontSize = 32.rsp)
+        }
+    }
+
+    @Test
+    fun text_withColorAndTextAlign_rtl() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile(
+            layoutDirection = LayoutDirection.Rtl
+        ) {
+            val left = "LEFT".rs
+            val center = "CENTER".rs
+            val right = "RIGHT".rs
+            val start = "START".rs
+            val end = "END".rs
+            val color = remember {
+                RemoteColor.createNamedRemoteColor("TestColor5_rtl", RemoteColor.Green)
+            }
+
+            RemoteColumn(RemoteModifier.fillMaxSize()) {
+                RemoteText(
+                    text = left,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.Left,
+                )
+                RemoteText(
+                    text = center,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.Center,
+                )
+                RemoteText(
+                    text = right,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.Right,
+                )
+                RemoteText(
+                    text = start,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.Start,
+                )
+                RemoteText(
+                    text = center,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.Center,
+                )
+                RemoteText(
+                    text = end,
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 32.rsp,
+                    color = color,
+                    textAlign = RemoteTextAlign.End,
+                )
+            }
         }
     }
 
     @Test
     fun text_withStyle() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString { "textWithStyle" }
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = "textWithStyle".rs
             RemoteText(
                 text,
-                style = LocalTextStyle.current.copy(fontStyle = FontStyle.Italic, fontSize = 32.sp),
+                style =
+                    LocalRemoteTextStyle.current.copy(
+                        fontStyle = RemoteFontStyle.Italic,
+                        fontSize = 32.rsp,
+                    ),
             )
         }
     }
 
     @Test
     fun text_withColor() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString { "text_withColor" }
-            val color = rememberRemoteColor("TestColor2") { Color.Green }
-            RemoteText(text, color = color, fontSize = 32.sp)
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = "text_withColor".rs
+            val color = remember {
+                RemoteColor.createNamedRemoteColor("TestColor2", RemoteColor.Green)
+            }
+            RemoteText(text, color = color, fontSize = 32.rsp)
         }
     }
 
     @Test
     fun text_withOverridingColor() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString { "text_withOverridingColor" }
-            val color = rememberRemoteColor("TestColor3") { Color.Green }
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = "text_withOverridingColor".rs
+            val color = remember {
+                RemoteColor.createNamedRemoteColor("TestColor3", RemoteColor.Green)
+            }
 
             RemoteText(
                 text,
                 color = color, // text color should be green
-                fontSize = 32.sp,
+                fontSize = 32.rsp,
                 style =
-                    LocalTextStyle.current.copy(color = Color.Red), // style color should be ignored
+                    LocalRemoteTextStyle.current.copy(
+                        color = RemoteColor.Red
+                    ), // style color should be ignored
             )
         }
     }
 
     @Test
     fun text_withParamAndStyle_paramIsPreserved() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString { "text_withParamAndStyle" }
-            val color = rememberRemoteColor("TestColor4") { Color.Green }
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = "text_withParamAndStyle".rs
+            val color = remember {
+                RemoteColor.createNamedRemoteColor("TestColor4", RemoteColor.Green)
+            }
 
             RemoteText(
                 text,
                 color = color,
-                fontStyle = FontStyle.Italic,
-                style = LocalTextStyle.current.copy(fontSize = 32.sp),
+                fontStyle = RemoteFontStyle.Italic,
+                style = LocalRemoteTextStyle.current.copy(fontSize = 32.rsp),
             )
         }
     }
 
     @Test
     fun text_withColorAndTextAlign() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val left = rememberRemoteString { "LEFT" }
-            val center = rememberRemoteString { "CENTER" }
-            val right = rememberRemoteString { "RIGHT" }
-            val color = rememberRemoteColor("TestColor5") { Color.Green }
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val left = "LEFT".rs
+            val center = "CENTER".rs
+            val right = "RIGHT".rs
+            val color = remember {
+                RemoteColor.createNamedRemoteColor("TestColor5", RemoteColor.Green)
+            }
 
             RemoteColumn(RemoteModifier.fillMaxSize()) {
                 RemoteText(
                     text = left,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 32.rsp,
                     color = color,
-                    textAlign = TextAlign.Left,
+                    textAlign = RemoteTextAlign.Left,
                 )
                 RemoteText(
                     text = center,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 32.rsp,
                     color = color,
-                    textAlign = TextAlign.Center,
+                    textAlign = RemoteTextAlign.Center,
                 )
                 RemoteText(
                     text = right,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 32.rsp,
                     color = color,
-                    textAlign = TextAlign.Right,
+                    textAlign = RemoteTextAlign.Right,
                 )
             }
         }
     }
 
     @Test
-    @Ignore("No flex font in CI")
     fun text_withWeight() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
             RemoteColumn(RemoteModifier.fillMaxSize()) {
-                VariantText(FontVariation.weight(100))
-                VariantText(FontVariation.weight(500))
-                VariantText(FontVariation.weight(900))
+                VariantText(RemoteFontVariation.weight(100f.rf))
+                VariantText(RemoteFontVariation.weight(500f.rf))
+                VariantText(RemoteFontVariation.weight(900f.rf))
             }
         }
     }
 
     @Test
-    @Ignore("No flex font in CI")
     fun text_withWidth() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
             RemoteColumn(RemoteModifier.fillMaxSize()) {
-                VariantText(FontVariation.width(10f))
-                VariantText(FontVariation.width(50f))
-                VariantText(FontVariation.width(90f))
+                VariantText(RemoteFontVariation.width(10f.rf))
+                VariantText(RemoteFontVariation.width(50f.rf))
+                VariantText(RemoteFontVariation.width(90f.rf))
             }
         }
     }
 
     @Test
-    @Ignore("No flex font in CI")
+    fun text_withGrade() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            RemoteColumn(RemoteModifier.fillMaxSize()) {
+                VariantText(RemoteFontVariation.grade(0.rf))
+                VariantText(RemoteFontVariation.grade(100.rf))
+                VariantText(RemoteFontVariation.grade(200.rf))
+            }
+        }
+    }
+
+    @Test
     fun text_withTnum() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val robotoFont = RemoteFontFamily.Named("google:Roboto Flex")
+            val sampleText = "11111 vs 88888"
             RemoteColumn(RemoteModifier.fillMaxSize()) {
                 RemoteText(
-                    text = RemoteString("WWWiii 012345679"),
+                    text = RemoteString("Roboto Default: $sampleText"),
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
-                    fontVariationSettings = Settings(Setting("tnum", 1f)),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFont,
                 )
                 RemoteText(
-                    text = RemoteString("WWWiii 012345679"),
+                    text = RemoteString("Roboto pnum: $sampleText"),
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFont,
+                    fontVariationSettings =
+                        RemoteFontVariation.Settings(RemoteFontVariation.Setting("pnum", 1f.rf)),
+                )
+                RemoteText(
+                    text = RemoteString("Roboto tnum: $sampleText"),
+                    modifier = RemoteModifier.fillMaxWidth(),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFont,
+                    fontVariationSettings =
+                        RemoteFontVariation.Settings(RemoteFontVariation.Setting("tnum", 1f.rf)),
                 )
             }
         }
     }
 
     @Test
-    @Ignore("No flex font in CI")
-    fun text_withRoundness() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+    fun text_withSlant() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
             RemoteColumn(RemoteModifier.fillMaxSize()) {
-                VariantText(Setting("ROND", 0f))
-                VariantText(Setting("ROND", 50f))
-                VariantText(Setting("ROND", 100f))
+                VariantText(RemoteFontVariation.slant((-15f).rf))
+                VariantText(RemoteFontVariation.slant((-7.5f).rf))
+                VariantText(RemoteFontVariation.slant(0f.rf))
+                VariantText(RemoteFontVariation.slant(15f.rf))
+            }
+        }
+    }
+
+    @Test
+    fun text_withRoundness() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            RemoteColumn(RemoteModifier.fillMaxSize()) {
+                VariantText(RemoteFontVariation.Setting("RNDS", 0f.rf))
+                VariantText(RemoteFontVariation.Setting("RNDS", 50f.rf))
+                VariantText(RemoteFontVariation.Setting("RNDS", 100f.rf))
+            }
+        }
+    }
+
+    @Test
+    fun text_withRobotoFlex_minMax() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val robotoFlex = RemoteFontFamily.Named("google:Roboto Flex")
+            RemoteColumn(RemoteModifier.fillMaxSize()) {
+                VariantText(
+                    RemoteFontVariation.weight(100f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.weight(1000f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.width(25f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.width(151f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.grade((-200).rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.grade(150.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.slant(0f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.slant((-10f).rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.opticalSizing(8f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+                VariantText(
+                    RemoteFontVariation.opticalSizing(144f.rf),
+                    fontSize = 14.rsp,
+                    fontFamily = robotoFlex,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun text_withLobsterTwo() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val fonts = listOf("google:Roboto Flex", "google:Inconsolata", "google:Karla")
+            RemoteColumn(RemoteModifier.fillMaxSize()) {
+                for (font in fonts) {
+                    RemoteText(
+                        text = RemoteString(font.removePrefix("google:")),
+                        modifier = RemoteModifier.fillMaxWidth(),
+                        fontSize = 16.rsp,
+                        fontFamily = RemoteFontFamily.Named(font),
+                    )
+                }
             }
         }
     }
 
     @Test
     fun text_withDecoration() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
             RemoteColumn(RemoteModifier.fillMaxSize()) {
                 RemoteText(
-                    text = RemoteString("None"),
+                    text = "None".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 32.rsp,
                 )
                 RemoteText(
-                    text = RemoteString("Underline"),
+                    text = "Underline".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
-                    style = LocalTextStyle.current.copy(textDecoration = TextDecoration.Underline),
+                    fontSize = 32.rsp,
+                    style =
+                        LocalRemoteTextStyle.current.copy(
+                            textDecoration = RemoteTextDecoration.Underline
+                        ),
                 )
                 RemoteText(
-                    text = RemoteString("LineThrough"),
+                    text = "LineThrough".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
-                    style = LocalTextStyle.current.copy(textDecoration = TextDecoration.LineThrough),
+                    fontSize = 32.rsp,
+                    style =
+                        LocalRemoteTextStyle.current.copy(
+                            textDecoration = RemoteTextDecoration.LineThrough
+                        ),
                 )
             }
         }
@@ -235,89 +499,324 @@ class RemoteTextTest {
 
     @Test
     fun text_withSpacing() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
             RemoteColumn(RemoteModifier.fillMaxSize()) {
                 RemoteText(
-                    text = RemoteString("Standard\nParagraph"),
+                    text = "Standard\nParagraph".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
+                    fontSize = 32.rsp,
                 )
                 RemoteText(
-                    text = RemoteString("Double Line Height\nParagraph\nAnd one more"),
+                    text = "Double Line Height\nParagraph\nAnd one more".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
-                    style = LocalTextStyle.current.copy(lineHeight = 64.sp),
+                    fontSize = 32.rsp,
+                    style = LocalRemoteTextStyle.current.copy(lineHeight = 64.rsp),
                 )
                 RemoteText(
-                    text = RemoteString("Letter Spacing\nParagraph"),
+                    text = "Letter Spacing\nParagraph".rs,
                     modifier = RemoteModifier.fillMaxWidth(),
-                    fontSize = 32.sp,
-                    style = LocalTextStyle.current.copy(letterSpacing = 64.sp),
+                    fontSize = 32.rsp,
+                    style = LocalRemoteTextStyle.current.copy(letterSpacing = 64.rsp),
                 )
             }
         }
     }
 
     @Composable
-    private fun VariantText(setting: Setting) {
+    private fun VariantText(
+        setting: RemoteFontVariation.Setting,
+        fontSize: RemoteTextUnit = 32.rsp,
+        fontFamily: RemoteFontFamily = RemoteFontFamily.Named("google:Roboto Flex"),
+    ) {
         RemoteText(
             text =
                 RemoteString(setting.axisName) +
                     RemoteString(" = ") +
-                    setting.toVariationValue(null).rf.toRemoteString(DecimalFormat("0")),
+                    setting.value.toRemoteString(DecimalFormat("0")),
             modifier = RemoteModifier.fillMaxWidth(),
-            fontSize = 32.sp,
-            fontVariationSettings = Settings(setting),
+            fontSize = fontSize,
+            fontFamily = fontFamily,
+            fontVariationSettings = RemoteFontVariation.Settings(setting),
         )
     }
 
     @Test
     fun longText_overflow() {
-        remoteComposeTestRule.runScreenshotTest(backgroundColor = Color.Black) {
-            val text = rememberRemoteString {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text =
                 "a piece of writing in which the expression of feelings and ideas is given intensity by particular attention to diction (sometimes involving rhyme), rhythm, and imagery."
-            }
-            val color = RemoteColor(Color.Green)
+                    .rs
+            val color = RemoteColor.Green
 
             RemoteColumn(RemoteModifier.fillMaxSize()) {
                 // Default
-                RemoteText(text = text, fontSize = 18.sp, color = color)
+                RemoteText(text = text, fontSize = 18.rsp, color = color)
                 RemoteText(
                     text = text,
-                    fontSize = 18.sp,
+                    fontSize = 18.rsp,
                     color = color,
-                    overflow = TextOverflow.Clip,
+                    overflow = RemoteTextOverflow.Clip,
                     maxLines = 1,
                 )
                 RemoteText(
                     text = text,
-                    fontSize = 18.sp,
+                    fontSize = 18.rsp,
                     color = color,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = RemoteTextOverflow.Ellipsis,
                     maxLines = 1,
                 )
                 RemoteText(
                     text = text,
-                    fontSize = 18.sp,
+                    fontSize = 18.rsp,
                     color = color,
-                    overflow = TextOverflow.Visible,
+                    overflow = RemoteTextOverflow.Visible,
                     maxLines = 1,
                 )
                 RemoteText(
                     text = text,
-                    fontSize = 18.sp,
+                    fontSize = 18.rsp,
                     color = color,
-                    overflow = TextOverflow.MiddleEllipsis,
+                    overflow = RemoteTextOverflow.MiddleEllipsis,
                     maxLines = 1,
                 )
                 RemoteText(
                     text = text,
-                    fontSize = 18.sp,
+                    fontSize = 18.rsp,
                     color = color,
-                    overflow = TextOverflow.StartEllipsis,
+                    overflow = RemoteTextOverflow.StartEllipsis,
                     maxLines = 1,
                 )
             }
         }
+    }
+
+    @Test
+    fun text_withLineBreakAndHyphens() {
+        remoteComposeTestRule.runScreenshotTestCustomProfile {
+            val text = SAMPLE_LONG_TEXT.rs
+            val dividerColor = RemoteColor.Gray
+            val textColor = RemoteColor.White
+
+            RemoteColumn(modifier = RemoteModifier.fillMaxWidth(0.7f.rf).fillMaxHeight()) {
+                // Row 1: Header Row
+                RemoteRow(
+                    modifier =
+                        RemoteModifier.fillMaxWidth()
+                            .height(RemoteIntrinsicSize.Min)
+                            .padding(bottom = 2.rdp)
+                ) {
+                    RemoteText(
+                        "".rs,
+                        color = textColor,
+                        fontSize = 8.rsp,
+                        modifier = RemoteModifier.weight(0.7f.rf),
+                    )
+                    RemoteBox(
+                        modifier =
+                            RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+                    )
+                    RemoteText(
+                        "LineBreak.Simple".rs,
+                        color = textColor,
+                        fontSize = 8.rsp,
+                        textAlign = RemoteTextAlign.Center,
+                        modifier = RemoteModifier.weight(1f.rf),
+                    )
+                    RemoteBox(
+                        modifier =
+                            RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+                    )
+                    RemoteText(
+                        "LineBreak.Heading".rs,
+                        color = textColor,
+                        fontSize = 8.rsp,
+                        textAlign = RemoteTextAlign.Center,
+                        modifier = RemoteModifier.weight(1f.rf),
+                    )
+                    RemoteBox(
+                        modifier =
+                            RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+                    )
+                    RemoteText(
+                        "LineBreak.Paragraph".rs,
+                        color = textColor,
+                        fontSize = 8.rsp,
+                        textAlign = RemoteTextAlign.Center,
+                        modifier = RemoteModifier.weight(1f.rf),
+                    )
+                }
+
+                // Horizontal Divider 1
+                RemoteBox(
+                    modifier = RemoteModifier.fillMaxWidth().height(1.rdp).background(dividerColor)
+                )
+
+                // Row 2: Hyphens.None
+                LineBreakRow(
+                    label = "Hyphens.None",
+                    hyphens = RemoteHyphens.None,
+                    text = text,
+                    textColor = textColor,
+                    dividerColor = dividerColor,
+                )
+
+                // Horizontal Divider 2
+                RemoteBox(
+                    modifier = RemoteModifier.fillMaxWidth().height(1.rdp).background(dividerColor)
+                )
+
+                // Row 3: Hyphens.Auto
+                LineBreakRow(
+                    label = "Hyphens.Auto",
+                    hyphens = RemoteHyphens.Auto,
+                    text = text,
+                    textColor = textColor,
+                    dividerColor = dividerColor,
+                    modifier = RemoteModifier.padding(top = 2.rdp),
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun LineBreakRow(
+        label: String,
+        hyphens: RemoteHyphens,
+        text: RemoteString,
+        textColor: RemoteColor,
+        dividerColor: RemoteColor,
+        modifier: RemoteModifier = RemoteModifier,
+    ) {
+        RemoteRow(
+            modifier = RemoteModifier.fillMaxWidth().height(RemoteIntrinsicSize.Min).then(modifier)
+        ) {
+            RemoteColumn(modifier = RemoteModifier.weight(0.7f.rf).padding(top = 6.rdp)) {
+                RemoteText(label.rs, color = textColor, fontSize = 8.rsp)
+            }
+            RemoteBox(
+                modifier = RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+            )
+            RemoteColumn(modifier = RemoteModifier.weight(1f.rf).padding(4.rdp)) {
+                RemoteText(
+                    text = text,
+                    color = textColor,
+                    fontSize = 8.rsp,
+                    style = RemoteTextStyle(lineBreak = RemoteLineBreak.Simple, hyphens = hyphens),
+                )
+            }
+            RemoteBox(
+                modifier = RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+            )
+            RemoteColumn(modifier = RemoteModifier.weight(1f.rf).padding(4.rdp)) {
+                RemoteText(
+                    text = text,
+                    color = textColor,
+                    fontSize = 8.rsp,
+                    style = RemoteTextStyle(lineBreak = RemoteLineBreak.Heading, hyphens = hyphens),
+                )
+            }
+            RemoteBox(
+                modifier = RemoteModifier.fillMaxHeight().width(1.rdp).background(dividerColor)
+            )
+            RemoteColumn(modifier = RemoteModifier.weight(1f.rf).padding(4.rdp)) {
+                RemoteText(
+                    text = text,
+                    color = textColor,
+                    fontSize = 8.rsp,
+                    style =
+                        RemoteTextStyle(lineBreak = RemoteLineBreak.Paragraph, hyphens = hyphens),
+                )
+            }
+        }
+    }
+
+    private fun RemoteScreenshotTestRule.runScreenshotTestCustomProfile(
+        layoutDirection: LayoutDirection = LayoutDirection.Ltr,
+        composable: @Composable @RemoteComposable () -> Unit,
+    ) {
+        val mockContext =
+            createMockContextWithFonts(
+                baseContext = context,
+                fontStreams =
+                    mapOf(
+                        "roboto" to context.resources.openRawResource(R.font.robotoflex_variable),
+                        "inconsolata" to
+                            context.resources.openRawResource(R.font.inconsolata_regular),
+                        "karla" to context.resources.openRawResource(R.font.karla_regular),
+                    ),
+                defaultFontKey = "roboto",
+            )
+        val current = FallbackCreateTypefaceResolver()
+        val remappingResolver =
+            RemappingTypefaceResolver(current).apply {
+                remapName("RobotoFlex", "google:Roboto Flex")
+                remapType(0, "google:Roboto Flex")
+                remapName("Fraunces", "google:Fraunces")
+            }
+        val resolver =
+            DownloadableTypefaceResolver(
+                context = mockContext,
+                next = remappingResolver,
+                isBlocking = true,
+            )
+        // Trigger a pre-fetch of fonts so they are loaded and cached in
+        // DownloadableTypefaceResolver before screenshot capture in CI.
+        resolver.prefetchFonts(listOf("google:Roboto Flex", "google:Inconsolata", "google:Karla"))
+
+        var resolveCalled = false
+        val trackingResolver =
+            object : TypefaceResolver {
+                override fun resolve(
+                    fontType: Int,
+                    weight: Int,
+                    italic: Boolean,
+                    fallbackTypeface: Typeface?,
+                    fallbackWeight: Int,
+                    fallbackItalic: Boolean,
+                ): FontInstance {
+                    resolveCalled = true
+                    return resolver.resolve(
+                        fontType,
+                        weight,
+                        italic,
+                        fallbackTypeface,
+                        fallbackWeight,
+                        fallbackItalic,
+                    )
+                }
+
+                override fun resolve(
+                    fontName: String,
+                    weight: Int,
+                    italic: Boolean,
+                    fallbackTypeface: Typeface?,
+                    fallbackWeight: Int,
+                    fallbackItalic: Boolean,
+                ): FontInstance {
+                    resolveCalled = true
+                    return resolver.resolve(
+                        fontName,
+                        weight,
+                        italic,
+                        fallbackTypeface,
+                        fallbackWeight,
+                        fallbackItalic,
+                    )
+                }
+            }
+
+        this.runScreenshotTest(
+            profile = TestProfiles.androidXWithCoreText,
+            creationComposableWrapper = ComposableWrappers.layoutDirection(layoutDirection),
+            playComposableWrapper = ComposableWrappers.blackBackground,
+            typefaceResolver = trackingResolver,
+            composable = composable,
+        )
+        assertTrue("Expected TypefaceResolver.resolve to be called during test", resolveCalled)
+    }
+
+    private companion object {
+        const val SAMPLE_LONG_TEXT =
+            "Remote Compose is a technology that enables apps to define their UI and business logic in a format that can be rendered and executed remotely by a host application, called a player. This player handles the display and processing of the application content."
     }
 }

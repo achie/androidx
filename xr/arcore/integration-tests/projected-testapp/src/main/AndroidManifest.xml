@@ -14,21 +14,44 @@
   limitations under the License.
   -->
 
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <uses-feature android:name="android.hardware.camera" android:required="true" />
-    <uses-feature android:name="android.hardware.location" android:required="true" />
-
     <application android:label="JXR ARCore Projected Tests">
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
         <activity
-            android:name="androidx.xr.arcore.projected.testapp.ProjectedTestAppActivity"
+            android:name=".GeospatialProjectedActivity"
             android:exported="true"
             android:label="Geospatial and Tracking testcase"
             android:requiredDisplayCategory="xr_projected">
+        </activity>
+        <activity
+            android:name=".GeospatialRemoteSensorActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:label="Remote Sensor Geospatial">
+        </activity>
+        <activity
+            android:name=".InertialTrackingActivity"
+            android:configChanges="uiMode"
+            android:label="Inertial Tracking testcase"
+            android:exported="true"
+            android:requiredDisplayCategory="xr_projected">
+        </activity>
+        <activity
+            android:name=".LowPowerGeospatialActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:requiredDisplayCategory="xr_projected"
+            android:label="Modern UI Projected Geospatial">
+        </activity>
+        <activity
+            android:name=".LowPowerRemoteSensorGeospatialActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:label="Modern UI Remote Sensor Geospatial">
         </activity>
         <activity
             android:name=".tiltgesture.TiltGestureTrackingActivity"
@@ -38,9 +61,60 @@
             android:requiredDisplayCategory="xr_projected">
         </activity>
         <activity
+            android:name=".ConfigProjectedGeospatialActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:requiredDisplayCategory="xr_projected"
+            android:label="Projected Geospatial Dashboard">
+        </activity>
+        <activity
+            android:name=".ThreadingStressTestActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:requiredDisplayCategory="xr_projected"
+            android:label="Threading Stress Test">
+        </activity>
+        <activity
+            android:name=".ThreadingRemoteSensorStressTestActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:label="Threading Remote Stress Test">
+        </activity>
+        <activity
+            android:name=".tiltgesture.TiltGestureHostActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:label="TiltGesture Test Host Activity">
+        </activity>
+        <activity
+            android:name=".tiltgesture.TiltGestureProjectedActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:label="TiltGesture Projected Activity"
+            android:requiredDisplayCategory="xr_projected">
+        </activity>
+        <activity
+            android:name=".tracking.TrackingHostActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:label="Tracking Test Host Activity">
+        </activity>
+        <activity
+            android:name=".tracking.TrackingProjectedActivity"
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:label="Tracking Projected Activity"
+            android:requiredDisplayCategory="xr_projected">
+        </activity>
+        <activity
             android:name=".MainActivity"
             android:configChanges="uiMode"
             android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             android:label="ARCore Projected Test App">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

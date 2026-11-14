@@ -31,20 +31,20 @@ class TypeAssignmentTest {
             Source.java(
                 "foo.bar.MyObject",
                 """
-            package foo.bar;
-            import java.util.Set;
-            import java.util.HashSet;
-            import java.util.Map;
-            class MyObject {
-                String mString;
-                Integer mInteger;
-                Set<MyObject> mSet;
-                Set<? extends MyObject> mVarianceSet;
-                HashSet<MyObject> mHashSet;
-                Map<String, ?> mUnboundedMap;
-                Map<String, String> mStringMap;
-            }
-            """
+                package foo.bar;
+                import java.util.Set;
+                import java.util.HashSet;
+                import java.util.Map;
+                class MyObject {
+                    String mString;
+                    Integer mInteger;
+                    Set<MyObject> mSet;
+                    Set<? extends MyObject> mVarianceSet;
+                    HashSet<MyObject> mHashSet;
+                    Map<String, ?> mUnboundedMap;
+                    Map<String, String> mStringMap;
+                }
+                """
                     .trimIndent(),
             )
     }
@@ -97,7 +97,7 @@ class TypeAssignmentTest {
     }
 
     private fun XTypeElement.getField(name: String): XVariableElement {
-        return getAllFieldsIncludingPrivateSupers().first { it.name == name }
+        return getAllPropertiesIncludingPrivateSupers().first { it.name == name }
     }
 
     private fun runTest(handler: XTestInvocation.() -> Unit) {

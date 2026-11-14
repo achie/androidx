@@ -23,7 +23,6 @@ import static java.util.Objects.requireNonNull;
 import androidx.car.app.annotations.CarProtocol;
 import androidx.car.app.annotations.ExperimentalCarApi;
 import androidx.car.app.annotations.KeepFields;
-import androidx.car.app.annotations.RequiresCarApi;
 import androidx.car.app.model.Action;
 import androidx.car.app.model.CarIcon;
 import androidx.car.app.model.CarText;
@@ -45,7 +44,6 @@ import java.util.Objects;
 
 /** A {@link Template} showing phone call controls and details. */
 @ExperimentalCarApi
-@RequiresCarApi(8)
 @CarProtocol
 @KeepFields
 public class InCallTemplate implements Template {
@@ -300,7 +298,7 @@ public class InCallTemplate implements Template {
          *
          * <h4>Requirements</h4>
          *
-         * This template allows up to 5 {@link Action}s in its body. Each action must have an icon
+         * This template allows up to 9 {@link Action}s in its body. Each action must have an icon
          * and cannot have a title. A single action may be flagged with {@link Action#FLAG_PRIMARY}.
          *
          * @throws NullPointerException if {@code action} is {@code null}

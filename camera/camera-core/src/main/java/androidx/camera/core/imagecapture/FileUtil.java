@@ -64,14 +64,26 @@ public final class FileUtil {
         try {
             File appProvidedFile = options.getFile();
             if (appProvidedFile != null) {
+                File parent = appProvidedFile.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    parent.mkdirs();
+                }
                 // For saving-to-file case, write to the target folder and rename for better
                 // performance. The file extensions must be the same as app provided to avoid the
                 // directory access problem.
-                return new File(appProvidedFile.getParent(),
+                return new File(parent,
                         TEMP_FILE_PREFIX + UUID.randomUUID().toString()
                                 + getFileExtensionWithDot(appProvidedFile));
             } else {
-                return File.createTempFile(TEMP_FILE_PREFIX, TEMP_FILE_SUFFIX);
+                File tempDir = null;
+                String tmpDirProperty = System.getProperty("java.io.tmpdir");
+                if (tmpDirProperty != null) {
+                    tempDir = new File(tmpDirProperty);
+                    if (!tempDir.exists()) {
+                        tempDir.mkdirs();
+                    }
+                }
+                return File.createTempFile(TEMP_FILE_PREFIX, TEMP_FILE_SUFFIX, tempDir);
             }
         } catch (IOException e) {
             throw new ImageCaptureException(ERROR_FILE_IO, "Failed to create temp file.", e);
@@ -141,7 +153,7 @@ public final class FileUtil {
             }
         } catch (IOException e) {
             throw new ImageCaptureException(
-                    ERROR_FILE_IO, "Failed to write to OutputStream.", null);
+                    ERROR_FILE_IO, "Failed to write to OutputStream.", e);
         } finally {
             tempFile.delete();
         }
@@ -178,13 +190,21 @@ public final class FileUtil {
                         ERROR_FILE_IO, "Failed to insert a MediaStore URI.", null);
             }
             copyTempFileToUri(file, uri, contentResolver);
-        } catch (IOException | SecurityException e) {
-            throw new ImageCaptureException(
-                    ERROR_FILE_IO, "Failed to write to MediaStore URI: " + uri, e);
-        } finally {
+            updateUriPendingStatus(uri, contentResolver, NOT_PENDING);
+        } catch (IOException | RuntimeException e) {
             if (uri != null) {
-                updateUriPendingStatus(uri, contentResolver, NOT_PENDING);
+                try {
+                    contentResolver.delete(uri, null, null);
+                } catch (RuntimeException deleteException) {
+                    if (deleteException != e) {
+                        e.addSuppressed(deleteException);
+                    }
+                }
             }
+            String message = uri != null
+                    ? "Failed to write to MediaStore URI: " + uri
+                    : "Failed to insert a MediaStore URI.";
+            throw new ImageCaptureException(ERROR_FILE_IO, message, e);
         }
         return uri;
     }

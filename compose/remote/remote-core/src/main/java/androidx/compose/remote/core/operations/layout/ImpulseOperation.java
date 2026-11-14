@@ -29,6 +29,7 @@ import androidx.compose.remote.core.operations.Utils;
 import androidx.compose.remote.core.serialize.MapSerializer;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,8 +69,7 @@ public class ImpulseOperation extends PaintOperation implements VariableSupport,
 
     @Override
     public void registerListening(@NonNull RemoteContext context) {
-        if (mProcess == null) {
-            System.out.println(".....");
+        if (mProcess == null && !mList.isEmpty()) {
             Operation last = mList.get(mList.size() - 1);
             if (last instanceof ImpulseProcess) {
                 mProcess = (ImpulseProcess) last;
@@ -106,10 +106,25 @@ public class ImpulseOperation extends PaintOperation implements VariableSupport,
         }
     }
 
+    /** Returns the raw impulse duration, preserving NaN-encoded variable IDs. */
+    public float getDuration() {
+        return mDuration;
+    }
+
+    /** Returns the raw impulse start time, preserving NaN-encoded variable IDs. */
+    public float getStartAt() {
+        return mStartAt;
+    }
+
     @NonNull
     @Override
     public ArrayList<Operation> getList() {
         return mList;
+    }
+
+    /** Returns {@code mProcess}, the operations run while the impulse is active, if any. */
+    public @Nullable ImpulseProcess getProcess() {
+        return mProcess;
     }
 
     @Override
@@ -141,8 +156,12 @@ public class ImpulseOperation extends PaintOperation implements VariableSupport,
     @Override
     public void paint(@NonNull PaintContext context) {
         RemoteContext remoteContext = context.getContext();
-
-        if (remoteContext.getAnimationTime() <= mOutStartAt + mOutDuration) {
+        float currentTime = remoteContext.getAnimationTime();
+        if (currentTime < mOutStartAt) {
+            context.wakeIn(mOutStartAt - currentTime);
+            return;
+        }
+        if (currentTime >= mOutStartAt && currentTime <= mOutStartAt + mOutDuration) {
             if (mInitialPass) {
                 for (Operation op : mList) {
                     if (op instanceof VariableSupport && op.isDirty()) {
@@ -193,8 +212,8 @@ public class ImpulseOperation extends PaintOperation implements VariableSupport,
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        float duration = buffer.readFloat();
-        float startAt = buffer.readFloat();
+        float duration = buffer.readNanId();
+        float startAt = buffer.readNanId();
 
         operations.add(new ImpulseOperation(duration, startAt));
     }
@@ -205,12 +224,11 @@ public class ImpulseOperation extends PaintOperation implements VariableSupport,
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Operations", OP_CODE, name())
+        doc.operation("Animation & Particles Operations", OP_CODE, CLASS_NAME)
                 .description(
-                        "Impulse Operation. This operation execute a list of action for a fixed"
-                                + " duration")
-                .field(DocumentedOperation.FLOAT, "duration", "How long to last")
-                .field(DocumentedOperation.FLOAT, "startAt", "value step");
+                        "Execute a list of actions once, and a process block for a fixed duration")
+                .field(DocumentedOperation.FLOAT, "duration", "Duration of the impulse")
+                .field(DocumentedOperation.FLOAT, "startAt", "The start time of the impulse");
     }
 
     /**

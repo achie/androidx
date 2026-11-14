@@ -21,6 +21,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraMetadata.SENSOR_TEST_PATTERN_MODE_SOLID_COLOR
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult.SENSOR_TEST_PATTERN_MODE
 import android.hardware.camera2.TotalCaptureResult
@@ -28,7 +29,6 @@ import android.util.Rational
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraXConfig
@@ -49,7 +49,6 @@ import androidx.camera.integration.core.util.SensorPatternUtil.setSolidColorPatt
 import androidx.camera.integration.core.util.SensorPatternUtil.verifyColor
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.hasCameraWithLensFacing
 import androidx.camera.testing.impl.CountdownDeferred
@@ -70,6 +69,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -90,10 +90,6 @@ class ImageCaptureEffectTest(
     private val implName: String,
     private val cameraConfig: CameraXConfig,
 ) {
-
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
 
     @get:Rule
     val cameraRule =
@@ -203,42 +199,56 @@ class ImageCaptureEffectTest(
                 setSolidColorPatternToCamera(camera, colorChannelBeforeEffect, implName)
 
                 lifecycleOwner.startAndResume()
+                try {
+                    // Wait for a capture result with the test image
+                    assertThat(
+                            withTimeoutOrNull(CAPTURE_TIMEOUT) {
+                                testPatternModeFlow.first {
+                                    it == SENSOR_TEST_PATTERN_MODE_SOLID_COLOR
+                                }
+                            }
+                        )
+                        .isNotNull()
 
-                // Act.
-                val latch = CountdownDeferred(1)
-                var outputPrimaryColor: Int? = null
-                var captureError: Exception? = null
-                val callback =
-                    object : ImageCapture.OnImageCapturedCallback() {
-                        override fun onCaptureSuccess(image: ImageProxy) {
-                            val bitmap = image.toBitmap()
-                            image.close()
+                    // Act.
+                    val latch = CountdownDeferred(1)
+                    var outputPrimaryColor: Int? = null
+                    var captureError: Exception? = null
+                    val callback =
+                        object : ImageCapture.OnImageCapturedCallback() {
+                            override fun onCaptureSuccess(image: ImageProxy) {
+                                val bitmap = image.toBitmap()
+                                image.close()
 
-                            // Get the primary color of the captured image.
-                            outputPrimaryColor = bitmap.getPrimaryColor()
+                                // Get the primary color of the captured image.
+                                outputPrimaryColor = bitmap.getPrimaryColor()
 
-                            latch.countDown()
+                                latch.countDown()
+                            }
+
+                            override fun onError(exception: ImageCaptureException) {
+                                captureError = exception
+                                latch.countDown()
+                            }
                         }
+                    imageCapture.takePicture(mainExecutor, callback)
 
-                        override fun onError(exception: ImageCaptureException) {
-                            captureError = exception
-                            latch.countDown()
-                        }
-                    }
-                imageCapture.takePicture(mainExecutor, callback)
-
-                // Assert.
-                // Wait for the signal that the image has been captured.
-                assertThat(withTimeoutOrNull(CAPTURE_TIMEOUT) { latch.await() }).isNotNull()
-                assertThat(captureError).isNull()
-                assertThat(
-                        verifyColor(effect.awaitInputPrimaryColor(5000), colorChannelBeforeEffect)
-                    )
-                    .isTrue()
-                assertThat(verifyColor(outputPrimaryColor, colorChannelAfterEffect)).isTrue()
-
-                lifecycleOwner.pauseAndStop()
-                lifecycleOwner.destroy()
+                    // Assert.
+                    // Wait for the signal that the image has been captured.
+                    assertThat(withTimeoutOrNull(CAPTURE_TIMEOUT) { latch.await() }).isNotNull()
+                    assertThat(captureError).isNull()
+                    assertThat(
+                            verifyColor(
+                                effect.awaitInputPrimaryColor(5000),
+                                colorChannelBeforeEffect,
+                            )
+                        )
+                        .isTrue()
+                    assertThat(verifyColor(outputPrimaryColor, colorChannelAfterEffect)).isTrue()
+                } finally {
+                    lifecycleOwner.pauseAndStop()
+                    lifecycleOwner.destroy()
+                }
             }
         }
 

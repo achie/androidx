@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 The Android Open Source Project
+ * Copyright 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,15 @@
  */
 
 @file:JvmName("LocalSavedStateRegistryOwnerKt")
+@file:JvmMultifileClass
+@file:Suppress("FacadeClassJvmName") // Cannot be updated, the Kt name has been released.
 
 package androidx.savedstate.compose
 
-import androidx.compose.runtime.ProvidableCompositionLocal
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.HostDefaultKey
 import androidx.savedstate.SavedStateRegistryOwner
+import kotlin.jvm.JvmMultifileClass
 import kotlin.jvm.JvmName
 
-public actual val LocalSavedStateRegistryOwner:
-    ProvidableCompositionLocal<SavedStateRegistryOwner> =
-    staticCompositionLocalOf {
-        error("CompositionLocal LocalSavedStateRegistryOwner not present")
-    }
+public actual val SavedStateRegistryOwnerHostDefaultKey: HostDefaultKey<SavedStateRegistryOwner> =
+    object : HostDefaultKey<SavedStateRegistryOwner> {}

@@ -1,0 +1,681 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.test.backup.host
+
+import java.io.IOException
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Test
+
+/**
+ * Pins the host half of the action wire protocol to its literal strings.
+ *
+ * This host library is a Kotlin/JVM artifact and cannot link against the device-side
+ * `androidx.test.backup.BackupActionInputKeys`, so the two copies are kept honest by this test and
+ * its device-side twin, `BackupActionKeysTest`. If one of them is edited alone, the build fails
+ * rather than a device run silently receiving arguments it does not recognize.
+ */
+class BackupActionWireProtocolTest {
+
+    @Test
+    fun inputKeysMatchTheDeviceLibrary() {
+        assertEquals("storage_type", BackupActionInputKeys.STORAGE_TYPE)
+        assertEquals("is_device_protected", BackupActionInputKeys.IS_DEVICE_PROTECTED)
+        assertEquals("pref_name", BackupActionInputKeys.PREF_NAME)
+        assertEquals("pref_key", BackupActionInputKeys.PREF_KEY)
+        assertEquals("value", BackupActionInputKeys.VALUE)
+        assertEquals("value_type", BackupActionInputKeys.VALUE_TYPE)
+        assertEquals("db_name", BackupActionInputKeys.DB_NAME)
+        assertEquals("table", BackupActionInputKeys.TABLE)
+        assertEquals("values", BackupActionInputKeys.VALUES)
+        assertEquals("key_col", BackupActionInputKeys.KEY_COL)
+        assertEquals("key_val", BackupActionInputKeys.KEY_VAL)
+        assertEquals("path", BackupActionInputKeys.PATH)
+        assertEquals("is_binary", BackupActionInputKeys.IS_BINARY)
+        assertEquals("expected", BackupActionInputKeys.EXPECTED)
+        assertEquals("expected_col", BackupActionInputKeys.EXPECTED_COL)
+        assertEquals("expected_val", BackupActionInputKeys.EXPECTED_VAL)
+        assertEquals("expect_null", BackupActionInputKeys.EXPECT_NULL)
+    }
+
+    @Test
+    fun outputKeysMatchTheDeviceLibrary() {
+        assertEquals("status", BackupActionOutputKeys.STATUS)
+        assertEquals("error", BackupActionOutputKeys.ERROR)
+    }
+
+    @Test
+    fun valuesMatchTheDeviceLibrary() {
+        assertEquals("PREFS", BackupActionValues.STORAGE_TYPE_PREFS)
+        assertEquals("DATABASE", BackupActionValues.STORAGE_TYPE_DATABASE)
+        assertEquals("FILES", BackupActionValues.STORAGE_TYPE_FILES)
+        assertEquals("DATASTORE_PREFS", BackupActionValues.STORAGE_TYPE_DATASTORE_PREFS)
+        assertEquals("INT", BackupActionValues.VALUE_TYPE_INT)
+        assertEquals("LONG", BackupActionValues.VALUE_TYPE_LONG)
+        assertEquals("FLOAT", BackupActionValues.VALUE_TYPE_FLOAT)
+        assertEquals("DOUBLE", BackupActionValues.VALUE_TYPE_DOUBLE)
+        assertEquals("BOOLEAN", BackupActionValues.VALUE_TYPE_BOOLEAN)
+        assertEquals("STRING", BackupActionValues.VALUE_TYPE_STRING)
+        assertEquals("STRING_SET", BackupActionValues.VALUE_TYPE_STRING_SET)
+        assertEquals("BYTES", BackupActionValues.VALUE_TYPE_BYTES)
+        assertEquals("success", BackupActionValues.STATUS_SUCCESS)
+        assertEquals("failure", BackupActionValues.STATUS_FAILURE)
+    }
+
+    /** The action status is lower case; the telemetry report status is upper case. */
+    @Test
+    fun actionStatusIsDistinctFromReportStatus() {
+        assertEquals("success", BackupActionValues.STATUS_SUCCESS)
+        assertEquals("SUCCESS", BackupReportKeys.REPORT_STATUS_SUCCESS)
+        assertEquals("failure", BackupActionValues.STATUS_FAILURE)
+        assertEquals("FAILURE", BackupReportKeys.REPORT_STATUS_FAILURE)
+    }
+
+    @Test
+    fun encodesPlainPairs() {
+        assertEquals(
+            "col1=val1&col2=val2",
+            BackupActionWireProtocol.encodeColumnValues(listOf("col1" to "val1", "col2" to "val2")),
+        )
+    }
+
+    /** Unencoded separators used to corrupt the column list on arrival. */
+    @Test
+    fun encodesSeparatorsInsideValues() {
+        assertEquals(
+            "q=a%26b%3Dc",
+            BackupActionWireProtocol.encodeColumnValues(listOf("q" to "a&b=c")),
+        )
+    }
+
+    @Test
+    fun encodesAnEmptyValue() {
+        assertEquals("col=", BackupActionWireProtocol.encodeColumnValues(listOf("col" to "")))
+    }
+
+    /** SQL NULL and the empty string stay distinct on the wire. */
+    @Test
+    fun encodesANullValueAsTheNameAlone() {
+        assertEquals(
+            "a=1&note&b=",
+            BackupActionWireProtocol.encodeColumnValues(
+                listOf("a" to "1", "note" to null, "b" to "")
+            ),
+        )
+    }
+
+    /** What the host writes has to survive the decoder the device applies to it. */
+    @Test
+    fun roundTripsThroughTheDeviceDecoder() {
+        val pairs =
+            listOf(
+                "a&b" to "c=d",
+                "e%f" to "g+h",
+                "unicode" to "café",
+                "empty" to "",
+                "null" to null,
+            )
+
+        val decoded =
+            BackupActionWireProtocol.encodeColumnValues(pairs).split("&").map { segment ->
+                val separator = segment.indexOf('=')
+                if (separator < 0) {
+                    decode(segment) to null
+                } else {
+                    decode(segment.substring(0, separator)) to
+                        decode(segment.substring(separator + 1))
+                }
+            }
+
+        assertEquals(pairs, decoded)
+    }
+
+    @Test
+    fun runnerComponentPointsAtTheTestApk() {
+        assertEquals(
+            "com.example.app.test/androidx.test.backup.BackupRestoreTestRunner",
+            BackupActionWireProtocol.runnerComponent("com.example.app"),
+        )
+    }
+
+    @Test
+    fun instrumentationArgsNameTheActionAndCarryItsArguments() {
+        val args =
+            BackupActionWireProtocol.instrumentationArgs(
+                "com.example.MyAction",
+                linkedMapOf("k1" to "v1", "k2" to "v2"),
+                waitForDebugger = false,
+            )
+
+        assertEquals(listOf("actionClass", "k1", "k2"), args.keys.toList())
+        assertEquals("com.example.MyAction", args["actionClass"])
+        assertEquals("v1", args["k1"])
+        assertEquals("v2", args["k2"])
+    }
+
+    /** The runner reads these keys itself, so an action argument must not set them. */
+    @Test
+    fun instrumentationArgsRejectTheKeysOfTheRunner() {
+        for (key in listOf("actionClass", "debug", "argsFile", "redirect_dir")) {
+            assertFailsWith<IllegalArgumentException>(key) {
+                BackupActionWireProtocol.instrumentationArgs("A", mapOf(key to "x"), false)
+            }
+        }
+    }
+
+    @Test
+    fun instrumentationArgsAskTheRunnerToWaitForADebugger() {
+        val args = BackupActionWireProtocol.instrumentationArgs("A", emptyMap(), true)
+
+        assertEquals("debug", args.keys.first())
+        assertEquals("true", args["debug"])
+    }
+
+    @Test
+    fun argsFileInstrumentationArgsNameTheFileInsteadOfTheArguments() {
+        val path = "/data/local/tmp/backup_args_1.json"
+
+        assertEquals(
+            mapOf("actionClass" to "com.example.MyAction", "argsFile" to path),
+            BackupActionWireProtocol.argsFileInstrumentationArgs(
+                "com.example.MyAction",
+                path,
+                waitForDebugger = false,
+            ),
+        )
+        assertEquals(
+            listOf("debug", "actionClass", "argsFile"),
+            BackupActionWireProtocol.argsFileInstrumentationArgs("A", path, true).keys.toList(),
+        )
+    }
+
+    @Test
+    fun argsFileHoldsTheArgumentsAsAJsonObjectOfStrings() {
+        val args =
+            mapOf("quote" to "a\"b", "lines" to "1\n2", "unicode" to "café 😀", "empty" to "")
+
+        val decoded =
+            Json.parseToJsonElement(BackupActionWireProtocol.encodeArgsFile(args)).jsonObject
+
+        assertEquals(args, decoded.mapValues { (_, value) -> value.jsonPrimitive.content })
+    }
+
+    @Test
+    fun argsFilesHaveFreshPathsWithoutWhitespaceInTheShellTempDirectory() {
+        val first = BackupActionWireProtocol.newArgsFilePath()
+        val second = BackupActionWireProtocol.newArgsFilePath()
+
+        for (path in listOf(first, second)) {
+            assertTrue(path.startsWith("/data/local/tmp/backup_args_"), path)
+            assertTrue(path.endsWith(".json"), path)
+            assertTrue(path.none { it.isWhitespace() }, path)
+        }
+        assertNotEquals(first, second)
+    }
+
+    @Test
+    fun populateArgsTypesPreferenceValues() {
+        mapOf(
+                7 to "INT",
+                7L to "LONG",
+                1.5f to "FLOAT",
+                true to "BOOLEAN",
+                "text" to "STRING",
+            )
+            .forEach { (value, valueType) ->
+                assertEquals(
+                    mapOf(
+                        "storage_type" to "PREFS",
+                        "pref_name" to "prefs",
+                        "pref_key" to "key",
+                        "value" to value.toString(),
+                        "value_type" to valueType,
+                    ),
+                    BackupActionWireProtocol.populateArgs(
+                        StorageDomain.Preference("prefs", "key", value)
+                    ),
+                )
+            }
+    }
+
+    @Test
+    fun populateArgsMarksANullPreferenceWithExpectNull() {
+        assertEquals(
+            mapOf(
+                "storage_type" to "PREFS",
+                "pref_name" to "prefs",
+                "pref_key" to "key",
+                "expect_null" to "true",
+            ),
+            BackupActionWireProtocol.populateArgs(StorageDomain.Preference("prefs", "key", null)),
+        )
+    }
+
+    @Test
+    fun populateArgsWriteAStringSetAsAJsonArray() {
+        assertEquals(
+            mapOf(
+                "storage_type" to "PREFS",
+                "pref_name" to "prefs",
+                "pref_key" to "key",
+                "value" to """["a","b\"c",""]""",
+                "value_type" to "STRING_SET",
+            ),
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.Preference("prefs", "key", linkedSetOf("a", "b\"c", ""))
+            ),
+        )
+    }
+
+    @Test
+    fun populateArgsWriteAnEmptyStringSet() {
+        val args =
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.Preference("prefs", "key", emptySet<String>())
+            )
+
+        assertEquals("[]", args["value"])
+        assertEquals("STRING_SET", args["value_type"])
+    }
+
+    @Test
+    fun populateArgsEncodeDataStorePreferenceValues() {
+        assertEquals(
+            mapOf(
+                "storage_type" to "DATASTORE_PREFS",
+                "pref_name" to "user_prefs",
+                "pref_key" to "pi",
+                "value" to "3.14",
+                "value_type" to "DOUBLE",
+            ),
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.DataStorePreference("user_prefs", "pi", 3.14)
+            ),
+        )
+        assertEquals(
+            mapOf(
+                "storage_type" to "DATASTORE_PREFS",
+                "pref_name" to "user_prefs",
+                "pref_key" to "token",
+                "value" to "AQL/",
+                "value_type" to "BYTES",
+            ),
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.DataStorePreference("user_prefs", "token", byteArrayOf(1, 2, -1))
+            ),
+        )
+    }
+
+    @Test
+    fun populateArgsMarkEveryKindOfDomainInDeviceProtectedStorage() {
+        val domains =
+            listOf(
+                StorageDomain.Preference("prefs", "key", "v", isDeviceProtectedStorage = true),
+                StorageDomain.Preference("prefs", "key", null, isDeviceProtectedStorage = true),
+                StorageDomain.DataStorePreference(
+                    "prefs",
+                    "key",
+                    3.14,
+                    isDeviceProtectedStorage = true,
+                ),
+                StorageDomain.Database("app.db", "t", "id", 1, mapOf("a" to "b"), true),
+                StorageDomain.TextFile("a.txt", "hello", isDeviceProtectedStorage = true),
+                StorageDomain.BinaryFile("b.bin", byteArrayOf(1), isDeviceProtectedStorage = true),
+            )
+
+        for (domain in domains) {
+            assertEquals(
+                "true",
+                BackupActionWireProtocol.populateArgs(domain)["is_device_protected"],
+                "$domain",
+            )
+            assertEquals(
+                "true",
+                BackupActionWireProtocol.assertArgs(domain)["is_device_protected"],
+                "$domain",
+            )
+        }
+    }
+
+    @Test
+    fun populateArgsAddTheMissingPrimaryKeyToTheDatabaseRow() {
+        val args =
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.Database("app.db", "users", "id", 42, mapOf("name" to "Ann"))
+            )
+
+        assertEquals(
+            mapOf(
+                "storage_type" to "DATABASE",
+                "db_name" to "app.db",
+                "table" to "users",
+                "values" to "name=Ann&id=42",
+                "key_col" to "id",
+                "key_val" to "42",
+            ),
+            args,
+        )
+    }
+
+    @Test
+    fun populateArgsKeepAPrimaryKeyTheRowAlreadyHas() {
+        val args =
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.Database(
+                    "app.db",
+                    "users",
+                    "id",
+                    42,
+                    linkedMapOf("ID" to 42, "note" to null),
+                )
+            )
+
+        assertEquals("ID=42&note", args["values"])
+        assertEquals("id", args["key_col"])
+        assertEquals("42", args["key_val"])
+    }
+
+    @Test
+    fun populateArgsWriteTextFiles() {
+        assertEquals(
+            mapOf("storage_type" to "FILES", "path" to "a/b.txt", "value" to "hello"),
+            BackupActionWireProtocol.populateArgs(StorageDomain.TextFile("a/b.txt", "hello")),
+        )
+    }
+
+    @Test
+    fun populateArgsEncodeBinaryFilesInBase64() {
+        assertEquals(
+            mapOf(
+                "storage_type" to "FILES",
+                "path" to "blob.bin",
+                "value" to "AQL/",
+                "is_binary" to "true",
+            ),
+            BackupActionWireProtocol.populateArgs(
+                StorageDomain.BinaryFile("blob.bin", byteArrayOf(1, 2, -1))
+            ),
+        )
+    }
+
+    /** The action verifies a preference against its value, so the value is sent only once. */
+    @Test
+    fun assertArgsVerifyAPreferenceAgainstItsValue() {
+        for (value in listOf(7, linkedSetOf("a", "b"))) {
+            val domain = StorageDomain.Preference("prefs", "key", value)
+
+            assertEquals(
+                BackupActionWireProtocol.populateArgs(domain),
+                BackupActionWireProtocol.assertArgs(domain),
+            )
+        }
+    }
+
+    @Test
+    fun assertArgsExpectANullPreferenceToBeAbsent() {
+        val domain = StorageDomain.Preference("prefs", "key", null)
+
+        assertEquals(
+            BackupActionWireProtocol.populateArgs(domain),
+            BackupActionWireProtocol.assertArgs(domain),
+        )
+    }
+
+    @Test
+    fun assertArgsCheckTheFirstColumnOfTheKeyedRow() {
+        val domain =
+            StorageDomain.Database(
+                "app.db",
+                "users",
+                "id",
+                42,
+                linkedMapOf("name" to null, "age" to 30),
+            )
+
+        assertEquals(
+            BackupActionWireProtocol.populateArgs(domain) +
+                mapOf("expected_col" to "name", "expected_val" to ""),
+            BackupActionWireProtocol.assertArgs(domain),
+        )
+    }
+
+    /** Sending a file's content once keeps twice as large a file within the inline limit. */
+    @Test
+    fun assertArgsVerifyAFileAgainstItsValue() {
+        val text = StorageDomain.TextFile("a.txt", "hello")
+        val binary = StorageDomain.BinaryFile("b.bin", byteArrayOf(1, 2, -1))
+
+        assertEquals(
+            BackupActionWireProtocol.populateArgs(text),
+            BackupActionWireProtocol.assertArgs(text),
+        )
+        assertEquals(
+            BackupActionWireProtocol.populateArgs(binary),
+            BackupActionWireProtocol.assertArgs(binary),
+        )
+    }
+
+    /** Absence is checked by row or path alone, without the values that were seeded. */
+    @Test
+    fun absenceArgsExpectTheDataToBeAbsent() {
+        val database = StorageDomain.Database("app.db", "notes", "id", 7, mapOf("text" to "hi"))
+        val file =
+            StorageDomain.TextFile("cache.txt", "x".repeat(100), isDeviceProtectedStorage = true)
+
+        assertEquals(
+            mapOf(
+                "storage_type" to "DATABASE",
+                "db_name" to "app.db",
+                "table" to "notes",
+                "key_col" to "id",
+                "key_val" to "7",
+                "expect_null" to "true",
+            ),
+            BackupActionWireProtocol.absenceArgs(database),
+        )
+        assertEquals(
+            mapOf(
+                "storage_type" to "FILES",
+                "path" to "cache.txt",
+                "is_device_protected" to "true",
+                "expect_null" to "true",
+            ),
+            BackupActionWireProtocol.absenceArgs(file),
+        )
+    }
+
+    @Test
+    fun excludedDataSeedsItsDomainAndVerifiesThatItIsAbsent() {
+        val file = StorageDomain.TextFile("no_backup.txt", "secret")
+        val excluded = StorageDomain.ExcludedData(file)
+
+        assertEquals(
+            BackupRestoreController.ACTION_POPULATE_STORAGE to
+                BackupActionWireProtocol.populateArgs(file),
+            BackupActionWireProtocol.populateCall(excluded),
+        )
+        assertEquals(
+            BackupRestoreController.ACTION_ASSERT_STORAGE to
+                BackupActionWireProtocol.absenceArgs(file),
+            BackupActionWireProtocol.verifyCall(excluded, emptyMap()),
+        )
+    }
+
+    /**
+     * Verify gets the arguments with the data of populate, whose values win, but not its status.
+     */
+    @Test
+    fun customDataPassesTheDataOfPopulateToVerify() {
+        val domain =
+            StorageDomain.CustomData(
+                populateAction = "com.example.CreateKeyAction",
+                verifyAction = "com.example.VerifyKeyAction",
+                args = mapOf("rp_id" to "example.com", "user" to "sarah", "status" to "new"),
+            )
+
+        assertEquals(
+            "com.example.CreateKeyAction" to domain.args,
+            BackupActionWireProtocol.populateCall(domain),
+        )
+        assertEquals(
+            "com.example.VerifyKeyAction" to
+                mapOf(
+                    "rp_id" to "example.com",
+                    "user" to "sarah@example.com",
+                    "status" to "new",
+                    "credential_id" to "abc",
+                ),
+            BackupActionWireProtocol.verifyCall(
+                domain,
+                mapOf(
+                    "credential_id" to "abc",
+                    "user" to "sarah@example.com",
+                    "status" to "success",
+                    "error" to "",
+                ),
+            ),
+        )
+    }
+
+    /** The flow can't pass a key that the runner reads itself, so it fails before the backup. */
+    @Test
+    fun customDataRejectsRunnerKeysThatPopulateReturns() {
+        val domain =
+            StorageDomain.CustomData("com.example.CreateKeyAction", "com.example.VerifyKeyAction")
+
+        val e =
+            assertFailsWith<IOException> {
+                BackupActionWireProtocol.verifyCall(
+                    domain,
+                    mapOf("credential_id" to "abc", "debug" to "true"),
+                )
+            }
+
+        assertEquals(
+            "CreateKeyAction returned the keys [debug], which the runner reads itself, so " +
+                "VerifyKeyAction can't get them. Use other keys.",
+            e.message,
+        )
+    }
+
+    @Test
+    fun deviceRunsGroupConsecutiveDomainsWithBuiltInActions() {
+        val preference = StorageDomain.Preference("prefs", "key", "value")
+        val file = StorageDomain.TextFile("a.txt", "a")
+        val excluded = StorageDomain.ExcludedData(StorageDomain.TextFile("b.txt", "b"))
+        val custom = StorageDomain.CustomData("com.example.Create", "com.example.Verify")
+
+        assertEquals(
+            listOf(listOf(preference, file, excluded)),
+            BackupActionWireProtocol.deviceRuns(listOf(preference, file, excluded)),
+        )
+        assertEquals(
+            listOf(listOf(preference, file), listOf(custom), listOf(excluded)),
+            BackupActionWireProtocol.deviceRuns(listOf(preference, file, custom, excluded)),
+        )
+        assertEquals(
+            listOf(listOf(custom), listOf(custom), listOf(file)),
+            BackupActionWireProtocol.deviceRuns(listOf(custom, custom, file)),
+        )
+        assertEquals(listOf(listOf(file)), BackupActionWireProtocol.deviceRuns(listOf(file)))
+        assertEquals(emptyList(), BackupActionWireProtocol.deviceRuns(emptyList()))
+    }
+
+    /**
+     * Pins the class name of the batch action, its argument and the members of a call to the string
+     * that the device-side `StorageBatchActionTest` runs.
+     */
+    @Test
+    fun storageBatchCallHoldsTheCallsAsAJsonArray() {
+        val file = StorageDomain.TextFile("storage_batch.txt", "it's \"here\"\n")
+
+        assertEquals(
+            "androidx.test.backup.actions.StorageBatchAction" to
+                mapOf(
+                    "calls" to
+                        """[{"action":"androidx.test.backup.actions.PopulateStorageAction",""" +
+                            """"args":{"storage_type":"FILES","path":"storage_batch.txt",""" +
+                            """"value":"it's \"here\"\n"}},""" +
+                            """{"action":"androidx.test.backup.actions.AssertStorageAction",""" +
+                            """"args":{"storage_type":"FILES","path":"storage_batch.txt",""" +
+                            """"value":"it's \"here\"\n"}}]"""
+                ),
+            BackupActionWireProtocol.storageBatchCall(
+                listOf(
+                    BackupActionWireProtocol.populateCall(file),
+                    BackupActionWireProtocol.verifyCall(file, emptyMap()),
+                )
+            ),
+        )
+    }
+
+    @Test
+    fun failedBatchCallIsTheIndexThatTheBatchReports() {
+        assertEquals(
+            2,
+            BackupActionWireProtocol.failedBatchCall(
+                BackupActionResult.Failure("Expected 'a'", data = mapOf("failed_call" to "2"))
+            ),
+        )
+        assertNull(
+            BackupActionWireProtocol.failedBatchCall(BackupActionResult.Failure("Timed out"))
+        )
+        assertNull(
+            BackupActionWireProtocol.failedBatchCall(
+                BackupActionResult.Failure("Expected 'a'", data = mapOf("failed_call" to "two"))
+            )
+        )
+    }
+
+    /** Runners of every version report an action class that they can't load with this message. */
+    @Test
+    fun storageBatchIsMissingWhenTheRunnerCannotLoadItsClass() {
+        assertTrue(
+            BackupActionWireProtocol.isStorageBatchMissing(
+                BackupActionResult.Failure(
+                    "Exception executing action: Could not load class " +
+                        "androidx.test.backup.actions.StorageBatchAction",
+                    "java.lang.ClassNotFoundException: Could not load class",
+                )
+            )
+        )
+        assertFalse(
+            BackupActionWireProtocol.isStorageBatchMissing(
+                BackupActionResult.Failure(
+                    "Exception executing action: Could not load class com.example.MyAction"
+                )
+            )
+        )
+        assertFalse(
+            BackupActionWireProtocol.isStorageBatchMissing(
+                BackupActionResult.Failure("Timed out after 1m")
+            )
+        )
+    }
+
+    private fun decode(value: String): String =
+        URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+}

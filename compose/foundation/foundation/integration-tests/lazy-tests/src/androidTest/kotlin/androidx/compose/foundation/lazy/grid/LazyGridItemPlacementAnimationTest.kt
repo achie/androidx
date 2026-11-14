@@ -46,7 +46,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertWidthIsEqualTo
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -58,7 +58,6 @@ import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
 import kotlin.math.roundToInt
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -75,7 +74,7 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
     private val reverseLayout: Boolean
         get() = config.reverseLayout
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     // the numbers should be divisible by 8 to avoid the rounding issues as we run 4 or 8 frames
     // of the animation.
@@ -398,6 +397,39 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
                 1 to AxisOffset(0f, itemSize - itemSize * fraction),
                 2 to AxisOffset(0f, itemSize * 2),
                 3 to AxisOffset(0f, itemSize * 3 + itemSize * fraction),
+                fraction = fraction,
+            )
+        }
+    }
+
+    @Test
+    fun noAnimationWhenParentSizeChanges_reverseLayout_itemsStayInPlace() {
+        // Regression test for b/548989579: with reverseLayout the items are positioned relative
+        // to the end of the layout, so the layout resizing must not start placement animations
+        // for items which did not visually move.
+        var size by mutableStateOf(itemSizeDp * 5)
+        rule.setContent {
+            LazyGrid(
+                1,
+                arrangement = if (isVertical) Arrangement.Top else Arrangement.Start,
+                reverseLayout = true,
+                minSize = size,
+                maxSize = size,
+            ) {
+                items(listOf(0, 1), key = { it }) { Item(it) }
+            }
+        }
+
+        assertPositions(1 to AxisOffset(0f, 0f), 0 to AxisOffset(0f, itemSize), autoReverse = false)
+
+        rule.runOnUiThread { size = itemSizeDp * 3 }
+        rule.mainClock.advanceTimeByFrame()
+
+        onAnimationFrame { fraction ->
+            assertPositions(
+                1 to AxisOffset(0f, 0f),
+                0 to AxisOffset(0f, itemSize),
+                autoReverse = false,
                 fraction = fraction,
             )
         }
@@ -1978,7 +2010,9 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
         var item0Size by mutableStateOf(itemSizeDp)
         val animSpec = spring(visibilityThreshold = IntOffset.VisibilityThreshold)
         rule.setContent {
-            LazyGrid(cells = 1) {
+            // fixed size container so the second item visually moves when the first one is
+            // resized in reverse layout too (otherwise the layout shrinks with the item).
+            LazyGrid(cells = 1, minSize = containerSizeDp) {
                 items(2, key = { it }) {
                     Item(it, if (it == 0) item0Size else itemSizeDp, animSpec = animSpec)
                 }
@@ -2074,8 +2108,9 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
                     keySelector = { it.config[SemanticsProperties.TestTag] },
                     valueTransform = { IntRect(it.positionInRoot.round(), it.size) },
                 )
-        val actualPositions =
-            expected.map { it.first to actualBounds.getValue(it.first.toString()).topLeft }
+        val actualPositions = expected.map {
+            it.first to actualBounds.getValue(it.first.toString()).topLeft
+        }
         val subject =
             if (fraction == null) {
                 assertThat(actualPositions)
@@ -2108,13 +2143,12 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
             }
         )
         if (crossAxis != null) {
-            val actualCross =
-                expected.map {
-                    it.first to
-                        actualBounds.getValue(it.first.toString()).topLeft.let { offset ->
-                            if (isVertical) offset.x else offset.y
-                        }
-                }
+            val actualCross = expected.map {
+                it.first to
+                    actualBounds.getValue(it.first.toString()).topLeft.let { offset ->
+                        if (isVertical) offset.x else offset.y
+                    }
+            }
             assertWithMessage("CrossAxis" + if (fraction != null) "for fraction=$fraction" else "")
                 .that(actualCross)
                 .isEqualTo(crossAxis.map { it.first to it.second.roundToInt() })
@@ -2149,12 +2183,13 @@ class LazyGridItemPlacementAnimationTest(private val config: Config) {
     @Composable
     private fun LazyGrid(
         cells: Int,
-        arrangement: Arrangement.HorizontalOrVertical? = null,
+        arrangement: Any? = null,
         minSize: Dp = 0.dp,
         maxSize: Dp = containerSizeDp,
         startIndex: Int = 0,
         startPadding: Dp = 0.dp,
         endPadding: Dp = 0.dp,
+        reverseLayout: Boolean = this.reverseLayout,
         content: LazyGridScope.() -> Unit,
     ) {
         state = rememberLazyGridState(startIndex)

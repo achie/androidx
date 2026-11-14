@@ -18,18 +18,19 @@ package androidx.camera.camera2.testing
 
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.MeteringRectangle
+import androidx.camera.camera2.adapter.CameraSessionLifecycleAdapter
 import androidx.camera.camera2.adapter.CameraStateAdapter
 import androidx.camera.camera2.adapter.GraphStateToCameraStateAdapter
 import androidx.camera.camera2.adapter.SessionConfigAdapter
 import androidx.camera.camera2.adapter.ZslControlNoOpImpl
+import androidx.camera.camera2.adapter.propagateTo
 import androidx.camera.camera2.compat.StreamConfigurationMapCompat
 import androidx.camera.camera2.compat.quirk.CameraQuirks
-import androidx.camera.camera2.compat.workaround.OutputSizesCorrector
 import androidx.camera.camera2.compat.workaround.TemplateParamsQuirkOverride
 import androidx.camera.camera2.config.CameraConfig
 import androidx.camera.camera2.config.UseCaseCameraComponent
 import androidx.camera.camera2.config.UseCaseCameraConfig
-import androidx.camera.camera2.config.UseCaseGraphContext
+import androidx.camera.camera2.config.UseCaseCameraContext
 import androidx.camera.camera2.impl.CameraCallbackMap
 import androidx.camera.camera2.impl.CameraGraphConfigProvider
 import androidx.camera.camera2.impl.ComboRequestListener
@@ -38,9 +39,12 @@ import androidx.camera.camera2.impl.UseCaseCameraRequestControl
 import androidx.camera.camera2.impl.toMap
 import androidx.camera.camera2.pipe.AeMode
 import androidx.camera.camera2.pipe.CameraGraph
+import androidx.camera.camera2.pipe.FrameMetadata
 import androidx.camera.camera2.pipe.Lock3ABehavior
+import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.Result3A
 import androidx.camera.camera2.pipe.testing.FakeCameraMetadata
+import androidx.camera.camera2.pipe.testing.HighEndDeviceTemplate
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.UseCase
 import androidx.camera.core.imagecapture.CameraCapturePipeline
@@ -49,6 +53,7 @@ import androidx.camera.core.impl.Config
 import androidx.camera.testing.impl.FakeCameraCapturePipeline
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.TimeUnit.NANOSECONDS
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -60,20 +65,17 @@ import org.robolectric.shadows.StreamConfigurationMapBuilder
 
 class FakeUseCaseCameraComponentBuilder : UseCaseCameraComponent.Builder {
     var buildInvocationCount = 0
+    val fakeUseCaseCamera = FakeUseCaseCamera()
     private var sessionConfigAdapter = SessionConfigAdapter(emptyList())
     private var cameraGraph = FakeCameraGraph()
-    private val cameraStateAdapter = CameraStateAdapter()
-    private val graphStateToCameraStateAdapter = GraphStateToCameraStateAdapter(cameraStateAdapter)
-    private val cameraMetadata = FakeCameraMetadata()
+    private val cameraStateAdapter = CameraStateAdapter(CameraSessionLifecycleAdapter())
+    private val cameraMetadata = FakeCameraMetadata.fromTemplate(HighEndDeviceTemplate)
     private val cameraQuirks =
         CameraQuirks(
             cameraMetadata,
             StreamConfigurationMapCompat(
                 StreamConfigurationMapBuilder.newBuilder().build(),
-                OutputSizesCorrector(
-                    cameraMetadata,
-                    StreamConfigurationMapBuilder.newBuilder().build(),
-                ),
+                cameraMetadata,
             ),
         )
     val configProvider =
@@ -87,14 +89,14 @@ class FakeUseCaseCameraComponentBuilder : UseCaseCameraComponent.Builder {
             cameraMetadata = cameraMetadata,
         )
 
+    var lastBuiltConfig: UseCaseCameraConfig? = null
     private var config: UseCaseCameraConfig =
         UseCaseCameraConfig.create(
-            useCases = emptyList(),
             cameraGraphConfigProvider = configProvider,
             cameraGraphFactory = { _ -> cameraGraph },
-            graphStateToCameraStateAdapter = graphStateToCameraStateAdapter,
+            cameraStateAdapter = cameraStateAdapter,
             sessionConfigAdapter = sessionConfigAdapter,
-            isExtensions = false,
+            extensionMode = null,
             sessionProcessor = null,
         )
 
@@ -105,16 +107,18 @@ class FakeUseCaseCameraComponentBuilder : UseCaseCameraComponent.Builder {
 
     override fun build(): UseCaseCameraComponent {
         buildInvocationCount++
-        return FakeUseCaseCameraComponent()
+        lastBuiltConfig = config
+        return FakeUseCaseCameraComponent(fakeUseCaseCamera)
     }
 }
 
-class FakeUseCaseCameraComponent() : UseCaseCameraComponent {
-    private val fakeUseCaseCamera = FakeUseCaseCamera()
+class FakeUseCaseCameraComponent(
+    private val fakeUseCaseCamera: FakeUseCaseCamera = FakeUseCaseCamera()
+) : UseCaseCameraComponent {
     private val cameraGraph = FakeCameraGraph()
-    private val cameraStateAdapter = CameraStateAdapter()
-    private val useCaseGraphContext =
-        UseCaseGraphContext(
+    private val cameraStateAdapter = CameraStateAdapter(CameraSessionLifecycleAdapter())
+    private val useCaseCameraContext =
+        UseCaseCameraContext(
             cameraGraphProvider = { cameraGraph },
             cameraStateAdapter = cameraStateAdapter,
             graphStateToCameraStateAdapter = GraphStateToCameraStateAdapter(cameraStateAdapter),
@@ -126,9 +130,9 @@ class FakeUseCaseCameraComponent() : UseCaseCameraComponent {
         return fakeUseCaseCamera
     }
 
-    override fun getUseCaseGraphContext(): UseCaseGraphContext {
+    override fun getUseCaseCameraContext(): UseCaseCameraContext {
         // TODO: Implement this properly once we need to use it with SessionProcessor enabled.
-        return useCaseGraphContext
+        return useCaseCameraContext
     }
 }
 
@@ -157,12 +161,12 @@ open class FakeUseCaseCameraRequestControl(
         return addParameterResult
     }
 
-    override fun setParametersAsync(
-        valuesFactory: () -> Map<CaptureRequest.Key<*>, Any>,
+    override fun submitParameters(
+        values: Map<CaptureRequest.Key<*>, Any>,
         type: UseCaseCameraRequestControl.Type,
         optionPriority: Config.OptionPriority,
     ): Deferred<Unit> {
-        addParameterCalls.add(valuesFactory())
+        addParameterCalls.add(values)
         return addParameterResult
     }
 
@@ -189,9 +193,18 @@ open class FakeUseCaseCameraRequestControl(
         return CompletableDeferred(Unit)
     }
 
-    override fun updateCamera2ConfigAsync(config: Config, tags: Map<String, Any>): Deferred<Unit> {
+    override fun updateCamera2ConfigAsync(
+        config: Config,
+        tags: Map<String, Any>,
+        listeners: Set<Request.Listener>,
+    ): Deferred<Unit> {
         setConfigCalls.add(
-            RequestParameters(UseCaseCameraRequestControl.Type.CAMERA2_CAMERA_CONTROL, config, tags)
+            RequestParameters(
+                UseCaseCameraRequestControl.Type.CAMERA2_CAMERA_CONTROL,
+                config,
+                tags,
+                listeners,
+            )
         )
         return CompletableDeferred(Unit)
     }
@@ -209,9 +222,13 @@ open class FakeUseCaseCameraRequestControl(
     var aeRegions: List<MeteringRectangle>? = null
     var afRegions: List<MeteringRectangle>? = null
     var awbRegions: List<MeteringRectangle>? = null
+    var cancelAeRegions: List<MeteringRectangle>? = null
+    var cancelAfRegions: List<MeteringRectangle>? = null
+    var cancelAwbRegions: List<MeteringRectangle>? = null
 
     val focusMeteringCalls = mutableListOf<FocusMeteringParams>()
     var focusMeteringResult = CompletableDeferred(Result3A(status = Result3A.Status.OK))
+    var lastFocusMeteringResult: Deferred<Result3A>? = null
     var cancelFocusMeteringCallCount = 0
     var cancelFocusMeteringResult = CompletableDeferred(Result3A(status = Result3A.Status.OK))
 
@@ -226,6 +243,7 @@ open class FakeUseCaseCameraRequestControl(
         awbLockBehavior: Lock3ABehavior?,
         afTriggerStartAeMode: AeMode?,
         timeLimitNs: Long,
+        convergedCondition: ((FrameMetadata) -> Boolean)?,
     ): Deferred<Result3A> {
         this.aeRegions = aeRegions
         this.afRegions = afRegions
@@ -244,25 +262,40 @@ open class FakeUseCaseCameraRequestControl(
             )
         )
 
+        val currentResult = CompletableDeferred<Result3A>()
+        lastFocusMeteringResult = currentResult
+        focusMeteringResult.propagateTo(currentResult)
+
         if (focusAutoCompletesAfterTimeout) {
             scope.launch {
-                withTimeoutOrNull(MILLISECONDS.convert(timeLimitNs, NANOSECONDS)) {
-                        focusMeteringResult.await()
-                    }
-                    .let { result3A ->
-                        if (result3A == null) {
-                            focusMeteringResult.complete(
-                                Result3A(status = Result3A.Status.TIME_LIMIT_REACHED)
-                            )
+                try {
+                    withTimeoutOrNull(MILLISECONDS.convert(timeLimitNs, NANOSECONDS).milliseconds) {
+                            currentResult.await()
                         }
-                    }
+                        .let { result3A ->
+                            if (result3A == null) {
+                                currentResult.complete(
+                                    Result3A(status = Result3A.Status.TIME_LIMIT_REACHED)
+                                )
+                            }
+                        }
+                } catch (_: kotlinx.coroutines.CancellationException) {
+                    // Ignore cancellation of currentResult
+                }
             }
         }
 
-        return focusMeteringResult
+        return currentResult
     }
 
-    override fun cancelFocusAndMeteringAsync(): Deferred<Result3A> {
+    override fun cancelFocusAndMeteringAsync(
+        aeRegions: List<MeteringRectangle>?,
+        afRegions: List<MeteringRectangle>?,
+        awbRegions: List<MeteringRectangle>?,
+    ): Deferred<Result3A> {
+        this.cancelAeRegions = aeRegions
+        this.cancelAfRegions = afRegions
+        this.cancelAwbRegions = awbRegions
         cancelFocusMeteringCallCount++
         return cancelFocusMeteringResult
     }
@@ -308,6 +341,7 @@ open class FakeUseCaseCameraRequestControl(
         val type: UseCaseCameraRequestControl.Type,
         val config: Config?,
         val tags: Map<String, Any> = emptyMap(),
+        val listeners: Set<Request.Listener> = emptySet(),
     )
 }
 
@@ -323,11 +357,15 @@ class FakeUseCaseCamera(
         flashType: Int,
     ): CameraCapturePipeline = FakeCameraCapturePipeline()
 
+    val runningUseCasesUpdates = mutableListOf<Set<UseCase>>()
+    var updateRepeatingRequestResult: Job = CompletableDeferred(Unit)
+
     override fun updateRepeatingRequestAsync(
         isPrimary: Boolean,
         runningUseCases: Collection<UseCase>,
     ): Job {
-        return CompletableDeferred(Unit)
+        runningUseCasesUpdates.add(runningUseCases.toSet())
+        return updateRepeatingRequestResult
     }
 
     override fun close(): Job {

@@ -30,6 +30,9 @@ public class PaintChangeAdapter implements PaintChanges {
     public void setTypeFace(int fontType, int weight, boolean italic) {}
 
     @Override
+    public void setFallbackTypeFace(int fontType, int weight, boolean italic) {}
+
+    @Override
     public void setShaderMatrix(float matrixId) {}
 
     @Override
@@ -101,6 +104,18 @@ public class PaintChangeAdapter implements PaintChanges {
             float centerX,
             float centerY,
             float radius,
+            int tileMode) {}
+
+    @Override
+    public void setRadialGradient(
+            int @NonNull [] colors,
+            float @Nullable [] stops,
+            float startX,
+            float startY,
+            float startRadius,
+            float endX,
+            float endY,
+            float endRadius,
             int tileMode) {}
 
     @Override

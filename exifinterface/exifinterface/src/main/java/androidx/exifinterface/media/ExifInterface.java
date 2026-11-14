@@ -74,6 +74,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
@@ -93,8 +94,8 @@ import java.util.zip.CRC32;
 /**
  * This is a class for reading and writing Exif tags in various image file formats.
  *
- * <p>Supported for reading: JPEG, PNG, WebP, HEIC, DNG, CR2, NEF, NRW, ARW, RW2, ORF, PEF, SRW,
- * RAF, AVIF (on API 31+).
+ * <p>Supported for reading: JPEG, PNG, WebP, HEIC (on API 28+), DNG, CR2, NEF, NRW, ARW, RW2, ORF,
+ * PEF, SRW, RAF, AVIF (on API 31+).
  *
  * <p>Supported for writing: JPEG, PNG, WebP.
  *
@@ -3132,8 +3133,26 @@ public class ExifInterface {
     private static final int WEBP_CHUNK_TYPE_BYTE_LENGTH = 4;
     private static final int WEBP_CHUNK_SIZE_BYTE_LENGTH = 4;
 
-    private static final SimpleDateFormat sFormatterPrimary;
-    private static final SimpleDateFormat sFormatterSecondary;
+    private static final ThreadLocal<SimpleDateFormat> sFormatterPrimary =
+            new ThreadLocal<SimpleDateFormat>() {
+                @Override
+                protected SimpleDateFormat initialValue() {
+                    SimpleDateFormat formatter =
+                            new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US);
+                    formatter.setTimeZone(TimeZone.getTimeZone("UTC"));
+                    return formatter;
+                }
+            };
+    private static final ThreadLocal<SimpleDateFormat> sFormatterSecondary =
+            new ThreadLocal<SimpleDateFormat>() {
+                @Override
+                protected SimpleDateFormat initialValue() {
+                    SimpleDateFormat formatter =
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+                    formatter.setTimeZone(TimeZone.getTimeZone("UTC"));
+                    return formatter;
+                }
+            };
 
     // See Exchangeable image file format for digital still cameras: Exif version 2.2.
     // The following values are for parsing EXIF data area. There are tag groups in EXIF data area.
@@ -3315,6 +3334,10 @@ public class ExifInterface {
         public static ExifAttribute createString(String value) {
             final byte[] ascii = (value + '\0').getBytes(ASCII);
             return new ExifAttribute(IFD_FORMAT_STRING, ascii.length, ascii);
+        }
+
+        public static ExifAttribute createUndefined(byte[] bytes) {
+            return new ExifAttribute(IFD_FORMAT_UNDEFINED, bytes.length, bytes);
         }
 
         public static ExifAttribute createURational(Rational[] values, ByteOrder byteOrder) {
@@ -3708,7 +3731,7 @@ public class ExifInterface {
             new ExifTag(TAG_ISO_SPEED, 34867, IFD_FORMAT_ULONG),
             new ExifTag(TAG_ISO_SPEED_LATITUDE_YYY, 34868, IFD_FORMAT_ULONG),
             new ExifTag(TAG_ISO_SPEED_LATITUDE_ZZZ, 34869, IFD_FORMAT_ULONG),
-            new ExifTag(TAG_EXIF_VERSION, 36864, IFD_FORMAT_STRING),
+            new ExifTag(TAG_EXIF_VERSION, 36864, IFD_FORMAT_UNDEFINED),
             new ExifTag(TAG_DATETIME_ORIGINAL, 36867, IFD_FORMAT_STRING),
             new ExifTag(TAG_DATETIME_DIGITIZED, 36868, IFD_FORMAT_STRING),
             new ExifTag(TAG_OFFSET_TIME, 36880, IFD_FORMAT_STRING),
@@ -3901,7 +3924,7 @@ public class ExifInterface {
     private static final int IFD_TYPE_PEF = 9;
 
     // List of Exif tag groups, indexed by the IDF_TYPE_* constants above.
-    static final ExifTag[][] EXIF_TAGS =
+    private static final ExifTag[][] EXIF_TAGS =
             new ExifTag[][] {
                 IFD_TIFF_TAGS, IFD_EXIF_TAGS, IFD_GPS_TAGS, IFD_INTEROPERABILITY_TAGS,
                 IFD_THUMBNAIL_TAGS, IFD_TIFF_TAGS, ORF_MAKER_NOTE_TAGS, ORF_CAMERA_SETTINGS_TAGS,
@@ -3999,11 +4022,6 @@ public class ExifInterface {
     private static final int IMAGE_TYPE_AVIF = 15;
 
     static {
-        sFormatterPrimary = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US);
-        sFormatterPrimary.setTimeZone(TimeZone.getTimeZone("UTC"));
-        sFormatterSecondary = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
-        sFormatterSecondary.setTimeZone(TimeZone.getTimeZone("UTC"));
-
         // Build up the hash tables to look up Exif tags for reading Exif tags.
         for (int ifdType = 0; ifdType < EXIF_TAGS.length; ++ifdType) {
             sExifTagMapsForReading[ifdType] = new HashMap<>();
@@ -4228,11 +4246,14 @@ public class ExifInterface {
             case "image/x-pentax-pef":
             case "image/x-samsung-srw":
             case "image/x-fuji-raf":
-            case "image/heic":
-            case "image/heif":
             case "image/png":
             case "image/webp":
                 return true;
+            case "image/heic":
+            case "image/heif":
+                return Build.VERSION.SDK_INT >= 28;
+            case "image/avif":
+                return Build.VERSION.SDK_INT >= 31;
             default:
                 return false;
         }
@@ -4513,7 +4534,11 @@ public class ExifInterface {
                         mAttributes[i].put(tag, ExifAttribute.createByte(value));
                         break;
                     }
-                    case IFD_FORMAT_UNDEFINED:
+                    case IFD_FORMAT_UNDEFINED: {
+                        mAttributes[i].put(
+                                tag, ExifAttribute.createUndefined(value.getBytes(ASCII)));
+                        break;
+                    }
                     case IFD_FORMAT_STRING: {
                         mAttributes[i].put(tag, ExifAttribute.createString(value));
                         break;
@@ -5259,7 +5284,7 @@ public class ExifInterface {
                 TAG_GPS_SPEED,
                 Rational.createFromDouble(location.getSpeed() * TimeUnit.HOURS.toSeconds(1) / 1000)
                         .toString());
-        String[] dateTime = sFormatterPrimary.format(
+        String[] dateTime = sFormatterPrimary.get().format(
                 new Date(location.getTime())).split("\\s+", -1);
         setAttribute(ExifInterface.TAG_GPS_DATESTAMP, dateTime[0]);
         setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, dateTime[1]);
@@ -5334,7 +5359,7 @@ public class ExifInterface {
         for (int i = subsecString.length(); i < 3; i++) {
             subsecString = "0" + subsecString;
         }
-        setAttribute(TAG_DATETIME, sFormatterPrimary.format(new Date(timeStamp)));
+        setAttribute(TAG_DATETIME, sFormatterPrimary.get().format(new Date(timeStamp)));
         setAttribute(TAG_SUBSEC_TIME, subsecString);
     }
 
@@ -5399,9 +5424,9 @@ public class ExifInterface {
         try {
             // The exif field is in local time. Parsing it as if it is UTC will yield time
             // since 1/1/1970 local time
-            Date dateTime = sFormatterPrimary.parse(dateTimeString, pos);
+            Date dateTime = sFormatterPrimary.get().parse(dateTimeString, pos);
             if (dateTime == null) {
-                dateTime = sFormatterSecondary.parse(dateTimeString, pos);
+                dateTime = sFormatterSecondary.get().parse(dateTimeString, pos);
                 if (dateTime == null) {
                     return null;
                 }
@@ -5446,9 +5471,9 @@ public class ExifInterface {
 
         ParsePosition pos = new ParsePosition(0);
         try {
-            Date dateTime = sFormatterPrimary.parse(dateTimeString, pos);
+            Date dateTime = sFormatterPrimary.get().parse(dateTimeString, pos);
             if (dateTime == null) {
-                dateTime = sFormatterSecondary.parse(dateTimeString, pos);
+                dateTime = sFormatterSecondary.get().parse(dateTimeString, pos);
                 if (dateTime == null) {
                     return null;
                 }
@@ -5847,8 +5872,8 @@ public class ExifInterface {
                     in.readFully(bytes);
                     length = 0;
                     if (getAttribute(TAG_USER_COMMENT) == null) {
-                        mAttributes[IFD_TYPE_EXIF].put(TAG_USER_COMMENT, ExifAttribute.createString(
-                                new String(bytes, ASCII)));
+                        mAttributes[IFD_TYPE_EXIF].put(
+                                TAG_USER_COMMENT, ExifAttribute.createUndefined(bytes));
                     }
                     break;
                 }
@@ -7330,7 +7355,7 @@ public class ExifInterface {
                 int jpegInterchangeFormat =
                         jpegInterchangeFormatAttribute.getIntValue(mExifByteOrder);
                 int jpegInterchangeFormatLength =
-                        jpegInterchangeFormatAttribute.getIntValue(mExifByteOrder);
+                        jpegInterchangeFormatLengthAttribute.getIntValue(mExifByteOrder);
 
                 // Searches for SOF marker in JPEG data and updates IMAGE_LENGTH & IMAGE_WIDTH tags
                 in.seek(jpegInterchangeFormat);
@@ -7838,9 +7863,23 @@ public class ExifInterface {
                 // Write entry count
                 dataOutputStream.writeUnsignedShort(mAttributes[ifdType].size());
 
+                // Sort entries in ascending order by tag number as required by TIFF 6.0 Section 2
+                // and JEITA CP-3451C Section 4.6.2.
+                final int currentIfdType = ifdType;
+                List<Map.Entry<String, ExifAttribute>> entries =
+                        new ArrayList<>(mAttributes[ifdType].entrySet());
+                Collections.sort(
+                        entries,
+                        (e1, e2) ->
+                                Integer.compare(
+                                        sExifTagMapsForWriting[currentIfdType]
+                                                .get(e1.getKey()).number,
+                                        sExifTagMapsForWriting[currentIfdType]
+                                                .get(e2.getKey()).number));
+
                 // Write entry info
                 int dataOffset = ifdOffsets[ifdType] + 2 + mAttributes[ifdType].size() * 12 + 4;
-                for (Map.Entry<String, ExifAttribute> entry : mAttributes[ifdType].entrySet()) {
+                for (Map.Entry<String, ExifAttribute> entry : entries) {
                     // Convert tag name to tag number.
                     final ExifTag tag = sExifTagMapsForWriting[ifdType].get(entry.getKey());
                     final int tagNumber = tag.number;
@@ -7874,7 +7913,7 @@ public class ExifInterface {
                 }
 
                 // Write values of data field exceeding 4 bytes after the next offset.
-                for (Map.Entry<String, ExifAttribute> entry : mAttributes[ifdType].entrySet()) {
+                for (Map.Entry<String, ExifAttribute> entry : entries) {
                     ExifAttribute attribute = entry.getValue();
 
                     if (attribute.bytes.length > 4) {

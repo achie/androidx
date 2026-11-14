@@ -19,9 +19,11 @@ package androidx.compose.ui.layout
 import androidx.collection.mutableIntSetOf
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
@@ -43,6 +46,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -50,14 +55,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.node.requireOwner
 import androidx.compose.ui.platform.AndroidComposeView
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.scale
 import androidx.compose.ui.semantics.SemanticsActions.ScrollBy
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.spatial.NotFound
 import androidx.compose.ui.spatial.RectList
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -72,8 +77,9 @@ import junit.framework.TestCase.assertFalse
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.runBlocking
 import org.junit.ComparisonFailure
 import org.junit.Rule
 import org.junit.Test
@@ -83,7 +89,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RectListIntegrationTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     @SmallTest
@@ -119,6 +125,29 @@ class RectListIntegrationTest {
         rule.runOnIdle { toggle = !toggle }
 
         rule.onNodeWithTag("foo").assertRectDp(50.dp, 50.dp, 60.dp, 60.dp)
+    }
+
+    @Test
+    @SmallTest
+    fun testUpdatePosition_OptimizedMove() {
+        var toggle by mutableStateOf(false)
+
+        rule.setContent {
+            Row {
+                Box(Modifier.width(if (toggle) 50.dp else 10.dp).height(10.dp))
+                Box(Modifier.testTag("parent").width(20.dp).height(20.dp)) {
+                    Box(Modifier.testTag("child").size(10.dp))
+                }
+            }
+        }
+
+        rule.onNodeWithTag("parent").assertRectDp(10.dp, 0.dp, 30.dp, 20.dp)
+        rule.onNodeWithTag("child").assertRectDp(10.dp, 0.dp, 20.dp, 10.dp)
+
+        rule.runOnIdle { toggle = !toggle }
+
+        rule.onNodeWithTag("parent").assertRectDp(50.dp, 0.dp, 70.dp, 20.dp)
+        rule.onNodeWithTag("child").assertRectDp(50.dp, 0.dp, 60.dp, 10.dp)
     }
 
     @Test
@@ -676,7 +705,7 @@ class RectListIntegrationTest {
             }
         }
 
-        rule.onNodeWithTag("outer").assertRectDp(0.dp, 0.dp, 40.dp, 40.dp)
+        rule.onNodeWithTag("outer").assertRectDp(0.dp, 0.dp, 30.dp, 30.dp)
         rule.onNodeWithTag("inner").assertRectDp(5.dp, 5.dp, 25.dp, 25.dp)
     }
 
@@ -913,6 +942,135 @@ class RectListIntegrationTest {
         assertThat(rule.onNodeWithTag("foo").addedToRectList).isFalse()
     }
 
+    @Test
+    fun unplaced_andThenPlacedNode_hasCorrectPositionInWindow() {
+        var placed by mutableStateOf(true)
+        var shift by mutableIntStateOf(0)
+        var leaf: LayoutCoordinates? = null
+
+        rule.setContent {
+            Layout(
+                content = {
+                    Box(
+                        modifier =
+                            Modifier.layout { measurable, constraints ->
+                                val placeable = measurable.measure(constraints)
+                                val x = shift
+                                layout(placeable.width, placeable.height) { placeable.place(x, 0) }
+                            }
+                    ) {
+                        Box(modifier = Modifier.size(20.dp).onGloballyPositioned { leaf = it })
+                    }
+                }
+            ) { measurables, constraints ->
+                val child = measurables[0].measure(constraints.copy(minWidth = 0, minHeight = 0))
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    if (placed) child.place(0, 0)
+                }
+            }
+        }
+
+        placed = false
+        rule.runOnIdle {
+            shift = 100
+            placed = true
+        }
+
+        rule.runOnIdle {
+            val node: LayoutCoordinates = leaf!!
+            assertEquals(
+                expected = node.findRootCoordinates().localPositionOf(node, Offset.Zero),
+                actual = node.positionInWindow(),
+            )
+        }
+    }
+
+    @Test
+    @SmallTest
+    fun testRectListDuringAlignment() {
+        rule.setContent {
+            Row {
+                Row(Modifier.alignByBaseline()) {
+                    BasicText("text", Modifier.size(10.dp).alignByBaseline())
+                }
+            }
+        }
+    }
+
+    @Test
+    @SmallTest
+    fun testRectListDuringAlignment_withLayoutModifier() {
+        rule.setContent {
+            Row {
+                Row(Modifier.padding(10.dp).alignByBaseline()) {
+                    BasicText("text", Modifier.size(10.dp).alignByBaseline())
+                }
+            }
+        }
+    }
+
+    // Regression test for b/549552303#comment6: alignment lines queried during the measure pass
+    // of reused LazyColumn items.
+    @Test
+    @MediumTest
+    fun testLazyColumn_alignmentLinesQueriedDuringMeasure_withReuse() {
+        val itemPx = 20
+        val itemDp = with(rule.density) { itemPx.toDp() }
+        val lazyListState = LazyListState()
+        rule.setContent {
+            LazyColumn(state = lazyListState, modifier = Modifier.height(itemDp * 2)) {
+                items(10) { index ->
+                    BaselineQueryingLayout {
+                        Box(Modifier.fillMaxWidth()) {
+                            Spacer(
+                                Modifier.layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    layout(10 + index, itemPx, mapOf(FirstBaseline to index)) {
+                                        placeable.place(0, 0)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Item 0 scrolls off-screen, but is still measured to advance the first visible index.
+        rule.runOnIdle { runBlocking { lazyListState.scrollBy(itemPx.toFloat()) } }
+        // Item 0 is no longer composed and its slot is moved to the reuse pool.
+        rule.runOnIdle { runBlocking { lazyListState.scrollBy(itemPx.toFloat()) } }
+        // Item 4 reuses the slot of item 0 and queries its baseline during measure.
+        rule.runOnIdle { runBlocking { lazyListState.scrollBy(itemPx.toFloat()) } }
+        rule.waitForIdle()
+    }
+
+    /**
+     * A layout which queries the baselines of its only child during the measure pass and re-exposes
+     * them as its own alignment lines, similar to the reproducer in b/549552303.
+     */
+    @Composable
+    private fun BaselineQueryingLayout(
+        modifier: Modifier = Modifier,
+        content: @Composable () -> Unit,
+    ) {
+        Layout(content = { Box(Modifier.layoutId("anchor")) { content() } }, modifier = modifier) {
+            measurables,
+            constraints ->
+            val placeable = measurables.first { it.layoutId == "anchor" }.measure(constraints)
+            val firstBaseline = placeable[FirstBaseline]
+            val lastBaseline = placeable[LastBaseline]
+            layout(
+                width = placeable.width,
+                height = placeable.height,
+                alignmentLines =
+                    mapOf(FirstBaseline to firstBaseline, LastBaseline to lastBaseline),
+            ) {
+                placeable.placeRelative(0, 0)
+            }
+        }
+    }
+
     /**
      * Lazy Column example that can be used to reproduce issues related to re-using LayoutNodes
      * where each item has the same Layout.
@@ -1006,9 +1164,10 @@ class RectListIntegrationTest {
         val rectList = node.getRectList()
 
         with(rule.density) {
-            val found = rectList.withRect(node.id) { l, t, r, b -> block(l, t, r, b) }
-
-            if (!found) {
+            val index = rectList.indexOf(node.id)
+            if (index != NotFound) {
+                rectList.withRectAt(index) { l, t, r, b -> block(l, t, r, b) }
+            } else {
                 error("Node with ${node.id} not found in rectlist")
             }
         }

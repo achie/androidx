@@ -26,7 +26,6 @@ import androidx.compose.remote.core.SerializableToString;
 import androidx.compose.remote.core.WireBuffer;
 import androidx.compose.remote.core.documentation.DocumentationBuilder;
 import androidx.compose.remote.core.operations.layout.ActionOperation;
-import androidx.compose.remote.core.operations.layout.Component;
 import androidx.compose.remote.core.operations.utilities.StringSerializer;
 import androidx.compose.remote.core.serialize.MapSerializer;
 import androidx.compose.remote.core.serialize.Serializable;
@@ -84,16 +83,18 @@ public class HostActionMetadataOperation extends Operation
         return (indent != null ? indent : "") + toString();
     }
 
-    @Override
-    public void write(@NonNull WireBuffer buffer) {}
+    /** Returns {@code mMetadataId}, the id of the text passed with the action. */
+    public int getMetadataId() {
+        return mMetadataId;
+    }
 
     @Override
-    public void runAction(
-            @NonNull RemoteContext context,
-            @NonNull CoreDocument document,
-            @NonNull Component component,
-            float x,
-            float y) {
+    public void write(@NonNull WireBuffer buffer) {
+        apply(buffer, mActionId, mMetadataId);
+    }
+
+    @Override
+    public void runAction(@NonNull RemoteContext context, @NonNull CoreDocument document) {
         String metadata = context.getText(mMetadataId);
         if (metadata == null) {
             metadata = "";
@@ -121,8 +122,8 @@ public class HostActionMetadataOperation extends Operation
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int actionId = buffer.readInt();
-        int metadataId = buffer.readInt();
+        int actionId = buffer.readId();
+        int metadataId = buffer.readId();
         operations.add(new HostActionMetadataOperation(actionId, metadataId));
     }
 
@@ -132,8 +133,10 @@ public class HostActionMetadataOperation extends Operation
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Layout Operations", OP_CODE, "HostAction")
-                .description("Host action. This operation represents a host action")
+        doc.operation("Layout Operations", OP_CODE, "HostActionMetadata")
+                .description(
+                        "Host action + metadata. This operation represents a host action"
+                                + " that can also provides some metadata")
                 .field(INT, "ACTION_ID", "Host Action ID")
                 .field(INT, "METADATA", "Host Action Text Metadata ID");
     }

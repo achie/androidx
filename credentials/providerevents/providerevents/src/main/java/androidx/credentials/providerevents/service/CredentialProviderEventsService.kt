@@ -20,11 +20,14 @@ import android.app.Service
 import android.content.Intent
 import android.os.CancellationSignal
 import android.os.IBinder
+import androidx.annotation.MainThread
+import androidx.annotation.RestrictTo
 import androidx.core.os.OutcomeReceiverCompat
 import androidx.credentials.CreateCredentialResponse
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.provider.CredentialProviderService
 import androidx.credentials.provider.ProviderCreateCredentialRequest
+import androidx.credentials.providerevents.exception.BeginBatchCreateCredentialException
 import androidx.credentials.providerevents.internal.CredentialEventsProviderFactory
 import androidx.credentials.providerevents.signal.ProviderSignalCredentialStateCallback
 import androidx.credentials.providerevents.signal.ProviderSignalCredentialStateRequest
@@ -139,4 +142,44 @@ public abstract class CredentialProviderEventsService() : Service() {
         request: ProviderSignalCredentialStateRequest,
         callback: ProviderSignalCredentialStateCallback,
     ) {}
+
+    /**
+     * Called to get the accounts this provider can create passkeys under for a batch of relying
+     * parties, returned as [androidx.credentials.provider.CreateEntry] items on a
+     * [BeginBatchCreateCredentialResponse]. No credential is created here.
+     *
+     * Each entry's [androidx.credentials.provider.CreateEntry.pendingIntent] must target an
+     * `Activity` of this provider through an explicit intent, with
+     * [android.app.PendingIntent.FLAG_MUTABLE] so the batch can be attached to it. Declare that
+     * activity with `android:exported="false"`; it needs no intent filter. When the user selects
+     * the entry, the activity reads the batch with
+     * [androidx.credentials.providerevents.IntentHandler.retrieveProviderBatchCreateCredentialRequest]
+     * and returns one result per request with
+     * [androidx.credentials.providerevents.IntentHandler.setBatchCreateCredentialResponse].
+     *
+     * This method is invoked on the main thread. Complete [callback] exactly once, from any thread.
+     *
+     * The default implementation fails with [BeginBatchCreateCredentialException].
+     *
+     * @param request one request per relying party in the batch
+     * @param cancellationSignal a signal to cancel the operation
+     * @param callback the callback to receive the create entries
+     */
+    @MainThread
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public open fun onBeginBatchCreateCredentialRequest(
+        request: BeginBatchCreateCredentialRequest,
+        cancellationSignal: CancellationSignal,
+        callback:
+            OutcomeReceiverCompat<
+                BeginBatchCreateCredentialResponse,
+                BeginBatchCreateCredentialException,
+            >,
+    ) {
+        callback.onError(
+            BeginBatchCreateCredentialException(
+                "Batch credential creation is not supported by this service"
+            )
+        )
+    }
 }

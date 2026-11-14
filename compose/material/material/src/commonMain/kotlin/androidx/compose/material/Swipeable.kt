@@ -44,12 +44,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.debugInspectorInfo
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.requireDensity
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
@@ -82,7 +82,7 @@ import kotlinx.coroutines.launch
 @Stable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-open class SwipeableState<T>(
+public open class SwipeableState<T>(
     initialValue: T,
     internal val animationSpec: AnimationSpec<Float> = AnimationSpec,
     internal val confirmStateChange: (newValue: T) -> Boolean = { true },
@@ -94,11 +94,11 @@ open class SwipeableState<T>(
      * [swipeable] is currently settled. If a swipe or animation is in progress, this corresponds
      * the last anchor at which the [swipeable] was settled before the swipe or animation started.
      */
-    var currentValue: T by mutableStateOf(initialValue)
+    public var currentValue: T by mutableStateOf(initialValue)
         private set
 
     /** Whether the state is currently animating. */
-    var isAnimationRunning: Boolean by mutableStateOf(false)
+    public var isAnimationRunning: Boolean by mutableStateOf(false)
         private set
 
     /**
@@ -107,11 +107,11 @@ open class SwipeableState<T>(
      * You should use this state to offset your content accordingly. The recommended way is to use
      * `Modifier.offsetPx`. This includes the resistance by default, if resistance is enabled.
      */
-    val offset: State<Float>
+    public val offset: State<Float>
         get() = offsetState
 
     /** The amount by which the [swipeable] has been swiped past its bounds. */
-    val overflow: State<Float>
+    public val overflow: State<Float>
         get() = overflowState
 
     // Use `Float.NaN` as a placeholder while the state is uninitialised.
@@ -127,8 +127,11 @@ open class SwipeableState<T>(
 
     internal var anchors by mutableStateOf(emptyMap<Float, T>())
 
-    private val latestNonEmptyAnchorsFlow: Flow<Map<Float, T>> =
-        snapshotFlow { anchors }.filter { it.isNotEmpty() }.take(1)
+    private val latestNonEmptyAnchorsFlow: Flow<Map<Float, T>> = snapshotFlow {
+        anchors
+    }
+        .filter { it.isNotEmpty() }
+        .take(1)
 
     internal var minBound = Float.NEGATIVE_INFINITY
     internal var maxBound = Float.POSITIVE_INFINITY
@@ -233,7 +236,7 @@ open class SwipeableState<T>(
      * Finally, if no swipe or animation is in progress, this is the same as the [currentValue].
      */
     @ExperimentalMaterialApi
-    val targetValue: T
+    public val targetValue: T
         get() {
             // TODO(calintat): Track current velocity (b/149549482) and use that here.
             val target =
@@ -255,7 +258,7 @@ open class SwipeableState<T>(
      * If no swipe or animation is in progress, this returns `SwipeProgress(value, value, 1f)`.
      */
     @ExperimentalMaterialApi
-    val progress: SwipeProgress<T>
+    public val progress: SwipeProgress<T>
         get() {
             val bounds = findBounds(offset.value, anchors.keys)
             val from: T
@@ -294,7 +297,7 @@ open class SwipeableState<T>(
      * moving from right to left or bottom to top, or 0f if no swipe or animation is in progress.
      */
     @ExperimentalMaterialApi
-    val direction: Float
+    public val direction: Float
         get() = anchors.getOffset(currentValue)?.let { sign(offset.value - it) } ?: 0f
 
     /**
@@ -303,7 +306,7 @@ open class SwipeableState<T>(
      * @param targetValue The new target value to set [currentValue] to.
      */
     @ExperimentalMaterialApi
-    suspend fun snapTo(targetValue: T) {
+    public suspend fun snapTo(targetValue: T) {
         latestNonEmptyAnchorsFlow.collect { anchors ->
             val targetOffset = anchors.getOffset(targetValue)
             requireNotNull(targetOffset) { "The target value must have an associated anchor." }
@@ -319,7 +322,7 @@ open class SwipeableState<T>(
      * @param anim The animation that will be used to animate to the new value.
      */
     @ExperimentalMaterialApi
-    suspend fun animateTo(targetValue: T, anim: AnimationSpec<Float> = animationSpec) {
+    public suspend fun animateTo(targetValue: T, anim: AnimationSpec<Float> = animationSpec) {
         latestNonEmptyAnchorsFlow.collect { anchors ->
             try {
                 val targetOffset = anchors.getOffset(targetValue)
@@ -351,7 +354,7 @@ open class SwipeableState<T>(
      * @param velocity velocity to fling and settle with
      * @return the reason fling ended
      */
-    suspend fun performFling(velocity: Float) {
+    public suspend fun performFling(velocity: Float) {
         latestNonEmptyAnchorsFlow.collect { anchors ->
             val lastAnchor = anchors.getOffset(currentValue)!!
             val targetValue =
@@ -385,7 +388,7 @@ open class SwipeableState<T>(
      * @param delta delta in pixels to drag by
      * @return the amount of [delta] consumed
      */
-    fun performDrag(delta: Float): Float {
+    public fun performDrag(delta: Float): Float {
         val potentiallyConsumed = absoluteOffset.floatValue + delta
         val clamped = potentiallyConsumed.coerceIn(minBound, maxBound)
         val deltaToConsume = clamped - absoluteOffset.floatValue
@@ -395,12 +398,12 @@ open class SwipeableState<T>(
         return deltaToConsume
     }
 
-    companion object {
+    public companion object {
         /** The default [Saver] implementation for [SwipeableState]. */
-        fun <T : Any> Saver(
+        public fun <T : Any> Saver(
             animationSpec: AnimationSpec<Float>,
             confirmStateChange: (T) -> Boolean,
-        ) =
+        ): Saver<SwipeableState<T>, T> =
             Saver<SwipeableState<T>, T>(
                 save = { it.currentValue },
                 restore = { SwipeableState(it, animationSpec, confirmStateChange) },
@@ -421,11 +424,11 @@ open class SwipeableState<T>(
 @Immutable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-class SwipeProgress<T>(
-    val from: T,
-    val to: T,
+public class SwipeProgress<T>(
+    public val from: T,
+    public val to: T,
     /*@FloatRange(from = 0.0, to = 1.0)*/
-    val fraction: Float,
+    public val fraction: Float,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -460,7 +463,7 @@ class SwipeProgress<T>(
 @Composable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-fun <T : Any> rememberSwipeableState(
+public fun <T : Any> rememberSwipeableState(
     initialValue: T,
     animationSpec: AnimationSpec<Float> = AnimationSpec,
     confirmStateChange: (newValue: T) -> Boolean = { true },
@@ -557,7 +560,7 @@ internal fun <T : Any> rememberSwipeableStateFor(
  */
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-fun <T> Modifier.swipeable(
+public fun <T> Modifier.swipeable(
     state: SwipeableState<T>,
     anchors: Map<Float, T>,
     orientation: Orientation,
@@ -567,42 +570,26 @@ fun <T> Modifier.swipeable(
     thresholds: (from: T, to: T) -> ThresholdConfig = { _, _ -> FixedThreshold(56.dp) },
     resistance: ResistanceConfig? = resistanceConfig(anchors.keys),
     velocityThreshold: Dp = VelocityThreshold,
-) =
-    composed(
-        inspectorInfo =
-            debugInspectorInfo {
-                name = "swipeable"
-                properties["state"] = state
-                properties["anchors"] = anchors
-                properties["orientation"] = orientation
-                properties["enabled"] = enabled
-                properties["reverseDirection"] = reverseDirection
-                properties["interactionSource"] = interactionSource
-                properties["thresholds"] = thresholds
-                properties["resistance"] = resistance
-                properties["velocityThreshold"] = velocityThreshold
-            }
-    ) {
-        require(anchors.isNotEmpty()) { "You must have at least one anchor." }
-        require(anchors.values.distinct().count() == anchors.size) {
-            "You cannot have two anchors mapped to the same state."
-        }
-        val density = LocalDensity.current
-        state.ensureInit(anchors)
-        LaunchedEffect(anchors, state) {
-            val oldAnchors = state.anchors
-            state.anchors = anchors
-            state.resistance = resistance
-            state.thresholds = { a, b ->
-                val from = anchors.getValue(a)
-                val to = anchors.getValue(b)
-                with(thresholds(from, to)) { density.computeThreshold(a, b) }
-            }
-            with(density) { state.velocityThreshold = velocityThreshold.toPx() }
-            state.processNewAnchors(oldAnchors, anchors)
-        }
-
-        Modifier.draggable(
+): Modifier {
+    require(anchors.isNotEmpty()) { "You must have at least one anchor." }
+    require(anchors.values.distinct().count() == anchors.size) {
+        "You cannot have two anchors mapped to the same state."
+    }
+    state.ensureInit(anchors)
+    return this.then(
+            SwipeableElement(
+                state = state,
+                anchors = anchors,
+                orientation = orientation,
+                enabled = enabled,
+                reverseDirection = reverseDirection,
+                interactionSource = interactionSource,
+                thresholds = thresholds,
+                resistance = resistance,
+                velocityThreshold = velocityThreshold,
+            )
+        )
+        .draggable(
             orientation = orientation,
             enabled = enabled,
             reverseDirection = reverseDirection,
@@ -611,7 +598,134 @@ fun <T> Modifier.swipeable(
             onDragStopped = { velocity -> launch { state.performFling(velocity) } },
             state = state.draggableState,
         )
+}
+
+@Suppress("PrimitiveInCollection")
+@OptIn(ExperimentalMaterialApi::class)
+private class SwipeableElement<T>(
+    private val state: SwipeableState<T>,
+    private val anchors: Map<Float, T>,
+    private val orientation: Orientation,
+    private val enabled: Boolean,
+    private val reverseDirection: Boolean,
+    private val interactionSource: MutableInteractionSource?,
+    private val thresholds: (from: T, to: T) -> ThresholdConfig,
+    private val resistance: ResistanceConfig?,
+    private val velocityThreshold: Dp,
+) : ModifierNodeElement<SwipeableNode<T>>() {
+    override fun create(): SwipeableNode<T> =
+        SwipeableNode(
+            state = state,
+            anchors = anchors,
+            thresholds = thresholds,
+            resistance = resistance,
+            velocityThreshold = velocityThreshold,
+        )
+
+    override fun update(node: SwipeableNode<T>) {
+        node.update(
+            state = state,
+            anchors = anchors,
+            thresholds = thresholds,
+            resistance = resistance,
+            velocityThreshold = velocityThreshold,
+        )
     }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "swipeable"
+        properties["state"] = state
+        properties["anchors"] = anchors
+        properties["orientation"] = orientation
+        properties["enabled"] = enabled
+        properties["reverseDirection"] = reverseDirection
+        properties["interactionSource"] = interactionSource
+        properties["thresholds"] = thresholds
+        properties["resistance"] = resistance
+        properties["velocityThreshold"] = velocityThreshold
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SwipeableElement<*>) return false
+        if (state != other.state) return false
+        if (anchors != other.anchors) return false
+        if (orientation != other.orientation) return false
+        if (enabled != other.enabled) return false
+        if (reverseDirection != other.reverseDirection) return false
+        if (interactionSource != other.interactionSource) return false
+        if (thresholds !== other.thresholds) return false
+        if (resistance != other.resistance) return false
+        if (velocityThreshold != other.velocityThreshold) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = state.hashCode()
+        result = 31 * result + anchors.hashCode()
+        result = 31 * result + orientation.hashCode()
+        result = 31 * result + enabled.hashCode()
+        result = 31 * result + reverseDirection.hashCode()
+        result = 31 * result + (interactionSource?.hashCode() ?: 0)
+        result = 31 * result + thresholds.hashCode()
+        result = 31 * result + (resistance?.hashCode() ?: 0)
+        result = 31 * result + velocityThreshold.hashCode()
+        return result
+    }
+}
+
+@Suppress("PrimitiveInCollection")
+@OptIn(ExperimentalMaterialApi::class)
+private class SwipeableNode<T>(
+    private var state: SwipeableState<T>,
+    private var anchors: Map<Float, T>,
+    private var thresholds: (from: T, to: T) -> ThresholdConfig,
+    private var resistance: ResistanceConfig?,
+    private var velocityThreshold: Dp,
+) : Modifier.Node() {
+    override fun onAttach() {
+        updateState()
+    }
+
+    fun update(
+        state: SwipeableState<T>,
+        anchors: Map<Float, T>,
+        thresholds: (from: T, to: T) -> ThresholdConfig,
+        resistance: ResistanceConfig?,
+        velocityThreshold: Dp,
+    ) {
+        val anchorsOrStateChanged = this.state != state || this.anchors != anchors
+        this.state = state
+        this.anchors = anchors
+        this.thresholds = thresholds
+        this.resistance = resistance
+        this.velocityThreshold = velocityThreshold
+        if (anchorsOrStateChanged) {
+            updateState()
+        }
+    }
+
+    private fun updateState() {
+        val currentState = state
+        val currentAnchors = anchors
+        val currentResistance = resistance
+        val currentThresholds = thresholds
+        val currentVelocityThreshold = velocityThreshold
+        coroutineScope.launch {
+            val density = requireDensity()
+            val oldAnchors = currentState.anchors
+            currentState.anchors = currentAnchors
+            currentState.resistance = currentResistance
+            currentState.thresholds = { a, b ->
+                val from = currentAnchors.getValue(a)
+                val to = currentAnchors.getValue(b)
+                with(currentThresholds(from, to)) { density.computeThreshold(a, b) }
+            }
+            with(density) { currentState.velocityThreshold = currentVelocityThreshold.toPx() }
+            currentState.processNewAnchors(oldAnchors, currentAnchors)
+        }
+    }
+}
 
 /**
  * Interface to compute a threshold between two anchors/states in a [swipeable].
@@ -621,9 +735,9 @@ fun <T> Modifier.swipeable(
 @Stable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-interface ThresholdConfig {
+public interface ThresholdConfig {
     /** Compute the value of the threshold (in pixels), once the values of the anchors are known. */
-    fun Density.computeThreshold(fromValue: Float, toValue: Float): Float
+    public fun Density.computeThreshold(fromValue: Float, toValue: Float): Float
 }
 
 /**
@@ -634,7 +748,7 @@ interface ThresholdConfig {
 @Immutable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-data class FixedThreshold(private val offset: Dp) : ThresholdConfig {
+public data class FixedThreshold(private val offset: Dp) : ThresholdConfig {
     override fun Density.computeThreshold(fromValue: Float, toValue: Float): Float {
         return fromValue + offset.toPx() * sign(toValue - fromValue)
     }
@@ -648,7 +762,7 @@ data class FixedThreshold(private val offset: Dp) : ThresholdConfig {
 @Immutable
 @ExperimentalMaterialApi
 @Deprecated(SwipeableDeprecation)
-data class FractionalThreshold(
+public data class FractionalThreshold(
     /*@FloatRange(from = 0.0, to = 1.0)*/
     private val fraction: Float
 ) : ThresholdConfig {
@@ -681,15 +795,15 @@ data class FractionalThreshold(
  */
 @Immutable
 @Deprecated(SwipeableDeprecation)
-class ResistanceConfig(
+public class ResistanceConfig(
     /*@FloatRange(from = 0.0, fromInclusive = false)*/
-    val basis: Float,
+    public val basis: Float,
     /*@FloatRange(from = 0.0)*/
-    val factorAtMin: Float = StandardResistanceFactor,
+    public val factorAtMin: Float = StandardResistanceFactor,
     /*@FloatRange(from = 0.0)*/
-    val factorAtMax: Float = StandardResistanceFactor,
+    public val factorAtMax: Float = StandardResistanceFactor,
 ) {
-    fun computeResistance(overflow: Float): Float {
+    public fun computeResistance(overflow: Float): Float {
         val factor = if (overflow < 0) factorAtMin else factorAtMax
         if (factor == 0f) return 0f
         val progress = (overflow / basis).fastCoerceIn(-1f, 1f)
@@ -793,18 +907,18 @@ private fun <T> Map<Float, T>.getOffset(state: T): Float? {
 
 /** Contains useful defaults for [swipeable] and [SwipeableState]. */
 @Deprecated(SwipeableDeprecation)
-object SwipeableDefaults {
+public object SwipeableDefaults {
     /** The default animation used by [SwipeableState]. */
-    val AnimationSpec = SpringSpec<Float>()
+    public val AnimationSpec: SpringSpec<Float> = SpringSpec<Float>()
 
     /** The default velocity threshold (1.8 dp per millisecond) used by [swipeable]. */
-    val VelocityThreshold = 125.dp
+    public val VelocityThreshold: Dp = 125.dp
 
     /** A stiff resistance factor which indicates that swiping isn't available right now. */
-    const val StiffResistanceFactor = 20f
+    public const val StiffResistanceFactor: Float = 20f
 
     /** A standard resistance factor which indicates that the user has run out of things to see. */
-    const val StandardResistanceFactor = 10f
+    public const val StandardResistanceFactor: Float = 10f
 
     /**
      * The default resistance config used by [swipeable].
@@ -812,7 +926,7 @@ object SwipeableDefaults {
      * This returns `null` if there is one anchor. If there are at least two anchors, it returns a
      * [ResistanceConfig] with the resistance basis equal to the distance between the two bounds.
      */
-    fun resistanceConfig(
+    public fun resistanceConfig(
         anchors: Set<Float>,
         factorAtMin: Float = StandardResistanceFactor,
         factorAtMax: Float = StandardResistanceFactor,

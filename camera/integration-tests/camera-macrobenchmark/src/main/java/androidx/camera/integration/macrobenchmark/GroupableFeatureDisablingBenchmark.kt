@@ -18,44 +18,28 @@ package androidx.camera.integration.macrobenchmark
 
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.integration.macrobenchmark.CameraBenchmarkUtils.GROUPABLE_FEATURE_DISABLING_ACTIVITY
-import androidx.camera.integration.macrobenchmark.CameraBenchmarkUtils.grantCameraPermission
 import androidx.camera.integration.macrobenchmark.CameraBenchmarkUtils.measureStartupDefault
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.test.filters.LargeTest
-import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.filters.SdkSuppress
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
+// Below API 29 Macrobenchmark sideloads tracebox in u:r:shell:s0, which OEM user builds
+// block from tracefs.
 @LargeTest
+@SdkSuppress(minSdkVersion = 29)
 @RunWith(Parameterized::class)
 class GroupableFeatureDisablingBenchmark(
     private val cameraXConfigName: String,
     private val lens: Int,
 ) {
     @get:Rule val benchmarkRule = MacrobenchmarkRule()
-
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = cameraXConfigName == CameraPipeConfig::class.simpleName)
-
-    private lateinit var device: UiDevice
-
-    @Before
-    fun setUp() {
-        grantCameraPermission()
-
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        device = UiDevice.getInstance(instrumentation)
-    }
 
     @Test
     fun measureStartupForDisablingUnsupportedGroupableFeatures() =
@@ -65,7 +49,12 @@ class GroupableFeatureDisablingBenchmark(
                 putExtra("camerax_config", cameraXConfigName)
                 putExtra("lens", lens)
             },
-            measureBlock = { device.wait(Until.findObject(By.text("HdrButton")), 5_000).click() },
+            measureBlock = {
+                requireNotNull(device.wait(Until.findObject(By.text("HdrButton")), 15_000)) {
+                        "Timed out waiting for HdrButton"
+                    }
+                    .click()
+            },
         )
 
     companion object {
@@ -76,7 +65,6 @@ class GroupableFeatureDisablingBenchmark(
                 CameraUtil.getAvailableCameraSelectors().forEach { selector ->
                     val lens = selector.lensFacing
                     add(arrayOf(Camera2Config::class.simpleName, lens))
-                    add(arrayOf(CameraPipeConfig::class.simpleName, lens))
                 }
             }
     }

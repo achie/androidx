@@ -25,6 +25,9 @@ import android.hardware.camera2.CameraDevice
 import android.os.Build
 import android.os.Looper.getMainLooper
 import android.util.Size
+import androidx.camera.core.CameraEffect.IMAGE_CAPTURE
+import androidx.camera.core.CameraEffect.PREVIEW
+import androidx.camera.core.CameraEffect.VIDEO_CAPTURE
 import androidx.camera.core.DynamicRange.HLG_10_BIT
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
@@ -67,6 +70,8 @@ import androidx.camera.testing.impl.TestImageUtil.createRawFakeImageProxy
 import androidx.camera.testing.impl.TestImageUtil.createYuvFakeImageProxy
 import androidx.camera.testing.impl.fakes.FakeImageInfo
 import androidx.camera.testing.impl.fakes.FakeImageReaderProxy
+import androidx.camera.testing.impl.fakes.FakeSurfaceEffect
+import androidx.camera.testing.impl.fakes.FakeSurfaceProcessorInternal
 import androidx.camera.testing.impl.fakes.GrayscaleImageEffect
 import androidx.core.util.Pair
 import com.google.common.truth.Truth.assertThat
@@ -108,6 +113,9 @@ class ImagePipelineTest {
     @After
     fun tearDown() {
         imagePipeline.close()
+
+        // Process any pending looper updates to prevent leaks
+        shadowOf(getMainLooper()).idle()
     }
 
     @Test
@@ -169,6 +177,27 @@ class ImagePipelineTest {
                     .mImageProcessor
             )
             .isNotNull()
+    }
+
+    @Test
+    fun createPipelineWithSurfaceProcessorEffect_processingNodeHasNoEffect() {
+        // Arrange: a SurfaceProcessor-based effect targeting IMAGE_CAPTURE has no ImageProcessor.
+        val surfaceEffect =
+            FakeSurfaceEffect(
+                PREVIEW or VIDEO_CAPTURE or IMAGE_CAPTURE,
+                FakeSurfaceProcessorInternal(mainThreadExecutor()),
+            )
+
+        // Act.
+        val pipeline =
+            ImagePipeline(imageCaptureConfig, SIZE, cameraCharacteristics, surfaceEffect, false)
+
+        // Assert: no InternalImageProcessor is created for the still capture pipeline.
+        try {
+            assertThat(pipeline.processingNode.mImageProcessor).isNull()
+        } finally {
+            pipeline.close()
+        }
     }
 
     @Test
@@ -334,6 +363,39 @@ class ImagePipelineTest {
             .isEqualTo(postviewSettings.resolution)
         assertThat(sessionConfig.postviewOutputConfig!!.surface.prescribedStreamFormat)
             .isEqualTo(postviewSettings.inputFormat)
+    }
+
+    @Test
+    fun createSessionConfigBuilder_withPhysicalCameraId_setsPhysicalCameraIdOnAllOutputs() {
+        // Arrange: enable simultaneous capture (RAW + JPEG) and postview with a physicalCameraId.
+        val physicalCameraId = "2"
+        val postviewSettings = PostviewSettings.create(Size(640, 480), YUV_420_888)
+        imageCaptureConfig =
+            createImageCaptureConfig(
+                inputFormat = ImageFormat.RAW_SENSOR,
+                secondaryInputFormat = JPEG,
+            )
+        imagePipeline =
+            ImagePipeline(
+                imageCaptureConfig,
+                SIZE,
+                cameraCharacteristics,
+                /* cameraEffect= */ null,
+                /* isVirtualCamera= */ false,
+                postviewSettings,
+                physicalCameraId,
+            )
+
+        // Act.
+        val sessionConfig = imagePipeline.createSessionConfigBuilder(SIZE).build()
+
+        // Assert: primary, secondary, and postview OutputConfigs all carry physicalCameraId.
+        assertThat(sessionConfig.outputConfigs).hasSize(2)
+        assertThat(sessionConfig.outputConfigs.map { it.physicalCameraId })
+            .containsExactly(physicalCameraId, physicalCameraId)
+        assertThat(sessionConfig.postviewOutputConfig).isNotNull()
+        assertThat(sessionConfig.postviewOutputConfig!!.physicalCameraId)
+            .isEqualTo(physicalCameraId)
     }
 
     @Test

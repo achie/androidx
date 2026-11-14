@@ -20,6 +20,7 @@ import android.util.Log;
 
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
+import androidx.appsearch.annotation.HideInPlatform;
 import androidx.appsearch.app.AppSearchResult;
 import androidx.appsearch.exceptions.AppSearchException;
 
@@ -32,9 +33,8 @@ import org.jspecify.annotations.NonNull;
 
 /**
  * Provides utility functions for working with package + database prefixes.
- *
- * @exportToFramework:hide
  */
+@HideInPlatform
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public class PrefixUtil {
     private static final String TAG = "AppSearchPrefixUtil";
@@ -180,55 +180,6 @@ public class PrefixUtil {
                 documentBuilder.setProperties(propertyIdx, propertyBuilder);
             }
         }
-    }
-
-    /**
-     * Removes any prefixes from types and namespaces mentioned anywhere in
-     * {@code documentBuilder}.
-     *
-     * @param documentBuilder The document to mutate
-     * @return Prefix name that was removed from the document.
-     * @throws AppSearchException if there are unexpected database prefixing errors.
-     */
-    public static @NonNull String removePrefixesFromDocument(
-            DocumentProto.@NonNull Builder documentBuilder) throws AppSearchException {
-        // Rewrite the type name and namespace to remove the prefix.
-        String schemaPrefix = getPrefix(documentBuilder.getSchema());
-        String namespacePrefix = getPrefix(documentBuilder.getNamespace());
-
-        if (!schemaPrefix.equals(namespacePrefix)) {
-            throw new AppSearchException(AppSearchResult.RESULT_INTERNAL_ERROR, "Found unexpected"
-                    + " multiple prefix names in document: " + schemaPrefix + ", "
-                    + namespacePrefix);
-        }
-
-        documentBuilder.setSchema(removePrefix(documentBuilder.getSchema()));
-        documentBuilder.setNamespace(removePrefix(documentBuilder.getNamespace()));
-
-        // Recurse into derived documents
-        for (int propertyIdx = 0;
-                propertyIdx < documentBuilder.getPropertiesCount();
-                propertyIdx++) {
-            int documentCount = documentBuilder.getProperties(propertyIdx).getDocumentValuesCount();
-            if (documentCount > 0) {
-                PropertyProto.Builder propertyBuilder =
-                        documentBuilder.getProperties(propertyIdx).toBuilder();
-                for (int documentIdx = 0; documentIdx < documentCount; documentIdx++) {
-                    DocumentProto.Builder derivedDocumentBuilder =
-                            propertyBuilder.getDocumentValues(documentIdx).toBuilder();
-                    String nestedPrefix = removePrefixesFromDocument(derivedDocumentBuilder);
-                    if (!nestedPrefix.equals(schemaPrefix)) {
-                        throw new AppSearchException(AppSearchResult.RESULT_INTERNAL_ERROR,
-                                "Found unexpected multiple prefix names in document: "
-                                        + schemaPrefix + ", " + nestedPrefix);
-                    }
-                    propertyBuilder.setDocumentValues(documentIdx, derivedDocumentBuilder);
-                }
-                documentBuilder.setProperties(propertyIdx, propertyBuilder);
-            }
-        }
-
-        return schemaPrefix;
     }
 
     /**

@@ -22,7 +22,7 @@ plugins {
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
 
     defaultConfig {
         applicationId = "androidx.camera.integration.core"
@@ -60,7 +60,6 @@ dependencies {
     api(libs.jspecify)
     // Internal library
     implementation(project(":camera:camera-camera2"))
-    implementation(project(":camera:camera-camera2-pipe-integration"))
     implementation(project(":camera:camera-core"))
     implementation(project(":camera:camera-lifecycle"))
     debugImplementation(project(":camera:camera-mlkit-vision"))
@@ -83,6 +82,7 @@ dependencies {
     implementation(project(":camera:camera-testing")) {
         // Ensure camera-testing does not pull in androidx.test dependencies
         exclude(group:"androidx.test")
+        exclude(group:"androidx.test.espresso", module:"espresso-core")
     }
     implementation(project(":camera:media3:media3-effect"))
     implementation("androidx.camera.viewfinder:viewfinder-core:1.5.1")
@@ -101,6 +101,7 @@ dependencies {
     androidTestImplementation(libs.mockitoCore)
     androidTestImplementation(libs.mockitoKotlin)
     androidTestImplementation(libs.testCore)
+    androidTestImplementation(libs.testExtJunit)
     androidTestImplementation(libs.testRules)
     androidTestImplementation(libs.testRunner)
     androidTestImplementation(libs.testUiautomator)
@@ -114,6 +115,8 @@ dependencies {
     androidTestImplementation("androidx.palette:palette:1.0.0")
     androidTestImplementation(libs.espressoCore)
     androidTestImplementation("org.jetbrains.kotlinx:atomicfu:0.13.1")
+    androidTestImplementation("androidx.exifinterface:exifinterface:1.4.2")
+    androidTestImplementation("androidx.core:core-backported-fixes:1.0.0")
 
     testImplementation(libs.kotlinCoroutinesAndroid)
     testImplementation(libs.kotlinCoroutinesTest)
@@ -121,25 +124,23 @@ dependencies {
     testImplementation(libs.mockitoCore4)
     testImplementation(libs.mockitoKotlin4)
     testImplementation(libs.truth)
+    testImplementation(project(":camera:camera-camera2-pipe"))
 
     // Transitive dependencies
-    implementation 'androidx.activity:activity:1.2.3'
-    implementation 'androidx.annotation:annotation-experimental:1.4.1'
-    implementation 'androidx.lifecycle:lifecycle-common:2.3.1'
-    implementation 'androidx.lifecycle:lifecycle-livedata-core:2.3.1'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel:2.3.1'
+    implementation "androidx.activity:activity:1.2.3"
+    implementation "androidx.annotation:annotation-experimental:1.4.1"
+    implementation "androidx.lifecycle:lifecycle-common:2.3.1"
+    implementation "androidx.lifecycle:lifecycle-livedata-core:2.3.1"
+    implementation "androidx.lifecycle:lifecycle-viewmodel:2.3.1"
     implementation libs.androidx.annotation
     implementation libs.androidx.core
     androidTestImplementation("com.google.android.gms:play-services-mlkit-barcode-scanning:18.0.0")
     androidTestImplementation("com.google.mlkit:barcode-scanning-common:17.0.0")
-    androidTestImplementation 'com.google.mlkit:vision-interfaces:16.0.0'
+    androidTestImplementation "com.google.mlkit:vision-interfaces:16.0.0"
     androidTestImplementation libs.hamcrestCore
     androidTestImplementation libs.junit
     androidTestImplementation libs.kotlinCoroutinesCore
     androidTestImplementation libs.testMonitor
-    testImplementation 'org.robolectric:annotations:4.14'
-    testImplementation 'org.robolectric:shadowapi:4.14'
-    testImplementation 'org.robolectric:shadows-framework:4.14'
     testImplementation libs.kotlinCoroutinesCore
     testImplementation libs.testCore
 }

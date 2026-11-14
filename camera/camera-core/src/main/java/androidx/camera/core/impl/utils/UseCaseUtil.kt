@@ -16,25 +16,30 @@
 
 package androidx.camera.core.impl.utils
 
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
 import androidx.camera.core.Logger
+import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.core.impl.UseCaseConfig
 import androidx.camera.core.impl.UseCaseConfigFactory
 import androidx.camera.core.impl.stabilization.StabilizationMode
 import androidx.camera.core.impl.stabilization.VideoStabilization
+import androidx.camera.core.streamsharing.StreamSharing
 
 public object UseCaseUtil {
     private const val TAG = "UseCaseUtil"
 
-    /** Checks if the receiver [UseCase] list contains a video capture use case instance. */
+    /**
+     * Checks if the receiver [UseCase] list contains a video capture use case instance, potentially
+     * nested within a [StreamSharing] use case.
+     */
     @JvmStatic
     public fun Collection<UseCase?>.containsVideoCapture(): Boolean {
-        forEach { useCase ->
-            if (useCase?.isVideoCapture() == true) {
-                return true
-            }
+        return any {
+            it?.isVideoCapture() == true ||
+                (it is StreamSharing && it.children.containsVideoCapture())
         }
-        return false
     }
 
     /** Checks if the receiver [UseCase] is a video capture use case instance. */
@@ -57,8 +62,16 @@ public object UseCaseUtil {
             videoStabilizationMode = getVideoStabilizationMode(configProvider),
         )
 
-    private fun Collection<UseCase>.getPreviewStabilizationMode(
-        configProvider: (UseCase) -> UseCaseConfig<*>
+    @JvmStatic
+    @JvmName("getVideoStabilizationFromConfigs")
+    public fun Collection<UseCaseConfig<*>>.getVideoStabilization(): VideoStabilization =
+        VideoStabilization.from(
+            previewStabilizationMode = getPreviewStabilizationMode { it },
+            videoStabilizationMode = getVideoStabilizationMode { it },
+        )
+
+    private fun <T> Collection<T>.getPreviewStabilizationMode(
+        configProvider: (T) -> UseCaseConfig<*>
     ): Int {
         var previewStabilizationMode = StabilizationMode.UNSPECIFIED
 
@@ -85,8 +98,8 @@ public object UseCaseUtil {
         return previewStabilizationMode
     }
 
-    private fun Collection<UseCase>.getVideoStabilizationMode(
-        configProvider: (UseCase) -> UseCaseConfig<*>
+    private fun <T> Collection<T>.getVideoStabilizationMode(
+        configProvider: (T) -> UseCaseConfig<*>
     ): Int {
         var videoStabilizationMode = StabilizationMode.UNSPECIFIED
 
@@ -112,4 +125,43 @@ public object UseCaseUtil {
 
         return videoStabilizationMode
     }
+
+    /**
+     * Finds and returns the [androidx.camera.video.VideoCapture] in the given [UseCase] list.
+     *
+     * @return a UseCase type instance for the VideoCapture when it is found. Returns UseCase
+     *   because VideoCapture is not visible in the core module.. Returns `null` when VideoCapture
+     *   can't be found.
+     */
+    @JvmStatic
+    public fun Collection<UseCase>.findVideoCapture(): UseCase? = firstOrNull {
+        it.isVideoCapture()
+    }
+
+    /**
+     * Finds and returns the [Preview] in the given UseCase list.
+     *
+     * @return a [Preview] instance if it can be found. Otherwise, return `null`.
+     */
+    @JvmStatic
+    public fun Collection<UseCase>.findPreview(): Preview? =
+        firstOrNull { it is Preview } as? Preview
+
+    /**
+     * Finds and returns the [ImageCapture] in the given UseCase list.
+     *
+     * @return a [ImageCapture] instance if it can be found. Otherwise, return `null`.
+     */
+    @JvmStatic
+    public fun Collection<UseCase>.findImageCapture(): ImageCapture? =
+        firstOrNull { it is ImageCapture } as? ImageCapture
+
+    /**
+     * Finds and returns the [ImageAnalysis] in the given UseCase list.
+     *
+     * @return a [ImageAnalysis] instance if it can be found. Otherwise, return `null`.
+     */
+    @JvmStatic
+    public fun Collection<UseCase>.findImageAnalysis(): ImageAnalysis? =
+        firstOrNull { it is ImageAnalysis } as? ImageAnalysis
 }

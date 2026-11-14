@@ -16,6 +16,7 @@
 
 package androidx.xr.scenecore.testapp.surfaceimage
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -61,10 +62,13 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.xr.arcore.ArDevice
 import androidx.xr.runtime.Config
-import androidx.xr.runtime.Config.HeadTrackingMode
+import androidx.xr.runtime.DeviceTrackingMode
 import androidx.xr.runtime.Session
 import androidx.xr.runtime.SessionCreateSuccess
+import androidx.xr.runtime.SpatialApiVersionHelper
+import androidx.xr.runtime.SpatialApiVersions
 import androidx.xr.runtime.math.FloatSize2d
 import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.IntSize2d
@@ -75,7 +79,6 @@ import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.Entity
 import androidx.xr.scenecore.EntityMoveListener
 import androidx.xr.scenecore.ExperimentalSurfaceEntityPixelDimensionsApi
-import androidx.xr.scenecore.GroupEntity
 import androidx.xr.scenecore.MovableComponent
 import androidx.xr.scenecore.PanelEntity
 import androidx.xr.scenecore.SurfaceEntity
@@ -97,6 +100,7 @@ object VideoButtonColors {
     val DefaultButton = Color(0xFF42A5F5) // Blue 400
 }
 
+@SuppressLint("RestrictedApiAndroidX") // using primaryAlphaMaskTexture
 class SurfaceEntityImageActivity : ComponentActivity() {
     private val activity = this
 
@@ -110,7 +114,16 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     private var imageShowing by mutableStateOf<Boolean>(false)
     private var controlPanelEntity: PanelEntity? = null
     private var alphaMaskTexture: Texture? = null
-    private var movieParent: GroupEntity? = null
+    private var movieParent: Entity? = null
+
+    // Hoisted out of the controls UI so resizing the canvas can clamp them.
+    private var cornerRadius by mutableFloatStateOf(0.0f)
+    private var maxCornerRadius by mutableFloatStateOf(0.0f)
+
+    // The extents the Quad canvas was last sized to, so switching away from and back to a Quad
+    // restores the size instead of collapsing to a unit square.
+    private var quadExtents = FloatSize2d(1.0f, 1.0f)
+
     // This is a custom move listener which moves the movieParent instead of the surfaceEntity
     // directly. This allows for the SurfaceEntity to be independently rotated without impacting
     // the player controls which are attached to the movieParent.
@@ -125,7 +138,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 check(entity == surfaceEntity) {
                     "Listener should only be attached to surfaceEntity."
                 }
-                var curParentPose = movieParent!!.getPose()
+                val curParentPose = movieParent!!.getPose()
                 // Apply the currentPose to the movieParent to move the surfaceEntity.
                 movieParent?.setPose(curParentPose.compose(currentPose))
             }
@@ -185,26 +198,54 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val session = (Session.create(this) as SessionCreateSuccess).session
-        session.configure(Config(headTracking = HeadTrackingMode.LAST_KNOWN))
-        session.scene.spatialEnvironment.preferredPassthroughOpacity = 0.0f
-
-        checkExternalStoragePermission()
-
-        // Set up the MoveableComponent so the user can move the Main Panel out of the way of
-        // video canvases which appear behind it.
-        if (movableComponentMP == null) {
-            movableComponentMP = MovableComponent.createSystemMovable(session)
-            val unused = session.scene.mainPanelEntity.addComponent(movableComponentMP!!)
+        // The content must be installed before the Session is created. Creating a Session
+        // registers this Activity's window as an XR "window leash", and the platform reads
+        // Window.peekDecorView() without a null check when a compositor transform update
+        // arrives, which crashes the process if no content view has been set yet. The content
+        // renders nothing until the Session is ready.
+        // See b/562983987.
+        val sessionState = mutableStateOf<Pair<Session, ArDevice>?>(null)
+        setContent {
+            sessionState.value?.let { (session, arDevice) ->
+                HelloWorld(session, arDevice, activity)
+            }
         }
-
-        // This will be re-used throughout the life of the Activity.
-        movieParent = GroupEntity.create(session, "movieParent")
 
         lifecycleScope.launch {
-            alphaMaskTexture = Texture.create(session, Paths.get("textures", "alpha_mask.png"))
+            val sessionResult = Session.create(context = this@SurfaceEntityImageActivity)
+            if (sessionResult is SessionCreateSuccess) {
+                val session = sessionResult.session
+                session.configure(
+                    Config.Builder().setDeviceTracking(DeviceTrackingMode.SPATIAL).build()
+                )
+                val arDevice = ArDevice.getInstance(session)
+                session.scene.spatialEnvironment.preferredPassthroughOpacity = 0.0f
+                session.scene.keyEntity = session.scene.mainPanelEntity
+
+                checkExternalStoragePermission()
+
+                // Set up the MoveableComponent so the user can move the Main Panel out of the way
+                // of
+                // video canvases which appear behind it.
+                if (movableComponentMP == null) {
+                    movableComponentMP = MovableComponent.createSystemMovable(session)
+                    session.scene.mainPanelEntity.addComponent(movableComponentMP!!)
+                }
+
+                // This will be re-used throughout the life of the Activity.
+                movieParent =
+                    Entity.create(
+                        session,
+                        name = "movieParent",
+                        parent = session.scene.activitySpace,
+                    )
+
+                alphaMaskTexture = Texture.create(session, Paths.get("textures", "alpha_mask.png"))
+                sessionState.value = session to arDevice
+            } else {
+                finish()
+            }
         }
-        setContent { HelloWorld(session, activity) }
     }
 
     override fun onDestroy() {
@@ -219,11 +260,15 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     // TODO: b/324947709 - Refactor common @Composable code into a utility library for common usage
     // across sample apps.
     @Composable
-    fun HelloWorld(session: Session, activity: SurfaceEntityImageActivity) {
+    fun HelloWorld(session: Session, arDevice: ArDevice, activity: SurfaceEntityImageActivity) {
         // Add a panel to the main activity with a button to toggle passthrough
         LaunchedEffect(Unit) {
             activity.setContentView(
-                createButtonViewUsingCompose(activity = activity, session = session)
+                createButtonViewUsingCompose(
+                    activity = activity,
+                    session = session,
+                    arDevice = arDevice,
+                )
             )
         }
     }
@@ -258,9 +303,10 @@ class SurfaceEntityImageActivity : ComponentActivity() {
         }
     }
 
-    private fun setupControlPanel(session: Session) {
+    private fun setupControlPanel(session: Session, arDevice: ArDevice) {
         // Dispose previous control panel if it exists
-        controlPanelEntity?.dispose()
+        controlPanelEntity?.removeAllComponents()
+        controlPanelEntity?.parent = null
         controlPanelEntity = null
 
         // Technically this leaks, but it's a sample / test app.
@@ -269,7 +315,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 setViewCompositionStrategy(
                     ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
                 )
-                setContent { VideoPlayerControls(session) }
+                setContent { VideoPlayerControls(session, arDevice) }
             }
 
         controlPanelEntity =
@@ -281,6 +327,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 IntSize2d(640, 480),
                 "playerControls",
                 Pose.Identity,
+                parent = session.scene.activitySpace,
             )
 
         // TODO: b/413478924 - Use controlPanelEntity.view when the api is available.
@@ -297,14 +344,30 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     fun destroySurfaceEntity() {
         imageShowing = false
 
-        surfaceEntity?.dispose()
+        surfaceEntity?.removeAllComponents()
+        surfaceEntity?.parent = null
         surfaceEntity = null
 
-        controlPanelEntity?.dispose()
+        controlPanelEntity?.removeAllComponents()
+        controlPanelEntity?.parent = null
         controlPanelEntity = null
 
         currentImageSize = null
         currentVideoRotationDegrees = 0
+        cornerRadius = 0.0f
+        maxCornerRadius = 0.0f
+        quadExtents = FloatSize2d(1.0f, 1.0f)
+    }
+
+    // Shape.Quad throws if cornerRadius exceeds half the smaller extent, so clamp on every resize.
+    private fun setQuadShape(extents: FloatSize2d) {
+        quadExtents = extents
+        maxCornerRadius = maxOf(0.0f, minOf(extents.width, extents.height) / 2.0f)
+        cornerRadius = cornerRadius.coerceIn(0.0f, maxCornerRadius)
+        surfaceEntity!!.shape = SurfaceEntity.Shape.Quad(extents, cornerRadius)
+        // Keep the resize affordance on top of the canvas. Synced here, after the shape is
+        // applied, so every caller gets it and dimensions already reflect the new extents.
+        movableComponent?.size = surfaceEntity!!.dimensions
     }
 
     fun getCanvasAspectRatio(
@@ -322,10 +385,13 @@ class SurfaceEntityImageActivity : ComponentActivity() {
             SurfaceEntity.StereoMode.MULTIVIEW_LEFT_PRIMARY,
             SurfaceEntity.StereoMode.MULTIVIEW_RIGHT_PRIMARY ->
                 FloatSize3d(1.0f, videoHeight.toFloat() / effectiveDisplayWidth, 0.0f)
+
             SurfaceEntity.StereoMode.TOP_BOTTOM ->
                 FloatSize3d(1.0f, 0.5f * videoHeight.toFloat() / effectiveDisplayWidth, 0.0f)
+
             SurfaceEntity.StereoMode.SIDE_BY_SIDE ->
                 FloatSize3d(1.0f, 2.0f * videoHeight.toFloat() / effectiveDisplayWidth, 0.0f)
+
             else -> throw IllegalArgumentException("Unsupported stereo mode: $stereoMode")
         }
     }
@@ -333,13 +399,14 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     private fun createButtonViewUsingCompose(
         activity: SurfaceEntityImageActivity,
         session: Session,
+        arDevice: ArDevice,
     ): View {
         val view =
             ComposeView(activity.applicationContext).apply {
                 setViewCompositionStrategy(
                     ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
                 )
-                setContent { SurfaceEntityImageActivityUI(session, activity) }
+                setContent { SurfaceEntityImageActivityUI(session, arDevice, activity) }
             }
         view.setViewTreeLifecycleOwner(activity as LifecycleOwner)
         view.setViewTreeViewModelStoreOwner(activity as ViewModelStoreOwner)
@@ -347,10 +414,29 @@ class SurfaceEntityImageActivity : ComponentActivity() {
         return view
     }
 
+    /**
+     * Checks if the runtime supports Spatial API [SpatialApiVersions.SPATIAL_API_V4], either as a
+     * stable API or as a preview API on top of [SpatialApiVersions.SPATIAL_API_V3]. The latter is
+     * what the Aura emulator ADS release reports. Rounded corners on [SurfaceEntity.Shape.Quad] and
+     * setting [SurfaceEntity.BlendingMode] require it.
+     */
+    private fun isSpatialApiV4Supported(): Boolean {
+        val apiVersion = SpatialApiVersionHelper.spatialApiVersion
+        return apiVersion >= SpatialApiVersions.SPATIAL_API_V4 ||
+            (apiVersion == SpatialApiVersions.SPATIAL_API_V3 &&
+                SpatialApiVersionHelper.previewSpatialApiVersion ==
+                    SpatialApiVersions.SPATIAL_API_V4)
+    }
+
+    @Suppress("DEPRECATION")
     @Composable
-    fun VideoPlayerControls(session: Session) {
+    fun VideoPlayerControls(session: Session, arDevice: ArDevice) {
         var featherRadiusX by remember { mutableFloatStateOf(0.0f) }
         var featherRadiusY by remember { mutableFloatStateOf(0.0f) }
+        var isQuadShape by remember {
+            mutableStateOf(surfaceEntity?.shape is SurfaceEntity.Shape.Quad)
+        }
+        val isCornerRadiusSupported = remember { isSpatialApiV4Supported() }
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -361,7 +447,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "Feather Radius", fontSize = 10.sp)
+                Text(text = "Feather Radius", fontSize = 10.sp, color = Color.White)
                 Column {
                     Slider(
                         value = featherRadiusX,
@@ -389,28 +475,65 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                     )
                 }
             }
+            // Rounded corners need Spatial API v4, so hide the control outright rather than
+            // showing a slider that can never do anything on this device.
+            if (isCornerRadiusSupported) {
+                val cornerRadiusEnabled = isQuadShape && maxCornerRadius > 0.0f
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Corner Radius",
+                        fontSize = 10.sp,
+                        color = if (cornerRadiusEnabled) Color.White else Color.Gray,
+                    )
+                    Slider(
+                        value = cornerRadius,
+                        onValueChange = {
+                            val currentShape = surfaceEntity!!.shape
+                            if (currentShape is SurfaceEntity.Shape.Quad) {
+                                cornerRadius = it
+                                setQuadShape(currentShape.extents)
+                            }
+                        },
+                        valueRange = 0.0f..maxCornerRadius,
+                        enabled = cornerRadiusEnabled,
+                    )
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = {
-                        surfaceEntity!!.shape = SurfaceEntity.Shape.Quad(FloatSize2d(1.0f, 1.0f))
+                        setQuadShape(quadExtents)
+                        isQuadShape = true
                         // Move the Quad-shaped canvas to a spot in front of the User.
                         surfaceEntity!!.setPose(
-                            session.scene.spatialUser.head?.transformPoseTo(
-                                Pose(
-                                    Vector3(0.0f, 0.0f, -1.5f),
-                                    Quaternion(0.0f, 0.0f, 0.0f, 1.0f),
-                                ),
-                                session.scene.activitySpace,
-                            )!!
+                            session.scene.perceptionSpace
+                                .getScenePoseFromPerceptionPose(arDevice.state.value.devicePose)
+                                .transformPoseTo(
+                                    Pose(
+                                        Vector3(0.0f, 0.0f, -1.5f),
+                                        Quaternion(0.0f, 0.0f, 0.0f, 1.0f),
+                                    ),
+                                    session.scene.activitySpace,
+                                )
                         )
                     }
                 ) {
                     Text(text = "Set Quad", fontSize = 10.sp)
                 }
-                Button(onClick = { surfaceEntity!!.shape = SurfaceEntity.Shape.Sphere(1.0f) }) {
+                Button(
+                    onClick = {
+                        surfaceEntity!!.shape = SurfaceEntity.Shape.Sphere(1.0f)
+                        isQuadShape = false
+                    }
+                ) {
                     Text(text = "Set Vr360", fontSize = 10.sp)
                 }
-                Button(onClick = { surfaceEntity!!.shape = SurfaceEntity.Shape.Hemisphere(1.0f) }) {
+                Button(
+                    onClick = {
+                        surfaceEntity!!.shape = SurfaceEntity.Shape.Hemisphere(1.0f)
+                        isQuadShape = false
+                    }
+                ) {
                     Text(text = "Set Vr180", fontSize = 10.sp)
                 }
             } // end row
@@ -440,20 +563,19 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 currentImageSize!!.height,
                 currentPixelAspectRatio,
             )
+        // Track the size the current image wants even while a non-Quad shape is active, so
+        // switching back to a Quad restores it.
+        quadExtents = FloatSize2d(newShapeDimensions.width, newShapeDimensions.height)
         if (surfaceEntity!!.shape is SurfaceEntity.Shape.Quad) {
-            surfaceEntity!!.shape =
-                SurfaceEntity.Shape.Quad(
-                    FloatSize2d(newShapeDimensions.width, newShapeDimensions.height)
-                )
-            movableComponent?.size = surfaceEntity!!.dimensions
+            setQuadShape(quadExtents)
         }
 
         var controlOffsetY: Float = 0.0f
         var controlOffsetZ: Float = 0.0f
 
-        var rotation =
+        val rotation =
             Quaternion.fromAxisAngle(Vector3.Forward, currentVideoRotationDegrees.toFloat())
-        var newPose = surfaceEntity!!.getPose().compose(Pose(Vector3.Zero, rotation))
+        val newPose = surfaceEntity!!.getPose().compose(Pose(Vector3.Zero, rotation))
         surfaceEntity!!.setPose(newPose)
         controlPanelEntity!!.parent = movieParent!!
 
@@ -482,6 +604,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     @OptIn(ExperimentalSurfaceEntityPixelDimensionsApi::class)
     fun ShowBitmapButton(
         session: Session,
+        arDevice: ArDevice,
         activity: Activity,
         bitmapUri: String,
         stereoMode: SurfaceEntity.StereoMode,
@@ -520,16 +643,17 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                             SurfaceEntity.Shape.Quad(
                                 FloatSize2d(shapeDimensions.width, shapeDimensions.height)
                             )
+
                         ShapeMode.HEMISPHERE -> SurfaceEntity.Shape.Hemisphere(1.0f)
                         ShapeMode.SPHERE -> SurfaceEntity.Shape.Sphere(1.0f)
                     }
 
                 if (!(canvasShape is SurfaceEntity.Shape.Quad)) {
                     actualPose =
-                        session.scene.spatialUser.head?.transformPoseTo(
-                            Pose.Identity,
+                        session.scene.perceptionSpace.transformPoseTo(
+                            arDevice.state.value.devicePose,
                             session.scene.activitySpace,
-                        )!!
+                        )
                 }
 
                 // Create SurfaceEntity and MovableComponent if they don't exist.
@@ -555,14 +679,14 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                     movieParent!!.setPose(actualPose)
 
                     surfaceEntity =
-                        SurfaceEntity.create(
-                            session = session,
-                            pose = Pose.Identity,
-                            shape = canvasShape,
-                            stereoMode = stereoMode,
-                            superSampling = superSamplingMode,
-                            surfaceProtection = surfaceContentLevel,
-                        )
+                        SurfaceEntity.Builder(session)
+                            .setPose(Pose.Identity)
+                            .setShape(canvasShape)
+                            .setStereoMode(stereoMode)
+                            .setSuperSampling(superSamplingMode)
+                            .setSurfaceProtection(surfaceContentLevel)
+                            .setParent(session.scene.activitySpace)
+                            .build()
 
                     surfaceEntity?.parent = movieParent!!
                     surfaceEntity?.setPose(Pose.Identity)
@@ -581,12 +705,9 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                     movableComponent!!.size = FloatSize3d(1.0f, 1.0f, 1.0f)
 
                     if (canvasShape is SurfaceEntity.Shape.Quad) {
-                        val unused = surfaceEntity!!.addComponent(movableComponent!!)
+                        surfaceEntity!!.addComponent(movableComponent!!)
                     }
 
-                    if (canvasShape is SurfaceEntity.Shape.Quad) {
-                        val unused = surfaceEntity!!.addComponent(movableComponent!!)
-                    }
                     imageShowing = true
                 }
 
@@ -595,7 +716,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 val canvas = surfaceEntity!!.getSurface().lockHardwareCanvas()
                 canvas.drawBitmap(bitmap, 0.0f, 0.0f, null)
                 surfaceEntity!!.getSurface().unlockCanvasAndPost(canvas)
-                setupControlPanel(session)
+                setupControlPanel(session, arDevice)
                 updateSurfaceEntityVisuals()
             },
             modifier = Modifier.fillMaxWidth().height(28.dp),
@@ -612,14 +733,20 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     }
 
     @Composable
-    fun StereoBitmapQuadButton(session: Session, activity: Activity, enabled: Boolean = true) {
+    fun StereoBitmapQuadButton(
+        session: Session,
+        arDevice: ArDevice,
+        activity: Activity,
+        enabled: Boolean = true,
+    ) {
         ShowBitmapButton(
             session = session,
+            arDevice = arDevice,
             activity = activity,
             // For Testers: Note that this translates to
             // "/sdcard/Download/2d_Flats_sbs_downsampled.jpg".
             bitmapUri =
-                Environment.getExternalStorageDirectory().getPath() +
+                Environment.getExternalStorageDirectory().path +
                     "/Download/2d_Flats_sbs_downsampled.jpg",
             shapeMode = ShapeMode.QUAD,
             stereoMode = SurfaceEntity.StereoMode.SIDE_BY_SIDE,
@@ -632,14 +759,20 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     }
 
     @Composable
-    fun StereoBitmap180Button(session: Session, activity: Activity, enabled: Boolean = true) {
+    fun StereoBitmap180Button(
+        session: Session,
+        arDevice: ArDevice,
+        activity: Activity,
+        enabled: Boolean = true,
+    ) {
         ShowBitmapButton(
             session = session,
+            arDevice = arDevice,
             activity = activity,
             // For Testers: Note that this translates to
             // "/sdcard/Download/VR180_CANON_downsampled.png".
             bitmapUri =
-                Environment.getExternalStorageDirectory().getPath() +
+                Environment.getExternalStorageDirectory().path +
                     "/Download/VR180_CANON_downsampled.png",
             shapeMode = ShapeMode.HEMISPHERE,
             stereoMode = SurfaceEntity.StereoMode.SIDE_BY_SIDE,
@@ -652,14 +785,20 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     }
 
     @Composable
-    fun MonoBitmap360Button(session: Session, activity: Activity, enabled: Boolean = true) {
+    fun MonoBitmap360Button(
+        session: Session,
+        arDevice: ArDevice,
+        activity: Activity,
+        enabled: Boolean = true,
+    ) {
         ShowBitmapButton(
             session = session,
+            arDevice = arDevice,
             activity = activity,
             // For Testers: Note that this translates to
             // "/sdcard/Download/360Flats_downsampled.jpg".
             bitmapUri =
-                Environment.getExternalStorageDirectory().getPath() +
+                Environment.getExternalStorageDirectory().path +
                     "/Download/360Flats_downsampled.jpg",
             shapeMode = ShapeMode.SPHERE,
             stereoMode = SurfaceEntity.StereoMode.MONO,
@@ -672,9 +811,14 @@ class SurfaceEntityImageActivity : ComponentActivity() {
     }
 
     @Composable
-    fun SurfaceEntityImageActivityUI(session: Session, activity: SurfaceEntityImageActivity) {
-        val videoPaused = remember { mutableStateOf(false) }
+    fun SurfaceEntityImageActivityUI(
+        session: Session,
+        arDevice: ArDevice,
+        activity: SurfaceEntityImageActivity,
+    ) {
+        remember { mutableStateOf(false) }
         val alphaMaskEnabled = remember { mutableStateOf(false) }
+        val isBlendingModeSupported = remember { isSpatialApiV4Supported() }
 
         Row(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Column(
@@ -690,10 +834,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 }
                 Button(onClick = { activity.toggleColorCorrectionMode() }) {
                     val buttonTextToDisplay =
-                        if (
-                            activity.colorCorrectionMode ==
-                                SurfaceEntityImageActivity.ColorCorrectionMode.BEST_EFFORT
-                        ) {
+                        if (activity.colorCorrectionMode == ColorCorrectionMode.BEST_EFFORT) {
                             "CC: Best Effort (Tap to User Managed)"
                         } else {
                             "CC: User Managed (Tap to Best Effort)"
@@ -702,10 +843,7 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 }
                 Button(onClick = { activity.toggleSuperSamplingMode() }) {
                     val buttonTextToDisplay =
-                        if (
-                            activity.superSamplingMode ==
-                                SurfaceEntityImageActivity.SuperSamplingMode.DEFAULT
-                        ) {
+                        if (activity.superSamplingMode == SuperSamplingMode.DEFAULT) {
                             "SuperSampling: Enabled (Tap to disable)"
                         } else {
                             "SuperSampling: Disabled (Tap to enable)"
@@ -720,15 +858,15 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                 Text(text = "SurfaceEntity", fontSize = 30.sp)
                 if (imageShowing == false) {
                     // High level testcases
-                    StereoBitmapQuadButton(session, activity)
-                    StereoBitmap180Button(session, activity)
-                    MonoBitmap360Button(session, activity)
+                    StereoBitmapQuadButton(session, arDevice, activity)
+                    StereoBitmap180Button(session, arDevice, activity)
+                    MonoBitmap360Button(session, arDevice, activity)
                 } else {
                     Column(
                         verticalArrangement = Arrangement.Center,
                         modifier = Modifier.weight(1f).padding(8.dp),
                     ) {
-                        VideoPlayerControls(session)
+                        VideoPlayerControls(session, arDevice)
                         Button(
                             onClick = {
                                 alphaMaskEnabled.value = !alphaMaskEnabled.value
@@ -741,6 +879,31 @@ class SurfaceEntityImageActivity : ComponentActivity() {
                             }
                         ) {
                             Text(text = "Toggle Alpha Mask", fontSize = 18.sp)
+                        }
+                        // Blending modes need Spatial API v4, so hide the control outright rather
+                        // than showing a button that can never do anything on this device.
+                        if (isBlendingModeSupported) {
+                            val isTransparent = remember { mutableStateOf(true) }
+                            Button(
+                                onClick = {
+                                    if (isTransparent.value) {
+                                        surfaceEntity!!.blendingMode =
+                                            SurfaceEntity.BlendingMode.OPAQUE
+                                        isTransparent.value = false
+                                    } else {
+                                        surfaceEntity!!.blendingMode =
+                                            SurfaceEntity.BlendingMode.TRANSPARENT
+                                        isTransparent.value = true
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    text =
+                                        if (isTransparent.value) "Make Opaque"
+                                        else "Make Transparent",
+                                    fontSize = 18.sp,
+                                )
+                            }
                         }
                     }
                 }

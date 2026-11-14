@@ -36,19 +36,36 @@ abstract class CheckKotlinApiTargetTask : DefaultTask() {
     @get:Internal val projectPath: String = project.path
 
     @get:Input
-    val allDependencies: Provider<List<Pair<String, String>>> =
-        project.provider {
-            project.configurations
-                .filter(project::shouldVerifyConfiguration)
-                .filter { it.isCanBeResolved && it.isPublished() }
-                .flatMap { config ->
-                    config.incoming.resolutionResult.allComponents.mapNotNull { component ->
-                        (component.id as? ModuleComponentIdentifier)?.let { id ->
-                            "${id.module}:${id.version}" to config.name
-                        }
+    val allDependencies: Provider<List<Pair<String, String>>> = project.provider {
+        project.configurations
+            .matching {
+                it.isCanBeResolved &&
+                    it.isPublished() &&
+                    // Don't check any tooling configurations.
+                    !it.name.endsWith("AnnotationProcessorClasspath") &&
+                    !it.name.endsWith("LintChecksClasspath") &&
+                    !it.name.startsWith("benchmarkGenerator") &&
+                    !it.name.startsWith("importInspector") &&
+                    !it.name.startsWith("kotlinAbi") &&
+                    !it.name.startsWith("kotlinCompiler") &&
+                    !it.name.startsWith("kotlinBuild") &&
+                    !it.name.startsWith("kotlinKlib") &&
+                    !it.name.startsWith("kotlinKapt") &&
+                    !it.name.startsWith("kspPluginClasspath") &&
+                    !it.name.startsWith("swiftExport") &&
+                    // For KotlinWasm/Js, versions of toolchain and stdlib need to be the same:
+                    // https://youtrack.jetbrains.com/issue/KT-71032
+                    !it.name.startsWith("js") &&
+                    !it.name.startsWith("wasmJs")
+            }
+            .flatMap { config ->
+                config.incoming.resolutionResult.allComponents.mapNotNull { component ->
+                    (component.id as? ModuleComponentIdentifier)?.let { id ->
+                        "${id.module}:${id.version}" to config.name
                     }
                 }
-        }
+            }
+    }
 
     @get:OutputFile abstract val outputFile: RegularFileProperty
 

@@ -17,6 +17,7 @@
 package androidx.compose.ui.layout
 
 import android.os.Build
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.testutils.assertPixels
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.background
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -45,7 +45,7 @@ import androidx.compose.ui.test.TestActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -58,7 +58,6 @@ import androidx.test.filters.SdkSuppress
 import androidx.test.filters.SmallTest
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -70,7 +69,7 @@ class PlacedChildTest {
 
     private val Tag = "tag"
 
-    @get:Rule val rule = createAndroidComposeRule<TestActivity>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity>()
 
     @Test
     fun remeasureNotPlacedChild() {
@@ -190,15 +189,14 @@ class PlacedChildTest {
         var measureCount = 0
         var placementCount = 0
         rule.runOnIdle {
-            modifier =
-                Modifier.layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    measureCount++
-                    layout(placeable.width, placeable.height) {
-                        placementCount++
-                        placeable.place(0, 0)
-                    }
+            modifier = Modifier.layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                measureCount++
+                layout(placeable.width, placeable.height) {
+                    placementCount++
+                    placeable.place(0, 0)
                 }
+            }
         }
 
         rule.runOnIdle {

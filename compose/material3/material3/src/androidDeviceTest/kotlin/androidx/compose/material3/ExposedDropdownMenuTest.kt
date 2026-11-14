@@ -56,7 +56,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -64,7 +63,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
@@ -88,19 +87,17 @@ import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assume.assumeNotNull
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalMaterial3Api::class)
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class ExposedDropdownMenuTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val TFTag = "TextFieldTag"
     private val TrailingIconTag = "TrailingIconTag"
@@ -269,7 +266,6 @@ class ExposedDropdownMenuTest {
         rule.onNodeWithTag(MenuItemTag).assertDoesNotExist()
     }
 
-    @Ignore("b/374850853")
     @Test
     fun edm_editable_collapsesOnEscapePress() {
         rule.setMaterialContent(lightColorScheme()) {
@@ -285,6 +281,11 @@ class ExposedDropdownMenuTest {
         rule.onNodeWithTag(EDMTag).assertIsDisplayed()
         rule.onNodeWithTag(MenuItemTag).assertIsDisplayed()
 
+        rule.onNodeWithTag(TFTag).requestFocus()
+        rule.onNodeWithTag(TFTag).assertIsFocused()
+        rule.onNodeWithTag(TFTag).performKeyInput { pressKey(Key.Tab) }
+
+        // Menu will only close if the focus is on it instead of on the text field.
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             .pressKeyCode(KeyEvent.KEYCODE_ESCAPE)
 
@@ -334,6 +335,26 @@ class ExposedDropdownMenuTest {
 
         // Menu still is not displayed
         rule.onNodeWithTag(EDMTag).assertDoesNotExist()
+    }
+
+    @Test
+    fun edm_editable_focusesTextField_whenClickedViaSemantics() {
+        rule.setMaterialContent(lightColorScheme()) {
+            var expanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuForTest(
+                expanded = expanded,
+                onExpandChange = {
+                    // Simulate autocomplete where empty text prevents expansion.
+                },
+                editable = true,
+            )
+        }
+
+        // Click on the TextField
+        rule.onNodeWithTag(TFTag).performClick()
+
+        // TextField is focused
+        rule.onNodeWithTag(TFTag).assertIsFocused()
     }
 
     @Test
@@ -493,7 +514,6 @@ class ExposedDropdownMenuTest {
         rule.onNodeWithTag(MenuItemTag).assertDoesNotExist()
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_expands_onEnterKey() {
         var expanded by mutableStateOf(false)
@@ -511,7 +531,6 @@ class ExposedDropdownMenuTest {
         rule.runOnIdle { assertThat(expanded).isTrue() }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_collapses_onEnterKey() {
         var expanded by mutableStateOf(true)
@@ -529,7 +548,6 @@ class ExposedDropdownMenuTest {
         rule.runOnIdle { assertThat(expanded).isFalse() }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_editable_expands_onEnterKey() {
         var expanded by mutableStateOf(false)
@@ -548,7 +566,6 @@ class ExposedDropdownMenuTest {
         rule.runOnIdle { assertThat(expanded).isTrue() }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_editable_collapses_onEnterKey() {
         var expanded by mutableStateOf(true)
@@ -567,7 +584,6 @@ class ExposedDropdownMenuTest {
         rule.runOnIdle { assertThat(expanded).isFalse() }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_editable_doesNotExpand_onSpacebarKey() {
         var expanded by mutableStateOf(false)
@@ -586,7 +602,6 @@ class ExposedDropdownMenuTest {
         rule.runOnIdle { assertThat(expanded).isFalse() }
     }
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
     fun edm_editable_doesNotCollapse_onSpacebarKey() {
         var expanded by mutableStateOf(true)
@@ -656,7 +671,9 @@ class ExposedDropdownMenuTest {
                         ExposedDropdownMenuDefaults.TrailingIcon(
                             expanded = expanded,
                             modifier =
-                                Modifier.menuAnchor(ExposedDropdownMenuAnchorType.SecondaryEditable),
+                                Modifier.menuAnchor(
+                                    ExposedDropdownMenuAnchorType.SecondaryEditable
+                                ),
                         )
                     },
                 )
@@ -801,7 +818,6 @@ class ExposedDropdownMenuTest {
         // Should not have crashed.
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     @Test
     fun edm_withScrolledContent() {
         lateinit var scrollState: ScrollState
@@ -925,6 +941,28 @@ class ExposedDropdownMenuTest {
                     windowSize.height + topWindowInsets - verticalMargin - popupSize.height,
                 )
             )
+    }
+
+    @Test
+    fun edm_positionProvider_contentExceedsWindowHeight() {
+        val density = Density(1f)
+        val anchorSize = IntSize(width = 200, height = 50)
+        val popupSize = IntSize(width = 200, height = 300)
+        val windowSize = IntSize(width = 500, height = 200)
+        val layoutDirection = LayoutDirection.Ltr
+
+        val edmPositionProvider =
+            ExposedDropdownMenuPositionProvider(density = density, topWindowInsets = 0)
+
+        val position =
+            edmPositionProvider.calculatePosition(
+                anchorBounds = IntRect(size = anchorSize, offset = IntOffset(0, 50)),
+                windowSize = windowSize,
+                popupContentSize = popupSize,
+                layoutDirection = layoutDirection,
+            )
+
+        assertThat(position.y).isEqualTo((windowSize.height - popupSize.height) / 2)
     }
 
     @Composable

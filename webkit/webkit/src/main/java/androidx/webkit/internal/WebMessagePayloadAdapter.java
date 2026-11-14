@@ -16,12 +16,14 @@
 
 package androidx.webkit.internal;
 
+import androidx.webkit.SharedArrayBuffer;
 import androidx.webkit.WebMessageCompat;
 
 import org.chromium.support_lib_boundary.WebMessagePayloadBoundaryInterface;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.lang.reflect.InvocationHandler;
 import java.util.Objects;
 
 /**
@@ -32,23 +34,34 @@ public class WebMessagePayloadAdapter implements WebMessagePayloadBoundaryInterf
     private final @WebMessagePayloadType int mType;
     private final @Nullable String mString;
     private final byte @Nullable [] mArrayBuffer;
+    private final @Nullable SharedArrayBuffer mSharedArrayBuffer;
 
     public WebMessagePayloadAdapter(final @Nullable String data) {
         mType = WebMessagePayloadType.TYPE_STRING;
         mString = data;
         mArrayBuffer = null;
+        mSharedArrayBuffer = null;
     }
 
     public WebMessagePayloadAdapter(final byte @NonNull [] arrayBuffer) {
         mType = WebMessagePayloadType.TYPE_ARRAY_BUFFER;
         mString = null;
         mArrayBuffer = arrayBuffer;
+        mSharedArrayBuffer = null;
+    }
+
+    public WebMessagePayloadAdapter(final @NonNull SharedArrayBuffer sharedArrayBuffer) {
+        mType = WebMessagePayloadType.TYPE_SHARED_ARRAY_BUFFER;
+        mString = null;
+        mArrayBuffer = null;
+        mSharedArrayBuffer = sharedArrayBuffer;
     }
 
     @Override
     public String @NonNull [] getSupportedFeatures() {
         // getType, getAsString and getAsArrayBuffer are covered by
-        // WEB_MESSAGE_ARRAY_BUFFER.
+        // WEB_MESSAGE_ARRAY_BUFFER, getAsSharedArrayBuffer is covered by
+        // WEB_MESSAGE_SHARED_ARRAY_BUFFER. Both are declared by WebMessageAdapter.
         return new String[0];
     }
 
@@ -67,6 +80,14 @@ public class WebMessagePayloadAdapter implements WebMessagePayloadBoundaryInterf
     public byte @NonNull [] getAsArrayBuffer() {
         checkType(WebMessagePayloadType.TYPE_ARRAY_BUFFER);
         return Objects.requireNonNull(mArrayBuffer);
+    }
+
+    @Override
+    public @NonNull InvocationHandler getAsSharedArrayBuffer() {
+        checkType(WebMessagePayloadType.TYPE_SHARED_ARRAY_BUFFER);
+        // WebView resolves this boundary object back to the buffer it allocated, so the original
+        // InvocationHandler has to be handed back unchanged.
+        return Objects.requireNonNull(mSharedArrayBuffer).getInvocationHandler();
     }
 
     /**

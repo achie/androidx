@@ -1,6 +1,7 @@
 import androidx.room3.RoomDatabase
 import androidx.room3.util.ByteArrayWrapper
 import androidx.room3.util.appendPlaceholders
+import androidx.room3.util.bufferStatement
 import androidx.room3.util.getColumnIndex
 import androidx.room3.util.getColumnIndexOrThrow
 import androidx.room3.util.performBlocking
@@ -21,7 +22,7 @@ import kotlin.reflect.KClass
 import kotlin.text.StringBuilder
 
 @Generated(value = ["androidx.room3.RoomProcessor"])
-@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL"])
+@Suppress(names = ["UNCHECKED_CAST", "DEPRECATION", "REDUNDANT_PROJECTION", "REMOVAL", "OPT_IN_USAGE_ERROR", "OPT_IN_USAGE", "MemberExtensionConflict", "CAN_BE_VAL"])
 internal class MyDao_Impl(
   __db: RoomDatabase,
 ) : MyDao {
@@ -37,28 +38,29 @@ internal class MyDao_Impl(
       try {
         val _columnIndexOfSongId: Int = getColumnIndexOrThrow(_stmt, "songId")
         val _columnIndexOfArtistKey: Int = getColumnIndexOrThrow(_stmt, "artistKey")
+        val _bufferedStmt: SQLiteStatement = bufferStatement(_stmt)
         val _collectionArtist: MutableMap<ByteArrayWrapper, Artist?> = mutableMapOf()
-        while (_stmt.step()) {
+        while (_bufferedStmt.step()) {
           val _tmpKey: ByteArrayWrapper
-          _tmpKey = ByteArrayWrapper(_stmt.getBlob(_columnIndexOfArtistKey))
+          _tmpKey = ByteArrayWrapper(_bufferedStmt.getBlob(_columnIndexOfArtistKey))
           _collectionArtist.put(_tmpKey, null)
         }
-        _stmt.reset()
+        _bufferedStmt.reset()
         __fetchRelationshipArtistAsArtist(_connection, _collectionArtist)
         val _result: SongWithArtist
-        if (_stmt.step()) {
+        if (_bufferedStmt.step()) {
           val _tmpSong: Song
           val _tmpSongId: Long
-          _tmpSongId = _stmt.getLong(_columnIndexOfSongId)
+          _tmpSongId = _bufferedStmt.getLong(_columnIndexOfSongId)
           val _tmpArtistKey: ByteArray
-          _tmpArtistKey = _stmt.getBlob(_columnIndexOfArtistKey)
+          _tmpArtistKey = _bufferedStmt.getBlob(_columnIndexOfArtistKey)
           _tmpSong = Song(_tmpSongId,_tmpArtistKey)
           val _tmpArtist: Artist?
           val _tmpKey_1: ByteArrayWrapper
-          _tmpKey_1 = ByteArrayWrapper(_stmt.getBlob(_columnIndexOfArtistKey))
+          _tmpKey_1 = ByteArrayWrapper(_bufferedStmt.getBlob(_columnIndexOfArtistKey))
           _tmpArtist = _collectionArtist.get(_tmpKey_1)
           if (_tmpArtist == null) {
-            error("Relationship item 'artist' was expected to be NON-NULL but is NULL in @Relation involving a parent column named 'artistKey' and entityColumn named 'artistId'.")
+            error("Relationship item 'artist' was expected to be NON-NULL but is NULL in @Relation involving parent columns named 'artistKey' and entityColumns named 'artistId''.")
           }
           _result = SongWithArtist(_tmpSong,_tmpArtist)
         } else {
@@ -71,7 +73,7 @@ internal class MyDao_Impl(
     }
   }
 
-  private fun __fetchRelationshipArtistAsArtist(_connection: SQLiteConnection, _map: MutableMap<ByteArrayWrapper, Artist?>) {
+  private suspend fun __fetchRelationshipArtistAsArtist(_connection: SQLiteConnection, _map: MutableMap<ByteArrayWrapper, Artist?>) {
     val __mapKeySet: Set<ByteArrayWrapper> = _map.keys
     if (__mapKeySet.isEmpty()) {
       return
@@ -83,7 +85,8 @@ internal class MyDao_Impl(
       return
     }
     val _stringBuilder: StringBuilder = StringBuilder()
-    _stringBuilder.append("SELECT `artistId` FROM `Artist` WHERE `artistId` IN (")
+    _stringBuilder.append("SELECT `artistId` FROM `Artist`")
+    _stringBuilder.append(" WHERE `artistId` IN (")
     val _inputSize: Int = __mapKeySet.size
     appendPlaceholders(_stringBuilder, _inputSize)
     _stringBuilder.append(")")
@@ -95,14 +98,14 @@ internal class MyDao_Impl(
       _argIndex++
     }
     try {
-      val _itemKeyIndex: Int = getColumnIndex(_stmt, "artistId")
-      if (_itemKeyIndex == -1) {
+      val _itemKeyIndex_0: Int = getColumnIndex(_stmt, "artistId")
+      if (_itemKeyIndex_0 == -1) {
         return
       }
       val _columnIndexOfArtistId: Int = 0
       while (_stmt.step()) {
         val _tmpKey: ByteArrayWrapper
-        _tmpKey = ByteArrayWrapper(_stmt.getBlob(_itemKeyIndex))
+        _tmpKey = ByteArrayWrapper(_stmt.getBlob(_itemKeyIndex_0))
         if (_map.containsKey(_tmpKey)) {
           val _item_1: Artist
           val _tmpArtistId: ByteArray
@@ -117,6 +120,8 @@ internal class MyDao_Impl(
   }
 
   public companion object {
-    public fun getRequiredConverters(): List<KClass<*>> = emptyList()
+    public fun getRequiredColumnConverters(): List<KClass<*>> = emptyList()
+
+    public fun getRequiredDaoReturnTypeConverters(): List<KClass<*>> = emptyList()
   }
 }

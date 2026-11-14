@@ -30,11 +30,11 @@ import androidx.lifecycle.lifecycleScope
 import androidx.xr.runtime.Session
 import androidx.xr.runtime.SessionCreateSuccess
 import androidx.xr.runtime.math.FloatSize2d
+import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.IntSize2d
 import androidx.xr.runtime.math.Pose
 import androidx.xr.runtime.math.Vector2
 import androidx.xr.runtime.math.Vector3
-import androidx.xr.scenecore.ExperimentalPanelCoordinateApi
 import androidx.xr.scenecore.GltfModel
 import androidx.xr.scenecore.GltfModelEntity
 import androidx.xr.scenecore.MovableComponent
@@ -49,7 +49,6 @@ import kotlinx.coroutines.launch
 
 class PanelCoordinateActivity : AppCompatActivity() {
 
-    private val TAG = "PanelCoordinateActivity"
     private var session: Session? = null
 
     private lateinit var coordinateTypeRadioGroup: RadioGroup
@@ -97,16 +96,16 @@ class PanelCoordinateActivity : AppCompatActivity() {
 
         setupMainPanelInitialState()
         setupMainPanelListeners()
-    }
 
-    override fun onResume() {
-        super.onResume()
         lifecycleScope.launch {
-            val sessionResult = Session.create(this@PanelCoordinateActivity)
+            val sessionResult = Session.create(context = this@PanelCoordinateActivity)
             if (sessionResult is SessionCreateSuccess) {
                 session = sessionResult.session
                 setupSecondaryPanelAndGltfEntity(session!!)
-                session!!.scene.mainPanelEntity.size = FloatSize2d(1.2f, 0.8f)
+                if (session!!.scene.mainPanelEntity.sizeInPixels != DEFAULT_MAIN_PANEL_SIZE) {
+                    session!!.scene.mainPanelEntity.sizeInPixels = DEFAULT_MAIN_PANEL_SIZE
+                }
+                session?.scene?.keyEntity = session?.scene?.mainPanelEntity
             } else {
                 this@PanelCoordinateActivity.finish()
             }
@@ -125,12 +124,13 @@ class PanelCoordinateActivity : AppCompatActivity() {
                 pixelDimensions = IntSize2d(1000, 1000),
                 name = "SecondaryPanel",
                 pose = Pose(Vector3(0.7f, 0.7f, -0.05f)),
+                parent = session.scene.mainPanelEntity,
             )
-        session.scene.activitySpace.addChild(panel)
 
         val movable = MovableComponent.createSystemMovable(session, scaleInZ = false)
         val resizable =
-            ResizableComponent.create(session) { event ->
+            ResizableComponent.create(session, minimumSize = FloatSize3d(0.1f, 0.1f, 0.1f)) { event
+                ->
                 panel.size = FloatSize2d(event.newSize.width, event.newSize.height)
                 updateSizeText()
                 updateXyzPose()
@@ -139,8 +139,7 @@ class PanelCoordinateActivity : AppCompatActivity() {
         panel.addComponent(resizable)
 
         xyzModel = GltfModel.create(session, Paths.get("models", "xyzArrows.glb"))
-        xyzEntity = GltfModelEntity.create(session, xyzModel)
-        panel.addChild(xyzEntity)
+        xyzEntity = GltfModelEntity.create(session, xyzModel, parent = panel)
         xyzEntity.setScale(0.2f)
 
         updateSizeText()
@@ -234,20 +233,29 @@ class PanelCoordinateActivity : AppCompatActivity() {
         }
     }
 
-    @OptIn(ExperimentalPanelCoordinateApi::class)
     private fun updateXyzPose() {
-        if (!::panel.isInitialized) return
+        if (!(::panel.isInitialized && ::xyzEntity.isInitialized)) return
 
         if (coordinateTypeRadioGroup.checkedRadioButtonId == R.id.pixel_coordinate_radio_button) {
             xyzEntity.setPose(
-                panel.transformPixelCoordinatesToPose(
-                    Vector2(xPixelSlider.value, yPixelSlider.value)
+                Pose(
+                    panel.transformPixelCoordinatesToLocalPosition(
+                        Vector2(xPixelSlider.value, yPixelSlider.value)
+                    )
                 )
             )
         } else {
             xyzEntity.setPose(
-                panel.transformNormalizedCoordinatesToPose(Vector2(uSlider.value, vSlider.value))
+                Pose(
+                    panel.transformNormalizedCoordinatesToLocalPosition(
+                        Vector2(uSlider.value, vSlider.value)
+                    )
+                )
             )
         }
+    }
+
+    companion object {
+        val DEFAULT_MAIN_PANEL_SIZE = IntSize2d(2048, 1280)
     }
 }

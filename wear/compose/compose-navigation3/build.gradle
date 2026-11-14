@@ -15,10 +15,9 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
 
@@ -32,14 +31,29 @@ plugins {
 }
 
 dependencies {
-    api(project(":navigation3:navigation3-ui"))
+    implementation("androidx.navigation3:navigation3-ui:1.0.0")
+    implementation("androidx.navigation3:navigation3-runtime:1.0.0")
+    implementation(project(":wear:compose:compose-material3"))
+    implementation("androidx.compose.animation:animation:1.9.3")
+
+    androidTestImplementation(project(":navigationevent:navigationevent-testing"))
+    androidTestImplementation(project(":compose:test-utils"))
+    androidTestImplementation(project(":compose:ui:ui-test-junit4"))
+    androidTestImplementation(project(":navigation3:navigation3-ui"))
+    androidTestImplementation("androidx.lifecycle:lifecycle-runtime-testing:2.7.0")
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.truth)
+
+    androidTestImplementation(project(":compose:foundation:foundation"))
+    androidTestImplementation(project(":compose:ui:ui-test"))
+    androidTestImplementation(project(":test:screenshot:screenshot"))
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) { minorApiLevel = 1 } }
 
     defaultConfig {
-        minSdk = 25
+        minSdk { version = release(25) }
     }
     namespace = "androidx.wear.compose.navigation3"
 }
@@ -52,4 +66,5 @@ androidx {
             "for developers to write Jetpack Compose applications for Wearable devices by " +
             "providing functionality to support navigation with Jetpack Navigation3. " +
             "It builds upon the Jetpack Compose libraries."
+    samples(project(":wear:compose:compose-navigation3-samples"))
 }

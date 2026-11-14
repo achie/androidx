@@ -22,6 +22,7 @@ import androidx.compose.animation.core.TweenSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,8 +71,8 @@ public fun rememberExpandableState(
 }
 
 /**
- * Create and [remember] a mapping from keys to [ExpandableState]s [ExpandableState]s can be
- * requested by key, and we will created with the parameters given here when a mapping didn't exist
+ * Create and [remember] a mapping from keys to [ExpandableState]s. [ExpandableState]s can be
+ * requested by key, and will be created with the parameters given here when a mapping didn't exist
  * before. This is mainly useful when you want to have a variable number of expandables, that can
  * change at runtime (for example, elements on a ScalingLazyColumn)
  *
@@ -241,11 +242,11 @@ internal constructor(
      * content is not showing, or 1f if the extra content is showing.
      */
     public val expandProgress: Float
-        get() = _expandProgress.value
+        @FrequentlyChangingValue get() = _expandProgress.value
 
     /**
      * Represents the current state of the component, true means it's showing the extra information.
-     * If its in the middle of an animation, the value of this field takes into account only the
+     * If it's in the middle of an animation, the value of this field takes into account only the
      * target of that animation.
      *
      * Modifying this value triggers a change to show/hide the extra information.

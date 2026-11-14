@@ -16,11 +16,17 @@
 
 package androidx.webkit.internal;
 
+import androidx.webkit.JavaScriptExecutionException;
 import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.SharedArrayBuffer;
+import androidx.webkit.WebViewOutcomeReceiver;
 
+import org.chromium.support_lib_boundary.ExecuteJavaScriptCallbackBoundaryInterface;
+import org.chromium.support_lib_boundary.ExecuteJavaScriptCallbackBoundaryInterface.ExecuteJavaScriptExceptionTypeBoundaryInterface;
 import org.chromium.support_lib_boundary.JsReplyProxyBoundaryInterface;
 import org.chromium.support_lib_boundary.util.BoundaryInterfaceReflectionUtil;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.reflect.InvocationHandler;
 import java.util.Objects;
@@ -68,5 +74,62 @@ public class JavaScriptReplyProxyImpl extends JavaScriptReplyProxy {
         } else {
             throw WebViewFeatureInternal.getUnsupportedOperationException();
         }
+    }
+
+    @Override
+    public void postMessage(@NonNull SharedArrayBuffer sharedArrayBuffer) {
+        // WebView cannot handle a null SharedArrayBuffer as WebMessage.
+        Objects.requireNonNull(sharedArrayBuffer, "SharedArrayBuffer must be non-null");
+        final ApiFeature.NoFramework feature =
+                WebViewFeatureInternal.WEB_MESSAGE_SHARED_ARRAY_BUFFER;
+        if (feature.isSupportedByWebView()) {
+            mBoundaryInterface.postMessageWithPayload(
+                    BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
+                            new WebMessagePayloadAdapter(sharedArrayBuffer)));
+        } else {
+            throw WebViewFeatureInternal.getUnsupportedOperationException();
+        }
+    }
+
+    @Override
+    public void executeJavaScript(
+            @NonNull String script,
+            final @Nullable WebViewOutcomeReceiver<String, JavaScriptExecutionException> receiver) {
+        final ApiFeature.NoFramework feature =
+                WebViewFeatureInternal.JS_INJECTION_IN_FRAME_AND_WORLD;
+        if (feature.isSupportedByWebView()) {
+            mBoundaryInterface.executeJavaScript(
+                    script,
+                    receiver == null ? null :
+                    BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
+                            new ExecuteJavaScriptCallbackBoundaryInterface() {
+                                @Override
+                                public void onSuccess(@NonNull String result) {
+                                    receiver.onResult(result);
+                                }
+
+                                @Override
+                                public void onFailure(
+                                        @ExecuteJavaScriptExceptionTypeBoundaryInterface int type,
+                                        @Nullable String message) {
+                                    receiver.onError(
+                                            new JavaScriptExecutionException(toErrorType(type),
+                                                    message));
+                                }
+                            }));
+        } else {
+            throw WebViewFeatureInternal.getUnsupportedOperationException();
+        }
+    }
+
+    private @JavaScriptExecutionException.ErrorType int toErrorType(
+            @ExecuteJavaScriptExceptionTypeBoundaryInterface int type) {
+        switch (type) {
+            case ExecuteJavaScriptExceptionTypeBoundaryInterface.GENERIC:
+                return JavaScriptExecutionException.ERROR_GENERIC;
+            case ExecuteJavaScriptExceptionTypeBoundaryInterface.FRAME_DESTROYED:
+                return JavaScriptExecutionException.ERROR_FRAME_DESTROYED;
+        }
+        return JavaScriptExecutionException.ERROR_GENERIC;
     }
 }

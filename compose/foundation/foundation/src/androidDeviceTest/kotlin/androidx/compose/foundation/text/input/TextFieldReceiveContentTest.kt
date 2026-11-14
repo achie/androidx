@@ -39,7 +39,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasSetTextAction
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.requestFocus
@@ -52,7 +52,6 @@ import androidx.test.filters.SdkSuppress
 import com.google.common.truth.Truth.assertThat
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -64,7 +63,7 @@ import org.junit.runner.RunWith
 @OptIn(ExperimentalFoundationApi::class)
 class TextFieldReceiveContentTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private val inputMethodInterceptor = InputMethodInterceptor(rule)
 
@@ -314,14 +313,13 @@ class TextFieldReceiveContentTest {
     @Test
     fun semanticsPasteContent_pastesLeftOverText() = runTest {
         val clipboard = FakeClipboard()
-        val clipEntry =
-            createClipData {
-                    addText("some text")
-                    addUri()
-                    addIntent()
-                    addText("more text")
-                }
-                .toClipEntry()
+        val clipEntry = createClipData {
+            addText("some text")
+            addUri()
+            addIntent()
+            addText("more text")
+        }
+            .toClipEntry()
         clipboard.setClipEntry(clipEntry)
         val state = TextFieldState()
         rule.setContent {
@@ -347,14 +345,13 @@ class TextFieldReceiveContentTest {
     @Test
     fun semanticsPasteContent_goesFromChildToParent() = runTest {
         val clipboard = FakeClipboard()
-        val clipEntry =
-            createClipData {
-                    addText("a")
-                    addText("b")
-                    addText("c")
-                    addText("d")
-                }
-                .toClipEntry()
+        val clipEntry = createClipData {
+            addText("a")
+            addText("b")
+            addText("c")
+            addText("d")
+        }
+            .toClipEntry()
         clipboard.setClipEntry(clipEntry)
 
         lateinit var transferableContent1: TransferableContent

@@ -23,15 +23,17 @@ import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
-import androidx.camera.core.CameraXConfig
-import androidx.camera.core.CameraXConfig.ImplType
 import androidx.camera.extensions.ExtensionMode
 
 /** The class to provide Camera2 Extensions related util methods. */
 public object Camera2ExtensionsUtil {
     private const val TAG = "Camera2ExtensionsUtil"
 
-    /** Returns the Camera2 extension mode corresponding to the input CameraX extension mode. */
+    /**
+     * Returns the Camera2 extension mode corresponding to the input CameraX extension mode.
+     *
+     * Unknown or vendor-defined extension modes are allowed to pass through as-is.
+     */
     @RequiresApi(31)
     public fun convertCameraXModeToCamera2Mode(cameraXMode: Int): Int =
         when (cameraXMode) {
@@ -40,11 +42,14 @@ public object Camera2ExtensionsUtil {
             ExtensionMode.NIGHT -> CameraExtensionCharacteristics.EXTENSION_NIGHT
             ExtensionMode.FACE_RETOUCH -> CameraExtensionCharacteristics.EXTENSION_FACE_RETOUCH
             ExtensionMode.AUTO -> CameraExtensionCharacteristics.EXTENSION_AUTOMATIC
-            else ->
-                throw IllegalArgumentException("Unavailable CameraX extension mode ($cameraXMode)")
+            else -> cameraXMode
         }
 
-    /** Returns the CameraX extension mode corresponding to the input Camera2 extension mode. */
+    /**
+     * Returns the CameraX extension mode corresponding to the input Camera2 extension mode.
+     *
+     * Unknown or vendor-defined extension modes are allowed to pass through as-is.
+     */
     @RequiresApi(31)
     public fun convertCamera2ModeToCameraXMode(camera2Mode: Int): Int =
         when (camera2Mode) {
@@ -53,8 +58,7 @@ public object Camera2ExtensionsUtil {
             CameraExtensionCharacteristics.EXTENSION_NIGHT -> ExtensionMode.NIGHT
             CameraExtensionCharacteristics.EXTENSION_FACE_RETOUCH -> ExtensionMode.FACE_RETOUCH
             CameraExtensionCharacteristics.EXTENSION_AUTOMATIC -> ExtensionMode.AUTO
-            else ->
-                throw IllegalArgumentException("Unavailable Camera2 extension mode ($camera2Mode)")
+            else -> camera2Mode
         }
 
     /** Creates the camera id to CameraExtensionCharacteristics map. */
@@ -77,9 +81,4 @@ public object Camera2ExtensionsUtil {
             }
         }
     }
-
-    /** Returns true if Camera2 Extensions API should be be used to turn on the extension mode. */
-    @JvmStatic
-    public fun shouldUseCamera2Extensions(@ImplType configImplType: Int): Boolean =
-        configImplType == CameraXConfig.CAMERAX_CONFIG_IMPL_TYPE_PIPE
 }

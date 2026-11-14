@@ -33,6 +33,7 @@ import androidx.car.app.constraints.ConstraintManager;
 import androidx.car.app.model.CarColor;
 import androidx.car.app.model.CarIcon;
 import androidx.car.app.model.CarIconSpan;
+import androidx.car.app.model.CarIconStyle;
 import androidx.car.app.model.CarLocation;
 import androidx.car.app.model.Distance;
 import androidx.car.app.model.DistanceSpan;
@@ -89,15 +90,23 @@ public class SamplePlaces {
 
         TypedArray typedArray =
                 carContext.obtainStyledAttributes(R.style.CarAppTheme, R.styleable.ShowcaseTheme);
-        CarColor iconTintColor =
-                CarColor.createCustom(
-                        typedArray.getColor(R.styleable.ShowcaseTheme_markerIconTintColor, -1),
-                        typedArray.getColor(R.styleable.ShowcaseTheme_markerIconTintColorDark, -1));
+        CarColor iconTintColor;
+        try {
+            iconTintColor =
+                    CarColor.createCustom(
+                            typedArray.getColor(R.styleable.ShowcaseTheme_markerIconTintColor, -1),
+                            typedArray.getColor(
+                                    R.styleable.ShowcaseTheme_markerIconTintColorDark, -1));
+        } finally {
+            typedArray.recycle();
+        }
 
 
         Location location1 = new Location(SamplePlaces.class.getSimpleName());
         location1.setLatitude(47.6696482);
         location1.setLongitude(-122.19950278);
+        CarIconStyle carIconStyle =
+                new CarIconStyle.Builder(CarIconStyle.TINTED).setTint(iconTintColor).build();
         places.add(
                 new PlaceInfo(
                         carContext.getString(R.string.location_1_title),
@@ -110,8 +119,8 @@ public class SamplePlaces {
                                         new CarIcon.Builder(
                                                 IconCompat.createWithResource(
                                                         carContext,
-                                                        R.drawable.ic_commute_24px))
-                                                .setTint(iconTintColor)
+                                                        R.drawable.ic_commute_24px),
+                                                carIconStyle)
                                                 .build(),
                                         PlaceMarker.TYPE_ICON)
                                 .build()));
@@ -128,10 +137,9 @@ public class SamplePlaces {
                         location2,
                         new PlaceMarker.Builder()
                                 .setIcon(
-                                        new CarIcon.Builder(
+                                        CarIcon.createOriginalIcon(
                                                 IconCompat.createWithResource(
-                                                        carContext, R.drawable.ic_520))
-                                                .build(),
+                                                        carContext, R.drawable.ic_520)),
                                         PlaceMarker.TYPE_IMAGE)
                                 .build()));
 
@@ -324,10 +332,10 @@ public class SamplePlaces {
 
     private static CarIcon createCarIconWithBitmap(CarContext carContext,
             @DrawableRes int drawable) {
-        return new CarIcon.Builder(
+        return CarIcon.createOriginalIcon(
                 IconCompat.createWithBitmap(
                         BitmapFactory.decodeResource(carContext.getResources(), drawable)
                 )
-        ).build();
+        );
     }
 }

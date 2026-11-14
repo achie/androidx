@@ -18,34 +18,53 @@ package androidx.build
 
 import androidx.build.AndroidXImplPlugin.Companion.FINALIZE_TEST_CONFIGS_WITH_APKS_TASK
 import androidx.build.AndroidXImplPlugin.Companion.ZIP_TEST_CONFIGS_WITH_APKS_TASK
+import androidx.build.aswb.registerASWBTask
 import androidx.build.buildInfo.CreateAggregateLibraryBuildInfoFileTask
 import androidx.build.buildInfo.CreateAggregateLibraryBuildInfoFileTask.Companion.CREATE_AGGREGATE_BUILD_INFO_FILES_TASK
 import androidx.build.dependencyTracker.AffectedModuleDetector
 import androidx.build.gradle.isRoot
+import androidx.build.intellij.registerIntelliJTask
 import androidx.build.license.ValidateLicensesExistTask
 import androidx.build.logging.TERMINAL_RED
 import androidx.build.logging.TERMINAL_RESET
+import androidx.build.optimization.KEEP_RULES_ANALYSIS_REPORTS_CATEGORY
+import androidx.build.optimization.KEEP_RULES_BASELINE_RELATIVE_PATH
+import androidx.build.optimization.UpdateKeepRulesBaselineTask
+import androidx.build.pinneddependencies.DEPENDENCY_EXEMPTIONS_REPORTS_CATEGORY
+import androidx.build.pinneddependencies.EXEMPTIONS_FILE_NAME
+import androidx.build.pinneddependencies.UpdateDependencyExemptionsTask
 import androidx.build.playground.ValidateIntegrationPatches
 import androidx.build.playground.VerifyPlaygroundGradleConfigurationTask
-import androidx.build.studio.StudioTask.Companion.registerStudioTask
+import androidx.build.studio.registerStudioTask
 import androidx.build.testConfiguration.registerOwnersServiceTasks
 import androidx.build.uptodatedness.TaskUpToDateValidator
 import androidx.build.uptodatedness.cacheEvenIfNoOutputs
-import com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION
+import androidx.build.uptodatedness.setupConfigurationCacheValidator
+import androidx.build.vscode.registerVSCodeTask
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import org.gradle.api.GradleException
+import org.gradle.api.NamedDomainObjectProvider
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.artifacts.ArtifactView
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.attributes.Category
 import org.gradle.api.configuration.BuildFeatures
+import org.gradle.api.file.Directory
+import org.gradle.api.file.FileCollection
+import org.gradle.api.file.RegularFile
 import org.gradle.api.file.RelativePath
+import org.gradle.api.flow.FlowScope
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.bundling.Zip
 import org.gradle.api.tasks.bundling.ZipEntryCompression
 import org.gradle.build.event.BuildEventsListenerRegistry
 import org.gradle.kotlin.dsl.extra
-import org.gradle.kotlin.dsl.register
 import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.targets.js.npm.tasks.KotlinNpmInstallTask
 import org.jetbrains.kotlin.gradle.targets.js.npm.tasks.KotlinToolingSetupTask
@@ -53,6 +72,7 @@ import org.jetbrains.kotlin.gradle.targets.js.npm.tasks.KotlinToolingSetupTask
 abstract class AndroidXRootImplPlugin : Plugin<Project> {
     @get:Inject abstract val registry: BuildEventsListenerRegistry
     @get:Inject abstract val buildFeatures: BuildFeatures
+    @get:Inject abstract val flowScope: FlowScope
 
     override fun apply(project: Project) {
         if (!project.isRoot) {
@@ -64,20 +84,20 @@ abstract class AndroidXRootImplPlugin : Plugin<Project> {
     private fun Project.configureRootProject() {
         project.validateAllAndroidxArgumentsAreRecognized()
         tasks.register("listAndroidXProperties", ListAndroidXPropertiesTask::class.java)
-        configureKtfmtCheckFile()
+        tasks.register("createProject", ProjectCreatorTask::class.java)
         maybeRegisterFilterableTask()
         registerListAffectedProjectsTask()
 
         // If we're running inside Studio, validate the Android Gradle Plugin version.
-        val expectedAgpVersion = System.getenv("EXPECTED_AGP_VERSION")
+        val expectedAgpVersion = System.getenv(BuildEnvironment.EXPECTED_AGP_VERSION)
         if (providers.gradleProperty("android.injected.invoked.from.ide").isPresent) {
-            if (expectedAgpVersion != ANDROID_GRADLE_PLUGIN_VERSION) {
+            if (expectedAgpVersion != BuildEnvironment.expectedAgpVersion) {
                 throw GradleException(
                     """
                     Please close and restart Android Studio.
 
                     Expected AGP version \"$expectedAgpVersion\" does not match actual AGP version
-                    \"$ANDROID_GRADLE_PLUGIN_VERSION\". This happens when AGP is updated while
+                    \"${BuildEnvironment.expectedAgpVersion}\". This happens when AGP is updated while
                     Studio is running and can be fixed by restarting Studio.
                     """
                         .trimIndent()
@@ -95,22 +115,55 @@ abstract class AndroidXRootImplPlugin : Plugin<Project> {
                 )
             } else null
 
+        val artifactCollection = configureArtifactConfigurations()
+        val distDir = getDistributionDirectory()
+
+        val createArchive =
+            tasks.register("createArchive", MergeZipsTask::class.java) { task ->
+                task.archiveFile.set(distDir.file("top-of-tree-m2repository-all.zip"))
+                task.zips.from(artifactCollection.releaseArtifacts)
+            }
+
+        tasks.register("createAllArchives", VerifyLicenseAndVersionFilesTask::class.java) { task ->
+            task.group = "Distribution"
+            task.description = "Builds all archives for publishing"
+            task.repositoryZips.from(createArchive.map { it.zips })
+            task.tmpDir.set(layout.buildDirectory.dir("androidx-verify"))
+        }
+
         val attestationManifest =
-            if (!buildFeatures.isIsolatedProjectsEnabled()) {
-                tasks.register(ATTESTATION_TASK_NAME, AttestationManifestTask::class.java) { task ->
-                    task.manifestFile.set(
-                        getDistributionDirectory().file("attestation_manifest.json")
-                    )
-                }
-            } else null
+            tasks.register(ATTESTATION_TASK_NAME, AttestationManifestTask::class.java) { task ->
+                task.manifestFile.set(distDir.file("attestation_manifest.json"))
+                task.zipMap.set(computeArtifactMap(artifactCollection.releaseIncoming, distDir))
+                task.sbomMap.set(computeArtifactMap(artifactCollection.sbomIncoming, distDir))
+            }
+
+        tasks.register(
+            UpdateDependencyExemptionsTask.TASK_NAME,
+            UpdateDependencyExemptionsTask::class.java,
+        ) { task ->
+            task.reportFiles.from(
+                artifactCollection.dependencyExemptionsReportsIncoming.map { it.files }
+            )
+            task.exemptionsFile.set(layout.projectDirectory.file(EXEMPTIONS_FILE_NAME))
+        }
+
+        tasks.register(
+            UpdateKeepRulesBaselineTask.TASK_NAME,
+            UpdateKeepRulesBaselineTask::class.java,
+        ) { task ->
+            task.reportFiles.from(
+                artifactCollection.keepRulesAnalysisReportsIncoming.map { it.files }
+            )
+            task.baselineFile.set(layout.projectDirectory.file(KEEP_RULES_BASELINE_RELATIVE_PATH))
+        }
+
         tasks.register(BUILD_ON_SERVER_TASK, BuildOnServerTask::class.java) { task ->
             task.cacheEvenIfNoOutputs()
-            task.aggregateBuildInfoFile.set(
-                getDistributionDirectory().file(AGGREGATE_BUILD_INFO_FILE_NAME)
-            )
+            task.aggregateBuildInfoFile.set(distDir.file(AGGREGATE_BUILD_INFO_FILE_NAME))
+            task.dependsOn(attestationManifest)
             verifyPlayground?.let { task.dependsOn(it) }
             aggregateBuildInfo?.let { task.dependsOn(it) }
-            attestationManifest?.let { task.dependsOn(it) }
         }
 
         extra.set("projects", ConcurrentHashMap<String, String>())
@@ -148,6 +201,9 @@ abstract class AndroidXRootImplPlugin : Plugin<Project> {
             registerOwnersServiceTasks()
         }
         registerStudioTask()
+        registerIntelliJTask()
+        registerVSCodeTask()
+        registerASWBTask()
 
         project.tasks.register("listTaskOutputs", ListTaskOutputsTask::class.java) { task ->
             task.outputFile.set(project.getDistributionDirectory().file("task_outputs.txt"))
@@ -155,6 +211,7 @@ abstract class AndroidXRootImplPlugin : Plugin<Project> {
         }
 
         TaskUpToDateValidator.setup(project, registry)
+        project.setupConfigurationCacheValidator(registry, buildFeatures, flowScope)
 
         /**
          * Add dependency analysis plugin and add buildHealth task to buildOnServer when
@@ -195,53 +252,204 @@ abstract class AndroidXRootImplPlugin : Plugin<Project> {
                 File(getPrebuiltsRoot(), "androidx/javascript-for-kotlin")
             }
 
-        val createYarnRcFileTask =
-            tasks.register("createYarnRcFile", CreateYarnRcFileTask::class.java) {
-                it.offlineMirrorStorage.set(offlineMirrorStorage)
-                it.cacheStorage.set(layout.buildDirectory.dir("yarnCache"))
-                it.yarnrcFile.set(layout.buildDirectory.file(".yarnrc"))
-            }
-        val createWasmYarnRcFileTask =
-            tasks.register("createWasmYarnRcFile", CreateYarnRcFileTask::class.java) {
-                it.offlineMirrorStorage.set(offlineMirrorStorage)
-                it.cacheStorage.set(layout.buildDirectory.dir("wasmYarnCache"))
-                it.yarnrcFile.set(layout.buildDirectory.file("wasm/.yarnrc"))
-            }
+        val createToolingYarnRcTask =
+            registerYarnConfigTask(
+                taskName = "createKotlinToolingYarnRcFile",
+                offlineMirror = offlineMirrorStorage,
+                cacheDir = layout.buildDirectory.dir("kotlinToolingYarnCache"),
+                destFile =
+                    project.objects
+                        .fileProperty()
+                        .fileValue(
+                            File(project.getOutDirectory(), ".kotlin/kotlin-npm-tooling/.yarnrc")
+                        ),
+            )
+
+        val createYarnRcTask =
+            registerYarnConfigTask(
+                taskName = "createYarnRcFile",
+                offlineMirror = offlineMirrorStorage,
+                cacheDir = layout.buildDirectory.dir("yarnCache"),
+                destFile = layout.buildDirectory.file(".yarnrc"),
+            )
+
+        val createWasmYarnRcTask =
+            registerYarnConfigTask(
+                taskName = "createWasmYarnRcFile",
+                offlineMirror = offlineMirrorStorage,
+                cacheDir = layout.buildDirectory.dir("wasmYarnCache"),
+                destFile = layout.buildDirectory.file("wasm/.yarnrc"),
+            )
 
         configureNode()
+        configureKotlinToolingTasks(offlineMirrorStorage, createToolingYarnRcTask)
+        configureNpmInstallTasks(offlineMirrorStorage, createYarnRcTask, createWasmYarnRcTask)
+    }
 
-        // ensure yarn install is complete before using it to install kotlin wasm tooling
-        tasks.withType<KotlinToolingSetupTask>().configureEach {
-            it.dependsOn(tasks.withType<KotlinNpmInstallTask>())
+    private fun Project.registerYarnConfigTask(
+        taskName: String,
+        offlineMirror: File,
+        cacheDir: Provider<Directory>,
+        destFile: Provider<RegularFile>,
+    ): TaskProvider<CreateYarnRcFileTask> =
+        tasks.register(taskName, CreateYarnRcFileTask::class.java) { task ->
+            task.offlineMirrorStorage.set(offlineMirror)
+            task.cacheStorage.set(cacheDir)
+            task.yarnrcFile.set(destFile)
         }
 
-        tasks.withType<KotlinNpmInstallTask>().configureEach {
-            when (it.name) {
-                "kotlinNpmInstall" -> it.dependsOn(createYarnRcFileTask)
-                "kotlinWasmNpmInstall" -> it.dependsOn(createWasmYarnRcFileTask)
-            }
-            it.args.addAll(listOf("--ignore-engines", "--verbose"))
+    private fun Project.configureKotlinToolingTasks(
+        offlineMirror: File,
+        configTask: TaskProvider<CreateYarnRcFileTask>,
+    ) =
+        tasks.withType<KotlinToolingSetupTask>().configureEach { task ->
+            task.dependsOn(tasks.withType<KotlinNpmInstallTask>(), configTask)
+            task.args.addAll(COMMON_YARN_ARGS)
+
             if (project.useYarnOffline()) {
-                it.args.add("--offline")
-                it.additionalFiles.plus(offlineMirrorStorage)
-                it.doFirst {
-                    println(
-                        """
-                    Fetching yarn packages from the offline mirror: ${offlineMirrorStorage.path}.
-                    Your build will fail if a package is not in the offline mirror. To fix, run:
-
-                    $TERMINAL_RED./gradlew kotlinNpmInstall kotlinWasmNpmInstall -Pandroidx.yarnOfflineMode=false && ./gradlew kotlinUpgradeYarnLock kotlinWasmUpgradeYarnLock$TERMINAL_RESET
-
-                    this will download the dependencies from the internet and update the lockfile.
-                    Don't forget to upload the changes to Gerrit!
-                    """
-                            .trimIndent()
-                            .replace("\n", " ")
-                    )
-                }
+                task.args.add("--offline")
+                task.doFirst { println(getToolingOfflineErrorMsg(offlineMirror.path)) }
             }
+        }
+
+    private fun Project.configureNpmInstallTasks(
+        offlineMirror: File,
+        npmConfig: TaskProvider<CreateYarnRcFileTask>,
+        wasmConfig: TaskProvider<CreateYarnRcFileTask>,
+    ) =
+        tasks.withType<KotlinNpmInstallTask>().configureEach { task ->
+            when (task.name) {
+                "kotlinNpmInstall" -> task.dependsOn(npmConfig)
+                "kotlinWasmNpmInstall" -> task.dependsOn(wasmConfig)
+            }
+
+            task.args.addAll(COMMON_YARN_ARGS)
+
+            if (project.useYarnOffline()) {
+                task.args.add("--offline")
+                task.additionalFiles.plus(offlineMirror)
+                task.doFirst { println(getOfflineErrorMsg(offlineMirror.path)) }
+            }
+        }
+}
+
+private val COMMON_YARN_ARGS = listOf("--ignore-engines")
+
+private fun getToolingOfflineErrorMsg(path: String) =
+    """
+    Fetching yarn packages from the offline mirror: $path.
+    Your build will fail if a package is not in the offline mirror. To fix, run:
+
+    $TERMINAL_RED./gradlew kotlinWasmToolingSetup -Pandroidx.yarnOfflineMode=false$TERMINAL_RESET
+
+    This will download the dependencies from the internet.
+    Don't forget to upload the changes to Gerrit!
+"""
+        .trimIndent()
+        .replace("\n", " ")
+
+private fun getOfflineErrorMsg(path: String) =
+    """
+    Fetching yarn packages from the offline mirror: $path.
+    Your build will fail if a package is not in the offline mirror. To fix, run:
+
+    $TERMINAL_RED./gradlew kotlinNpmInstall kotlinWasmNpmInstall -Pandroidx.yarnOfflineMode=false && ./gradlew kotlinUpgradeYarnLock kotlinWasmUpgradeYarnLock$TERMINAL_RESET
+
+    This will download the dependencies from the internet and update the lockfile.
+    Don't forget to upload the changes to Gerrit!
+"""
+        .trimIndent()
+        .replace("\n", " ")
+
+private fun Project.configureArtifactConfigurations(): RootArtifactCollection {
+    val releaseProvider =
+        registerArtifactConfiguration("releaseArtifacts", "androidx-release-artifacts")
+    val sbomProvider = registerArtifactConfiguration("sbomArtifacts", "androidx-sbom-artifacts")
+    val dependencyExemptionsReportsProvider =
+        registerArtifactConfiguration(
+            "dependencyExemptionsReports",
+            DEPENDENCY_EXEMPTIONS_REPORTS_CATEGORY,
+        )
+    val keepRulesAnalysisReportsProvider =
+        registerArtifactConfiguration(
+            "keepRulesAnalysisReports",
+            KEEP_RULES_ANALYSIS_REPORTS_CATEGORY,
+        )
+
+    subprojects { sub ->
+        dependencies.add(releaseProvider.name, dependencies.create(sub))
+        dependencies.add(sbomProvider.name, dependencies.create(sub))
+        dependencies.add(dependencyExemptionsReportsProvider.name, dependencies.create(sub))
+        dependencies.add(keepRulesAnalysisReportsProvider.name, dependencies.create(sub))
+    }
+
+    val releaseView = releaseProvider.map { conf ->
+        conf.incoming.artifactView { it.lenient(true) }
+    }
+
+    val sbomView = sbomProvider.map { conf -> conf.incoming.artifactView { it.lenient(true) } }
+    val dependencyExemptionsReportsView = dependencyExemptionsReportsProvider.map { conf ->
+        conf.incoming.artifactView { it.lenient(true) }
+    }
+    val keepRulesAnalysisReportsView = keepRulesAnalysisReportsProvider.map { conf ->
+        conf.incoming.artifactView { it.lenient(true) }
+    }
+    val releaseFiles = objects.fileCollection().from(releaseView.map { it.files })
+
+    return RootArtifactCollection(
+        releaseArtifacts = releaseFiles,
+        releaseIncoming = releaseView,
+        sbomIncoming = sbomView,
+        dependencyExemptionsReportsIncoming = dependencyExemptionsReportsView,
+        keepRulesAnalysisReportsIncoming = keepRulesAnalysisReportsView,
+    )
+}
+
+private fun Project.registerArtifactConfiguration(
+    name: String,
+    categoryName: String,
+): NamedDomainObjectProvider<Configuration> =
+    configurations.register(name) { conf ->
+        conf.isCanBeResolved = true
+        conf.isCanBeConsumed = false
+        conf.isTransitive = false
+        conf.attributes { attrs ->
+            attrs.attribute(
+                Category.CATEGORY_ATTRIBUTE,
+                objects.named(Category::class.java, categoryName),
+            )
         }
     }
+
+/* Holds the lazy providers for artifact views and file collections. */
+private class RootArtifactCollection(
+    val releaseArtifacts: FileCollection,
+    val releaseIncoming: Provider<ArtifactView>,
+    val sbomIncoming: Provider<ArtifactView>,
+    val dependencyExemptionsReportsIncoming: Provider<ArtifactView>,
+    val keepRulesAnalysisReportsIncoming: Provider<ArtifactView>,
+)
+
+/* Computes a map of projectPath to the artifact's path relative to the distDir. */
+private fun computeArtifactMap(
+    viewProvider: Provider<ArtifactView>,
+    distDir: Provider<Directory>,
+): Provider<Map<String, String>> {
+    return viewProvider
+        .flatMap { view -> view.artifacts.resolvedArtifacts }
+        .zip(distDir) { artifacts, distDirectory ->
+            artifacts
+                .mapNotNull { artifact ->
+                    val id = artifact.id.componentIdentifier
+                    if (id is ProjectComponentIdentifier) {
+                        val relativePath = artifact.file.relativeTo(distDirectory.asFile).path
+                        id.projectPath to relativePath
+                    } else {
+                        null
+                    }
+                }
+                .toMap()
+        }
 }
 
 internal const val AGGREGATE_BUILD_INFO_FILE_NAME = "androidx_aggregate_build_info.txt"

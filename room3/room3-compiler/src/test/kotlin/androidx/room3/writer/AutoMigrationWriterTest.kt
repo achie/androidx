@@ -34,12 +34,12 @@ class AutoMigrationWriterTest() {
         Source.kotlin(
             "MyDatabase.kt",
             """
-        package foo.bar
-        import androidx.room3.*
-        @Database(entities = [], version = 1)
-        abstract class MyDatabase : RoomDatabase() {
-        }
-        """
+            package foo.bar
+            import androidx.room3.*
+            @Database(entities = [], version = 1)
+            abstract class MyDatabase : RoomDatabase() {
+            }
+            """
                 .trimIndent(),
         )
 
@@ -91,8 +91,9 @@ class AutoMigrationWriterTest() {
                     writerContext =
                         TypeWriter.WriterContext(
                             codeLanguage = CodeLanguage.KOTLIN,
-                            javaLambdaSyntaxAvailable = false,
                             targetPlatforms = setOf(XProcessingEnv.Platform.JVM),
+                            javaLambdaSyntaxAvailable = false,
+                            validateChunkSize = 300,
                         ),
                 )
                 .write(invocation.processingEnv)
@@ -157,8 +158,9 @@ class AutoMigrationWriterTest() {
                     writerContext =
                         TypeWriter.WriterContext(
                             codeLanguage = CodeLanguage.KOTLIN,
-                            javaLambdaSyntaxAvailable = false,
                             targetPlatforms = setOf(XProcessingEnv.Platform.JVM),
+                            javaLambdaSyntaxAvailable = false,
+                            validateChunkSize = 300,
                         ),
                 )
                 .write(invocation.processingEnv)
@@ -186,7 +188,7 @@ class AutoMigrationWriterTest() {
                 import androidx.room3.ProvidedAutoMigrationSpec
                 import androidx.room3.migration.AutoMigrationSpec
                 import androidx.sqlite.db.SupportSQLiteDatabase
-                
+
                 @ProvidedAutoMigrationSpec
                 class AutoMigrationWithProvidedSpec(val data: String) : AutoMigrationSpec {}
                 """
@@ -227,13 +229,80 @@ class AutoMigrationWriterTest() {
                     writerContext =
                         TypeWriter.WriterContext(
                             codeLanguage = CodeLanguage.KOTLIN,
-                            javaLambdaSyntaxAvailable = false,
                             targetPlatforms = setOf(XProcessingEnv.Platform.JVM),
+                            javaLambdaSyntaxAvailable = false,
+                            validateChunkSize = 300,
                         ),
                 )
                 .write(invocation.processingEnv)
 
             val expectedFile = "kotlin/AutoMigrationWithProvidedSpec.kt"
+            invocation.assertCompilationResult {
+                generatedSource(
+                    loadTestSource(
+                        "autoMigrationWriter/output/$expectedFile",
+                        "foo.bar.MyDatabase_AutoMigration_1_2_Impl",
+                    )
+                )
+            }
+        }
+    }
+
+    @Test
+    fun validAutoMigrationWithKotlinObject() {
+        val specSource =
+            Source.kotlin(
+                "ValidAutoMigrationWithKotlinObject.kt",
+                """
+                package foo.bar
+                import androidx.room3.migration.AutoMigrationSpec
+                object ValidAutoMigrationWithKotlinObject : AutoMigrationSpec
+                """
+                    .trimIndent(),
+            )
+
+        runKspTest(listOf(specSource)) { invocation ->
+            val autoMigrationResultWithNewAddedColumn =
+                AutoMigration(
+                    from = 1,
+                    to = 2,
+                    schemaDiff =
+                        SchemaDiffResult(
+                            addedColumns =
+                                listOf(
+                                    AutoMigration.AddedColumn(
+                                        "Song",
+                                        FieldBundle("artistId", "artistId", "INTEGER", true, "0"),
+                                    )
+                                ),
+                            deletedColumns = listOf(),
+                            addedTables = setOf(),
+                            complexChangedTables = mapOf(),
+                            renamedTables = mapOf(),
+                            deletedTables = listOf(),
+                            fromViews = emptyList(),
+                            toViews = emptyList(),
+                        ),
+                    specElement =
+                        invocation.processingEnv.requireTypeElement(
+                            "foo.bar.ValidAutoMigrationWithKotlinObject"
+                        ),
+                    isSpecProvided = false,
+                )
+            AutoMigrationWriter(
+                    autoMigration = autoMigrationResultWithNewAddedColumn,
+                    dbElement = invocation.processingEnv.requireTypeElement("foo.bar.MyDatabase"),
+                    writerContext =
+                        TypeWriter.WriterContext(
+                            codeLanguage = CodeLanguage.KOTLIN,
+                            targetPlatforms = setOf(XProcessingEnv.Platform.JVM),
+                            javaLambdaSyntaxAvailable = false,
+                            validateChunkSize = 300,
+                        ),
+                )
+                .write(invocation.processingEnv)
+
+            val expectedFile = "kotlin/ValidAutoMigrationWithKotlinObject.kt"
             invocation.assertCompilationResult {
                 generatedSource(
                     loadTestSource(

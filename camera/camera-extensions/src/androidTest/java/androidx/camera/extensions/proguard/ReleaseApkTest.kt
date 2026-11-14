@@ -26,28 +26,27 @@ import android.hardware.camera2.CameraExtensionCharacteristics.EXTENSION_NIGHT
 import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraFilter
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.CameraXConfig
 import androidx.camera.core.impl.CameraInfoInternal
+import androidx.camera.core.impl.utils.executor.CameraXExecutors.directExecutor
 import androidx.camera.extensions.ExtensionMode.AUTO
 import androidx.camera.extensions.ExtensionMode.BOKEH
 import androidx.camera.extensions.ExtensionMode.FACE_RETOUCH
 import androidx.camera.extensions.ExtensionMode.HDR
 import androidx.camera.extensions.ExtensionMode.NIGHT
 import androidx.camera.extensions.ExtensionsManager
-import androidx.camera.extensions.impl.ExtensionsTestlibControl
-import androidx.camera.extensions.impl.ExtensionsTestlibControl.ImplementationType.OEM_IMPL
+import androidx.camera.extensions.internal.compat.quirk.DeviceQuirks
+import androidx.camera.extensions.internal.compat.quirk.ExtensionDisabledQuirk
 import androidx.camera.extensions.util.ExtensionsTestUtil
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.PreTestCameraIdList
-import androidx.camera.testing.impl.CoreAppTestUtil
 import androidx.camera.testing.impl.LabTestRule
+import androidx.camera.testing.impl.RequireForegroundRule
 import androidx.camera.testing.impl.activity.RequestResultTestActivity
 import androidx.camera.testing.impl.activity.RequestResultTestActivity.INTENT_EXTRA_BUNDLE
 import androidx.test.core.app.ActivityScenario
@@ -56,12 +55,11 @@ import androidx.test.espresso.Espresso
 import androidx.test.espresso.IdlingRegistry
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.UiDevice
 import com.google.common.truth.Truth.assertWithMessage
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.After
-import org.junit.Before
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -71,39 +69,24 @@ import org.junit.runners.Parameterized
 @RunWith(Parameterized::class)
 class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
 
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = config.implName == CameraPipeConfig::class.simpleName)
+    @get:Rule(order = 0) val labTestRule = LabTestRule()
 
-    @get:Rule
+    @get:Rule(order = 1)
+    val requireForegroundRule = RequireForegroundRule { assumeTrue(CameraUtil.deviceHasCamera()) }
+
+    @get:Rule(order = 2)
     val cameraRule =
         CameraUtil.grantCameraPermissionAndPreTestAndPostTest(
-            PreTestCameraIdList(config.cameraXConfig)
+            PreTestCameraIdList(Camera2Config.defaultConfig())
         )
 
-    @get:Rule val labTestRule = LabTestRule()
-
-    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
     private lateinit var requestResultActivityScenario: ActivityScenario<RequestResultTestActivity>
-
-    @Before
-    fun setUp() {
-        // Clear the device UI and check if there is no dialog or lock screen on the top of the
-        // window before start the test.
-        CoreAppTestUtil.prepareDeviceUI(InstrumentationRegistry.getInstrumentation())
-    }
 
     @After
     fun tearDown(): Unit = runBlocking {
         if (::requestResultActivityScenario.isInitialized) {
             requestResultActivityScenario.close()
         }
-
-        // Unfreeze rotation so the device can choose the orientation via its own policy. Be nice
-        // to other tests :)
-        device.unfreezeRotation()
-        device.pressHome()
-        device.waitForIdle(3000)
     }
 
     @LabTestRule.LabTestOnly
@@ -124,14 +107,6 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
                 putExtra(
                     INTENT_EXTRA_BUNDLE,
                     Bundle().apply {
-                        putString(
-                            INTENT_EXTRA_CAMERA_IMPLEMENTATION,
-                            if (config.implName == CameraPipeConfig::class.simpleName) {
-                                CAMERA_PIPE_IMPLEMENTATION_OPTION
-                            } else {
-                                CAMERA2_IMPLEMENTATION_OPTION
-                            },
-                        )
                         putString(INTENT_EXTRA_RUNNING_MODE_CHECK, "release")
                         putString(INTENT_EXTRA_KEY_CAMERA_ID, config.cameraId)
                         putInt(INTENT_EXTRA_KEY_EXTENSION_MODE, config.extensionMode)
@@ -158,9 +133,6 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
     }
 
     companion object {
-        /** Launches the activity with the specified CameraX implementation. */
-        private const val INTENT_EXTRA_CAMERA_IMPLEMENTATION = "camera_implementation"
-
         /** Launches the activity with the specified id of camera. */
         private const val INTENT_EXTRA_KEY_CAMERA_ID = "camera_id"
 
@@ -173,9 +145,6 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
         /** Result error code - no error */
         private const val RESULT_ERROR_NONE = 0
 
-        private const val CAMERA2_IMPLEMENTATION_OPTION: String = "camera2"
-        private const val CAMERA_PIPE_IMPLEMENTATION_OPTION: String = "camera_pipe"
-
         private val context = ApplicationProvider.getApplicationContext<Context>()!!
 
         @Parameterized.Parameters(name = "config = {0}")
@@ -185,12 +154,7 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
                 getAllCameraIdExtensionModeCombinations()
             } else listOf()
 
-        data class CameraXExtensionTestParams(
-            val implName: String,
-            val cameraXConfig: CameraXConfig,
-            val cameraId: String,
-            val extensionMode: Int,
-        )
+        data class CameraXExtensionTestParams(val cameraId: String, val extensionMode: Int)
 
         /** Gets a list of all camera id and extension mode combinations. */
         @JvmStatic
@@ -200,15 +164,8 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
             filterOutUnavailableMode(
                 context,
                 CameraUtil.getBackwardCompatibleCameraIdListOrThrow().flatMap { cameraId ->
-                    AVAILABLE_EXTENSION_MODES.flatMap { extensionMode ->
-                        CAMERAX_CONFIGS.map { config ->
-                            CameraXExtensionTestParams(
-                                config.first!!,
-                                config.second,
-                                cameraId,
-                                extensionMode,
-                            )
-                        }
+                    AVAILABLE_EXTENSION_MODES.map { extensionMode ->
+                        CameraXExtensionTestParams(cameraId, extensionMode)
                     }
                 },
             )
@@ -220,14 +177,22 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
         ): List<CameraXExtensionTestParams> {
             var extensionsManager: ExtensionsManager? = null
             var cameraProvider: ProcessCameraProvider? = null
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
             try {
-                cameraProvider = ProcessCameraProvider.getInstance(context)[2, TimeUnit.SECONDS]
+                cameraProvider =
+                    cameraProviderFuture[CAMERA_PROVIDER_TIMEOUT_SECONDS, TimeUnit.SECONDS]
                 extensionsManager = runBlocking {
                     ExtensionsManager.getInstance(context, cameraProvider!!)
                 }
 
                 val result: MutableList<CameraXExtensionTestParams> = mutableListOf()
                 for (item in list) {
+                    // Skips the extension modes that are intentionally disabled by CameraX on the
+                    // device. Camera2Extensions might still report them as supported, but
+                    // ExtensionsManager will report them as unavailable by design.
+                    if (isExtensionDisabledByQuirk(item.cameraId, item.extensionMode)) {
+                        continue
+                    }
                     val cameraSelector = createCameraSelectorById(item.cameraId)
                     // For CameraX extensions, minification might cause a default ExtensionsManager
                     // instance returned. In that case, no item will be added to the testing target
@@ -249,14 +214,47 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
                 }
                 return result
             } catch (e: Exception) {
-                return list
+                // ExtensionsManager can't be retrieved, e.g. CameraX initialization takes too long
+                // on low-end devices. Falls back to the Camera2Extensions support list instead of
+                // returning all combinations, which would otherwise make all the tests fail with
+                // misleading "Mode N is not supported!" errors on the devices that don't support
+                // any extensions.
+                Log.w(TAG, "Failed to filter out unavailable extension modes.", e)
+                // The devices that only support Camera2Extensions can't rely on the
+                // Camera2Extensions support list. See isDeviceOnlySupportedInCamera2Extensions().
+                if (isDeviceOnlySupportedInCamera2Extensions()) {
+                    return emptyList()
+                }
+                return list.filter {
+                    !isExtensionDisabledByQuirk(it.cameraId, it.extensionMode) &&
+                        runCatching {
+                                isCamera2ExtensionsSupported(context, it.cameraId, it.extensionMode)
+                            }
+                            .getOrDefault(false)
+                }
             } finally {
                 try {
-                    cameraProvider?.shutdownAsync()?.get()
+                    val provider = cameraProvider
+                    if (provider != null) {
+                        provider.shutdownAsync().get()
+                    } else {
+                        // Shuts down the camera provider once its initialization completes, so
+                        // that it won't be leaked to the tests when getInstance() timed out.
+                        cameraProviderFuture.addListener(
+                            { runCatching { cameraProviderFuture.get().shutdownAsync() } },
+                            directExecutor(),
+                        )
+                    }
                     extensionsManager?.shutdown()?.get()
                 } catch (_: Exception) {}
             }
         }
+
+        /** Checks whether the extension mode is disabled by [ExtensionDisabledQuirk]. */
+        @JvmStatic
+        private fun isExtensionDisabledByQuirk(cameraId: String, extensionMode: Int): Boolean =
+            DeviceQuirks.get(ExtensionDisabledQuirk::class.java)
+                ?.shouldDisableExtension(cameraId, extensionMode) == true
 
         @JvmStatic
         private fun isExtensionAvailableInOemImpl(
@@ -264,12 +262,11 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
             cameraSelector: CameraSelector,
             extensionMode: Int,
         ) =
-            ExtensionsTestlibControl.getInstance().implementationType == OEM_IMPL &&
-                ExtensionsTestUtil.isExtensionAvailable(
-                    extensionsManager,
-                    cameraSelector,
-                    extensionMode,
-                )
+            ExtensionsTestUtil.isExtensionAvailable(
+                extensionsManager,
+                cameraSelector,
+                extensionMode,
+            )
 
         @JvmStatic
         private fun createCameraSelectorById(cameraId: String) =
@@ -294,7 +291,9 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
             cameraId: String,
             cameraXExtensionMode: Int,
         ): Boolean {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            // CameraX only enables Camera2Extensions on API level 33 or above. See
+            // ExtensionsInfo#getVendorExtender().
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 return false
             }
 
@@ -325,14 +324,12 @@ class ReleaseApkTest(private val config: CameraXExtensionTestParams) {
         private fun isDeviceOnlySupportedInCamera2Extensions() =
             Build.BRAND.equals("samsung", true) && Build.MODEL.equals("sm-n975u1", true)
 
+        private const val TAG = "ReleaseApkTest"
+
+        /** The timeout to retrieve the [ProcessCameraProvider] instance. */
+        private const val CAMERA_PROVIDER_TIMEOUT_SECONDS = 10L
+
         @JvmStatic
         private val AVAILABLE_EXTENSION_MODES = arrayOf(BOKEH, HDR, NIGHT, FACE_RETOUCH, AUTO)
-
-        /** A list of supported implementation options and their respective [CameraXConfig]. */
-        private val CAMERAX_CONFIGS =
-            listOf(
-                Pair(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                Pair(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
     }
 }

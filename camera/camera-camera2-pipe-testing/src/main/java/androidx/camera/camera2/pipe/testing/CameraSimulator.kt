@@ -16,21 +16,23 @@
 
 package androidx.camera.camera2.pipe.testing
 
+import android.hardware.HardwareBuffer
+import android.hardware.camera2.CaptureResult
 import android.media.ImageReader
 import androidx.camera.camera2.pipe.CameraGraph
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.GraphState.GraphStateError
 import androidx.camera.camera2.pipe.OutputId
 import androidx.camera.camera2.pipe.Request
 import androidx.camera.camera2.pipe.StreamId
 import androidx.camera.camera2.pipe.media.ImageSource
+import androidx.camera.common.CameraId
 
 /**
  * The base interface for [CameraGraphSimulator] and [FrameGraphSimulator].
  *
  * The simulator does not make (many) assumptions about how the simulator will be used, and for this
  * reason it does not automatically put the underlying graph into a "started" state. In most cases,
- * the test will need start the [CameraGraph], [simulateCameraStarted], and either configure
+ * the test will need to start the [CameraGraph], [simulateCameraStarted], and either configure
  * surfaces for the [CameraGraph] or call [initializeSurfaces] to put the graph into a state where
  * it is able to send and simulate interactions with the camera. This mirrors the normal lifecycle
  * of a [CameraGraph]. Tests using [CameraSimulator]s should also close them after they've completed
@@ -64,21 +66,59 @@ public interface CameraSimulator {
      * or buffer production.
      */
     public fun simulateNextFrame(
-        advanceClockByNanos: Long = 33_366_666 // (2_000_000_000 / (60  / 1.001))
+        advanceClockByNanos: Long = 33_366_666, // (2_000_000_000 / (60  / 1.001))
+        advanceBarrier: Boolean = true,
     ): CameraGraphSimulator.FrameSimulator
 
-    /** Utility function to simulate the production of a [FakeImage]s for one or more streams. */
-    public fun simulateImage(streamId: StreamId, imageTimestamp: Long, outputId: OutputId? = null)
+    /** Utility function to simulate the production of [FakeImage]s for one or more streams. */
+    public fun simulateImage(
+        streamId: StreamId,
+        imageTimestamp: Long,
+        outputId: OutputId? = null,
+        hardwareBuffer: HardwareBuffer? = null,
+    )
 
     /**
      * Utility function to simulate the production of [FakeImage]s for all outputs on a specific
-     * [request]. Use [simulateImage] to directly control simulation of individual outputs.
-     * [physicalCameraId] should be used to select the correct output id when simulating images from
-     * multi-resolution [ImageReader]s and [ImageSource]s
+     * [request].
+     *
+     * - Use [simulateImage] to directly control simulation of individual outputs.
+     * - [physicalCameraIds] should be used to select the correct output ids when simulating images
+     *   from multi-resolution [ImageReader]s and [ImageSource]s. If no physical camera ID is given,
+     *   images will be simulated from the first output stream of a multi-resolution stream.
+     * - [hardwareBuffers] helps generate corresponding [Image] with the hardware buffer provided.
+     *   If the hardware buffer is not provided for the outputId, no hardware buffer will be
+     *   generated for the image.
      */
     public fun simulateImages(
         request: Request,
         imageTimestamp: Long,
-        physicalCameraId: CameraId? = null,
+        physicalCameraIds: Set<CameraId> = emptySet(),
+        hardwareBuffers: Map<OutputId, HardwareBuffer> = emptyMap(),
     )
+
+    /**
+     * Utility function to simulate the expected outputs of [streamId] for a frame with [timestamp].
+     */
+    public fun simulateExpectedOutputs(
+        streamId: StreamId,
+        timestamp: Long,
+        outputIds: Set<OutputId>,
+    )
+
+    /**
+     * Utility function to simulate a Frame end-to-end.
+     *
+     * This will simulate the next frame, simulate expected outputs if multi-output streams exist,
+     * simulate images, and simulate capture completion.
+     *
+     * Note that if physical camera IDs aren't given, images will be simulated on the first output
+     * stream for a multi-resolution stream.
+     */
+    public fun simulateAndCompleteNextFrame(
+        resultMetadata: Map<CaptureResult.Key<*>, Any?> = emptyMap(),
+        physicalCameraIds: Set<CameraId> = emptySet(),
+        hardwareBuffers: Map<OutputId, HardwareBuffer> = emptyMap(),
+        advanceClockByNanos: Long = 33_366_666,
+    ): CameraGraphSimulator.FrameSimulator
 }

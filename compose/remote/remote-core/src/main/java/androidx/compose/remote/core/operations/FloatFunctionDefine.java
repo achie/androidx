@@ -19,6 +19,7 @@ import static androidx.compose.remote.core.documentation.DocumentedOperation.FLO
 import static androidx.compose.remote.core.documentation.DocumentedOperation.INT;
 
 import androidx.annotation.RestrictTo;
+import androidx.compose.remote.core.Limits;
 import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.Operations;
 import androidx.compose.remote.core.RemoteContext;
@@ -42,9 +43,12 @@ import java.util.List;
 public class FloatFunctionDefine extends Operation implements VariableSupport, Container {
     private static final int OP_CODE = Operations.FUNCTION_DEFINE;
     private static final String CLASS_NAME = "FunctionDefine";
-    private static final int MAX_ARGUMENTS = 32;
     private final int mId;
     private final int @NonNull [] mFloatVarId;
+    private static final int MAX_EXECUTION_DEPTH = 16;
+    private static final ThreadLocal<Integer> sGlobalExecutionDepth =
+            ThreadLocal.withInitial(() -> 0);
+    private int mExecutionDepth = 0;
     @NonNull private ArrayList<Operation> mList = new ArrayList<>();
 
     @NonNull AnimatedFloatExpression mExp = new AnimatedFloatExpression();
@@ -114,14 +118,14 @@ public class FloatFunctionDefine extends Operation implements VariableSupport, C
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int id = buffer.readInt();
+        int id = buffer.readId();
         int varLen = buffer.readInt();
-        if (varLen > MAX_ARGUMENTS) {
+        if (varLen < 0 || varLen > Limits.MAX_FUNCTION_ARGUMENTS) {
             throw new IllegalArgumentException("Too many arguments");
         }
         int[] varId = new int[varLen];
         for (int i = 0; i < varId.length; i++) {
-            varId[i] = buffer.readInt();
+            varId[i] = buffer.readId();
         }
         FloatFunctionDefine data = new FloatFunctionDefine(id, varId);
         operations.add(data);
@@ -146,11 +150,23 @@ public class FloatFunctionDefine extends Operation implements VariableSupport, C
         return indent + toString();
     }
 
+    /** Returns the id of this function. */
+    public int getId() {
+        return mId;
+    }
+
     /**
      * @return the array of id's
      */
     public int @NonNull [] getArgs() {
         return mFloatVarId;
+    }
+
+    /**
+     * @return the current execution depth of this function
+     */
+    public int getExecutionDepth() {
+        return mExecutionDepth;
     }
 
     @Override
@@ -162,13 +178,24 @@ public class FloatFunctionDefine extends Operation implements VariableSupport, C
      * @param context the current RemoteContext
      */
     public void execute(@NonNull RemoteContext context) {
-        for (Operation op : mList) {
-            if (op instanceof VariableSupport) {
-                ((VariableSupport) op).updateVariables(context);
-            }
+        int globalDepth = sGlobalExecutionDepth.get();
+        if (mExecutionDepth >= MAX_EXECUTION_DEPTH || globalDepth >= MAX_EXECUTION_DEPTH) {
+            throw new RuntimeException("Recursion not allowed");
+        }
+        mExecutionDepth++;
+        sGlobalExecutionDepth.set(globalDepth + 1);
+        try {
+            for (Operation op : mList) {
+                if (op instanceof VariableSupport) {
+                    ((VariableSupport) op).updateVariables(context);
+                }
 
-            context.incrementOpCount();
-            op.apply(context);
+                context.incrementOpCount();
+                op.apply(context);
+            }
+        } finally {
+            mExecutionDepth--;
+            sGlobalExecutionDepth.set(globalDepth);
         }
     }
 }

@@ -18,6 +18,7 @@ package androidx.compose.material3
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -26,13 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.filters.LargeTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.AndroidXScreenshotTestRule
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,13 +41,98 @@ import org.junit.runners.Parameterized
 @LargeTest
 @RunWith(Parameterized::class)
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
     private val ListTestTag = "List"
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @get:Rule val screenshotRule = AndroidXScreenshotTestRule(GOLDEN_MATERIAL3)
+
+    @Test
+    fun nonInteractiveListItems() {
+        rule.setMaterialContent(scheme.colorScheme) {
+            Column(modifier = Modifier.testTag(ListTestTag)) {
+                HorizontalDivider()
+
+                ListItem(
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    content = { Text("One line list item") },
+                )
+
+                HorizontalDivider()
+
+                ListItem(
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    supportingContent = { Text("Supporting text") },
+                    content = { Text("Two line list item") },
+                )
+
+                HorizontalDivider()
+
+                ListItem(
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    overlineContent = { Text("Overline text") },
+                    supportingContent = { Text("Supporting text") },
+                    content = { Text("Three line list item") },
+                )
+
+                HorizontalDivider()
+
+                ListItem(
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    supportingContent = { Text("Supporting text\nthat is multiple lines") },
+                    content = { Text("Another three line list item") },
+                )
+
+                HorizontalDivider()
+            }
+        }
+
+        assertAgainstGolden("nonInteractiveListItems_${scheme.name}")
+    }
+
+    @Test
+    fun nonInteractiveSegmentedListItems() {
+        rule.setMaterialContent(scheme.colorScheme) {
+            val count = 4
+            Column(
+                modifier =
+                    Modifier.testTag(ListTestTag)
+                        .background(MaterialTheme.colorScheme.surfaceContainer),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+            ) {
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = 0, count = count),
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    content = { Text("One line list item") },
+                )
+
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = 1, count = count),
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    supportingContent = { Text("Supporting text") },
+                    content = { Text("Two line list item") },
+                )
+
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = 2, count = count),
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    overlineContent = { Text("Overline text") },
+                    supportingContent = { Text("Supporting text") },
+                    content = { Text("Three line list item") },
+                )
+
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = 3, count = count),
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    supportingContent = { Text("Supporting text\nthat is multiple lines") },
+                    content = { Text("Another three line list item") },
+                )
+            }
+        }
+
+        assertAgainstGolden("nonInteractiveSegmentedListItems_${scheme.name}")
+    }
 
     @Test
     fun clickableListItem_oneLine() {
@@ -126,7 +211,7 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 content = { Text("Content") },
                 supportingContent = { Text("Supporting") },
                 colors =
-                    InteractiveListItemDefaults.colors(
+                    ListItemDefaults.colors(
                         containerColor = Color.Yellow,
                         contentColor = Color.Blue,
                         leadingContentColor = Color.Green,
@@ -221,12 +306,12 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                     )
@@ -245,12 +330,12 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting") },
@@ -270,12 +355,12 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting 1\nSupporting 2") },
@@ -295,13 +380,13 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         selected = idx == 0,
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting") },
@@ -321,13 +406,13 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         selected = idx == 1,
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting") },
@@ -347,13 +432,13 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         selected = idx == 2,
                         onClick = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting") },
@@ -373,13 +458,13 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
                 modifier =
                     Modifier.testTag(ListTestTag)
                         .background(MaterialTheme.colorScheme.surfaceContainer),
-                verticalArrangement = Arrangement.spacedBy(InteractiveListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 repeat(count) { idx ->
                     SegmentedListItem(
                         checked = true,
                         onCheckedChange = {},
-                        shapes = InteractiveListItemDefaults.segmentedShapes(idx, count),
+                        shapes = ListItemDefaults.segmentedShapes(idx, count),
                         content = { Text("Content") },
                         leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                         supportingContent = { Text("Supporting") },
@@ -389,6 +474,26 @@ class InteractiveListScreenshotTest(private val scheme: ColorSchemeWrapper) {
         }
 
         assertAgainstGolden("segmentedListItem_allChecked_${scheme.name}")
+    }
+
+    @Test
+    fun segmentedListItem_standalone() {
+        rule.setMaterialContent(scheme.colorScheme) {
+            Box(
+                modifier =
+                    Modifier.testTag(ListTestTag)
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+            ) {
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+                    content = { Text("Content") },
+                    supportingContent = { Text("Supporting text") },
+                    leadingContent = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                )
+            }
+        }
+
+        assertAgainstGolden("segmentedListItem_standalone_${scheme.name}")
     }
 
     companion object {

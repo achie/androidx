@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package androidx.compose.material3.samples
 
 import androidx.activity.compose.BackHandler
@@ -35,7 +37,6 @@ import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButtonMenu
 import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.Icon
@@ -66,17 +67,23 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.traversalIndex
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
+import kotlin.math.floor
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Preview
 @Sampled
 @Composable
@@ -87,7 +94,7 @@ fun FloatingActionButtonMenuSample() {
             listState.firstVisibleItemIndex == 0 || listState.canScrollForward == false
         }
     }
-    val focusRequester = FocusRequester()
+    val focusRequester = remember { FocusRequester() }
 
     Box {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -129,7 +136,20 @@ fun FloatingActionButtonMenuSample() {
                                 TooltipAnchorPosition.Above
                             }
                         ),
-                    tooltip = { PlainTooltip { Text("Toggle menu") } },
+                    tooltip = {
+                        PlainTooltip(
+                            modifier =
+                                Modifier.semantics {
+                                    // TODO(b/496338253): Remove this modifier once bug where
+                                    //  tooltip text is not announced by a11y screen readers is
+                                    //  resolved.
+                                    liveRegion = LiveRegionMode.Assertive
+                                    paneTitle = "Toggle menu"
+                                }
+                        ) {
+                            Text("Toggle menu")
+                        }
+                    },
                     state = rememberTooltipState(),
                 ) {
                     ToggleFloatingActionButton(
@@ -191,6 +211,7 @@ fun FloatingActionButtonMenuSample() {
                                         if (
                                             it.type == KeyEventType.KeyDown &&
                                                 (it.key == Key.DirectionUp ||
+                                                    it.key == Key.NumPadDirectionUp ||
                                                     (it.isShiftPressed && it.key == Key.Tab))
                                         ) {
                                             focusRequester.requestFocus()
@@ -204,7 +225,32 @@ fun FloatingActionButtonMenuSample() {
                             ),
                     onClick = { fabMenuExpanded = false },
                     icon = { Icon(item.first, contentDescription = null) },
-                    text = { Text(text = item.second) },
+                    text = {
+                        // Adjust Text width to match longest line if multiline, since Text doesn't
+                        // do that automatically (https://issuetracker.google.com/issues/206039942).
+                        var textLayoutResult: TextLayoutResult? by remember { mutableStateOf(null) }
+                        Text(
+                            modifier =
+                                Modifier.layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    val newTextLayoutResult = textLayoutResult!!
+                                    val minX =
+                                        (0 until newTextLayoutResult.lineCount).minOf(
+                                            newTextLayoutResult::getLineLeft
+                                        )
+                                    val maxX =
+                                        (0 until newTextLayoutResult.lineCount).maxOf(
+                                            newTextLayoutResult::getLineRight
+                                        )
+
+                                    layout(ceil(maxX - minX).toInt(), placeable.height) {
+                                        placeable.place(-floor(minX).toInt(), 0)
+                                    }
+                                },
+                            text = item.second,
+                            onTextLayout = { textLayoutResult = it },
+                        )
+                    },
                 )
             }
         }

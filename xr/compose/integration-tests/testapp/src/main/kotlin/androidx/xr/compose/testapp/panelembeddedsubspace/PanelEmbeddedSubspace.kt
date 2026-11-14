@@ -19,7 +19,6 @@ package androidx.xr.compose.testapp.panelembeddedsubspace
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -62,29 +61,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.spatial.PlanarEmbeddedSubspace
 import androidx.xr.compose.spatial.Subspace
-import androidx.xr.compose.subspace.MovePolicy
-import androidx.xr.compose.subspace.ResizePolicy
 import androidx.xr.compose.subspace.SceneCoreEntity
-import androidx.xr.compose.subspace.SpatialLayoutSpacer
 import androidx.xr.compose.subspace.SpatialPanel
 import androidx.xr.compose.subspace.SpatialRow
+import androidx.xr.compose.subspace.SpatialSpacer
 import androidx.xr.compose.subspace.SubspaceComposable
+import androidx.xr.compose.subspace.draw.scale
 import androidx.xr.compose.subspace.layout.SpatialAlignment
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.fillMaxSize
 import androidx.xr.compose.subspace.layout.height
+import androidx.xr.compose.subspace.layout.movable
 import androidx.xr.compose.subspace.layout.offset
+import androidx.xr.compose.subspace.layout.resizable
 import androidx.xr.compose.subspace.layout.rotate
-import androidx.xr.compose.subspace.layout.scale
 import androidx.xr.compose.subspace.layout.size
 import androidx.xr.compose.subspace.layout.width
 import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.GltfModel
 import androidx.xr.scenecore.GltfModelEntity
+import androidx.xr.scenecore.scene
 import java.nio.file.Paths
 
 class PanelEmbeddedSubspace : ComponentActivity() {
@@ -92,14 +93,12 @@ class PanelEmbeddedSubspace : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        enableEdgeToEdge()
+        WindowCompat.enableEdgeToEdge(window)
         setContent {
             Subspace {
                 SpatialRow {
                     SpatialPanel(
-                        SubspaceModifier.height(400.dp).width(800.dp),
-                        dragPolicy = MovePolicy(),
-                        resizePolicy = ResizePolicy(),
+                        SubspaceModifier.height(400.dp).width(800.dp).movable().resizable()
                     ) {
                         Row(horizontalArrangement = Arrangement.SpaceEvenly) {
                             Box(
@@ -140,7 +139,7 @@ class PanelEmbeddedSubspace : ComponentActivity() {
                                     var count by remember { mutableIntStateOf(0) }
                                     SpatialRow(
                                         modifier = SubspaceModifier.fillMaxSize(),
-                                        alignment = SpatialAlignment.Center,
+                                        verticalAlignment = SpatialAlignment.CenterVertically,
                                     ) {
                                         SpatialPanel(
                                             SubspaceModifier.fillMaxSize(0.5f).offset(z = 150.dp)
@@ -155,7 +154,7 @@ class PanelEmbeddedSubspace : ComponentActivity() {
                                                 Button(onClick = { count++ }) { Text("Increase") }
                                             }
                                         }
-                                        SpatialLayoutSpacer(SubspaceModifier.size(50.dp))
+                                        SpatialSpacer(SubspaceModifier.size(50.dp))
                                         SpatialPanel(SubspaceModifier.offset(z = 250.dp)) {
                                             Box(
                                                 modifier =
@@ -175,11 +174,8 @@ class PanelEmbeddedSubspace : ComponentActivity() {
                         }
                     }
 
-                    SpatialLayoutSpacer(SubspaceModifier.size(100.dp))
-                    SpatialPanel(
-                        SubspaceModifier.height(800.dp).width(400.dp),
-                        dragPolicy = MovePolicy(),
-                    ) {
+                    SpatialSpacer(SubspaceModifier.size(100.dp))
+                    SpatialPanel(SubspaceModifier.height(800.dp).width(400.dp).movable()) {
                         Box(Modifier.border(30.dp, Color.White, RoundedCornerShape(10.dp))) {
                             PlanarEmbeddedSubspace {
                                 SpatialPanel(SubspaceModifier.offset(z = (-200).dp)) {
@@ -256,7 +252,9 @@ fun XyzArrows(modifier: SubspaceModifier = SubspaceModifier) {
         }
     } else {
         SceneCoreEntity(
-            factory = { GltfModelEntity.create(session, gltfModel!!) },
+            factory = {
+                GltfModelEntity.create(session, gltfModel!!, parent = session.scene.activitySpace)
+            },
             modifier =
                 modifier.rotate(
                     Quaternion.fromAxisAngle(Vector3(x = 1f), 45f) +

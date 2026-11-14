@@ -24,4 +24,5 @@ import androidx.compose.runtime.Composable
 
 @ExperimentalFoundationApi
 @Composable
-actual fun rememberDefaultPrefetchScheduler(): PrefetchScheduler = implementedInJetBrainsFork()
+internal actual fun rememberDefaultPrefetchScheduler(): PrefetchScheduler =
+    implementedInJetBrainsFork()

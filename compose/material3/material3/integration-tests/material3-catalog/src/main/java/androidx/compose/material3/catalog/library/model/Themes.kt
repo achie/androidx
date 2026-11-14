@@ -23,6 +23,7 @@ data class Theme(
     val themeColorMode: ThemeColorMode = ThemeColorMode.System,
     val colorMode: ColorMode = ColorMode.Baseline,
     val expressiveThemeMode: ExpressiveThemeMode = ExpressiveThemeMode.NonExpressive,
+    val focusIndicationStyle: FocusIndicationStyle = FocusIndicationStyle.Opacity,
     val fontScale: Float = 1.0f,
     val fontScaleMode: FontScaleMode = FontScaleMode.System,
     val textDirection: TextDirection = TextDirection.System,
@@ -32,15 +33,29 @@ data class Theme(
     constructor(
         map: Map<String, Float>
     ) : this(
-        themeColorMode = ThemeColorMode.values()[map.getValue(ThemeModeKey).toInt()],
-        colorMode = ColorMode.values()[map.getValue(ColorModeKey).toInt()],
+        themeColorMode =
+            map[ThemeModeKey]?.toInt()?.let { ThemeColorMode.entries.getOrNull(it) }
+                ?: ThemeColorMode.System,
+        colorMode =
+            map[ColorModeKey]?.toInt()?.let { ColorMode.entries.getOrNull(it) }
+                ?: ColorMode.Baseline,
         expressiveThemeMode =
-            ExpressiveThemeMode.values()[map.getValue(ExpressiveThemeModeKey).toInt()],
-        fontScale = map.getValue(FontScaleKey),
-        fontScaleMode = FontScaleMode.values()[map.getValue(FontScaleModeKey).toInt()],
-        textDirection = TextDirection.values()[map.getValue(TextDirectionKey).toInt()],
-        showOnlyExpressiveComponents = map.getValue(ShowOnlyExpressiveComponents).toInt() != 0,
-        markExpressiveComponents = map.getValue(MarkExpressiveComponents).toInt() != 0,
+            map[ExpressiveThemeModeKey]?.toInt()?.let { ExpressiveThemeMode.entries.getOrNull(it) }
+                ?: ExpressiveThemeMode.NonExpressive,
+        focusIndicationStyle =
+            map[FocusIndicationStyleKey]?.toInt()?.let {
+                FocusIndicationStyle.entries.getOrNull(it)
+            } ?: FocusIndicationStyle.Opacity,
+        fontScale = map[FontScaleKey] ?: 1.0f,
+        fontScaleMode =
+            map[FontScaleModeKey]?.toInt()?.let { FontScaleMode.entries.getOrNull(it) }
+                ?: FontScaleMode.System,
+        textDirection =
+            map[TextDirectionKey]?.toInt()?.let { TextDirection.entries.getOrNull(it) }
+                ?: TextDirection.System,
+        showOnlyExpressiveComponents =
+            map[ShowOnlyExpressiveComponents]?.let { it.toInt() != 0 } ?: false,
+        markExpressiveComponents = map[MarkExpressiveComponents]?.let { it.toInt() != 0 } ?: true,
     )
 
     fun toMap() =
@@ -48,6 +63,7 @@ data class Theme(
             ThemeModeKey to themeColorMode.ordinal.toFloat(),
             ColorModeKey to colorMode.ordinal.toFloat(),
             ExpressiveThemeModeKey to expressiveThemeMode.ordinal.toFloat(),
+            FocusIndicationStyleKey to focusIndicationStyle.ordinal.toFloat(),
             FontScaleKey to fontScale,
             FontScaleModeKey to fontScaleMode.ordinal.toFloat(),
             TextDirectionKey to textDirection.ordinal.toFloat(),
@@ -128,12 +144,18 @@ enum class ExpressiveThemeMode {
     NonExpressive,
 }
 
+enum class FocusIndicationStyle {
+    Opacity,
+    InsetFocusRing,
+}
+
 const val MinFontScale = 0.4f
 const val MaxFontScale = 2f
 
 private const val ThemeModeKey = "themeMode"
 private const val ColorModeKey = "colorMode"
 private const val ExpressiveThemeModeKey = "expressiveThemeMode"
+private const val FocusIndicationStyleKey = "focusIndicationStyle"
 private const val FontScaleKey = "fontScale"
 private const val FontScaleModeKey = "fontScaleMode"
 private const val TextDirectionKey = "textDirection"

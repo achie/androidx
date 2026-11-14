@@ -21,6 +21,7 @@ import static com.google.common.truth.Truth.assertThat;
 import androidx.appsearch.app.AppSearchSchema;
 import androidx.appsearch.app.GenericDocument;
 import androidx.appsearch.app.InternalSetSchemaResponse;
+import androidx.appsearch.app.InternalVisibilityConfig;
 import androidx.appsearch.app.SearchResult;
 import androidx.appsearch.app.SearchSpec;
 
@@ -56,11 +57,7 @@ public class SearchResultsImplTest {
         mAppSearchImpl = AppSearchImpl.create(
                 mTemporaryFolder.newFolder(),
                 config,
-                /*initStatsBuilder=*/ null,
-                /*callStatsBuilder=*/ null,
-                /*visibilityChecker=*/ null,
-                /*revocableFileDescriptorStore=*/ null,
-                /*icingSearchEngine=*/ null,
+                AppSearchUserPlugins.EMPTY,
                 ALWAYS_OPTIMIZE);
     }
 
@@ -83,6 +80,7 @@ public class SearchResultsImplTest {
                 /*accountPropertyPaths=*/ Collections.emptyMap(),
                 /*forceOverride=*/ false,
                 /*version=*/ 0,
+                /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                 /* setSchemaStatsBuilder= */ null,
                 /*callStatsBuilder=*/ null);
         assertThat(internalSetSchemaResponse.isSuccess()).isTrue();
@@ -136,6 +134,7 @@ public class SearchResultsImplTest {
                 /*accountPropertyPaths=*/ Collections.emptyMap(),
                 /*forceOverride=*/ false,
                 /*version=*/ 0,
+                /* callingUid= */ InternalVisibilityConfig.INVALID_UID,
                 /* setSchemaStatsBuilder= */ null,
                 /*callStatsBuilder=*/ null);
         assertThat(internalSetSchemaResponse.isSuccess()).isTrue();

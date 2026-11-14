@@ -18,7 +18,9 @@
 
 package androidx.compose.runtime
 
+import androidx.collection.objectListOf
 import androidx.compose.runtime.composer.gapbuffer.expectError
+import androidx.compose.runtime.mock.ComposerToUse
 import androidx.compose.runtime.mock.Contact
 import androidx.compose.runtime.mock.ContactModel
 import androidx.compose.runtime.mock.Edit
@@ -56,6 +58,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -72,8 +75,6 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import kotlinx.test.IgnoreJsTarget
-import kotlinx.test.IgnoreWasmTarget
 
 @Composable fun Container(content: @Composable () -> Unit) = content()
 
@@ -1115,6 +1116,73 @@ class CompositionTests {
         validate { this.Test(1, 2, 3, 4, 6) }
 
         assertEquals(2, count)
+    }
+
+    @Test
+    fun testRememberVarargParametersDropped() = compositionTest {
+        var keys by mutableStateOf(arrayOf<Any?>(1, 2, 3, 4, 5))
+        val rememberedObjects = mutableSetOf<Any>()
+        lateinit var scope: RecomposeScope
+
+        compose {
+            scope = currentRecomposeScope
+            rememberedObjects +=
+                remember(*keys) { Any() }
+                    .also {
+                        assertEquals(
+                            Any::class,
+                            it::class,
+                            "Remembered object is not an instance of Any",
+                        )
+                    }
+        }
+
+        val baselineSlotCount = composition!!.getSlots().count()
+        assertEquals(1, rememberedObjects.size, "Unexpected number of unique remembered values")
+
+        scope.invalidate()
+        expectNoChanges()
+        assertEquals(1, rememberedObjects.size, "Unexpected number of unique remembered values")
+
+        keys = keys.drop(1)
+        expectChanges()
+        assertEquals(2, rememberedObjects.size, "Unexpected number of unique remembered values")
+        assertEquals(
+            baselineSlotCount - 1,
+            composition!!.getSlots().count(),
+            "SlotTable did not deallocate the slot of the removed key",
+        )
+
+        keys = keys.drop(1)
+        expectChanges()
+        assertEquals(3, rememberedObjects.size, "Unexpected number of unique remembered values")
+        assertEquals(
+            baselineSlotCount - 2,
+            composition!!.getSlots().count(),
+            "SlotTable did not deallocate the slot of the removed key",
+        )
+
+        keys = emptyArray()
+        expectChanges()
+        assertEquals(4, rememberedObjects.size, "Unexpected number of unique remembered values")
+        assertEquals(
+            baselineSlotCount - 5,
+            composition!!.getSlots().count(),
+            "SlotTable did not deallocate the slot of the removed key",
+        )
+
+        scope.invalidate()
+        expectNoChanges()
+        assertEquals(4, rememberedObjects.size, "Unexpected number of unique remembered values")
+
+        composition!!.getSlots().forEach { slot ->
+            if (slot !== rememberedObjects.last() && slot in rememberedObjects) {
+                fail(
+                    "Remembered object #${rememberedObjects.indexOf(slot)} ($slot) is no longer " +
+                        "referenced by composition, but leaked in the SlotTable."
+                )
+            }
+        }
     }
 
     @Test
@@ -2565,10 +2633,7 @@ class CompositionTests {
     }
 
     @Test
-    // The test for web is properly implemented in CompositionTests.web.kt
-    @IgnoreJsTarget
-    @IgnoreWasmTarget
-    fun testRememberObserver_Abandon_Recompose() {
+    fun testRememberObserver_Abandon_Recompose_GapBuffer() = wrapRunTest {
         val abandonedObjects = mutableListOf<RememberObserver>()
         val observed =
             object : RememberObserver {
@@ -2585,22 +2650,63 @@ class CompositionTests {
                 }
             }
         assertFailsWith(IllegalStateException::class, message = "Throw") {
-            compositionTest {
-                val rememberObject = mutableStateOf(false)
+            compositionTest(ComposerToUse.Gap) {
+                    val rememberObject = mutableStateOf(false)
 
-                compose {
-                    if (rememberObject.value) {
-                        @Suppress("UNUSED_EXPRESSION") remember { observed }
-                        error("Throw")
+                    compose {
+                        if (rememberObject.value) {
+                            @Suppress("UNUSED_EXPRESSION") remember { observed }
+                            error("Throw")
+                        }
                     }
+
+                    assertTrue(abandonedObjects.isEmpty())
+
+                    rememberObject.value = true
+
+                    advance(ignorePendingWork = true)
+                }
+                .awaitCompletion()
+        }
+
+        assertArrayEquals(listOf(observed), abandonedObjects)
+    }
+
+    @Test
+    fun testRememberObserver_Abandon_Recompose_LinkTable() = wrapRunTest {
+        val abandonedObjects = mutableListOf<RememberObserver>()
+        val observed =
+            object : RememberObserver {
+                override fun onAbandoned() {
+                    abandonedObjects.add(this)
                 }
 
-                assertTrue(abandonedObjects.isEmpty())
+                override fun onForgotten() {
+                    error("Unexpected call to onForgotten")
+                }
 
-                rememberObject.value = true
-
-                advance(ignorePendingWork = true)
+                override fun onRemembered() {
+                    error("Unexpected call to onRemembered")
+                }
             }
+        assertFailsWith(IllegalStateException::class, message = "Throw") {
+            compositionTest(ComposerToUse.Link) {
+                    val rememberObject = mutableStateOf(false)
+
+                    compose {
+                        if (rememberObject.value) {
+                            @Suppress("UNUSED_EXPRESSION") remember { observed }
+                            error("Throw")
+                        }
+                    }
+
+                    assertTrue(abandonedObjects.isEmpty())
+
+                    rememberObject.value = true
+
+                    advance(ignorePendingWork = true)
+                }
+                .awaitCompletion()
         }
 
         assertArrayEquals(listOf(observed), abandonedObjects)
@@ -3396,7 +3502,8 @@ class CompositionTests {
     fun testModificationsPropagateToSubcomposition() = compositionTest {
         var value by mutableIntStateOf(0)
         val content: MutableState<@Composable () -> Unit> = mutableStateOf({})
-        @Suppress("VARIABLE_WITH_REDUNDANT_INITIALIZER") var subCompositionOccurred = false
+        @Suppress("VARIABLE_WITH_REDUNDANT_INITIALIZER", "VARIABLE_INITIALIZER_IS_REDUNDANT")
+        var subCompositionOccurred = false
 
         @Composable
         fun ComposeContent() {
@@ -3675,6 +3782,7 @@ class CompositionTests {
 
             key(Unit) {}
 
+            @Suppress("UNUSED_VARIABLE")
             val unused = remember {
                 assertEquals(
                     1,
@@ -3703,6 +3811,7 @@ class CompositionTests {
 
             key(Unit) { key(Unit) {} }
 
+            @Suppress("UNUSED_VARIABLE")
             val unused = remember {
                 assertEquals(
                     1,
@@ -3771,6 +3880,37 @@ class CompositionTests {
 
         assertEquals("1", lastOuterSeen, "Outer scope did not recompose")
         assertEquals("1", lastInnerSeen, "Inner scope did not recompose")
+    }
+
+    @Test
+    fun testInvalidateDoesNotRecomputeDefaultValues() = compositionTest {
+        lateinit var recomposeScope: RecomposeScope
+        val defaultValues = mutableSetOf<Any>()
+
+        compose {
+            ComposableWithDefaultArg { parentScope, defaultValue ->
+                recomposeScope = parentScope
+                defaultValues += defaultValue
+            }
+        }
+
+        recomposeScope.invalidate()
+        expectNoChanges()
+        assertEquals(
+            expected = 1,
+            actual = defaultValues.size,
+            message =
+                "Expected exactly one default object instance; " +
+                    "the default argument should not be recalculated",
+        )
+    }
+
+    @Composable
+    private fun ComposableWithDefaultArg(
+        defaultValue: Any = Any(),
+        block: @Composable (scope: RecomposeScope, defaultValue: Any) -> Unit,
+    ) {
+        block(currentRecomposeScope, defaultValue)
     }
 
     enum class MyEnum {
@@ -4383,7 +4523,7 @@ class CompositionTests {
             InlineSubcomposition {
                 @Suppress("ConstantConditionIf") // Testing this case
                 if (false) {
-                    remember { "Something" }
+                    remember { @Suppress("UNUSED_EXPRESSION") "Something" }
                 }
             }
         }
@@ -4421,7 +4561,7 @@ class CompositionTests {
     */
 
     @Test
-    fun testCompositionAndRecomposerDeadlock() {
+    fun testCompositionAndRecomposerDeadlock() =
         runTest(timeout = 10.seconds) {
             withGlobalSnapshotManager {
                 repeat(100) {
@@ -4458,7 +4598,6 @@ class CompositionTests {
                 }
             }
         }
-    }
 
     @Test
     fun earlyComposableUnitReturn() = compositionTest {
@@ -4752,7 +4891,7 @@ class CompositionTests {
         var count by mutableIntStateOf(1)
         compose {
             repeat(count) { Text("Some text") }
-            repeat(count) { unused(remember { it }) }
+            repeat(count) { Use(remember { it }) }
         }
 
         validate { repeat(count) { Text("Some text") } }
@@ -4810,6 +4949,24 @@ class CompositionTests {
 
         state.value = true
         advance()
+    }
+
+    @Test // b/516904513
+    fun derivedStateOfLeak() = compositionTest {
+        val state = mutableIntStateOf(10)
+        compose {
+            val derived by remember { derivedStateOf { state.intValue > 100 } }
+            state.intValue++
+            Text("$derived")
+            Wrap { Text("$derived") }
+        }
+
+        repeat(10) {
+            state.intValue++
+            advance(ignorePendingWork = true)
+        }
+
+        assertEquals(0, (composition as CompositionImpl).processedObservationCount)
     }
 
     @Test // regression test for 339618126
@@ -4896,6 +5053,194 @@ class CompositionTests {
             job.cancel()
         }
     }
+
+    @Test
+    fun testRecomposeToGroupEnd_withNodeGroupSibling() = compositionTest {
+        var showA by mutableStateOf(false)
+        var showB by mutableStateOf(false)
+
+        compose {
+            InlineLinear {
+                RestartGroup {
+                    if (showA) {
+                        Text("A")
+                    }
+                    repeat(10) { Text("C$it") }
+                }
+            }
+            RestartGroup {
+                if (showB) {
+                    Text("B")
+                }
+                Text("Static")
+            }
+        }
+
+        validate {
+            Linear { repeat(10) { Text("C$it") } }
+            Text("Static")
+        }
+
+        showA = true
+        showB = true
+        expectChanges()
+
+        validate {
+            Linear {
+                Text("A")
+                repeat(10) { Text("C$it") }
+            }
+            Text("B")
+            Text("Static")
+        }
+    }
+
+    @Test
+    fun testImminentInvalidationForCurrentGroup() = compositionTest {
+        var newShowChild by mutableStateOf(true)
+        var compositions = 0
+
+        compose {
+            val showChild = remember { mutableStateOf(newShowChild) }
+            showChild.value = newShowChild
+            SkippableHidingText("Child", showChild)
+            Text("compositions = ${++compositions}")
+        }
+
+        validate {
+            Text("Child")
+            Text("compositions = 1")
+        }
+
+        newShowChild = false
+        assertEquals(1, advanceCount(), "Content should settle in one composition")
+
+        validate { Text("compositions = 2") }
+    }
+
+    // Regression test for b/556047369
+    @Test
+    fun recompositionClearsObservationsWhenDefaultParametersSkip() = compositionTest {
+        val events = mutableListOf<String>()
+        var readA = true
+        val a = mutableIntStateOf(0)
+
+        compose {
+            RecompositionClearsObservationsWhenDefaultParametersSkip_Content(
+                readA = { readA },
+                setReadA = { readA = it },
+                stateA = a,
+                events = events,
+            )
+        }
+
+        advance()
+
+        validate { Text("a=-1, b=1") }
+        assertEquals(
+            "*, S(0,0), L(0,0), *, S(-1,1), L(-1,1)",
+            events.joinToString(),
+        )
+
+        a.intValue = 10
+        advance()
+
+        validate { Text("a=-1, b=1") }
+        assertEquals(
+            "*, S(0,0), L(0,0), *, S(-1,1), L(-1,1)",
+            events.joinToString(),
+        )
+    }
+
+    @Test // b/565042559
+    fun removedScopeInvalidationsAreCleared() = compositionTest {
+        var visible by mutableStateOf(true)
+        var childState by mutableIntStateOf(0)
+
+        compose {
+            if (visible) {
+                Wrap { Text("Child: $childState") }
+            }
+        }
+
+        validate { Text("Child: 0") }
+
+        val composer = (composition as CompositionImpl).composer
+        assertEquals(0, composer.stacksSize())
+
+        // Both ancestor (`visible`) and descendant scope (`childState`) are invalidated in the
+        // same snapshot, and the ancestor removes the descendant scope.
+        // The unvisited descendant invalidation must be cleared when composition finishes.
+        Snapshot.withMutableSnapshot {
+            visible = false
+            childState += 1
+        }
+        expectChanges()
+        validate {}
+        assertEquals(0, composer.stacksSize())
+    }
+
+    @Test // b/574639982
+    fun testMoveAndInsertKeyedGroups() = compositionTest {
+        var list by mutableStateOf(objectListOf("A", "B"))
+        compose {
+            list.forEach { item ->
+                key(item) {
+                    Text("Item $item")
+                }
+            }
+        }
+
+        validate {
+            list.forEach { item ->
+                Text("Item $item")
+            }
+        }
+
+        list = objectListOf("B", "NEW", "A")
+        expectChanges()
+        revalidate()
+
+        list = objectListOf("B", "A")
+        expectChanges()
+        revalidate()
+
+        list = objectListOf("A", "B", "NEW")
+        expectChanges()
+        revalidate()
+
+        list = objectListOf("A", "B")
+        expectChanges()
+        revalidate()
+    }
+
+    @Test // b/569219194
+    fun moveNodeFromParentToChildGroupOfInlinedNode() = compositionTest {
+        var move by mutableStateOf(false)
+        compose {
+            key(move) {}
+            InlineLinear {
+                Linear {}
+                if (move) Linear {}
+            }
+            if (!move) Linear {}
+        }
+        validate {
+            Linear {
+                Linear()
+            }
+            Linear()
+        }
+
+        move = true
+        expectChanges()
+        validate {
+            Linear {
+                Linear()
+                Linear()
+            }
+        }
+    }
 }
 
 class SomeUnstableClass(val a: Any = "abc")
@@ -4961,6 +5306,9 @@ var stateB by mutableIntStateOf(2000)
 fun use(@Suppress("UNUSED_PARAMETER") v: Int) {}
 
 fun calculateSomething() = 4
+
+private inline fun <reified T> Array<T>.drop(n: Int): Array<T> =
+    Array((size - n).coerceAtLeast(0)) { this[it] }
 
 @Composable // used in testRestartOfDefaultFunctions
 fun Defaults(a: Int = 1, b: Int = 2, c: Int = 3, d: Int = calculateSomething()) {
@@ -5052,14 +5400,14 @@ private fun <T> assertArrayEquals(message: String, expected: Array<T>, received:
     fun err(msg: String): Nothing =
         error(
             "$message: $msg, expected: [${
-        expected.getString()}], received: [${received.getString()}]"
+                expected.getString()}], received: [${received.getString()}]"
         )
     if (expected.size != received.size) err("sizes are different")
     expected.indices.forEach { index ->
         if (expected[index] != received[index])
             err(
                 "item at index $index was different (expected [${
-                expected[index]}], received: [${received[index]}]"
+                    expected[index]}], received: [${received[index]}]"
             )
     }
 }
@@ -5138,6 +5486,13 @@ private inline fun InlineSubcomposition(crossinline content: @Composable () -> U
 private operator fun <T> CompositionLocal<T>.getValue(thisRef: Any?, property: KProperty<*>) =
     current
 
+@Composable
+private fun SkippableHidingText(label: String, visible: State<Boolean>) {
+    if (visible.value) {
+        Text(label)
+    }
+}
+
 // for 274185312
 
 var itemRendererCalls = 0
@@ -5180,7 +5535,7 @@ fun ListContentItem(viewItem: ListViewItem, itemRenderer: @Composable (ListViewI
 
 data class ListViewItem(val id: Int)
 
-private fun <T> unused(@Suppress("UNUSED_PARAMETER") value: T) {}
+private fun <T> Use(@Suppress("UNUSED_PARAMETER") value: T) {}
 
 // Part of regression test for 339618126
 @Composable
@@ -5193,4 +5548,35 @@ inline fun ExplicitStartReplaceGroup(
     if (insertGroup) currentComposer.startReplaceGroup(key)
     content()
     if (insertGroup) currentComposer.endReplaceGroup()
+}
+
+/**
+ * Content composable for
+ * [CompositionTests.recompositionClearsObservationsWhenDefaultParametersSkip]. This test case
+ * depends on having a default parameter present.
+ */
+@Composable
+private fun RecompositionClearsObservationsWhenDefaultParametersSkip_Content(
+    readA: () -> Boolean,
+    setReadA: (Boolean) -> Unit,
+    stateA: MutableIntState,
+    events: MutableList<String>,
+    @Suppress("unused") defaultParameter: Any = Any(),
+) {
+    events += "*"
+    val stateB = remember { mutableIntStateOf(0) }
+    val b = stateB.intValue
+    val a = if (readA()) stateA.intValue else -1
+
+    LaunchedEffect(b) {
+        events += "L($a,$b)"
+        setReadA(b != 0)
+    }
+
+    SideEffect {
+        events += "S($a,$b)"
+        if (stateB.intValue == 0) stateB.intValue = 1
+    }
+
+    Text("a=$a, b=$b")
 }

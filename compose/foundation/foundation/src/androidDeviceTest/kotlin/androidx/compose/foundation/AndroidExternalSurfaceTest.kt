@@ -33,6 +33,7 @@ import androidx.annotation.RequiresApi
 import androidx.annotation.UiThread
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.ReusableContentHost
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -51,7 +52,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsEqualTo
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
@@ -75,7 +76,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.isActive
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -86,7 +87,7 @@ const val FrameCount = 12
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.TIRAMISU)
 @RunWith(AndroidJUnit4::class)
 class AndroidExternalSurfaceTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     val size = 48.dp
 
@@ -219,6 +220,45 @@ class AndroidExternalSurfaceTest {
         }
 
         rule.runOnIdle {
+            assertEquals(2, surfaceCreatedCount)
+            assertEquals(1, surfaceDestroyedCount)
+        }
+    }
+
+    @Test
+    fun testOnSurfaceReused() {
+        var surfaceCreatedCount = 0
+        var surfaceDestroyedCount = 0
+        var onInitCount = 0
+        var active by mutableStateOf(true)
+
+        // NOTE: SurfaceView only destroys the surface when SurfaceView is detached from
+        // the window, and only creates when it gets attached to the window
+        rule.setContent {
+            ReusableContentHost(active) {
+                AndroidExternalSurface(modifier = Modifier.size(size)) {
+                    onInitCount++
+                    onSurface { surface, _, _ ->
+                        assert(isActive)
+                        surfaceCreatedCount++
+                        surface.onDestroyed { surfaceDestroyedCount++ }
+                    }
+                }
+            }
+        }
+
+        rule.runOnIdle {
+            assertEquals(1, onInitCount)
+            assertEquals(1, surfaceCreatedCount)
+            assertEquals(0, surfaceDestroyedCount)
+        }
+
+        // Deactivate and reactivate the content to simulate reuse in lazy layouts
+        rule.runOnIdle { active = false }
+        rule.runOnIdle { active = true }
+
+        rule.runOnIdle {
+            assertEquals(2, onInitCount)
             assertEquals(2, surfaceCreatedCount)
             assertEquals(1, surfaceDestroyedCount)
         }
@@ -503,45 +543,44 @@ private fun SemanticsNodeInteraction.screenshotToImage(
 
         val mainExecutor = HandlerExecutor(Handler(Looper.getMainLooper()))
         mainExecutor.execute {
-            cleanup =
-                view.waitForWindowManager {
-                    Choreographer.getInstance().postFrameCallback {
-                        val location = IntArray(2)
-                        view.getLocationOnScreen(location)
+            cleanup = view.waitForWindowManager {
+                Choreographer.getInstance().postFrameCallback {
+                    val location = IntArray(2)
+                    view.getLocationOnScreen(location)
 
-                        val bounds =
-                            node.boundsInRoot
-                                .translate(location[0].toFloat(), location[1].toFloat())
-                                .deflate(1.0f) // inset the rectangle to avoid rounding errors
+                    val bounds =
+                        node.boundsInRoot
+                            .translate(location[0].toFloat(), location[1].toFloat())
+                            .deflate(1.0f) // inset the rectangle to avoid rounding errors
 
-                        // do multiple retries of uiAutomation.takeScreenshot because it is
-                        // known to return null on API 31+ b/257274080
-                        var bitmap: Bitmap? = null
-                        var i = 0
-                        while (i < 3 && bitmap == null) {
-                            bitmap = uiAutomation.takeScreenshot()
-                            i++
+                    // do multiple retries of uiAutomation.takeScreenshot because it is
+                    // known to return null on API 31+ b/257274080
+                    var bitmap: Bitmap? = null
+                    var i = 0
+                    while (i < 3 && bitmap == null) {
+                        bitmap = uiAutomation.takeScreenshot()
+                        i++
+                    }
+
+                    if (bitmap != null) {
+                        bitmap =
+                            Bitmap.createBitmap(
+                                bitmap,
+                                bounds.left.toInt(),
+                                bounds.top.toInt(),
+                                bounds.width.toInt(),
+                                bounds.height.toInt(),
+                            )
+                        bitmapFuture.set(bitmap)
+                    } else {
+                        if (hasSecureSurfaces) {
+                            // may be null on older API levels when a secure surface is showing
+                            bitmapFuture.set(null)
                         }
-
-                        if (bitmap != null) {
-                            bitmap =
-                                Bitmap.createBitmap(
-                                    bitmap,
-                                    bounds.left.toInt(),
-                                    bounds.top.toInt(),
-                                    bounds.width.toInt(),
-                                    bounds.height.toInt(),
-                                )
-                            bitmapFuture.set(bitmap)
-                        } else {
-                            if (hasSecureSurfaces) {
-                                // may be null on older API levels when a secure surface is showing
-                                bitmapFuture.set(null)
-                            }
-                            // if we don't show secure surfaces, let the future timeout on get()
-                        }
+                        // if we don't show secure surfaces, let the future timeout on get()
                     }
                 }
+            }
         }
 
         val bitmap =
@@ -563,11 +602,10 @@ internal fun Surface.captureToImage(width: Int, height: Int): ImageBitmap {
 
     val latch = CountDownLatch(1)
     var copyResult = 0
-    val onCopyFinished =
-        PixelCopy.OnPixelCopyFinishedListener { result ->
-            copyResult = result
-            latch.countDown()
-        }
+    val onCopyFinished = PixelCopy.OnPixelCopyFinishedListener { result ->
+        copyResult = result
+        latch.countDown()
+    }
 
     PixelCopy.request(
         this,

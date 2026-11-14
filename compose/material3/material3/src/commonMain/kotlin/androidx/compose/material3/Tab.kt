@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.internal.layoutId
 import androidx.compose.material3.tokens.MotionSchemeKeyTokens
 import androidx.compose.material3.tokens.PrimaryNavigationTabTokens
 import androidx.compose.runtime.Composable
@@ -40,16 +41,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.fastFirst
+import androidx.compose.ui.util.fastFirstOrNull
 import kotlin.math.max
 
 /**
@@ -88,7 +96,7 @@ import kotlin.math.max
  * @see LeadingIconTab
  */
 @Composable
-fun Tab(
+public fun Tab(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -99,16 +107,13 @@ fun Tab(
     unselectedContentColor: Color = selectedContentColor,
     interactionSource: MutableInteractionSource? = null,
 ) {
-    val styledText: @Composable (() -> Unit)? =
-        text?.let {
-            @Composable {
-                val style =
-                    PrimaryNavigationTabTokens.LabelTextFont.value.copy(
-                        textAlign = TextAlign.Center
-                    )
-                ProvideTextStyle(style, content = text)
-            }
+    val styledText: @Composable (() -> Unit)? = text?.let {
+        @Composable {
+            val style =
+                PrimaryNavigationTabTokens.LabelTextFont.value.copy(textAlign = TextAlign.Center)
+            ProvideTextStyle(style, content = text)
         }
+    }
     Tab(
         modifier = modifier.badgeBounds(),
         selected = selected,
@@ -152,7 +157,7 @@ fun Tab(
  * @see Tab
  */
 @Composable
-fun LeadingIconTab(
+public fun LeadingIconTab(
     selected: Boolean,
     onClick: () -> Unit,
     text: @Composable () -> Unit,
@@ -226,7 +231,7 @@ fun LeadingIconTab(
  * @param content the content of this tab
  */
 @Composable
-fun Tab(
+public fun Tab(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -299,28 +304,38 @@ private fun TabTransition(
  */
 @Composable
 private fun TabBaselineLayout(text: @Composable (() -> Unit)?, icon: @Composable (() -> Unit)?) {
-    Layout({
-        if (text != null) {
-            Box(Modifier.layoutId("text").padding(horizontal = HorizontalTextPadding)) { text() }
-        }
-        if (icon != null) {
-            Box(Modifier.layoutId("icon")) { icon() }
-        }
-    }) { measurables, constraints ->
-        val textPlaceable =
-            text?.let {
-                measurables
-                    .fastFirst { it.layoutId == "text" }
-                    .measure(
-                        // Measure with loose constraints for height as we don't want the text to
-                        // take up more
-                        // space than it needs
-                        constraints.copy(minHeight = 0)
-                    )
+    Layout(
+        content = {
+            if (text != null) {
+                Box(Modifier.layoutId("text").padding(horizontal = HorizontalTextPadding)) {
+                    text()
+                }
             }
+            if (icon != null) {
+                Box(Modifier.layoutId("icon")) { icon() }
+            }
+        },
+        measurePolicy = TabBaselineLayoutMeasurePolicy,
+    )
+}
+
+private object TabBaselineLayoutMeasurePolicy : MeasurePolicy {
+    override fun MeasureScope.measure(
+        measurables: List<Measurable>,
+        constraints: Constraints,
+    ): MeasureResult {
+        val textPlaceable =
+            measurables
+                .fastFirstOrNull { it.layoutId == "text" }
+                ?.measure(
+                    // Measure with loose constraints for height as we don't want the text to
+                    // take up more
+                    // space than it needs
+                    constraints.copy(minHeight = 0)
+                )
 
         val iconPlaceable =
-            icon?.let { measurables.fastFirst { it.layoutId == "icon" }.measure(constraints) }
+            measurables.fastFirstOrNull { it.layoutId == "icon" }?.measure(constraints)
 
         val tabWidth = max(textPlaceable?.width ?: 0, iconPlaceable?.width ?: 0)
 
@@ -343,11 +358,11 @@ private fun TabBaselineLayout(text: @Composable (() -> Unit)?, icon: @Composable
         val firstBaseline = textPlaceable?.get(FirstBaseline)
         val lastBaseline = textPlaceable?.get(LastBaseline)
 
-        layout(tabWidth, tabHeight) {
+        return layout(tabWidth, tabHeight) {
             when {
                 textPlaceable != null && iconPlaceable != null ->
                     placeTextAndIcon(
-                        density = this@Layout,
+                        density = this@measure,
                         textPlaceable = textPlaceable,
                         iconPlaceable = iconPlaceable,
                         tabWidth = tabWidth,
@@ -360,6 +375,66 @@ private fun TabBaselineLayout(text: @Composable (() -> Unit)?, icon: @Composable
                 else -> {}
             }
         }
+    }
+
+    override fun IntrinsicMeasureScope.minIntrinsicWidth(
+        measurables: List<IntrinsicMeasurable>,
+        height: Int,
+    ): Int =
+        max(
+            measurables.fastFirstOrNull { it.layoutId == "text" }?.minIntrinsicWidth(height) ?: 0,
+            measurables.fastFirstOrNull { it.layoutId == "icon" }?.minIntrinsicWidth(height) ?: 0,
+        )
+
+    override fun IntrinsicMeasureScope.maxIntrinsicWidth(
+        measurables: List<IntrinsicMeasurable>,
+        height: Int,
+    ): Int =
+        max(
+            measurables.fastFirstOrNull { it.layoutId == "text" }?.maxIntrinsicWidth(height) ?: 0,
+            measurables.fastFirstOrNull { it.layoutId == "icon" }?.maxIntrinsicWidth(height) ?: 0,
+        )
+
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(
+        measurables: List<IntrinsicMeasurable>,
+        width: Int,
+    ): Int {
+        val textMeasurable = measurables.fastFirstOrNull { it.layoutId == "text" }
+        val iconMeasurable = measurables.fastFirstOrNull { it.layoutId == "icon" }
+        val textHeight = textMeasurable?.minIntrinsicHeight(width) ?: 0
+        val iconHeight = iconMeasurable?.minIntrinsicHeight(width) ?: 0
+        val specHeight =
+            if (textMeasurable != null && iconMeasurable != null) {
+                    LargeTabHeight
+                } else {
+                    SmallTabHeight
+                }
+                .roundToPx()
+        return max(
+            specHeight,
+            iconHeight + textHeight + IconDistanceFromBaseline.roundToPx(),
+        )
+    }
+
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(
+        measurables: List<IntrinsicMeasurable>,
+        width: Int,
+    ): Int {
+        val textMeasurable = measurables.fastFirstOrNull { it.layoutId == "text" }
+        val iconMeasurable = measurables.fastFirstOrNull { it.layoutId == "icon" }
+        val textHeight = textMeasurable?.maxIntrinsicHeight(width) ?: 0
+        val iconHeight = iconMeasurable?.maxIntrinsicHeight(width) ?: 0
+        val specHeight =
+            if (textMeasurable != null && iconMeasurable != null) {
+                    LargeTabHeight
+                } else {
+                    SmallTabHeight
+                }
+                .roundToPx()
+        return max(
+            specHeight,
+            iconHeight + textHeight + IconDistanceFromBaseline.roundToPx(),
+        )
     }
 }
 
@@ -417,22 +492,29 @@ private fun Placeable.PlacementScope.placeTextAndIcon(
 }
 
 // Tab specifications
-private val SmallTabHeight = PrimaryNavigationTabTokens.ContainerHeight
-private val LargeTabHeight = 72.dp
+private val SmallTabHeight
+    get() = PrimaryNavigationTabTokens.ContainerHeight
+private val LargeTabHeight
+    get() = 72.dp
 
 // The horizontal padding on the left and right of text
-internal val HorizontalTextPadding = 16.dp
+internal val HorizontalTextPadding
+    get() = 16.dp
 
 // Distance from the top of the indicator to the text baseline when there is one line of text and an
 // icon
-private val SingleLineTextBaselineWithIcon = 14.dp
+private val SingleLineTextBaselineWithIcon
+    get() = 14.dp
 
 // Distance from the top of the indicator to the last text baseline when there are two lines of text
 // and an icon
-private val DoubleLineTextBaselineWithIcon = 6.dp
+private val DoubleLineTextBaselineWithIcon
+    get() = 6.dp
 
 // Distance from the first text baseline to the bottom of the icon in a combined tab
-private val IconDistanceFromBaseline = 20.sp
+private val IconDistanceFromBaseline
+    get() = 20.sp
 
 // Distance from the end of the leading icon to the start of the text
-private val TextDistanceFromLeadingIcon = 8.dp
+private val TextDistanceFromLeadingIcon
+    get() = 8.dp

@@ -48,15 +48,18 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
 
     /** converts to all lower case */
     public static final int TEXT_TO_LOWERCASE = 1;
+
     /** converts to all upper case */
     public static final int TEXT_TO_UPPERCASE = 2;
+
     /** trim white spaces from the ends */
     public static final int TEXT_TRIM = 3;
+
     /** converts to first letter of each word to upper case */
     public static final int TEXT_CAPITALIZE = 4;
+
     /** Makes the first character uppercase */
     public static final int TEXT_UPPERCASE_FIRST_CHAR = 5;
-
 
     public TextTransform(int textId, int srcId1, float start, float len, int op) {
         mTextId = textId;
@@ -64,6 +67,11 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
         mOutStart = mStart = start;
         mOutLen = mLen = len;
         mOperation = op;
+    }
+
+    /** Returns {@code mTextId}, the id of the text this operation produces. */
+    public int getTextId() {
+        return mTextId;
     }
 
     @Override
@@ -74,8 +82,16 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
     @NonNull
     @Override
     public String toString() {
-        return "TextSubrange[" + mTextId + "] = ["
-                + mSrcId1 + " ] +  " + mStart + " - " + mLen + " " + mOperation;
+        return "TextSubrange["
+                + mTextId
+                + "] = ["
+                + mSrcId1
+                + " ] +  "
+                + mStart
+                + " - "
+                + mLen
+                + " "
+                + mOperation;
     }
 
     /**
@@ -103,11 +119,15 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
      * @param buffer buffer to write to
      * @param textId id of the text
      * @param srcId1 source text 1
-     * @param start  of the subrange
-     * @param len    of the subrange exclusive -1 for end of string
+     * @param start of the subrange
+     * @param len of the subrange exclusive -1 for end of string
      */
     public static void apply(
-            @NonNull WireBuffer buffer, int textId, int srcId1, float start, float len,
+            @NonNull WireBuffer buffer,
+            int textId,
+            int srcId1,
+            float start,
+            float len,
             int operation) {
         buffer.start(OP_CODE);
         buffer.writeInt(textId);
@@ -120,14 +140,14 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
     /**
      * Read this operation and add it to the list of operations
      *
-     * @param buffer     the buffer to read
+     * @param buffer the buffer to read
      * @param operations the list of operations that will be added to
      */
     public static void read(@NonNull WireBuffer buffer, @NonNull List<Operation> operations) {
-        int textId = buffer.readInt();
-        int srcId1 = buffer.readInt();
-        float start = buffer.readFloat();
-        float len = buffer.readFloat();
+        int textId = buffer.declareId();
+        int srcId1 = buffer.readId();
+        float start = buffer.readNanId();
+        float len = buffer.readNanId();
         int operation = buffer.readInt();
 
         operations.add(new TextTransform(textId, srcId1, start, len, operation));
@@ -139,13 +159,23 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
      * @param doc to append the description to.
      */
     public static void documentation(@NonNull DocumentationBuilder doc) {
-        doc.operation("Data Operations", OP_CODE, CLASS_NAME)
-                .description("Merge two string into one")
-                .field(DocumentedOperation.INT, "textId", "id of the text")
-                .field(INT, "srcTextId1", "id of the path")
-                .field(FLOAT, "start", "start of the subrange")
-                .field(FLOAT, "end", "end of the subrange -1 for end of string")
-                .field(INT, "operation", "various text to text operations ");
+        doc.operation("Text Operations", OP_CODE, CLASS_NAME)
+                .addedVersion(7)
+                .experimental(true)
+                .description("Transform a string (case conversion, trimming, etc.)")
+                .field(
+                        DocumentedOperation.INT,
+                        "textId",
+                        "The ID of the resulting transformed text")
+                .field(INT, "srcId1", "The ID of the source string")
+                .field(FLOAT, "start", "The start index of the transformation range")
+                .field(FLOAT, "len", "The length of the transformation range")
+                .field(INT, "operation", "The type of transformation to apply")
+                .possibleValues("TEXT_TO_LOWERCASE", TEXT_TO_LOWERCASE)
+                .possibleValues("TEXT_TO_UPPERCASE", TEXT_TO_UPPERCASE)
+                .possibleValues("TEXT_TRIM", TEXT_TRIM)
+                .possibleValues("TEXT_CAPITALIZE", TEXT_CAPITALIZE)
+                .possibleValues("TEXT_UPPERCASE_FIRST_CHAR", TEXT_UPPERCASE_FIRST_CHAR);
     }
 
     @Override
@@ -201,7 +231,6 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
         return result.toString();
     }
 
-
     private static @NonNull String capitalizeFirstWord(@NonNull String input) {
         if (input.isEmpty()) {
             return input;
@@ -217,7 +246,6 @@ public class TextTransform extends Operation implements VariableSupport, Seriali
 
         return input;
     }
-
 
     @Override
     public void updateVariables(@NonNull RemoteContext context) {

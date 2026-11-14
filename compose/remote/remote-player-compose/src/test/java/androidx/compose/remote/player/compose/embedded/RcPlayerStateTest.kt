@@ -1,0 +1,456 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.compose.remote.player.compose.embedded
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.remote.core.CoreDocument
+import androidx.compose.remote.core.RemoteClock
+import androidx.compose.remote.core.RemoteComposeBuffer
+import androidx.compose.remote.core.operations.Header
+import androidx.compose.remote.core.operations.layout.Component
+import androidx.compose.remote.creation.compose.capture.captureSingleRemoteDocument
+import androidx.compose.remote.creation.compose.layout.RemoteBox
+import androidx.compose.remote.creation.compose.layout.RemoteImage
+import androidx.compose.remote.creation.compose.layout.RemoteText
+import androidx.compose.remote.creation.compose.modifier.RemoteModifier
+import androidx.compose.remote.creation.compose.modifier.background
+import androidx.compose.remote.creation.compose.modifier.contentDescription
+import androidx.compose.remote.creation.compose.modifier.semantics
+import androidx.compose.remote.creation.compose.modifier.size
+import androidx.compose.remote.creation.compose.modifier.visibility
+import androidx.compose.remote.creation.compose.state.RemoteBoolean.Companion.createNamedRemoteBoolean
+import androidx.compose.remote.creation.compose.state.RemoteColor
+import androidx.compose.remote.creation.compose.state.RemoteFloat.Companion.createNamedRemoteFloat
+import androidx.compose.remote.creation.compose.state.RemoteFloatArray.Companion.createNamedRemoteFloatArray
+import androidx.compose.remote.creation.compose.state.RemoteImageBitmap
+import androidx.compose.remote.creation.compose.state.RemoteInt.Companion.createNamedRemoteInt
+import androidx.compose.remote.creation.compose.state.RemoteState
+import androidx.compose.remote.creation.compose.state.RemoteString.Companion.createNamedRemoteString
+import androidx.compose.remote.creation.compose.state.asRemoteDp
+import androidx.compose.remote.creation.compose.state.createNamedRemoteImageBitmap
+import androidx.compose.remote.creation.compose.state.rc
+import androidx.compose.remote.creation.compose.state.rdp
+import androidx.compose.remote.creation.compose.state.ri
+import androidx.compose.remote.creation.compose.state.rs
+import androidx.compose.remote.creation.modifiers.RecordingModifier
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
+import com.google.common.truth.Truth.assertThat
+import java.io.ByteArrayInputStream
+import kotlinx.coroutines.runBlocking
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class RcPlayerStateTest {
+
+    @get:Rule val rule = RcPlayerTestRule()
+
+    private fun createDocument(content: @Composable () -> Unit): CoreDocument = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bytes = captureSingleRemoteDocument(context = context, content = content).bytes
+        CoreDocument(RemoteClock.SYSTEM).apply {
+            ByteArrayInputStream(bytes).use {
+                initFromBuffer(RemoteComposeBuffer.fromInputStream(it))
+            }
+        }
+    }
+
+    @Test
+    fun testPreCompositionSetAndGet() {
+        val document = createDocument {
+            val progress = remember { createNamedRemoteFloat("progress", 0.25f) }
+            val count = remember { createNamedRemoteInt("count", 10) }
+            val flag = remember { createNamedRemoteBoolean("flag", false) }
+            val title = remember { createNamedRemoteString("title", "Initial Title") }
+            val color = remember { RemoteColor.createNamedRemoteColor("accent", Color.Red.rc) }
+
+            val widthDp = progress.asRemoteDp()
+            val heightDp = count.toRemoteFloat().asRemoteDp()
+            val visibilityInt =
+                flag.select(Component.Visibility.VISIBLE.ri, Component.Visibility.GONE.ri)
+
+            RemoteBox(
+                modifier =
+                    RemoteModifier.size(widthDp, heightDp)
+                        .background(color)
+                        .semantics { contentDescription = title }
+                        .visibility(visibilityInt)
+            )
+        }
+
+        val playerState = RcPlayerState(document)
+        var progress by playerState.floatState("progress")
+        var count by playerState.intState("count")
+        var flag by playerState.booleanState("flag")
+        var title by playerState.stringState("title")
+        var accent by playerState.colorState("accent")
+
+        // Read initial defaults before setting
+        assertThat(progress).isEqualTo(0.25f)
+        assertThat(count).isEqualTo(10)
+        assertThat(flag).isFalse()
+        assertThat(title).isEqualTo("Initial Title")
+        assertThat(accent).isEqualTo(Color.Red)
+
+        // Set overrides before composition
+        progress = 75f
+        count = 42
+        flag = true
+        title = "Updated Title"
+        accent = Color.Green
+
+        // Verify get immediately reflects changes
+        assertThat(progress).isEqualTo(75f)
+        assertThat(count).isEqualTo(42)
+        assertThat(flag).isTrue()
+        assertThat(title).isEqualTo("Updated Title")
+        assertThat(accent).isEqualTo(Color.Green)
+
+        rule.setContent {
+            Box(modifier = Modifier.size(200.dp)) {
+                RcPlayer(state = playerState)
+            }
+        }
+
+        rule.waitForIdle()
+
+        // Verify RcPlayer rendered with the overridden values
+        rule
+            .onNodeWithContentDescription("Updated Title")
+            .assertExists()
+            .assertWidthIsEqualTo(75.dp)
+            .assertHeightIsEqualTo(42.dp)
+    }
+
+    @Test
+    fun testReactiveRecompositionOnSet() {
+        val document = createDocument {
+            val text = remember { createNamedRemoteString("message", "Hello") }
+            RemoteText(text = text)
+        }
+
+        val playerState = RcPlayerState(document)
+        var message by playerState.stringState("message")
+
+        rule.setContent {
+            RcPlayer(state = playerState)
+        }
+
+        rule.waitForIdle()
+        rule.onNodeWithText("Hello", useUnmergedTree = true).assertExists()
+
+        // Mutate state via delegated property
+        rule.runOnUiThread {
+            message = "World"
+        }
+
+        rule.waitForIdle()
+        rule.onNodeWithText("World", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("Hello", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun testTwoWayStateDelegation() {
+        val document = createDocument {
+            val progress = remember { createNamedRemoteFloat("progress", 10f) }
+            RemoteBox(
+                modifier =
+                    RemoteModifier.size(progress.asRemoteDp(), 50.rdp).semantics {
+                        contentDescription = "box".rs
+                    }
+            )
+        }
+
+        val playerState = RcPlayerState(document)
+        var progress by playerState.floatState("progress")
+
+        rule.setContent {
+            RcPlayer(state = playerState)
+        }
+
+        rule.waitForIdle()
+        assertThat(progress).isEqualTo(10f)
+        rule.onNodeWithContentDescription("box").assertWidthIsEqualTo(10.dp)
+
+        // Mutate via delegate property
+        rule.runOnUiThread {
+            progress = 80f
+        }
+
+        rule.waitForIdle()
+        assertThat(progress).isEqualTo(80f)
+        rule.onNodeWithContentDescription("box").assertWidthIsEqualTo(80.dp)
+    }
+
+    @Test
+    fun testClearOverrideRestoresInitialValue() {
+        val document = createDocument {
+            val progress = remember { createNamedRemoteFloat("progress", 20f) }
+            val count = remember { createNamedRemoteInt("count", 5) }
+            val title = remember { createNamedRemoteString("title", "Initial") }
+            RemoteBox(
+                modifier =
+                    RemoteModifier.size(progress.asRemoteDp(), count.toRemoteFloat().asRemoteDp())
+                        .semantics { contentDescription = title }
+            )
+        }
+
+        val playerState = RcPlayerState(document)
+        var progress by playerState.floatState("progress")
+        var count by playerState.intState("count")
+        var title by playerState.stringState("title")
+
+        progress = 90f
+        count = 30
+        title = "Modified"
+
+        assertThat(progress).isEqualTo(90f)
+        assertThat(count).isEqualTo(30)
+        assertThat(title).isEqualTo("Modified")
+
+        playerState.clearOverride("progress")
+        assertThat(progress).isEqualTo(20f)
+
+        playerState.clearOverride("count")
+        assertThat(count).isEqualTo(5)
+
+        playerState.clearOverride("title")
+        assertThat(title).isEqualTo("Initial")
+    }
+
+    @Test
+    fun testNameResolutionWithDefaultPrefix() {
+        val document = createDocument {
+            // By default, rememberNamedRemoteFloat uses Domain.User -> "USER:user_var"
+            val userVar = remember { createNamedRemoteFloat("user_var", 15f) }
+            // An unprefixed variable
+            val rawVar = remember {
+                createNamedRemoteFloat("raw_var", 25f, domain = RemoteState.Domain.None)
+            }
+            RemoteBox(
+                modifier =
+                    RemoteModifier.size(userVar.asRemoteDp(), rawVar.asRemoteDp()).semantics {
+                        contentDescription = "box".rs
+                    }
+            )
+        }
+
+        val playerState = RcPlayerState(document)
+
+        // "user_var" resolves to "USER:user_var"
+        var userVar by playerState.floatState("user_var")
+        assertThat(userVar).isEqualTo(15f)
+        userVar = 40f
+        assertThat(userVar).isEqualTo(40f)
+
+        // "raw_var" without prefix in document resolves to "raw_var"
+        var rawVar by playerState.floatState("raw_var")
+        assertThat(rawVar).isEqualTo(25f)
+        rawVar = 50f
+        assertThat(rawVar).isEqualTo(50f)
+
+        // Explicit fully-qualified name with colon
+        var qualifiedUserVar by playerState.floatState("USER:user_var")
+        qualifiedUserVar = 60f
+        assertThat(userVar).isEqualTo(60f)
+    }
+
+    @Test
+    fun testNameResolutionWithNullDefaultPrefix() {
+        val document = createDocument {
+            val rawVar = remember {
+                createNamedRemoteFloat(
+                    "unprefixed_var",
+                    100f,
+                    domain = RemoteState.Domain.None,
+                )
+            }
+            RemoteBox(modifier = RemoteModifier.size(rawVar.asRemoteDp(), 10.rdp))
+        }
+
+        // defaultPrefix = null means no prefix and no colon
+        val playerState = RcPlayerState(document, defaultPrefix = null)
+        var unprefixedVar by playerState.floatState("unprefixed_var")
+        assertThat(unprefixedVar).isEqualTo(100f)
+
+        unprefixedVar = 150f
+        assertThat(unprefixedVar).isEqualTo(150f)
+    }
+
+    @Test
+    fun testBitmapState() {
+        val initialAndroidBitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        val initialBitmap = initialAndroidBitmap.asImageBitmap()
+        val document = createDocument {
+            val remoteImage = remember {
+                RemoteImageBitmap.createNamedRemoteImageBitmap(
+                    name = "custom_image",
+                    defaultValue = initialBitmap,
+                )
+            }
+            RemoteImage(bitmap = remoteImage, contentDescription = "image".rs)
+        }
+
+        val playerState = RcPlayerState(document)
+        var customImage by playerState.bitmapState("custom_image")
+
+        val retrievedAndroidBitmap = customImage
+        assertThat(retrievedAndroidBitmap).isNotNull()
+        assertThat(retrievedAndroidBitmap!!.sameAs(initialAndroidBitmap)).isTrue()
+
+        val newBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+        customImage = newBitmap
+        assertThat(customImage).isEqualTo(newBitmap)
+
+        playerState.clearOverride("custom_image")
+        assertThat(customImage!!.sameAs(initialAndroidBitmap)).isTrue()
+
+        // Also test clearing via setting null
+        customImage = newBitmap
+        assertThat(customImage).isEqualTo(newBitmap)
+        customImage = null
+        assertThat(customImage!!.sameAs(initialAndroidBitmap)).isTrue()
+    }
+
+    @Test
+    fun testFloatArrayState() {
+        val document = createDocument {
+            val chartData = createNamedRemoteFloatArray("chartData", floatArrayOf(10f, 20f, 30f))
+            RemoteBox(modifier = RemoteModifier.size(chartData[0].asRemoteDp()))
+        }
+
+        val playerState = RcPlayerState(document)
+        var chartData by playerState.floatArrayState("chartData")
+        assertThat(chartData).isEqualTo(floatArrayOf(10f, 20f, 30f))
+
+        val updated = floatArrayOf(40f, 50f, 60f)
+        chartData = updated
+        assertThat(chartData).isEqualTo(updated)
+
+        playerState.clearOverride("chartData")
+        assertThat(chartData).isEqualTo(floatArrayOf(10f, 20f, 30f))
+    }
+
+    @Test
+    fun testCompressedCapturedDocument() {
+        val captured = runBlocking {
+            captureSingleRemoteDocument(context = ApplicationProvider.getApplicationContext()) {
+                val title = remember { createNamedRemoteString("title", "Compressed") }
+                RemoteBox(
+                    modifier =
+                        RemoteModifier.size(60.rdp, 40.rdp).semantics { contentDescription = title }
+                )
+            }
+        }
+        val compressed = Header.compressDocument(captured.bytes, captured.bytes.size)
+        assertThat(Header.readDirect(ByteArrayInputStream(compressed)).get(Header.COMPRESS))
+            .isEqualTo(Header.COMPRESSION_DEFLATE)
+
+        // The document is decompressed while loading.
+        val document =
+            CoreDocument(RemoteClock.SYSTEM).apply {
+                ByteArrayInputStream(compressed).use {
+                    initFromBuffer(RemoteComposeBuffer.fromInputStream(it))
+                }
+            }
+        val playerState = RcPlayerState(document)
+        val title by playerState.stringState("title")
+        assertThat(title).isEqualTo("Compressed")
+
+        rule.setContent {
+            Box(modifier = Modifier.size(200.dp)) {
+                RcPlayer(state = playerState)
+            }
+        }
+
+        rule.waitForIdle()
+        rule
+            .onNodeWithContentDescription("Compressed")
+            .assertExists()
+            .assertWidthIsEqualTo(60.dp)
+            .assertHeightIsEqualTo(40.dp)
+    }
+
+    @Test
+    fun floatStateSetBeforeFirstFrame_reachesNamedFloatDeclaredInCanvas() {
+        val document = buildDocument {
+            root {
+                canvas(RecordingModifier().fillMaxSize()) {
+                    val width = writer.addNamedFloat("width", 10f)
+                    painter.setColor(AndroidColor.RED).commit()
+                    writer.drawRect(0f, 40f, width, 60f)
+                }
+            }
+        }
+        val state = RcPlayerState(document, defaultPrefix = null)
+        state.floatState("width").value = 80f
+
+        val bitmap = rule.renderState(state)
+
+        assertRed(bitmap, 75, 50)
+    }
+
+    @Test
+    fun floatStateSetBeforeFirstFrame_reachesNamedFloatDeclaredInFloatFunction() {
+        val document = buildDocument {
+            val function = writer.createFloatFunction(FloatArray(0))
+            val width = writer.addNamedFloat("width", 10f)
+            painter.setColor(AndroidColor.RED).commit()
+            writer.drawRect(0f, 40f, width, 60f)
+            writer.endFloatFunction()
+            writer.callFloatFunction(function)
+        }
+        val state = RcPlayerState(document, defaultPrefix = null)
+        state.floatState("width").value = 80f
+
+        val bitmap = rule.renderState(state)
+
+        assertRed(bitmap, 75, 50)
+    }
+
+    private fun RcPlayerTestRule.renderState(state: RcPlayerState): Bitmap {
+        setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                Box(modifier = Modifier.size(100.dp)) { RcPlayer(state = state) }
+            }
+        }
+        return captureRootBitmap()
+    }
+}

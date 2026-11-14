@@ -26,7 +26,6 @@ import android.content.ServiceConnection
 import android.os.Build
 import android.os.IBinder
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
 import androidx.camera.core.CameraSelector.LENS_FACING_BACK
 import androidx.camera.core.CameraXConfig
 import androidx.camera.core.ImageAnalysis
@@ -40,7 +39,6 @@ import androidx.camera.integration.core.CameraXService.EXTRA_IMAGE_ANALYSIS_ENAB
 import androidx.camera.integration.core.CameraXService.EXTRA_IMAGE_CAPTURE_ENABLED
 import androidx.camera.integration.core.CameraXService.EXTRA_VIDEO_CAPTURE_ENABLED
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CameraUtil.hasCameraWithLensFacing
 import androidx.camera.testing.impl.IgnoreVideoRecordingProblematicDeviceRule.Companion.skipVideoRecordingTestIfNotSupportedByEmulator
@@ -48,6 +46,11 @@ import androidx.camera.testing.impl.mocks.MockConsumer
 import androidx.camera.testing.impl.mocks.helpers.ArgumentCaptor
 import androidx.camera.testing.impl.mocks.helpers.CallTimes
 import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_NONE
+import androidx.camera.video.VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE
 import androidx.concurrent.futures.await
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
@@ -55,9 +58,9 @@ import androidx.test.filters.LargeTest
 import androidx.test.rule.GrantPermissionRule
 import androidx.testutils.lifecycle.LifecycleOwnerUtils
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -85,18 +88,10 @@ class CameraXServiceTest(private val implName: String, private val cameraXConfig
             Manifest.permission.RECORD_AUDIO,
         )
 
-    @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
-
     companion object {
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()),
-                arrayOf(CameraPipeConfig::class.simpleName, CameraPipeConfig.defaultConfig()),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName, Camera2Config.defaultConfig()))
     }
 
     private val context = ApplicationProvider.getApplicationContext<Context>()
@@ -203,7 +198,7 @@ class CameraXServiceTest(private val implName: String, private val cameraXConfig
     }
 
     @Test
-    fun canRecordVideo() = runBlocking {
+    fun canRecordVideo(): Unit = runBlocking {
         skipVideoRecordingTestIfNotSupportedByEmulator()
         // Arrange.
         context.startService(
@@ -213,15 +208,37 @@ class CameraXServiceTest(private val implName: String, private val cameraXConfig
         )
 
         // Act.
+        val statusLatch = service.acquireRecordVideoStatusCountDownLatch()
         val latch = service.acquireRecordVideoCountDownLatch()
         context.startService(createServiceIntent(ACTION_START_RECORDING))
 
-        delay(3000L)
-
-        context.startService(createServiceIntent(ACTION_STOP_RECORDING))
+        val statusLatchReleased =
+            try {
+                statusLatch.await(15, TimeUnit.SECONDS)
+            } finally {
+                context.startService(createServiceIntent(ACTION_STOP_RECORDING))
+            }
 
         // Assert.
         assertThat(latch.await(15, TimeUnit.SECONDS)).isTrue()
+        // The status latch is also released by an early Finalize event, whose error is verified
+        // below, so a timeout here means neither a qualifying Status nor a Finalize arrived.
+        assertWithMessage(
+                "Timed out waiting for a Status event with >= 1s of recorded data or a Finalize"
+            )
+            .that(statusLatchReleased)
+            .isTrue()
+        assertWithMessage("Recording finalized with error")
+            .that(service.recordVideoError)
+            .isIn(
+                listOf(
+                    ERROR_NONE,
+                    ERROR_FILE_SIZE_LIMIT_REACHED,
+                    ERROR_DURATION_LIMIT_REACHED,
+                    ERROR_INSUFFICIENT_STORAGE,
+                    ERROR_SOURCE_INACTIVE,
+                )
+            )
     }
 
     private fun createServiceIntent(action: String? = null) =

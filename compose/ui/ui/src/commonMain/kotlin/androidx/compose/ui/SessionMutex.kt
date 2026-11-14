@@ -32,15 +32,16 @@ import kotlinx.coroutines.job
  * cancelled and allowed to finish any cancellation tasks (e.g. `finally` blocks) before the new
  * session's coroutine starts.
  */
+@Suppress("BanRestrictTo")
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 @InternalComposeUiApi
 @JvmInline
-value class SessionMutex<T>
+public value class SessionMutex<T>
 private constructor(private val currentSessionHolder: AtomicReference<Session<T>?>) {
-    constructor() : this(AtomicReference(null))
+    public constructor() : this(AtomicReference(null))
 
     /** Returns the current session object. */
-    val currentSession: T?
+    public val currentSession: T?
         get() = currentSessionHolder.get()?.value
 
     /**
@@ -53,7 +54,7 @@ private constructor(private val currentSessionHolder: AtomicReference<Session<T>
      * @param session Called with the return value from [sessionInitializer] after cancelling the
      *   previous session.
      */
-    suspend fun <R> withSessionCancellingPrevious(
+    public suspend fun <R> withSessionCancellingPrevious(
         sessionInitializer: (CoroutineScope) -> T,
         session: suspend (data: T) -> R,
     ): R = coroutineScope {

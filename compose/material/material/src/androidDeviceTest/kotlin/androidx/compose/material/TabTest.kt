@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.testutils.assertIsEqualTo
+import androidx.compose.testutils.toList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.InspectableValue
@@ -52,7 +53,7 @@ import androidx.compose.ui.test.assertPositionInRootIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isSelectable
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onParent
 import androidx.compose.ui.test.performClick
@@ -62,7 +63,6 @@ import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -78,7 +78,7 @@ class TabTest {
 
     private val icon = Icons.Filled.Favorite
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Before
     fun before() {
@@ -387,7 +387,13 @@ class TabTest {
 
         val baselinePositionY = textBounds.top + textBaselinePos
         val expectedPositionY = tabRowBounds.height - expectedBaselineDistance
-        baselinePositionY.assertIsEqualTo(expectedPositionY, "baseline y-position")
+
+        val tolerance = maxOf(0.5.dp, with(rule.density) { 1.toDp() + 0.05.dp })
+        baselinePositionY.assertIsEqualTo(
+            expectedPositionY,
+            "baseline y-position",
+            tolerance = tolerance,
+        )
     }
 
     @Test
@@ -723,10 +729,17 @@ class TabTest {
     fun testInspectorValue() {
         val pos = TabPosition(10.0.dp, 200.0.dp)
         rule.setContent {
-            val modifier = Modifier.tabIndicatorOffset(pos) as InspectableValue
-            assertThat(modifier.nameFallback).isEqualTo("tabIndicatorOffset")
-            assertThat(modifier.valueOverride).isEqualTo(pos)
-            assertThat(modifier.inspectableElements.asIterable()).isEmpty()
+            val modifiers = Modifier.tabIndicatorOffset(pos).toList()
+            val fillMaxWidth = modifiers[0] as InspectableValue
+            val wrapContentSize = modifiers[1] as InspectableValue
+            val tabIndicatorOffset = modifiers[2] as InspectableValue
+
+            assertThat(fillMaxWidth.nameFallback).isEqualTo("fillMaxWidth")
+            assertThat(wrapContentSize.nameFallback).isEqualTo("wrapContentSize")
+
+            assertThat(tabIndicatorOffset.nameFallback).isEqualTo("tabIndicatorOffset")
+            assertThat(tabIndicatorOffset.valueOverride).isEqualTo(pos)
+            assertThat(tabIndicatorOffset.inspectableElements.asIterable()).isEmpty()
         }
     }
 

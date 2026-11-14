@@ -42,6 +42,11 @@ import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScrollPro
  *
  * @sample androidx.wear.compose.material3.samples.CustomTransformationSpecSample
  *
+ * This shows how to apply different [androidx.compose.ui.graphics.CompositingStrategy] with
+ * [TransformationSpec] for the [TransformingLazyColumn].
+ *
+ * @sample androidx.wear.compose.material3.samples.CustomCompositingStrategyTransformationSpecSample
+ *
  * This shows how to apply the [TransformationSpec] to custom component inside
  * [TransformingLazyColumn].
  *
@@ -172,7 +177,7 @@ public class TransformationVariableSpec(
     /**
      * Defines how far into the transition area the transformation zone ends. For example, a value
      * of 0.5f means that when the item is moving down, its bottom edge needs to reach the middle
-     * point of the transition area for this variable to reach it's maximum/target value. Should be
+     * point of the transition area for this variable to reach its maximum/target value. Should be
      * greater than [transformationZoneEnterFraction].
      *
      * See also [transformationZoneEnterFraction]

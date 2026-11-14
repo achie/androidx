@@ -17,6 +17,7 @@
 package androidx.compose.animation
 
 import androidx.annotation.VisibleForTesting
+import androidx.collection.MutableObjectList
 import androidx.collection.MutableScatterMap
 import androidx.compose.animation.SharedTransitionScope.OverlayClip
 import androidx.compose.animation.SharedTransitionScope.PlaceholderSize
@@ -26,7 +27,7 @@ import androidx.compose.animation.SharedTransitionScope.ResizeMode
 import androidx.compose.animation.SharedTransitionScope.ResizeMode.Companion.RemeasureToBounds
 import androidx.compose.animation.SharedTransitionScope.ResizeMode.Companion.scaleToBounds
 import androidx.compose.animation.SharedTransitionScope.SharedContentState
-import androidx.compose.animation.core.ExperimentalTransitionApi
+import androidx.compose.animation.core.DeferredTransition
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring.StiffnessMediumLow
@@ -43,8 +44,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -63,13 +63,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.LookaheadScope
@@ -77,12 +77,15 @@ import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.approachLayout
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
-import androidx.compose.ui.node.ObserverModifierNode
+import androidx.compose.ui.node.currentValueOf
 import androidx.compose.ui.node.invalidateDraw
-import androidx.compose.ui.node.observeReads
+import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -90,7 +93,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.round
-import androidx.compose.ui.util.fastForEach
+import kotlin.js.JsName
+import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -165,11 +169,12 @@ private data class SharedTransitionScopeRootModifierElement(
     }
 }
 
+@OptIn(ExperimentalLookaheadAnimationVisualDebugApi::class)
 private class SharedTransitionScopeRootModifierNode(sharedScope: SharedTransitionScopeImpl) :
-    Modifier.Node(), LayoutModifierNode, ObserverModifierNode, DrawModifierNode {
+    Modifier.Node(), LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode {
+
     override fun onAttach() {
         super.onAttach()
-        observeReads(sharedScope.observeAnimatingBlock)
         sharedScope.invalidateOverlay = { invalidateDraw() }
     }
 
@@ -178,12 +183,6 @@ private class SharedTransitionScopeRootModifierNode(sharedScope: SharedTransitio
     }
 
     var sharedScope: SharedTransitionScopeImpl = sharedScope
-        set(newScope) {
-            if (newScope != field) {
-                observeReads(newScope.observeAnimatingBlock)
-            }
-            field = newScope
-        }
 
     override fun MeasureScope.measure(
         measurable: Measurable,
@@ -195,6 +194,19 @@ private class SharedTransitionScopeRootModifierNode(sharedScope: SharedTransitio
             if (coords != null) {
                 if (!isLookingAhead) {
                     sharedScope.root = coords
+                    if (isLookaheadAnimationVisualDebuggingEnabled) {
+                        if (currentValueOf(LocalLookaheadAnimationVisualDebugConfig).isEnabled) {
+                            if (sharedScope.lookaheadAnimationVisualDebugHelper == null) {
+                                sharedScope.lookaheadAnimationVisualDebugHelper =
+                                    LookaheadAnimationVisualDebugHelper()
+                            }
+                            sharedScope.lookaheadAnimationVisualDebugHelper!!
+                                .updateDrawingCoordinates(
+                                    coords.findRootCoordinates().positionInRoot(),
+                                    sharedScope.lookaheadRoot.size,
+                                )
+                        }
+                    }
                 } else {
                     sharedScope.lookaheadRoot = coords
                 }
@@ -203,19 +215,25 @@ private class SharedTransitionScopeRootModifierNode(sharedScope: SharedTransitio
         }
     }
 
-    override fun onObservedReadsChanged() {
-        sharedScope.updateTransitionActiveness()
-        observeReads(sharedScope.observeAnimatingBlock)
-    }
-
     override fun ContentDrawScope.draw() {
         drawContent()
-        sharedScope.drawInOverlay(this)
-        if (VisualDebugging) {
-            drawRect(
-                if (sharedScope.isTransitionActive) Color.Red else Color.Green,
-                style = Stroke(3f),
-            )
+
+        if (isLookaheadAnimationVisualDebuggingEnabled) {
+            val lookaheadAnimationVisualDebugConfig =
+                currentValueOf(LocalLookaheadAnimationVisualDebugConfig)
+            if (lookaheadAnimationVisualDebugConfig.isEnabled && sharedScope.isTransitionActive) {
+                with(sharedScope.lookaheadAnimationVisualDebugHelper!!) {
+                    drawOverlay(lookaheadAnimationVisualDebugConfig.overlayColor)
+                }
+            }
+            sharedScope.drawInOverlay(this, requireGraphicsContext())
+            if (lookaheadAnimationVisualDebugConfig.isEnabled && sharedScope.isTransitionActive) {
+                with(sharedScope.lookaheadAnimationVisualDebugHelper!!) {
+                    drawGlobalVisualizations()
+                }
+            }
+        } else {
+            sharedScope.drawInOverlay(this, requireGraphicsContext())
         }
     }
 }
@@ -270,6 +288,11 @@ public interface SharedTransitionScope : LookaheadScope {
              * parent layout of shared elements or shared bounds observe the animated size during an
              * active shared transition. Therefore the layout parent will most likely resize itself
              * and re-layout its children to adjust to the new animated size.
+             *
+             * **Performance caveat**: Because [AnimatedSize] changes on every frame of the bounds
+             * animation, the parent layout and any sibling layouts will be remeasured and relaid
+             * out on each animation frame. If parent or sibling remeasurement during the transition
+             * is undesirable for performance or layout stability, use [ContentSize] instead.
              *
              * @see [ContentSize]
              * @see [SharedTransitionScope.PlaceholderSize]
@@ -335,6 +358,10 @@ public interface SharedTransitionScope : LookaheadScope {
              * Therefore, the child layout of [sharedBounds] will likely change its layout to fit in
              * the animated constraints.
              *
+             * **Performance caveat**: [RemeasureToBounds] incurs frame-by-frame remeasurement,
+             * which can be expensive especially for complex layout trees. Consider using
+             * [scaleToBounds] instead (which is the default for [sharedBounds]).
+             *
              * [RemeasureToBounds] mode works well for layouts that respond well to constraints
              * change, such as background and Images. It does not work well for layouts with
              * specific size requirements. Such layouts include Text, and bespoke layouts that could
@@ -352,6 +379,12 @@ public interface SharedTransitionScope : LookaheadScope {
              * child layout does not re-layout during the bounds transform, contrary to
              * [RemeasureToBounds] mode. Instead, it will scale the stable layout based on the
              * animated size of the [sharedBounds].
+             *
+             * Under the hood, [scaleToBounds] effectively uses [skipToLookaheadSize] for the child
+             * layout, measuring the child layout only once at its target lookahead constraints and
+             * then scaling it to fit in the parent's constraints. This avoids frame-by-frame
+             * remeasurement, making [scaleToBounds] the default and recommended [ResizeMode] for
+             * maintaining performance during transitions.
              *
              * [scaleToBounds] works best for [sharedBounds] when used to animate shared Text.
              *
@@ -668,7 +701,7 @@ public interface SharedTransitionScope : LookaheadScope {
      *   the shared element's initial and target bounds for the transition.
      * @param resizeMode A [ResizeMode] that defines how the child layout of [sharedBounds] should
      *   be resized during [boundsTransform]. By default, [scaleToBounds] is used to scale the child
-     *   content to fit the transforming bounds.
+     *   content to fit the transforming bounds. This avoids frame-by-frame remeasurement.
      * @param placeholderSize A [PlaceholderSize] that defines the size the transforming layout
      *   reports to the layout system during the transition. By default, this is the shared bounds'
      *   content size (without any scaling or transformation).
@@ -683,10 +716,10 @@ public interface SharedTransitionScope : LookaheadScope {
     public fun Modifier.sharedBounds(
         sharedContentState: SharedContentState,
         animatedVisibilityScope: AnimatedVisibilityScope,
-        enter: EnterTransition = fadeIn(),
-        exit: ExitTransition = fadeOut(),
+        enter: EnterTransition = SharedTransitionDefaults.EnterTransition,
+        exit: ExitTransition = SharedTransitionDefaults.ExitTransition,
         boundsTransform: BoundsTransform = SharedTransitionDefaults.BoundsTransform,
-        resizeMode: ResizeMode = scaleToBounds(ContentScale.FillWidth, Center),
+        resizeMode: ResizeMode = SharedTransitionDefaults.ResizeMode,
         placeholderSize: PlaceholderSize = ContentSize,
         renderInOverlayDuringTransition: Boolean = true,
         zIndexInOverlay: Float = 0f,
@@ -902,6 +935,48 @@ public interface SharedTransitionScope : LookaheadScope {
     }
 
     /**
+     * Defines how a shared element behaves during the deferred phase of a [DeferredTransition].
+     *
+     * @see SharedContentConfig.deferredTransitionBehavior
+     */
+    @Immutable
+    @JvmInline
+    public value class DeferredTransitionBehavior internal constructor(private val value: Int) {
+        public companion object {
+            /**
+             * The shared element visually transforms (`scale`, `offset`) with its parent container
+             * during the deferred phase of a [DeferredTransition], appearing attached to its parent
+             * container until the transition switches to the automatic phase.
+             */
+            public val FollowContainer: DeferredTransitionBehavior = DeferredTransitionBehavior(0)
+
+            /**
+             * The shared element detaches from its parent container's manual transformations and
+             * remains static at its initial bounds during the deferred phase of a
+             * [DeferredTransition].
+             */
+            public val Static: DeferredTransitionBehavior = DeferredTransitionBehavior(1)
+
+            /**
+             * The shared element detaches from its parent container's manual transformations and
+             * interpolates between its initial and target bounds according to
+             * [MutableContentTransform.sharedElementProgress] during the deferred phase of a
+             * [DeferredTransition]. If [MutableContentTransform.sharedElementProgress] is not
+             * configured, the element remains at its initial bounds.
+             */
+            public val SeekToTarget: DeferredTransitionBehavior = DeferredTransitionBehavior(2)
+        }
+
+        override fun toString(): String =
+            when (this) {
+                FollowContainer -> "FollowContainer"
+                Static -> "Static"
+                SeekToTarget -> "SeekToTarget"
+                else -> "Invalid"
+            }
+    }
+
+    /**
      * [SharedContentConfig] allows a shared element to be disabled or enabled dynamically through
      * [isEnabled] property. By default, [shouldKeepEnabledForOngoingAnimation] is true. This means
      * if the shared element transition is already running for the layout that this
@@ -918,6 +993,7 @@ public interface SharedTransitionScope : LookaheadScope {
      *
      * @sample androidx.compose.animation.samples.DynamicallyEnabledSharedElementInPagerSample
      * @sample androidx.compose.animation.samples.SharedContentConfigSample
+     * @sample androidx.compose.animation.samples.SharedContentConfigDeferredTransitionSample
      */
     public interface SharedContentConfig {
         /**
@@ -939,6 +1015,55 @@ public interface SharedTransitionScope : LookaheadScope {
         @get:Suppress("GetterSetterNames")
         public val shouldKeepEnabledForOngoingAnimation: Boolean
             get() = true
+
+        /**
+         * **Deprecated:** Override [deferredTransitionBehavior] instead:
+         * ```kotlin
+         * override val deferredTransitionBehavior = DeferredTransitionBehavior.Static
+         * ```
+         *
+         * [permitTransformDuringDeferredTransition] defines whether the shared element should take
+         * part in the manual transformations applied to its container during the deferred phase of
+         * a [DeferredTransition]. If true, the element visually transforms with its container until
+         * the transition switches to the automatic phase. This makes it look like it remains
+         * visually attached to its parent container. If false, it remains statically detached in
+         * its start position during the deferred phase.
+         *
+         * @sample androidx.compose.animation.samples.SharedContentConfigDeferredTransitionSample
+         */
+        @Deprecated(
+            message =
+                "Override deferredTransitionBehavior instead: return " +
+                    "DeferredTransitionBehavior.Static for false, or " +
+                    "DeferredTransitionBehavior.FollowContainer for true."
+        )
+        @get:Suppress("GetterSetterNames")
+        public val permitTransformDuringDeferredTransition: Boolean
+            get() = true
+
+        /**
+         * Defines how the shared element behaves during the deferred phase of a
+         * [DeferredTransition].
+         *
+         * By default, this returns [DeferredTransitionBehavior.FollowContainer], meaning the
+         * element visually transforms (`scale`, `offset`) with its parent container until the
+         * transition switches to the automatic phase.
+         *
+         * Use [DeferredTransitionBehavior.Static] to detach the element from its container's manual
+         * transformations and keep it at its initial bounds, or
+         * [DeferredTransitionBehavior.SeekToTarget] to interpolate between its initial and target
+         * bounds when [MutableContentTransform.sharedElementProgress] is configured.
+         *
+         * @sample androidx.compose.animation.samples.SharedContentConfigDeferredTransitionSample
+         */
+        @Suppress("DEPRECATION")
+        public val deferredTransitionBehavior: DeferredTransitionBehavior
+            get() =
+                if (permitTransformDuringDeferredTransition) {
+                    DeferredTransitionBehavior.FollowContainer
+                } else {
+                    DeferredTransitionBehavior.Static
+                }
 
         /**
          * [alternativeTargetBoundsInTransitionScopeAfterRemoval] returns an alternative target
@@ -975,8 +1100,65 @@ public interface SharedTransitionScope : LookaheadScope {
      *
      * @see SharedContentConfig
      */
+    @JsName("makeSharedContentConfig")
     public fun SharedContentConfig(): SharedContentConfig {
         return CachedSharedContentConfig
+    }
+
+    /**
+     * [SharedContentConfig] is a factory method that returns a [SharedContentConfig] object with
+     * default implementations for all the functions and properties defined in the
+     * [SharedContentConfig] interface, configured with the given [deferredTransitionBehavior].
+     *
+     * @param deferredTransitionBehavior how the shared element behaves during the deferred phase of
+     *   a [DeferredTransition].
+     * @sample androidx.compose.animation.samples.SharedContentConfigDeferredTransitionSample
+     * @see SharedContentConfig
+     */
+    public fun SharedContentConfig(
+        deferredTransitionBehavior: DeferredTransitionBehavior
+    ): SharedContentConfig =
+        when (deferredTransitionBehavior) {
+            DeferredTransitionBehavior.Static -> CachedStaticSharedContentConfig
+            DeferredTransitionBehavior.SeekToTarget -> CachedSeekToTargetSharedContentConfig
+            else -> CachedSharedContentConfig
+        }
+
+    /**
+     * [SharedContentConfig] is a factory method that returns an [SharedContentConfig] object with
+     * default implementations for all the functions and properties defined in the
+     * [SharedContentConfig] interface. More specifically, the returned
+     * [SharedTransitionScope.SharedContentConfig] enables shared elements and bounds, and keeps
+     * them enabled while the animation is in-flight. It also sets the
+     * [SharedContentConfig.alternativeTargetBoundsInTransitionScopeAfterRemoval] to null, ensuring
+     * the shared element transition is canceled immediately if the incoming shared element is
+     * removed during the animation.
+     *
+     * Use [SharedContentConfig] with [DeferredTransitionBehavior.Static] for `false`, or
+     * [DeferredTransitionBehavior.FollowContainer] for `true`.
+     *
+     * @param permitTransformDuringDeferredTransition defines whether the shared element should take
+     *   part in the manual transformations applied to its container during the deferred phase of a
+     *   [DeferredTransition]. This makes it look like it remains visually attached to its parent
+     *   container.
+     * @sample androidx.compose.animation.samples.SharedContentConfigDeferredTransitionSample
+     * @see SharedContentConfig
+     */
+    @Deprecated(
+        message =
+            "Use SharedContentConfig(DeferredTransitionBehavior.Static) for false, or " +
+                "SharedContentConfig(DeferredTransitionBehavior.FollowContainer) for true."
+    )
+    public fun SharedContentConfig(
+        permitTransformDuringDeferredTransition: Boolean
+    ): SharedContentConfig {
+        return SharedContentConfig(
+            if (permitTransformDuringDeferredTransition) {
+                DeferredTransitionBehavior.FollowContainer
+            } else {
+                DeferredTransitionBehavior.Static
+            }
+        )
     }
 }
 
@@ -989,7 +1171,17 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
     override var isTransitionActive: Boolean by mutableStateOf(false)
         private set
 
+    internal var lookaheadAnimationVisualDebugHelper: LookaheadAnimationVisualDebugHelper? = null
+
     @VisibleForTesting var testBlockToRun: (() -> Unit)? = null
+
+    @VisibleForTesting
+    internal fun sharedElementForKey(key: Any): SharedElement? = sharedElements[key]
+
+    // True if any `renderInSharedTransitionScopeOverlay` renderer has a layer.
+    @VisibleForTesting
+    internal val hasRenderInOverlayLayer: Boolean
+        get() = renderers.any { it !is SharedElementEntry && it.layer != null }
 
     override fun Modifier.skipToLookaheadSize(enabled: () -> Boolean): Modifier =
         this.then(SkipToLookaheadSizeElement(isEnabled = enabled))
@@ -1052,9 +1244,12 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
             )
             .composed {
                 animatedVisibilityScope.transition
-                    .createModifier(
-                        enter = enter,
-                        exit = exit,
+                    .createEnterExitModifier(
+                        updateEnterExitModifierState(
+                            animatedVisibilityScope.transition,
+                            enter,
+                            exit,
+                        ),
                         // Since we don't know if a match is found when this is composed,
                         // we have to defer the decision to enable or disable content
                         // scaling until later in the frame. This later time could be
@@ -1187,20 +1382,41 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
 
     override fun OverlayClip(clipShape: Shape): OverlayClip = ShapeBasedClip(clipShape)
 
-    // Called from the observation in SharedTransitionScopeRootModifierNode
-    internal val observeAnimatingBlock: () -> Unit = {
-        sharedElements.any { (_, element) -> element.isAnimating() }
-    }
+    // Tracks the total number of shared element entries that are currently transitioning. e.g., If
+    // a matching pair of entries are animating, this count should be 2. When this count drops
+    // to 0, it means no shared elements are animating. Hence we can update the `isTransitionActive`
+    // flag on the shared transition scope level.
+    private var activeTransitionEntryCount = 0
 
-    internal fun updateTransitionActiveness() {
-        val isActive = sharedElements.any { (_, element) -> element.isAnimating() }
+    @OptIn(ExperimentalLookaheadAnimationVisualDebugApi::class)
+    internal fun onNodeTransitionActivenessChanged(active: Boolean) {
+        if (active) {
+            activeTransitionEntryCount++
+        } else {
+            activeTransitionEntryCount = (activeTransitionEntryCount - 1).coerceAtLeast(0)
+        }
+        val isActive = activeTransitionEntryCount > 0
         if (isActive != isTransitionActive) {
             isTransitionActive = isActive
             if (!isActive) {
-                sharedElements.forEach { (_, element) -> element.onSharedTransitionFinished() }
+                attachLookaheadAnimationVisualDebugHelper()
+                sharedElements.forEachValue { element -> element.onSharedTransitionFinished() }
+            } else {
+                detachLookaheadAnimationVisualDebugHelper()
             }
         }
-        sharedElements.forEach { (_, element) -> element.updateMatch() }
+    }
+
+    private fun attachLookaheadAnimationVisualDebugHelper() {
+        if (isLookaheadAnimationVisualDebuggingEnabled) {
+            lookaheadAnimationVisualDebugHelper?.onAttach(coroutineScope)
+        }
+    }
+
+    private fun detachLookaheadAnimationVisualDebugHelper() {
+        if (isLookaheadAnimationVisualDebuggingEnabled) {
+            lookaheadAnimationVisualDebugHelper?.onDetach(coroutineScope)
+        }
     }
 
     /** ******** Impl details below **************** */
@@ -1211,7 +1427,6 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
      * will add its animations to. When [parentTransition] is null, [visible] will be cast to (Unit)
      * -> Boolean, since we have no parent state to use for the query.
      */
-    @OptIn(ExperimentalTransitionApi::class)
     private fun <T> Modifier.sharedBoundsImpl(
         sharedContentState: SharedContentState,
         parentTransition: Transition<T>?,
@@ -1224,7 +1439,7 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
         clipInOverlayDuringTransition: OverlayClip,
     ) = composed {
         val key = sharedContentState.key
-        val sharedElementState =
+        val sharedElementEntry =
             key(key) {
                 val sharedElement = remember { sharedElementsFor(key) }
                 val boundsAnimation =
@@ -1237,26 +1452,25 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
                             } else {
                                 @Suppress("UNCHECKED_CAST")
                                 val targetState = (visible as (Unit) -> Boolean).invoke(Unit)
-                                val transitionState =
-                                    remember {
-                                            val initialState =
-                                                if (sharedElement.enabledEntries.isEmpty()) {
-                                                    targetState
-                                                } else {
-                                                    // If there's already shared elements of the
-                                                    // same key
-                                                    // already declared, we likely will need to
-                                                    // animate.
-                                                    // Hence, set the initial state to be different
-                                                    // than
-                                                    // target. If no animation is needed, this will
-                                                    // finish
-                                                    // right away.
-                                                    !targetState
-                                                }
-                                            MutableTransitionState(initialState = initialState)
+                                val transitionState = remember {
+                                    val initialState =
+                                        if (sharedElement.enabledEntries.isEmpty()) {
+                                            targetState
+                                        } else {
+                                            // If there's already shared elements of the
+                                            // same key
+                                            // already declared, we likely will need to
+                                            // animate.
+                                            // Hence, set the initial state to be different
+                                            // than
+                                            // target. If no animation is needed, this will
+                                            // finish
+                                            // right away.
+                                            !targetState
                                         }
-                                        .also { it.targetState = targetState }
+                                    MutableTransitionState(initialState = initialState)
+                                }
+                                    .also { it.targetState = targetState }
                                 rememberTransition(transitionState)
                             }
                         val animation =
@@ -1274,16 +1488,14 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
                             }
                             .also {
                                 it.updateAnimation(animation, boundsTransform)
-                                if (SharedTransitionDebug) {
-                                    println(
-                                        "SharedTransition, current state:" +
-                                            " ${boundsTransition.currentState}" +
-                                            ", target: ${boundsTransition.targetState}"
-                                    )
+                                sharedTransitionDebug {
+                                    "current state:" +
+                                        " ${boundsTransition.currentState}" +
+                                        ", target: ${boundsTransition.targetState}"
                                 }
                             }
                     }
-                rememberSharedElementState(
+                rememberSharedElementEntry(
                     sharedElement = sharedElement,
                     boundsAnimation = boundsAnimation,
                     placeholderSize = placeholderSize,
@@ -1295,11 +1507,11 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
                 )
             }
 
-        this then SharedBoundsNodeElement(sharedElementState)
+        this then SharedBoundsNodeElement(sharedElementEntry)
     }
 
     @Composable
-    private fun rememberSharedElementState(
+    private fun rememberSharedElementEntry(
         sharedElement: SharedElement,
         boundsAnimation: BoundsAnimation,
         placeholderSize: PlaceholderSize,
@@ -1308,45 +1520,45 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
         clipInOverlayDuringTransition: OverlayClip,
         zIndexInOverlay: Float,
         renderInOverlayDuringTransition: Boolean,
-    ): SharedElementEntry =
-        remember {
-                SharedElementEntry(
-                    sharedElement,
-                    boundsAnimation,
-                    placeholderSize,
-                    renderOnlyWhenVisible = renderOnlyWhenVisible,
-                    userState = sharedContentState,
-                    overlayClip = clipInOverlayDuringTransition,
-                    zIndex = zIndexInOverlay,
-                    renderInOverlayDuringTransition = renderInOverlayDuringTransition,
-                )
-            }
-            .also {
-                sharedContentState.internalState = it
-                // Update the properties if any of them changes
-                it.sharedElement = sharedElement
-                it.renderOnlyWhenVisible = renderOnlyWhenVisible
-                it.boundsAnimation = boundsAnimation
-                it.placeholderSize = placeholderSize
-                it.overlayClip = clipInOverlayDuringTransition
-                it.zIndex = zIndexInOverlay
-                it.renderInOverlayDuringTransition = renderInOverlayDuringTransition
-                it.userState = sharedContentState
-            }
+    ): SharedElementEntry = remember {
+        SharedElementEntry(
+            sharedElement,
+            boundsAnimation,
+            placeholderSize,
+            renderOnlyWhenVisible = renderOnlyWhenVisible,
+            userState = sharedContentState,
+            overlayClip = clipInOverlayDuringTransition,
+            zIndex = zIndexInOverlay,
+            renderInOverlayDuringTransition = renderInOverlayDuringTransition,
+        )
+    }
+        .also {
+            sharedContentState.internalState = it
+            // Update the properties if any of them changes
+            it.sharedElement = sharedElement
+            it.renderOnlyWhenVisible = renderOnlyWhenVisible
+            it.boundsAnimation = boundsAnimation
+            it.placeholderSize = placeholderSize
+            it.overlayClip = clipInOverlayDuringTransition
+            it.zIndex = zIndexInOverlay
+            it.renderInOverlayDuringTransition = renderInOverlayDuringTransition
+            it.userState = sharedContentState
+        }
 
     internal var root: LayoutCoordinates
         get() =
-            requireNotNull(_nullableRoot) {
+            requireNotNull(nullableRoot) {
                 "Error: Uninitialized LayoutCoordinates." +
                     " Please make sure when using the SharedTransitionScope composable function," +
                     " the modifier passed to the child content is being used, or use" +
                     " SharedTransitionLayout instead."
             }
         set(value) {
-            _nullableRoot = value
+            nullableRoot = value
         }
 
-    private var _nullableRoot: LayoutCoordinates? = null
+    internal var nullableRoot: LayoutCoordinates? = null
+        private set
 
     internal var lookaheadRoot: LayoutCoordinates
         get() =
@@ -1362,50 +1574,47 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
 
     private var _nullableLookaheadRoot: LayoutCoordinates? = null
 
-    // TODO: Use MutableObjectList and impl sort
-    private val renderers = mutableStateListOf<LayerRenderer>()
+    private var renderersVersion by mutableIntStateOf(0)
+    private val renderers = MutableObjectList<LayerRenderer>()
 
-    // sharedElements are being observed for the edge events of 1) any transition has started,
-    // and 2) all transitions are finished. As such, the map containing the key-sharedElement pairs
-    // need to be observable, in order to update the observation when new shared elements are
-    // added or removed.
-    private val sharedElements = mutableStateMapOf<Any, SharedElement>()
+    private val sharedElements = MutableScatterMap<Any, SharedElement>()
 
     private fun sharedElementsFor(key: Any): SharedElement {
-        return sharedElements[key] ?: SharedElement(key, this).also { sharedElements[key] = it }
+        return sharedElements.getOrPut(key) { SharedElement(key, this) }
     }
 
-    internal fun drawInOverlay(scope: ContentDrawScope) {
-        // TODO: Sort while preserving the parent child order
-        renderers.sortBy {
-            if (it.zIndex == 0f && it is SharedElementEntry && it.parentState == null) {
-                -1f
-            } else it.zIndex
-        }
+    private var lastSortedVersion = -1
 
-        renderers.fastForEach { it.drawInOverlay(drawScope = scope) }
+    internal fun zOrderChanged() {
+        renderersVersion++
     }
 
-    internal fun onEntryRemoved(sharedElementState: SharedElementEntry) {
-        if (SharedTransitionDebug) {
-            println(
-                "SharedTransition, entry removed, key: ${sharedElementState.sharedElement.key}," +
-                    " state: ${sharedElementState.sharedElement.state}"
-            )
+    internal fun drawInOverlay(scope: ContentDrawScope, graphicsContext: GraphicsContext) {
+        val version = renderersVersion // Read to register dependency
+        if (lastSortedVersion != version) {
+            renderers.sortWith(LayerRenderer.LayerRendererComparator)
+            lastSortedVersion = version
         }
-        with(sharedElementState.sharedElement) {
-            removeEntry(sharedElementState)
-            updateTransitionActiveness()
-            renderers.remove(sharedElementState)
+        renderers.forEach { it.drawInOverlay(drawScope = scope, graphicsContext) }
+    }
+
+    internal fun onEntryRemoved(sharedElementEntry: SharedElementEntry) {
+        sharedTransitionDebug {
+            "entry removed, key: ${sharedElementEntry.sharedElement.key}," +
+                " state: ${sharedElementEntry.sharedElement.state}"
+        }
+        sharedElementEntry.onEntryRemoved()
+        with(sharedElementEntry.sharedElement) {
+            removeEntry(sharedElementEntry)
+            renderers -= sharedElementEntry
+            renderersVersion++
             if (allEntries.isEmpty()) {
                 scope.coroutineScope.launch {
                     if (allEntries.isEmpty()) {
-                        if (SharedTransitionDebug) {
-                            println(
-                                "SharedTransition, key removed. key =" +
-                                    " ${sharedElementState.sharedElement.key}," +
-                                    " state: ${sharedElementState.sharedElement.state}"
-                            )
+                        sharedTransitionDebug {
+                            "key removed. key =" +
+                                " ${sharedElementEntry.sharedElement.key}," +
+                                " state: ${sharedElementEntry.sharedElement.state}"
                         }
                         scope.sharedElements.remove(key)
                     }
@@ -1414,28 +1623,30 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
         }
     }
 
-    internal fun onEntryAdded(sharedElementState: SharedElementEntry) {
-        with(sharedElementState.sharedElement) {
-            addEntry(sharedElementState)
-            updateTransitionActiveness()
-            val id =
-                renderers.indexOfFirst {
-                    (it as? SharedElementEntry)?.sharedElement == sharedElementState.sharedElement
-                }
-            if (id == renderers.size - 1 || id == -1) {
-                renderers.add(sharedElementState)
-            } else {
-                renderers.add(id + 1, sharedElementState)
+    internal fun onEntryAdded(sharedElementEntry: SharedElementEntry) {
+        with(sharedElementEntry.sharedElement) {
+            addEntry(sharedElementEntry)
+            sharedElementEntry.updateTransitionActiveness()
+            val id = renderers.indexOfFirst {
+                (it as? SharedElementEntry)?.sharedElement == sharedElementEntry.sharedElement
             }
+            if (id == -1 || id >= renderers.size - 1) {
+                renderers += sharedElementEntry
+            } else {
+                renderers.add(id + 1, sharedElementEntry)
+            }
+            renderersVersion++
         }
     }
 
     internal fun onLayerRendererCreated(renderer: LayerRenderer) {
-        renderers.add(renderer)
+        renderers += renderer
+        renderersVersion++
     }
 
     internal fun onLayerRendererRemoved(renderer: LayerRenderer) {
-        renderers.remove(renderer)
+        renderers -= renderer
+        renderersVersion++
     }
 
     private class ShapeBasedClip(val clipShape: Shape) : OverlayClip {
@@ -1458,9 +1669,23 @@ internal constructor(lookaheadScope: LookaheadScope, val coroutineScope: Corouti
 internal interface LayerRenderer {
     val parentState: SharedElementEntry?
 
-    fun drawInOverlay(drawScope: DrawScope)
+    // Layer for rendering in overlay. Null when not rendering in overlay.
+    val layer: GraphicsLayer?
+
+    fun drawInOverlay(drawScope: DrawScope, graphicsContext: GraphicsContext)
 
     val zIndex: Float
+
+    companion object LayerRendererComparator : Comparator<LayerRenderer> {
+        override fun compare(a: LayerRenderer, b: LayerRenderer): Int =
+            comparator(a).compareTo(comparator(b))
+
+        // TODO: Sort while preserving the parent child order
+        private fun comparator(it: LayerRenderer): Float =
+            if (it.zIndex == 0f && it is SharedElementEntry && it.parentState == null) {
+                -1f
+            } else it.zIndex
+    }
 }
 
 private val DefaultSpring =
@@ -1524,7 +1749,24 @@ private val cachedScaleToBoundsImplMap =
 internal class ScaleToBoundsImpl(val contentScale: ContentScale, val alignment: Alignment) :
     ResizeMode
 
-private object CachedSharedContentConfig : SharedTransitionScope.SharedContentConfig
+private class ImmutableSharedContentConfig(
+    override val deferredTransitionBehavior: SharedTransitionScope.DeferredTransitionBehavior
+) : SharedTransitionScope.SharedContentConfig {
+    @Suppress("OVERRIDE_DEPRECATION")
+    override val permitTransformDuringDeferredTransition: Boolean
+        get() =
+            deferredTransitionBehavior ==
+                SharedTransitionScope.DeferredTransitionBehavior.FollowContainer
+}
+
+private val CachedSharedContentConfig =
+    ImmutableSharedContentConfig(SharedTransitionScope.DeferredTransitionBehavior.FollowContainer)
+
+private val CachedStaticSharedContentConfig =
+    ImmutableSharedContentConfig(SharedTransitionScope.DeferredTransitionBehavior.Static)
+
+private val CachedSeekToTargetSharedContentConfig =
+    ImmutableSharedContentConfig(SharedTransitionScope.DeferredTransitionBehavior.SeekToTarget)
 
 private object RemeasureImpl : ResizeMode
 
@@ -1534,11 +1776,20 @@ private object RemeasureImpl : ResizeMode
  */
 public object SharedTransitionDefaults {
 
+    /** Default enter transition used in [SharedTransitionScope.sharedBounds]. */
+    public val EnterTransition: EnterTransition = fadeIn()
+
+    /** Default exit transition used in [SharedTransitionScope.sharedBounds]. */
+    public val ExitTransition: ExitTransition = fadeOut()
+
     /**
      * Default bounds transform used in [SharedTransitionScope.sharedBounds]. This default lambda
      * employs a [spring] for the animation.
      */
     public val BoundsTransform: BoundsTransform = BoundsTransform { _, _ -> DefaultSpring }
+
+    /** Default resize mode used in [SharedTransitionScope.sharedBounds]. */
+    public val ResizeMode: ResizeMode = ScaleToBoundsImpl(ContentScale.FillWidth, Center)
 
     /**
      * Default SharedContentConfig used in [SharedTransitionScope.rememberSharedContentState]. This
@@ -1551,4 +1802,19 @@ public object SharedTransitionDefaults {
      * @see SharedTransitionScope.SharedContentConfig
      */
     public object SharedContentConfig : SharedTransitionScope.SharedContentConfig
+}
+
+// In-place insertion sort, because we expect the list to be somewhat small and mostly sorted most
+// of the time.
+private fun <T> MutableObjectList<T>.sortWith(comparator: Comparator<T>) {
+    for (i in 1 until size) {
+        val current = this[i]
+        var j = i - 1
+        // Shift elements to the right to make room for the current item
+        while (j >= 0 && comparator.compare(this[j], current) > 0) {
+            this[j + 1] = this[j]
+            j--
+        }
+        this[j + 1] = current
+    }
 }

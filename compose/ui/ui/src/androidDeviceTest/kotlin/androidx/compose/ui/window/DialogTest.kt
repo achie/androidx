@@ -15,7 +15,9 @@
  */
 package androidx.compose.ui.window
 
+import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Point
 import android.os.Build
 import android.util.DisplayMetrics
@@ -78,7 +80,8 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyChild
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isRoot
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.IntOffset
@@ -89,14 +92,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
+import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry.getInstrumentation
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.UiDevice
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.roundToInt
-import kotlinx.coroutines.test.StandardTestDispatcher
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -105,13 +111,21 @@ import org.junit.runner.RunWith
 @MediumTest
 @RunWith(AndroidJUnit4::class)
 class DialogTest {
-    @get:Rule val rule = createAndroidComposeRule<TestActivity2>(StandardTestDispatcher())
+    @get:Rule val rule = createAndroidComposeRule<TestActivity2>()
 
     lateinit var activity: ComponentActivity
 
     private val defaultText = "dialogText"
     private val testTag = "tag"
     private lateinit var dispatcher: OnBackPressedDispatcher
+    private var initialOrientation: Int? = null
+
+    @After
+    fun tearDown() {
+        val targetConfigOrientation = initialOrientation ?: return
+        initialOrientation = null
+        rule.restoreOrientationAndWait(targetConfigOrientation)
+    }
 
     @Test
     fun dialogTest_isShowingContent() {
@@ -226,7 +240,7 @@ class DialogTest {
         textInteraction.assertIsDisplayed()
     }
 
-    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
+    @SdkSuppress(minSdkVersion = 25)
     @Test
     fun dialogTest_isNotDismissed_whenPressOutside_releaseInside() {
         setupDialogTest(dialogProperties = DialogProperties())
@@ -249,7 +263,7 @@ class DialogTest {
         textInteraction.assertIsDisplayed()
     }
 
-    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
+    @SdkSuppress(minSdkVersion = 25)
     @Test
     fun dialogTest_isNotDismissed_whenPressOutside_releaseInside_decorFitsFalse() {
         setupDialogTest(dialogProperties = DialogProperties(decorFitsSystemWindows = false))
@@ -434,7 +448,10 @@ class DialogTest {
             Dialog(
                 {},
                 properties =
-                    DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true),
+                    DialogProperties(
+                        usePlatformDefaultWidth = false,
+                        decorFitsSystemWindows = true,
+                    ),
             ) {
                 dialogView = LocalView.current
                 Box(Modifier.size(with(LocalDensity.current) { 100.toDp() }))
@@ -456,7 +473,10 @@ class DialogTest {
             Dialog(
                 {},
                 properties =
-                    DialogProperties(usePlatformDefaultWidth = true, decorFitsSystemWindows = false),
+                    DialogProperties(
+                        usePlatformDefaultWidth = true,
+                        decorFitsSystemWindows = false,
+                    ),
             ) {
                 dialogView = LocalView.current
                 Box(Modifier.size(with(LocalDensity.current) { 100.toDp() }))
@@ -608,7 +628,10 @@ class DialogTest {
             Dialog(
                 onDismissRequest = { dismissed = true },
                 properties =
-                    DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true),
+                    DialogProperties(
+                        usePlatformDefaultWidth = false,
+                        decorFitsSystemWindows = true,
+                    ),
             ) {
                 composeView = LocalView.current
                 Box(Modifier.size(10.dp).testTag(clickBoxTag).clickable { clicked = true })
@@ -815,8 +838,7 @@ class DialogTest {
                     }
                 ) {
                     TextField(
-                        "Hello World",
-                        onValueChange = {},
+                        rememberTextFieldState("Hello World"),
                         Modifier.align(Alignment.BottomStart).focusRequester(focusRequester),
                     )
                 }
@@ -929,13 +951,23 @@ class DialogTest {
 
     @Test
     fun fullScreenDialogPortraitNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                expectedConfigOrientation = Configuration.ORIENTATION_PORTRAIT,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogMatchesContainer()
     }
 
     @Test
     fun fullScreenDialogLandscapeNotDefaultWidthDecorFitsMatchesContainerSize() {
-        rule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        initialOrientation =
+            rule.setOrientationAndWait(
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+                expectedConfigOrientation = Configuration.ORIENTATION_LANDSCAPE,
+                savedInitialOrientation = initialOrientation,
+            )
         verifyFullScreenDialogMatchesContainer()
     }
 
@@ -1071,6 +1103,144 @@ class DialogTest {
         }
     }
 
+    @Test
+    fun dialogTest_customWindowType() {
+        lateinit var window: Window
+        val customType = android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL
+
+        rule.setContent {
+            Dialog(onDismissRequest = {}, properties = DialogProperties(windowType = customType)) {
+                var parent = LocalView.current
+                while (parent !is DialogWindowProvider) {
+                    parent = parent.parent as View
+                }
+                window = (parent as DialogWindowProvider).window
+                Box(Modifier.size(10.dp))
+            }
+        }
+
+        rule.runOnIdle { assertThat(window.attributes.type).isEqualTo(customType) }
+    }
+
+    @Test
+    fun dialogTest_customWindowType_recreatesWindow_whenChanged() {
+        lateinit var window: Window
+        var customType by
+            mutableStateOf(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+
+        rule.setContent {
+            Dialog(onDismissRequest = {}, properties = DialogProperties(windowType = customType)) {
+                var parent = LocalView.current
+                while (parent !is DialogWindowProvider) {
+                    parent = parent.parent as View
+                }
+                window = (parent as DialogWindowProvider).window
+                Box(Modifier.size(10.dp))
+            }
+        }
+
+        // Verify initial type
+        val initialWindow = window
+        rule.runOnIdle {
+            assertThat(initialWindow.attributes.type)
+                .isEqualTo(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+        }
+
+        // Trigger a change in window type
+        customType = android.view.WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL
+
+        // Verify that a NEW window was created with the updated type
+        rule.runOnIdle {
+            assertThat(window).isNotSameInstanceAs(initialWindow)
+            assertThat(window.attributes.type)
+                .isEqualTo(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL)
+        }
+    }
+
+    @Test
+    fun dialogTest_customWindowType_revertToApplication_isDisplayed() {
+        lateinit var window: Window
+        var windowType by
+            mutableStateOf(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+
+        rule.setContent {
+            Dialog(onDismissRequest = {}, properties = DialogProperties(windowType = windowType)) {
+                var parent = LocalView.current
+                while (parent !is DialogWindowProvider) {
+                    parent = parent.parent as View
+                }
+                window = (parent as DialogWindowProvider).window
+                // Use the existing testTag to verify visibility
+                Box(Modifier.size(10.dp).testTag(testTag))
+            }
+        }
+
+        // Verify initial custom type and that the dialog is displayed
+        rule.onNodeWithTag(testTag).assertIsDisplayed()
+        rule.runOnIdle {
+            assertThat(window.attributes.type)
+                .isEqualTo(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+        }
+
+        // Trigger an update to revert back to TYPE_APPLICATION
+        windowType = android.view.WindowManager.LayoutParams.TYPE_APPLICATION
+
+        // Verify updated type and that the dialog is still displayed
+        rule.onNodeWithTag(testTag).assertIsDisplayed()
+        rule.runOnIdle {
+            assertThat(window.attributes.type)
+                .isEqualTo(android.view.WindowManager.LayoutParams.TYPE_APPLICATION)
+        }
+    }
+
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.S)
+    @Test
+    fun dialogTest_blurProperties() {
+        lateinit var window: Window
+        rule.setContent {
+            Dialog(onDismissRequest = {}, properties = DialogProperties(blurBehindRadius = 40.dp)) {
+                var parent = LocalView.current
+                while (parent !is DialogWindowProvider) {
+                    parent = parent.parent as View
+                }
+                window = (parent as DialogWindowProvider).window
+                Box(Modifier.size(10.dp))
+            }
+        }
+
+        rule.runOnIdle {
+            val attributes = window.attributes
+            assertThat(
+                    attributes.flags and android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                )
+                .isNotEqualTo(0)
+            val expectedBlurBehindRadius = with(rule.density) { 40.dp.roundToPx() }
+            assertThat(attributes.blurBehindRadius).isEqualTo(expectedBlurBehindRadius)
+        }
+    }
+
+    @Test
+    fun dialogTest_scrimAlphaProperties() {
+        lateinit var window: Window
+        rule.setContent {
+            Dialog(onDismissRequest = {}, properties = DialogProperties(scrimAlpha = 0.75f)) {
+                var parent = LocalView.current
+                while (parent !is DialogWindowProvider) {
+                    parent = parent.parent as View
+                }
+                window = (parent as DialogWindowProvider).window
+                Box(Modifier.size(10.dp))
+            }
+        }
+
+        rule.runOnIdle {
+            val attributes = window.attributes
+            assertThat(attributes.flags and android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                .isNotEqualTo(0)
+            assertThat(attributes.dimAmount).isEqualTo(0.75f)
+        }
+    }
+
     private fun setupDialogTest(
         closeDialogOnDismiss: Boolean = true,
         dialogProperties: DialogProperties = DialogProperties(),
@@ -1166,4 +1336,67 @@ private fun PopupUsingPosition(parentPositionInRoot: Offset) {
         }
 
     Popup(popupPositionProvider = popupPositionOffset) { Box(Modifier.fillMaxSize()) }
+}
+
+internal fun <A : ComponentActivity> AndroidComposeTestRule<ActivityScenarioRule<A>, A>
+    .setOrientationAndWait(
+    requestedOrientation: Int,
+    expectedConfigOrientation: Int,
+    savedInitialOrientation: Int?,
+    waitForWindowFocus: Boolean = true,
+): Int {
+    var resolvedInitialOrientation = savedInitialOrientation
+    var previousActivity: Activity? = null
+    var needsRecreation = false
+    activityRule.scenario.onActivity { activity ->
+        if (resolvedInitialOrientation == null) {
+            resolvedInitialOrientation = activity.resources.configuration.orientation
+        }
+        previousActivity = activity
+        needsRecreation = activity.resources.configuration.orientation != expectedConfigOrientation
+        activity.requestedOrientation = requestedOrientation
+    }
+
+    waitUntil(timeoutMillis = 10_000) {
+        runOnUiThread {
+            val activity =
+                ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(Stage.RESUMED)
+                    .firstOrNull() ?: return@runOnUiThread false
+            val decorView = activity.window.decorView
+            val dimensionsMatch =
+                when (expectedConfigOrientation) {
+                    Configuration.ORIENTATION_LANDSCAPE -> decorView.width > decorView.height
+                    Configuration.ORIENTATION_PORTRAIT -> decorView.height > decorView.width
+                    else -> decorView.width > 0 && decorView.height > 0
+                }
+            (!needsRecreation || activity !== previousActivity) &&
+                activity.resources.configuration.orientation == expectedConfigOrientation &&
+                decorView.isAttachedToWindow &&
+                ((!waitForWindowFocus && !needsRecreation) || activity.hasWindowFocus()) &&
+                dimensionsMatch &&
+                !decorView.isLayoutRequested
+        }
+    }
+    getInstrumentation().waitForIdleSync()
+    return resolvedInitialOrientation!!
+}
+
+internal fun <A : ComponentActivity> AndroidComposeTestRule<ActivityScenarioRule<A>, A>
+    .restoreOrientationAndWait(targetConfigOrientation: Int) {
+    val restoreOrientation =
+        if (targetConfigOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    setOrientationAndWait(
+        requestedOrientation = restoreOrientation,
+        expectedConfigOrientation = targetConfigOrientation,
+        savedInitialOrientation = targetConfigOrientation,
+        waitForWindowFocus = false,
+    )
+    activityRule.scenario.onActivity { activity ->
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
 }

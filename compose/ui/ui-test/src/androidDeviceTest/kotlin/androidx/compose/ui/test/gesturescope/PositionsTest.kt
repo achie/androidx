@@ -36,7 +36,7 @@ import androidx.compose.ui.test.centerRight
 import androidx.compose.ui.test.centerX
 import androidx.compose.ui.test.centerY
 import androidx.compose.ui.test.height
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.left
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.percentOffset
@@ -51,14 +51,13 @@ import androidx.compose.ui.test.util.ClickableTestBox.defaultTag
 import androidx.compose.ui.test.width
 import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth.assertThat
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 
 @MediumTest
 class PositionsTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun testCornersEdgesAndCenter() {

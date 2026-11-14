@@ -37,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.platform.AtomicInt
@@ -49,7 +48,7 @@ import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.platform.PlatformTextInputModifierNode
 import androidx.compose.ui.platform.establishTextInputSession
 import androidx.compose.ui.test.ComposeTimeoutException
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -75,17 +74,15 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withContext
 import org.junit.Rule
 import org.junit.runner.RunWith
 
-@OptIn(ExperimentalComposeUiApi::class)
 @SmallTest
 @RunWith(AndroidJUnit4::class)
 class InterceptPlatformTextInputTest {
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     private lateinit var testNode: TestNode
     private lateinit var coroutineScope: CoroutineScope
@@ -276,18 +273,17 @@ class InterceptPlatformTextInputTest {
         var interceptor by mutableStateOf(interceptor1)
         setContent { InterceptPlatformTextInput(interceptor) { FakeTextField() } }
 
-        val sessionJob =
-            rule.runOnIdle {
-                coroutineScope.launch {
-                    testNode.establishTextInputSession {
-                        try {
-                            startInputMethod(TaggedRequest())
-                        } finally {
-                            downstreamSessionCancelled = true
-                        }
+        val sessionJob = rule.runOnIdle {
+            coroutineScope.launch {
+                testNode.establishTextInputSession {
+                    try {
+                        startInputMethod(TaggedRequest())
+                    } finally {
+                        downstreamSessionCancelled = true
                     }
                 }
             }
+        }
 
         rule.runOnIdle {
             assertTrue(sessionJob.isActive)
@@ -450,15 +446,14 @@ class InterceptPlatformTextInputTest {
             }
         }
 
-        val testJob =
-            rule.runOnIdle {
-                coroutineScope.launch {
-                    testNode.establishTextInputSession {
-                        // This context should be propagated to startInputMethod.
-                        startInputMethod(TaggedRequest("root"))
-                    }
+        val testJob = rule.runOnIdle {
+            coroutineScope.launch {
+                testNode.establishTextInputSession {
+                    // This context should be propagated to startInputMethod.
+                    startInputMethod(TaggedRequest("root"))
                 }
             }
+        }
         // Let the session start.
         rule.runOnIdle { assertThat(requests).containsExactly("one wrapping root").inOrder() }
 
@@ -499,15 +494,14 @@ class InterceptPlatformTextInputTest {
                 InterceptPlatformTextInput(interceptor) { FakeTextField() }
             }
         }
-        val testJob =
-            rule.runOnIdle {
-                coroutineScope.launch {
-                    testNode.establishTextInputSession {
-                        // This context should be propagated to startInputMethod.
-                        startInputMethod(TaggedRequest("root"))
-                    }
+        val testJob = rule.runOnIdle {
+            coroutineScope.launch {
+                testNode.establishTextInputSession {
+                    // This context should be propagated to startInputMethod.
+                    startInputMethod(TaggedRequest("root"))
                 }
             }
+        }
         // Let the session start.
         rule.runOnIdle { assertThat(requests).isEmpty() }
 

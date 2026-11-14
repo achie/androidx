@@ -25,6 +25,7 @@ import androidx.appfunctions.internal.AppFunctionSerializableFactory
 // appfunctions module.
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@OptIn(ExperimentalAppFunctionsApi::class)
 public class `$AppFunctionTextResourceFactory` :
     AppFunctionSerializableFactory<AppFunctionTextResource> {
     override fun fromAppFunctionData(appFunctionData: AppFunctionData): AppFunctionTextResource {
@@ -42,10 +43,12 @@ public class `$AppFunctionTextResourceFactory` :
     }
 
     override fun toAppFunctionData(
-        appFunctionSerializable: AppFunctionTextResource
+        spec: AppFunctionDataSpec?,
+        appFunctionSerializable: AppFunctionTextResource,
     ): AppFunctionData {
         val appFunctionTextResource_appFunctionSerializable = appFunctionSerializable
-        val builder = getAppFunctionDataBuilder("androidx.appfunctions.AppFunctionTextResource")
+        val builder =
+            getAppFunctionDataBuilder(spec, "androidx.appfunctions.AppFunctionTextResource")
         builder.setString("mimeType", appFunctionTextResource_appFunctionSerializable.mimeType)
         builder.setString("content", appFunctionTextResource_appFunctionSerializable.content)
 

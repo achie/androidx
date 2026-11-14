@@ -20,12 +20,12 @@ plugins {
 }
 
 android {
-    compileSdk = 35
+    compileSdk { version = release(35) }
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt")
+            optimization {
+                enable = true
+            }
         }
     }
     namespace = "androidx.emoji2.integration.macrobenchmark.enabled.target"

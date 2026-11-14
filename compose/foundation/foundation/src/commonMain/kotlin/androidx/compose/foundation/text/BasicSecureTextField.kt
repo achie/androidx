@@ -16,25 +16,26 @@
 
 package androidx.compose.foundation.text
 
+import androidx.compose.foundation.ComposeFoundationFlags
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.input.Default
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.KeyboardActionHandler
+import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldDecorator
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.TextObfuscationMode
+import androidx.compose.foundation.text.input.internal.ChangeTracker
 import androidx.compose.foundation.text.input.internal.CodepointTransformation
 import androidx.compose.foundation.text.input.then
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -51,12 +52,15 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
+import kotlin.jvm.JvmInline
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -65,10 +69,11 @@ import kotlinx.coroutines.flow.consumeAsFlow
 /**
  * BasicSecureTextField is specifically designed for password entry fields and is a preconfigured
  * alternative to [BasicTextField]. It only supports a single line of content and comes with default
- * settings for [KeyboardOptions], [InputTransformation], and [CodepointTransformation] that are
+ * settings for [KeyboardOptions], [InputTransformation], and [OutputTransformation] that are
  * appropriate for entering secure content. Additionally, some context menu actions like cut, copy,
  * and drag are disabled for added security.
  *
+ * @sample androidx.compose.foundation.samples.PinCodeEntryRowSample
  * @param state [TextFieldState] object that holds the internal state of a [BasicSecureTextField].
  * @param modifier optional [Modifier] for this text field.
  * @param enabled controls the enabled state of the [BasicSecureTextField]. When `false`, the text
@@ -88,7 +93,8 @@ import kotlinx.coroutines.flow.consumeAsFlow
  * @param keyboardOptions Software keyboard options that contain configurations such as
  *   [KeyboardType] and [ImeAction]. This composable by default configures [KeyboardOptions] for a
  *   secure text field by disabling auto correct and setting [KeyboardType] to
- *   [KeyboardType.Password].
+ *   [KeyboardType.Password]. If using [TextObfuscationMode.Visible], consider passing
+ *   [KeyboardType.PasswordVisible] instead to indicate to the IME that the input is visible.
  * @param onKeyboardAction Called when the user presses the action button in the input method editor
  *   (IME), or by pressing the enter key on a hardware keyboard. By default this parameter is null,
  *   and would execute the default behavior for a received IME Action e.g., [ImeAction.Done] would
@@ -118,8 +124,9 @@ import kotlinx.coroutines.flow.consumeAsFlow
  */
 // This takes a composable lambda, but it is not primarily a container.
 @Suppress("ComposableLambdaParameterPosition")
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun BasicSecureTextField(
+public fun BasicSecureTextField(
     state: TextFieldState,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -134,23 +141,32 @@ fun BasicSecureTextField(
     decorator: TextFieldDecorator? = null,
     // Last parameter must not be a function unless it's intended to be commonly used as a trailing
     // lambda.
-    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.Default,
+    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.System,
     textObfuscationCharacter: Char = DefaultObfuscationCharacter,
     scrollState: ScrollState = rememberScrollState(),
 ) {
     val obfuscationMaskState = rememberUpdatedState(textObfuscationCharacter)
-    val secureTextFieldController = remember { SecureTextFieldController(obfuscationMaskState) }
+    val visibilitySettings = rememberPlatformPasswordVisibilitySettingsState()
+    val currentMode = rememberUpdatedState(textObfuscationMode)
+    val currentVisibilitySettings = rememberUpdatedState(visibilitySettings)
+
+    val secureTextFieldController = remember {
+        SecureTextFieldController(
+            obfuscationMask = { obfuscationMaskState.value },
+            textObfuscationMode = { currentMode.value },
+            platformAllowsReveal = { currentVisibilitySettings.value },
+        )
+    }
     LaunchedEffect(secureTextFieldController) {
         // start a coroutine that listens for scheduled hide events.
         secureTextFieldController.observeHideEvents()
     }
 
-    // revealing last typed character depends on two conditions;
-    // 1 - Requested Obfuscation method
-    // 2 - if the system allows it
+    // revealing last typed character is supported in both RevealLastTyped and System modes.
+    // The actual gating per mode is done inside PasswordInputTransformation.
     val revealLastTypedEnabled =
-        textObfuscationMode == TextObfuscationMode.RevealLastTyped &&
-            platformAllowsRevealLastTyped()
+        textObfuscationMode == TextObfuscationMode.RevealLastTyped ||
+            textObfuscationMode == TextObfuscationMode.System
 
     // while toggling between obfuscation methods if the revealing gets disabled, reset the reveal.
     LaunchedEffect(revealLastTypedEnabled) {
@@ -159,35 +175,53 @@ fun BasicSecureTextField(
         }
     }
 
-    val codepointTransformation =
-        remember(textObfuscationMode) {
-            when (textObfuscationMode) {
-                TextObfuscationMode.RevealLastTyped -> {
-                    secureTextFieldController.codepointTransformation
+    val codepointTransformation: CodepointTransformation?
+    val outputTransformation: OutputTransformation?
+    if (ComposeFoundationFlags.isBasicTextFieldOutputTransformationOnlyEnabled) {
+        codepointTransformation = null
+        outputTransformation =
+            remember(textObfuscationMode, secureTextFieldController) {
+                when (textObfuscationMode) {
+                    TextObfuscationMode.RevealLastTyped,
+                    TextObfuscationMode.System -> {
+                        secureTextFieldController.outputTransformation
+                    }
+                    TextObfuscationMode.Hidden -> {
+                        OutputTransformationPerGlyph { obfuscationMaskState.value.toString() }
+                    }
+                    else -> null
                 }
-                TextObfuscationMode.Hidden -> {
-                    CodepointTransformation { _, _ -> obfuscationMaskState.value.code }
-                }
-                else -> null
             }
-        }
+    } else {
+        outputTransformation = null
+        codepointTransformation =
+            remember(textObfuscationMode, secureTextFieldController) {
+                when (textObfuscationMode) {
+                    TextObfuscationMode.RevealLastTyped,
+                    TextObfuscationMode.System -> {
+                        secureTextFieldController.codepointTransformation
+                    }
+                    TextObfuscationMode.Hidden -> {
+                        CodepointTransformation { _, _ -> obfuscationMaskState.value.code }
+                    }
+                    else -> null
+                }
+            }
+    }
 
     val secureTextFieldModifier =
         modifier
-            .semantics { contentType = ContentType.Password }
+            .semantics {
+                contentType = ContentType.Password
+                password(isPasswordObfuscated = textObfuscationMode != TextObfuscationMode.Visible)
+            }
             .onPreviewKeyEvent { keyEvent ->
                 // BasicTextField uses this static mapping
                 val command = platformDefaultKeyMapping.map(keyEvent)
                 // do not propagate copy and cut operations
                 command == KeyCommand.COPY || command == KeyCommand.CUT
             }
-            .then(
-                if (revealLastTypedEnabled) {
-                    secureTextFieldController.focusChangeModifier
-                } else {
-                    Modifier
-                }
-            )
+            .then(secureTextFieldController.focusChangeModifier)
 
     DisableCutCopy {
         BasicTextField(
@@ -196,9 +230,7 @@ fun BasicSecureTextField(
             enabled = enabled,
             readOnly = readOnly,
             inputTransformation =
-                if (revealLastTypedEnabled) {
-                    inputTransformation.then(secureTextFieldController.passwordInputTransformation)
-                } else inputTransformation,
+                inputTransformation.then(secureTextFieldController.passwordInputTransformation),
             textStyle = textStyle,
             keyboardOptions = keyboardOptions,
             onKeyboardAction = onKeyboardAction,
@@ -207,6 +239,7 @@ fun BasicSecureTextField(
             interactionSource = interactionSource,
             cursorBrush = cursorBrush,
             codepointTransformation = codepointTransformation,
+            outputTransformation = outputTransformation,
             decorator = decorator,
             isPassword = true,
             scrollState = scrollState,
@@ -223,13 +256,18 @@ private fun InputTransformation?.then(next: InputTransformation?): InputTransfor
     }
 }
 
-internal class SecureTextFieldController(private val obfuscationMaskState: State<Char>) {
+internal class SecureTextFieldController(
+    private val obfuscationMask: () -> Char,
+    val textObfuscationMode: () -> TextObfuscationMode,
+    val platformAllowsReveal: () -> SplitVisibilitySettings,
+) {
     /**
      * A special [InputTransformation] that tracks changes to the content to identify the last typed
      * character to reveal. `scheduleHide` lambda is delegated to a member function to be able to
      * use [passwordInputTransformation] instance.
      */
-    val passwordInputTransformation = PasswordInputTransformation(::scheduleHide)
+    val passwordInputTransformation =
+        PasswordInputTransformation(::scheduleHide, textObfuscationMode, platformAllowsReveal)
 
     /** Pass to [BasicTextField] for obscuring text input. */
     val codepointTransformation = CodepointTransformation { codepointIndex, codepoint ->
@@ -237,12 +275,23 @@ internal class SecureTextFieldController(private val obfuscationMaskState: State
             // reveal the last typed character by not obscuring it
             codepoint
         } else {
-            obfuscationMaskState.value.code
+            obfuscationMask().code
         }
     }
 
-    val focusChangeModifier =
-        Modifier.onFocusChanged { if (!it.isFocused) passwordInputTransformation.hide() }
+    /** Pass to [BasicTextField] for obscuring text input. */
+    val outputTransformation = OutputTransformationPerGlyph { range ->
+        if (range.min != passwordInputTransformation.revealCodepointIndex) {
+            // only obscure if the current offset is not marked for reveal
+            obfuscationMask().toString()
+        } else {
+            null
+        }
+    }
+
+    val focusChangeModifier = Modifier.onFocusChanged {
+        if (!it.isFocused) passwordInputTransformation.hide()
+    }
 
     private val resetTimerSignal = Channel<Unit>(Channel.UNLIMITED)
 
@@ -270,17 +319,68 @@ internal class SecureTextFieldController(private val obfuscationMaskState: State
  *   typed.
  */
 @OptIn(ExperimentalFoundationApi::class)
-internal class PasswordInputTransformation(val scheduleHide: () -> Unit) : InputTransformation {
+internal class PasswordInputTransformation(
+    val scheduleHide: () -> Unit,
+    val textObfuscationMode: () -> TextObfuscationMode,
+    val platformAllowsReveal: () -> SplitVisibilitySettings,
+) : InputTransformation {
     // TODO: Consider setting this as a tracking annotation in AnnotatedString.
     internal var revealCodepointIndex by mutableIntStateOf(-1)
         private set
 
     override fun TextFieldBuffer.transformInput() {
-        // We only care about changes that add a single character
-        val singleCharacterChange = changes.changeCount == 1 && changes.getRange(0).length == 1
+        val singleCharacterInsertion =
+            if (ComposeFoundationFlags.isBasicTextFieldOutputTransformationOnlyEnabled) {
+                // We only care about a single character insertion changes
+                var isSingleGlyph = false
+                if (changes.changeCount == 1) {
+                    val insertedRange = changes.getRange(0)
+                    val insertedLength = insertedRange.length
+                    if (insertedLength == 1) {
+                        isSingleGlyph = true
+                    } else if (insertedLength > 1) {
+                        // To detect a single character insertion, we check if the changed range
+                        // corresponds to a single glyph. `findFollowingBreak` helps identify the
+                        // boundary of the next glyph, which works for single characters as well as
+                        // complex multi-codepoint emojis.
+                        val nextBreakInInsertedText =
+                            asCharSequence()
+                                .subSequence(insertedRange.min, insertedRange.max)
+                                .findFollowingBreak(0)
+                        if (nextBreakInInsertedText == insertedLength) {
+                            // this is a proper single character insertion, including emojis.
+                            isSingleGlyph = true
+                        }
+                    }
+                }
+                isSingleGlyph
+            } else {
+                // We only care about changes that add a single character
+                changes.changeCount == 1 && changes.getRange(0).length == 1
+            }
 
         // if there is an expanded selection, don't reveal anything
-        if (!singleCharacterChange || hasSelection) {
+        if (!singleCharacterInsertion || hasSelection) {
+            revealCodepointIndex = -1
+            return
+        }
+
+        val mode = textObfuscationMode()
+
+        val shouldReveal =
+            when (mode) {
+                TextObfuscationMode.RevealLastTyped -> true
+                TextObfuscationMode.System -> {
+                    val visibilitySettings = platformAllowsReveal()
+                    val isPhysicalKeyboard =
+                        (changes as? ChangeTracker)?.isFromHardwareSource(0) ?: false
+                    if (isPhysicalKeyboard) visibilitySettings.physical
+                    else visibilitySettings.touch
+                }
+                else -> false
+            }
+
+        if (!shouldReveal) {
             revealCodepointIndex = -1
             return
         }
@@ -336,8 +436,22 @@ private fun DisableCutCopy(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalTextToolbar provides copyDisabledToolbar, content)
 }
 
-/** Whether the underlying platform allows the reveal last typed behavior. */
-@Composable internal expect fun platformAllowsRevealLastTyped(): Boolean
+@JvmInline
+internal value class SplitVisibilitySettings(val value: Int) {
+    val touch: Boolean
+        get() = (value and 0x1) != 0x0
+
+    val physical: Boolean
+        get() = (value and 0x2) != 0x0
+
+    constructor(
+        touch: Boolean,
+        physical: Boolean,
+    ) : this((if (touch) 0x1 else 0x0) or (if (physical) 0x2 else 0x0))
+}
+
+@Composable
+internal expect fun rememberPlatformPasswordVisibilitySettingsState(): SplitVisibilitySettings
 
 @Deprecated(
     message = "Please use the overload that takes in readOnly parameter.",
@@ -345,7 +459,7 @@ private fun DisableCutCopy(content: @Composable () -> Unit) {
 )
 @Suppress("ComposableLambdaParameterPosition")
 @Composable
-fun BasicSecureTextField(
+public fun BasicSecureTextField(
     state: TextFieldState,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -359,7 +473,7 @@ fun BasicSecureTextField(
     decorator: TextFieldDecorator? = null,
     // Last parameter must not be a function unless it's intended to be commonly used as a trailing
     // lambda.
-    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.RevealLastTyped,
+    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.System,
     textObfuscationCharacter: Char = DefaultObfuscationCharacter,
 ) {
     BasicSecureTextField(
@@ -386,7 +500,7 @@ fun BasicSecureTextField(
 )
 @Suppress("ComposableLambdaParameterPosition")
 @Composable
-fun BasicSecureTextField(
+public fun BasicSecureTextField(
     state: TextFieldState,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -401,7 +515,7 @@ fun BasicSecureTextField(
     decorator: TextFieldDecorator? = null,
     // Last parameter must not be a function unless it's intended to be commonly used as a trailing
     // lambda.
-    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.RevealLastTyped,
+    textObfuscationMode: TextObfuscationMode = TextObfuscationMode.System,
     textObfuscationCharacter: Char = DefaultObfuscationCharacter,
 ) {
     BasicSecureTextField(
@@ -421,4 +535,27 @@ fun BasicSecureTextField(
         textObfuscationCharacter = textObfuscationCharacter,
         scrollState = rememberScrollState(),
     )
+}
+
+/**
+ * A special OutputTransformation implementation that separates the buffer into unbreakable glyphs.
+ *
+ * @param transform A transformation function that points to a `range` that consists of a single
+ *   glyph or emoji. Return an optional string that should replace the glyph in the given range.
+ *   Returning `null` indicates that replacement is not necessary.
+ */
+internal class OutputTransformationPerGlyph(
+    private val transform: TextFieldBuffer.(range: TextRange) -> String?
+) : OutputTransformation {
+    override fun TextFieldBuffer.transformOutput() {
+        var readOffset = length
+        val charSequence = asCharSequence()
+        while (readOffset > 0) {
+            val previousBreak = charSequence.findPrecedingBreak(readOffset)
+            transform(TextRange(previousBreak, readOffset))?.let {
+                replace(previousBreak, readOffset, it)
+            }
+            readOffset = previousBreak
+        }
+    }
 }

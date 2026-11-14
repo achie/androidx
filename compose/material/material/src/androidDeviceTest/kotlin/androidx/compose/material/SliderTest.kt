@@ -35,8 +35,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -53,10 +55,13 @@ import androidx.compose.ui.test.assertRangeInfoEquals
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isFocusable
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -64,7 +69,6 @@ import androidx.test.filters.MediumTest
 import com.google.common.truth.Truth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,7 +78,7 @@ import org.junit.runner.RunWith
 class SliderTest {
     private val tag = "slider"
 
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     @Test
     fun sliderPosition_valueCoercion() {
@@ -334,6 +338,39 @@ class SliderTest {
     }
 
     @Test
+    fun slider_click_givesFocusToSlider() {
+        var hasFocus = false
+        var onValueChangedCalled = false
+
+        rule.setMaterialContent {
+            Slider(
+                modifier = Modifier.testTag(tag).onFocusChanged { hasFocus = it.hasFocus },
+                value = 0f,
+                onValueChange = { onValueChangedCalled = true },
+                valueRange = 0f..2f,
+                steps = 1,
+            )
+        }
+
+        Truth.assertThat(hasFocus).isFalse()
+
+        rule.onNodeWithTag(tag).performMouseInput {
+            click(centerLeft)
+        }
+        rule.runOnIdle {
+            Truth.assertThat(hasFocus).isEqualTo(sliderRequestsFocusOnGestureEnd)
+            onValueChangedCalled = false // Reset
+        }
+
+        rule.onNodeWithTag(tag).performKeyInput {
+            pressKey(Key.DirectionUp)
+        }
+        rule.runOnIdle {
+            Truth.assertThat(onValueChangedCalled).isEqualTo(sliderRequestsFocusOnGestureEnd)
+        }
+    }
+
+    @Test
     fun slider_drag_rtl() {
         val state = mutableStateOf(0f)
         var slop = 0f
@@ -454,7 +491,7 @@ class SliderTest {
             val start = left + offset
             val end = right - offset
 
-            ((pos - start) / (end - start)).coerceIn(0f, 1f)
+            ((pos - start) / (end - start + 1)).coerceIn(0f, 1f)
         }
 
     @Test

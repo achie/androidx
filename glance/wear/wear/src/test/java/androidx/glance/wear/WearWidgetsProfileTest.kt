@@ -1,0 +1,209 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.glance.wear
+
+import androidx.collection.intSetOf
+import androidx.compose.remote.core.Operations.CLIP_PATH
+import androidx.compose.remote.core.Operations.COLOR_THEME
+import androidx.compose.remote.core.Operations.DATA_BITMAP_FONT
+import androidx.compose.remote.core.Operations.DATA_FONT
+import androidx.compose.remote.core.Operations.DATA_SHADER
+import androidx.compose.remote.core.Operations.DRAW_BITMAP_FONT_TEXT_RUN
+import androidx.compose.remote.core.Operations.DRAW_BITMAP_FONT_TEXT_RUN_ON_PATH
+import androidx.compose.remote.core.Operations.DRAW_TEXT_ON_CIRCLE
+import androidx.compose.remote.core.Operations.DRAW_TEXT_ON_PATH
+import androidx.compose.remote.core.Operations.DRAW_TO_BITMAP
+import androidx.compose.remote.core.Operations.DYNAMIC_FLOAT_LIST
+import androidx.compose.remote.core.Operations.HEADER
+import androidx.compose.remote.core.Operations.ID_LOOKUP
+import androidx.compose.remote.core.Operations.LAYOUT_BOX
+import androidx.compose.remote.core.Operations.LAYOUT_COLLAPSIBLE_COLUMN
+import androidx.compose.remote.core.Operations.LAYOUT_COLLAPSIBLE_ROW
+import androidx.compose.remote.core.Operations.MODIFIER_CLICK
+import androidx.compose.remote.core.Operations.MODIFIER_COLLAPSIBLE_PRIORITY
+import androidx.compose.remote.core.Operations.MODIFIER_GRAPHICS_LAYER
+import androidx.compose.remote.core.Operations.MODIFIER_SCROLL
+import androidx.compose.remote.core.Operations.MODIFIER_TOUCH_CANCEL
+import androidx.compose.remote.core.Operations.MODIFIER_TOUCH_DOWN
+import androidx.compose.remote.core.Operations.MODIFIER_TOUCH_UP
+import androidx.compose.remote.core.Operations.PARTICLE_COMPARE
+import androidx.compose.remote.core.Operations.PARTICLE_DEFINE
+import androidx.compose.remote.core.Operations.PARTICLE_LOOP
+import androidx.compose.remote.core.Operations.PATH_COMBINE
+import androidx.compose.remote.core.Operations.PATH_EXPRESSION
+import androidx.compose.remote.core.Operations.ROOT_CONTENT_DESCRIPTION
+import androidx.compose.remote.core.Operations.SKIP
+import androidx.compose.remote.core.Operations.TEXT_STYLE
+import androidx.compose.remote.core.Operations.TEXT_TRANSFORM
+import androidx.compose.remote.core.Operations.THEME
+import androidx.compose.remote.core.Operations.TOUCH_EXPRESSION
+import androidx.compose.remote.core.Operations.UPDATE_DYNAMIC_FLOAT_LIST
+import androidx.compose.remote.core.Operations.WAKE_IN
+import androidx.compose.remote.creation.profile.RcPlatformProfiles
+import androidx.glance.wear.core.ContainerInfo
+import androidx.glance.wear.core.RendererVersion
+import androidx.glance.wear.core.WearWidgetParams
+import androidx.glance.wear.core.WidgetInstanceId
+import androidx.glance.wear.core.mapToList
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class WearWidgetsProfileTest {
+
+    @Test
+    fun testRequiredOperations() {
+        val profile = GlanceWearProfiles.createWearWidgetsProfileFromOperations()
+        val operations = profile.supportedOperations
+        val exclusions =
+            setOf(
+                COLOR_THEME,
+                CLIP_PATH,
+                DATA_BITMAP_FONT,
+                DATA_SHADER,
+                DRAW_BITMAP_FONT_TEXT_RUN,
+                DRAW_BITMAP_FONT_TEXT_RUN_ON_PATH,
+                DRAW_TEXT_ON_PATH,
+                DRAW_TO_BITMAP,
+                LAYOUT_COLLAPSIBLE_COLUMN,
+                LAYOUT_COLLAPSIBLE_ROW,
+                MODIFIER_COLLAPSIBLE_PRIORITY,
+                MODIFIER_SCROLL,
+                PARTICLE_COMPARE,
+                PARTICLE_DEFINE,
+                PARTICLE_LOOP,
+                ROOT_CONTENT_DESCRIPTION,
+                SKIP,
+                TEXT_STYLE,
+                THEME,
+                TOUCH_EXPRESSION,
+                WAKE_IN,
+            )
+
+        // Things not in AndroidX profile, so either experimental, Widgets or Wear related
+        val missingFromAndroidX = setOf(DRAW_TEXT_ON_CIRCLE)
+
+        assertThat(operations.intersect(exclusions)).isEmpty()
+
+        // Test the things deliberately excluded
+        assertThat(operations - RcPlatformProfiles.ANDROIDX.supportedOperations)
+            .containsExactlyElementsIn(missingFromAndroidX)
+
+        // Fail if things are added to AndroidX Baseline without consideration here
+        assertThat(operations)
+            .containsAtLeastElementsIn(RcPlatformProfiles.ANDROIDX.supportedOperations - exclusions)
+    }
+
+    @Test
+    fun testTouchOperations() {
+        val touchOperations = listOf(MODIFIER_TOUCH_DOWN, MODIFIER_TOUCH_UP, MODIFIER_TOUCH_CANCEL)
+
+        assertThat(RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS.mapToList { it })
+            .containsAtLeastElementsIn(touchOperations)
+        assertThat(GlanceWearProfiles.createWearWidgetsProfileFromOperations().supportedOperations)
+            .containsAtLeastElementsIn(touchOperations)
+        assertThat(
+                GlanceWearProfiles.createWearWidgetsProfileFromOperations(
+                        RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS
+                    )
+                    .supportedOperations
+            )
+            .containsAtLeastElementsIn(touchOperations)
+        // Hosts that report supported operations without them don't get them.
+        assertThat(
+                GlanceWearProfiles.createWearWidgetsProfileFromOperations(
+                        intSetOf(HEADER, MODIFIER_CLICK)
+                    )
+                    .supportedOperations
+                    .intersect(touchOperations.toSet())
+            )
+            .isEmpty()
+    }
+
+    @Test
+    fun testSafeFallbackOperations() {
+        val profile = GlanceWearProfiles.createWearWidgetsProfileFromOperations()
+        val operations = profile.supportedOperations
+        val post160Operations =
+            listOf(
+                DATA_FONT,
+                DYNAMIC_FLOAT_LIST,
+                ID_LOOKUP,
+                MODIFIER_GRAPHICS_LAYER,
+                PATH_COMBINE,
+                PATH_EXPRESSION,
+                TEXT_TRANSFORM,
+                UPDATE_DYNAMIC_FLOAT_LIST,
+            )
+
+        assertThat(operations)
+            .containsAtLeastElementsIn(
+                RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS.mapToList { it }
+            )
+        assertThat(GlanceWearProfiles.WEAR_WIDGETS_ALLOWED_OPERATIONS.mapToList { it })
+            .containsAtLeastElementsIn(
+                RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS.mapToList { it }
+            )
+        assertThat(operations).containsAtLeastElementsIn(post160Operations)
+        assertThat(RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS.mapToList { it })
+            .containsNoneIn(post160Operations)
+        assertThat(
+                GlanceWearProfiles.createWearWidgetsProfileFromOperations(
+                        RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS
+                    )
+                    .supportedOperations
+            )
+            .containsNoneIn(post160Operations)
+    }
+
+    @Test
+    fun createWearWidgetsProfile_withParams_usesHostSupportedOperations() {
+        val params =
+            WearWidgetParams(
+                instanceId = WidgetInstanceId("ns", 1),
+                containerType = ContainerInfo.CONTAINER_TYPE_SMALL,
+                widthDp = 100f,
+                heightDp = 100f,
+                horizontalPaddingDp = 8f,
+                verticalPaddingDp = 8f,
+                cornerRadiusDp = 16f,
+                rendererVersion =
+                    RendererVersion(
+                        major = 1,
+                        minor = 7,
+                        revision = 0,
+                        supportedOperations = intSetOf(LAYOUT_BOX, WAKE_IN),
+                    ),
+            )
+
+        val profile = GlanceWearProfiles.createWearWidgetsProfile(params)
+
+        assertThat(profile.supportedOperations).containsExactly(LAYOUT_BOX)
+    }
+
+    @Test
+    fun createWearWidgetsProfile_withNullParams_usesSafeFallbackOperations() {
+        val profile = GlanceWearProfiles.createWearWidgetsProfile(null)
+
+        assertThat(profile.supportedOperations)
+            .containsExactlyElementsIn(
+                RendererVersion.SAFE_FALLBACK_SUPPORTED_OPERATIONS.mapToList { it }
+            )
+    }
+}

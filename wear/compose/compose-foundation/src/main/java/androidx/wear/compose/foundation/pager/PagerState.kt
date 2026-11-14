@@ -27,13 +27,15 @@ import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.pager.PagerLayoutInfo as ComposePagerLayoutInfo
 import androidx.compose.foundation.pager.PagerState as ComposePagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.annotation.FrequentlyChangingValue
+import androidx.compose.runtime.annotation.RememberInComposition
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 
 /**
- * Creates and remember a [PagerState] to be used with a Wear Pager
+ * Creates and remembers a [PagerState] to be used with a Wear Pager
  *
  * @param initialPage The page that should be shown first.
  * @param initialPageOffsetFraction The offset of the initial page as a fraction of the page size.
@@ -61,7 +63,9 @@ public fun rememberPagerState(
  *   be between -0.5 and 0.5, where 0 indicates the start of the initial page.
  * @param pageCount The number of pages in this Pager.
  */
-public class PagerState(
+public class PagerState
+@RememberInComposition
+constructor(
     @IntRange(from = 0) currentPage: Int = 0,
     @FloatRange(from = -0.5, to = 0.5) currentPageOffsetFraction: Float = 0f,
     @IntRange(from = 1) pageCount: () -> Int,
@@ -77,8 +81,7 @@ public class PagerState(
      * indicates the start of the current page
      */
     public val currentPageOffsetFraction: Float
-        // @FrequentlyChangingValue
-        get() = pagerState.currentPageOffsetFraction
+        @FrequentlyChangingValue get() = pagerState.currentPageOffsetFraction
 
     /** The total number of pages present in this pager. */
     public val pageCount: Int
@@ -106,13 +109,13 @@ public class PagerState(
      *
      * This property is observable and is updated after every scroll or remeasure. If you use it in
      * the composable function it will be recomposed on every change causing potential performance
-     * issues including infinity recomposition loop. Therefore, avoid using it in the composition.
+     * issues including infinite recomposition loop. Therefore, avoid using it in the composition.
      *
      * If you want to run some side effects like sending an analytics event or updating a state
      * based on this value consider using "snapshotFlow".
      */
     public val layoutInfo: PagerLayoutInfo
-        get() = PagerLayoutInfoImpl(pagerState.layoutInfo)
+        @FrequentlyChangingValue get() = PagerLayoutInfoImpl(pagerState.layoutInfo)
 
     override val isScrollInProgress: Boolean
         get() = pagerState.isScrollInProgress

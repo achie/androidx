@@ -40,8 +40,10 @@ import android.util.SparseArray;
 import android.view.View;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeInfo.MathInfo;
 import android.view.accessibility.AccessibilityNodeInfo.Selection;
 import android.view.accessibility.AccessibilityNodeInfo.SelectionPosition;
+import android.view.accessibility.AccessibilityNodeInfo.StructuredDataInfo;
 import android.view.accessibility.AccessibilityNodeInfo.TouchDelegateInfo;
 
 import androidx.annotation.IntDef;
@@ -49,6 +51,8 @@ import androidx.annotation.IntRange;
 import androidx.annotation.OptIn;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.StringDef;
+import androidx.annotation.VisibleForTesting;
 import androidx.core.R;
 import androidx.core.accessibilityservice.AccessibilityServiceInfoCompat;
 import androidx.core.os.BuildCompat;
@@ -70,8 +74,11 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Helper for accessing {@link android.view.accessibility.AccessibilityNodeInfo} in a backwards
@@ -749,11 +756,8 @@ public class AccessibilityNodeInfoCompat {
          * selection.
          *
          * <strong>Example:</strong> <code><pre><p>
-         *  Bundle arguments = new Bundle();
-         *  SelectionCompat selection = new SelectionCompat(null, null);
-         *  arguments.setParcelable(
-         *          AccessibilityNodeInfoCompat.ACTION_ARGUMENT_SELECTION_PARCELABLE,
-         *          selection.mSelection);
+         *  SelectionCompat selection = new SelectionCompat(start, end);
+         *  Bundle arguments = selection.toActionArguments();
          *  info.performAction(
          *          AccessibilityActionCompat.ACTION_SET_EXTENDED_SELECTION.getId(), arguments);
          * </pre></code>
@@ -1552,6 +1556,753 @@ public class AccessibilityNodeInfoCompat {
     }
 
     /**
+     * Compat class for {@link AccessibilityNodeInfo.StructuredDataInfo}, which is an abstract base
+     * class for holding structured semantic information about a node.
+     *
+     * <p>On API levels where the platform class corresponding to a subclass isn't available,
+     * {@link AccessibilityNodeInfoCompat#setStructuredDataInfo(StructuredDataInfoCompat)} stores
+     * the information in the node's extras instead. Accessibility services can read it from there
+     * with {@link AccessibilityNodeInfoCompat#getStructuredDataInfo()}, but not with
+     * {@link AccessibilityNodeInfo#getStructuredDataInfo()}.
+     *
+     * @see AccessibilityNodeInfo.StructuredDataInfo
+     */
+    public abstract static class StructuredDataInfoCompat {
+        @VisibleForTesting
+        static final String STRUCTURED_DATA_TYPE_KEY =
+                "androidx.view.accessibility.AccessibilityNodeInfoCompat.STRUCTURED_DATA_TYPE_KEY";
+
+        @VisibleForTesting
+        static final String STRUCTURED_DATA_TAG_KEY =
+                "androidx.view.accessibility.AccessibilityNodeInfoCompat.STRUCTURED_DATA_TAG_KEY";
+
+        @VisibleForTesting
+        static final String STRUCTURED_DATA_ATTRIBUTES_KEY =
+                "androidx.view.accessibility.AccessibilityNodeInfoCompat."
+                        + "STRUCTURED_DATA_ATTRIBUTES_KEY";
+
+        /**
+         * The platform object holding this instance's data, or {@code null} if the platform class
+         * for this type isn't available, in which case this instance holds its own data.
+         */
+        @Nullable
+        final StructuredDataInfo mStructuredDataInfo;
+
+        /**
+         * Identifies this type in a node's extras and in {@link #equals(Object)}, or {@code null}
+         * if this instance can't be stored in a node's extras.
+         */
+        @Nullable
+        private final String mExtrasType;
+
+        /**
+         * The tag of an instance without a platform object. Instances that wrap a platform object
+         * get their tag from it instead.
+         */
+        @Nullable
+        private final String mTag;
+
+        /**
+         * The attributes of an instance without a platform object. Instances that wrap a platform
+         * object get their attributes from it instead.
+         */
+        @Nullable
+        private Bundle mAttributes;
+
+        /**
+         * Instantiates a new StructuredDataInfoCompat.
+         *
+         * @param structuredDataInfo The underlying StructuredDataInfo to wrap.
+         */
+        protected StructuredDataInfoCompat(@Nullable StructuredDataInfo structuredDataInfo) {
+            this(structuredDataInfo, null, null, null);
+        }
+
+        /**
+         * Instantiates a new StructuredDataInfoCompat that holds its data in
+         * {@code structuredDataInfo} if it's non-null, or in this instance otherwise.
+         *
+         * @param structuredDataInfo The underlying StructuredDataInfo to wrap, or {@code null} if
+         *     the platform class for this type isn't available.
+         * @param extrasType Identifies this type in a node's extras.
+         * @param tag The tag, if {@code structuredDataInfo} is {@code null}.
+         * @param attributes The attributes, if {@code structuredDataInfo} is {@code null}.
+         */
+        StructuredDataInfoCompat(@Nullable StructuredDataInfo structuredDataInfo,
+                @Nullable String extrasType, @Nullable String tag, @Nullable Bundle attributes) {
+            mStructuredDataInfo = structuredDataInfo;
+            mExtrasType = extrasType;
+            mTag = tag;
+            mAttributes = attributes;
+        }
+
+        /**
+         * @return The tag for this structured semantic information.
+         */
+        @Nullable
+        public String getTag() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    && mStructuredDataInfo != null) {
+                return Api37Impl.getStructuredDataInfoTag(mStructuredDataInfo);
+            }
+
+            return mTag;
+        }
+
+        /**
+         * Adds an attribute.
+         *
+         * @param attributeKey The attribute key.
+         * @param value The attribute value.
+         */
+        public void putAttribute(@NonNull String attributeKey,
+                @NonNull String value) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    && mStructuredDataInfo != null) {
+                Api37Impl.putStructuredDataInfoAttribute(mStructuredDataInfo, attributeKey, value);
+            } else {
+                getOrCreateAttributes().putString(attributeKey, value);
+            }
+        }
+
+        /**
+         * Removes an attribute.
+         *
+         * @param attributeKey The attribute key.
+         */
+        public void removeAttribute(@NonNull String attributeKey) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    && mStructuredDataInfo != null) {
+                Api37Impl.removeStructuredDataInfoAttribute(mStructuredDataInfo, attributeKey);
+            } else if (mAttributes != null) {
+                mAttributes.remove(attributeKey);
+            }
+        }
+
+        /**
+         * Gets the value of an attribute.
+         *
+         * @param attributeKey The attribute key.
+         * @return The attribute value.
+         */
+        @Nullable
+        public String getAttribute(@NonNull String attributeKey) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    && mStructuredDataInfo != null) {
+                return Api37Impl.getStructuredDataInfoAttribute(mStructuredDataInfo, attributeKey);
+            }
+
+            return mAttributes != null ? mAttributes.getString(attributeKey) : null;
+        }
+
+        /**
+         * Returns an unmodifiable map of attributes.
+         *
+         * @return An unmodifiable {@link Map} of attribute keys to values.
+         */
+        @NonNull
+        public Map<String, String> getAttributes() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    && mStructuredDataInfo != null) {
+                return Collections.unmodifiableMap(
+                        Api37Impl.getStructuredDataInfoAttributes(mStructuredDataInfo));
+            }
+
+            Map<String, String> attributes = new HashMap<>();
+            if (mAttributes != null) {
+                for (String key : mAttributes.keySet()) {
+                    String value = mAttributes.getString(key);
+                    if (value != null) {
+                        attributes.put(key, value);
+                    }
+                }
+            }
+            return Collections.unmodifiableMap(attributes);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mExtrasType, getTag(), getAttributes());
+        }
+
+        @Override
+        public boolean equals(@Nullable Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof StructuredDataInfoCompat)) {
+                return false;
+            }
+            StructuredDataInfoCompat other = (StructuredDataInfoCompat) obj;
+            // Instances of different subclasses with the same tag and attributes aren't equal.
+            return Objects.equals(mExtrasType, other.mExtrasType)
+                    && Objects.equals(getTag(), other.getTag())
+                    && getAttributes().equals(other.getAttributes());
+        }
+
+        @Override
+        public @NonNull String toString() {
+            return getClass().getSimpleName() + "{tag=" + getTag()
+                    + ", attributes=" + getAttributes() + "}";
+        }
+
+        /**
+         * Stores this instance in a node's {@code extras}, unless it wraps a platform object or
+         * has no tag or extras type. Only subclasses in this library have an extras type, since
+         * {@link #readFromExtras(Bundle)} has to recreate them.
+         */
+        void writeToExtras(@NonNull Bundle extras) {
+            if (mStructuredDataInfo != null || mExtrasType == null || mTag == null) {
+                return;
+            }
+            extras.putString(STRUCTURED_DATA_TYPE_KEY, mExtrasType);
+            extras.putString(STRUCTURED_DATA_TAG_KEY, mTag);
+            extras.putBundle(STRUCTURED_DATA_ATTRIBUTES_KEY, getOrCreateAttributes());
+        }
+
+        /**
+         * Removes any instance stored by {@link #writeToExtras(Bundle)} from a node's
+         * {@code extras}.
+         */
+        static void removeFromExtras(@NonNull Bundle extras) {
+            extras.remove(STRUCTURED_DATA_TYPE_KEY);
+            extras.remove(STRUCTURED_DATA_TAG_KEY);
+            extras.remove(STRUCTURED_DATA_ATTRIBUTES_KEY);
+        }
+
+        /**
+         * Returns the instance stored in a node's {@code extras} by
+         * {@link #writeToExtras(Bundle)}, or {@code null} if there isn't one of a type known to
+         * this version of the library.
+         */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
+        static @Nullable StructuredDataInfoCompat readFromExtras(@Nullable Bundle extras) {
+            if (extras == null) {
+                return null;
+            }
+            String type = extras.getString(STRUCTURED_DATA_TYPE_KEY);
+            String tag = extras.getString(STRUCTURED_DATA_TAG_KEY);
+            if (type == null || tag == null) {
+                return null;
+            }
+            Bundle attributes = extras.getBundle(STRUCTURED_DATA_ATTRIBUTES_KEY);
+            switch (type) {
+                case MathInfoCompat.EXTRAS_TYPE:
+                    return new MathInfoCompat(tag, attributes);
+                case PublicationInfoCompat.EXTRAS_TYPE:
+                    return new PublicationInfoCompat(tag, attributes);
+                default:
+                    // A type this version of the library doesn't know, such as one stored by a
+                    // newer version of the library.
+                    return null;
+            }
+        }
+
+        private @NonNull Bundle getOrCreateAttributes() {
+            if (mAttributes == null) {
+                mAttributes = new Bundle();
+            }
+            return mAttributes;
+        }
+    }
+
+    /**
+     * Compat class for {@link AccessibilityNodeInfo.MathInfo}, which is a class that holds
+     * information about a node that represents a mathematical expression.
+     *
+     * <p>On API levels below 37, where {@link AccessibilityNodeInfo.MathInfo} isn't available,
+     * this information is stored in the node's extras. See {@link StructuredDataInfoCompat}.
+     *
+     * @see AccessibilityNodeInfo.MathInfo
+     */
+    public static class MathInfoCompat extends StructuredDataInfoCompat {
+        /** Identifies this type in a node's extras. */
+        static final String EXTRAS_TYPE = "math";
+
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
+        @StringDef(
+            value = {
+                MATH_TAG_MATH,
+                MATH_TAG_ANNOTATION,
+                MATH_TAG_ANNOTATION_XML,
+                MATH_TAG_ERROR,
+                MATH_TAG_FRACTION,
+                MATH_TAG_IDENTIFIER,
+                MATH_TAG_MULTISCRIPTS,
+                MATH_TAG_NONE_SCRIPT,
+                MATH_TAG_NUMBER,
+                MATH_TAG_OPERATOR,
+                MATH_TAG_OVER,
+                MATH_TAG_PHANTOM,
+                MATH_TAG_PRESCRIPT_DELIMITER,
+                MATH_TAG_ROOT,
+                MATH_TAG_ROW,
+                MATH_TAG_SEMANTICS,
+                MATH_TAG_SPACE,
+                MATH_TAG_SQUARE_ROOT,
+                MATH_TAG_STRING_LITERAL,
+                MATH_TAG_SUB,
+                MATH_TAG_SUB_SUP,
+                MATH_TAG_SUP,
+                MATH_TAG_TABLE,
+                MATH_TAG_TABLE_CELL,
+                MATH_TAG_TABLE_ROW,
+                MATH_TAG_TEXT,
+                MATH_TAG_UNDER,
+                MATH_TAG_UNDER_OVER,
+            })
+        @RestrictTo(LIBRARY_GROUP_PREFIX)
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface MathTag {}
+
+        /** The top-level root element that encapsulates a MathML expression. */
+        public static final String MATH_TAG_MATH = "math";
+        /**
+         * An element that holds a text annotation, such as TeX source, within a {@code semantics}
+         * element.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_ANNOTATION = "annotation";
+        /**
+         * An element that holds a markup annotation, such as Content MathML, SVG or HTML, within a
+         * {@code semantics} element.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_ANNOTATION_XML = "annotation-xml";
+        /**
+         * An element for an error message, typically from a program reporting a syntax error in the
+         * input it converted to MathML.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_ERROR = "merror";
+        /** An element for creating fractions. */
+        public static final String MATH_TAG_FRACTION = "mfrac";
+        /** An element for symbolic names or arbitrary text to be rendered as an identifier. */
+        public static final String MATH_TAG_IDENTIFIER = "mi";
+        /**
+         * An element for attaching any number of prescripts and postscripts to a base
+         * expression.
+         */
+        public static final String MATH_TAG_MULTISCRIPTS = "mmultiscripts";
+        /**
+         * Represents an empty element, often used as a placeholder in elements like
+         * {@code mmultiscripts}.
+         */
+        public static final String MATH_TAG_NONE_SCRIPT = "none";
+        /** An element for a numeric literal. */
+        public static final String MATH_TAG_NUMBER = "mn";
+        /** An element for an operator, fence, separator, or accent. */
+        public static final String MATH_TAG_OPERATOR = "mo";
+        /** An element that attaches an accent or a limit over a base expression. */
+        public static final String MATH_TAG_OVER = "mover";
+        /**
+         * An element whose contents take up space but aren't displayed, often used for alignment.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_PHANTOM = "mphantom";
+        /**
+         * An empty element used within {@code mmultiscripts} to separate postscripts from
+         * prescripts.
+         */
+        public static final String MATH_TAG_PRESCRIPT_DELIMITER = "mprescripts";
+        /** An element for radicals with an explicit index, such as a cube root. */
+        public static final String MATH_TAG_ROOT = "mroot";
+        /** An element for grouping sub-expressions horizontally. */
+        public static final String MATH_TAG_ROW = "mrow";
+        /**
+         * An element that associates annotations with an expression. Its first child is typically
+         * the expression, and the rest are annotations.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_SEMANTICS = "semantics";
+        /**
+         * An empty element for blank space of a specified size, such as the blank in a
+         * fill-in-the-blank problem.
+         */
+        @PreviewAccessibilityApi
+        public static final String MATH_TAG_SPACE = "mspace";
+        /** An element for a square root. */
+        public static final String MATH_TAG_SQUARE_ROOT = "msqrt";
+        /** An element for representing string literals, often for computer algebra systems. */
+        public static final String MATH_TAG_STRING_LITERAL = "ms";
+        /** An element that attaches a subscript to a base expression. */
+        public static final String MATH_TAG_SUB = "msub";
+        /** An element that attaches both a subscript and a superscript to a base expression. */
+        public static final String MATH_TAG_SUB_SUP = "msubsup";
+        /** An element that attaches a superscript to a base expression. */
+        public static final String MATH_TAG_SUP = "msup";
+        /** An element for creating tables or matrices. */
+        public static final String MATH_TAG_TABLE = "mtable";
+        /** An element representing a single cell in a table or matrix. */
+        public static final String MATH_TAG_TABLE_CELL = "mtd";
+        /** An element representing a single row in a a table or matrix. */
+        public static final String MATH_TAG_TABLE_ROW = "mtr";
+        /** An element for arbitrary text to be rendered as itself, often used for commentary. */
+        public static final String MATH_TAG_TEXT = "mtext";
+        /** An element that attaches an accent or a limit under a base expression. */
+        public static final String MATH_TAG_UNDER = "munder";
+        /** An element that attaches scripts both under and over a base expression. */
+        public static final String MATH_TAG_UNDER_OVER = "munderover";
+
+        @StringDef(
+            value = {
+                MATH_ATTRIBUTE_INTENT,
+                MATH_ATTRIBUTE_ARG,
+            })
+        @RestrictTo(LIBRARY_GROUP_PREFIX)
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface MathAttribute {}
+
+        /**
+         * An attribute that provides a semantic annotation for the element on which it is
+         * specified.
+         *
+         * <p>
+         * The {@code intent} attribute's value is a string that can be parsed to determine
+         * the meaning of the element and its children. An {@code intent} value is a string
+         * consisting of a single token, or a function-like expression.
+         *
+         * <p>
+         * Use this attribute on a container node to disambiguate mathematical notation. For
+         * example, the expression {@code (a, b)} is ambiguous; it could be a point, an open
+         * interval, or the greatest common divisor. By setting
+         * {@code intent="open-interval($1, $2)"} on the parent node, you provide a precise,
+         * machine-readable meaning that accessibility services can use to provide a better
+         * experience. The {@code $1} and {@code $2} are placeholders for the arguments, which are
+         * identified on child nodes using the {@link #MATH_ATTRIBUTE_ARG} attribute.
+         */
+        public static final String MATH_ATTRIBUTE_INTENT = "intent";
+
+        /**
+         * An attribute used to associate a child element with one of the arguments in its parent's
+         * {@link #MATH_ATTRIBUTE_INTENT} value.
+         *
+         * <p>
+         * The value of the {@code arg} attribute is a token that must match one of the argument
+         * names in the parent's {@code intent} value.
+         *
+         * <p>
+         * Use this attribute on a child node to explicitly link it to one of the argument
+         * placeholders in its parent's {@code intent} string. For example, if a parent node has
+         * {@code intent="gcd($1, $2)"}, the child node representing the first parameter of the
+         * function should have its {@code arg} attribute set to "1".
+         */
+        public static final String MATH_ATTRIBUTE_ARG = "arg";
+
+        /**
+         * Instantiates a new MathInfoCompat.
+         *
+         * @param tag The MathML tag for this node.
+         */
+        public MathInfoCompat(@NonNull @MathTag String tag) {
+            super(Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    ? (StructuredDataInfo) Api37Impl.createMathInfo(tag) : null,
+                    EXTRAS_TYPE, tag, null);
+        }
+
+        /**
+         * Instantiates a new MathInfoCompat.
+         *
+         * @param mathInfo The underlying MathInfo to wrap.
+         */
+        public MathInfoCompat(@Nullable MathInfo mathInfo) {
+            super(Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
+                    ? (StructuredDataInfo) mathInfo : null, EXTRAS_TYPE, null, null);
+        }
+
+        /**
+         * Instantiates a new MathInfoCompat that holds its own data rather than wrapping a
+         * platform object, such as one stored in a node's extras.
+         *
+         * @param tag The MathML tag for this node.
+         * @param attributes The attributes.
+         */
+        MathInfoCompat(@NonNull String tag, @Nullable Bundle attributes) {
+            super(null, EXTRAS_TYPE, tag, attributes);
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        @Nullable
+        @MathTag
+        public String getTag() {
+            return super.getTag();
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public void putAttribute(@NonNull @MathAttribute String attributeKey,
+                @NonNull String value) {
+            super.putAttribute(attributeKey, value);
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        public void removeAttribute(@NonNull @MathAttribute String attributeKey) {
+            super.removeAttribute(attributeKey);
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        @Nullable
+        public String getAttribute(@NonNull @MathAttribute String attributeKey) {
+            return super.getAttribute(attributeKey);
+        }
+    }
+
+    /**
+     * Holds information about a node that represents a part of a digital publication, such as a
+     * chapter, footnote, or glossary entry.
+     *
+     * <p>An accessibility service can use this information to provide a richer experience for users
+     * reading digital publications, such as ebooks, articles, and long-form documents. For example,
+     * a screen reader could announce when a user enters a chapter or footnote and allow jumping
+     * between publication sections.
+     *
+     * <p>To add publication information to a node, create an instance of
+     * {@link PublicationInfoCompat} and call
+     * {@link AccessibilityNodeInfoCompat#setStructuredDataInfo(StructuredDataInfoCompat)}.
+     *
+     * <p>On all API levels, this information is currently stored in the node's extras, where
+     * accessibility services can read it with
+     * {@link AccessibilityNodeInfoCompat#getStructuredDataInfo()}. See
+     * {@link StructuredDataInfoCompat}.
+     */
+    @PreviewAccessibilityApi
+    public static final class PublicationInfoCompat extends StructuredDataInfoCompat {
+        /** Identifies this type in a node's extras. */
+        static final String EXTRAS_TYPE = "publication";
+
+        @StringDef(
+            value = {
+                PUBLICATION_TAG_ABSTRACT,
+                PUBLICATION_TAG_ACKNOWLEDGMENTS,
+                PUBLICATION_TAG_AFTERWORD,
+                PUBLICATION_TAG_APPENDIX,
+                PUBLICATION_TAG_BACK_LINK,
+                PUBLICATION_TAG_BIBLIOGRAPHY,
+                PUBLICATION_TAG_BIBLIOGRAPHY_REFERENCE,
+                PUBLICATION_TAG_CHAPTER,
+                PUBLICATION_TAG_COLOPHON,
+                PUBLICATION_TAG_CONCLUSION,
+                PUBLICATION_TAG_COVER,
+                PUBLICATION_TAG_CREDIT,
+                PUBLICATION_TAG_CREDITS,
+                PUBLICATION_TAG_DEDICATION,
+                PUBLICATION_TAG_ENDNOTES,
+                PUBLICATION_TAG_EPIGRAPH,
+                PUBLICATION_TAG_EPILOGUE,
+                PUBLICATION_TAG_ERRATA,
+                PUBLICATION_TAG_EXAMPLE,
+                PUBLICATION_TAG_FOOTNOTE,
+                PUBLICATION_TAG_FOREWORD,
+                PUBLICATION_TAG_GLOSSARY,
+                PUBLICATION_TAG_GLOSSARY_REFERENCE,
+                PUBLICATION_TAG_INDEX,
+                PUBLICATION_TAG_INTRODUCTION,
+                PUBLICATION_TAG_NOTE_REFERENCE,
+                PUBLICATION_TAG_NOTICE,
+                PUBLICATION_TAG_PAGE_BREAK,
+                PUBLICATION_TAG_PAGE_FOOTER,
+                PUBLICATION_TAG_PAGE_HEADER,
+                PUBLICATION_TAG_PAGE_LIST,
+                PUBLICATION_TAG_PART,
+                PUBLICATION_TAG_PREFACE,
+                PUBLICATION_TAG_PROLOGUE,
+                PUBLICATION_TAG_PULL_QUOTE,
+                PUBLICATION_TAG_QUESTIONS_AND_ANSWERS,
+                PUBLICATION_TAG_SUBTITLE,
+                PUBLICATION_TAG_TABLE_OF_CONTENTS,
+                PUBLICATION_TAG_TIP,
+            })
+        @RestrictTo(LIBRARY_GROUP_PREFIX)
+        @Retention(RetentionPolicy.SOURCE)
+        public @interface PublicationTag {}
+
+        /** A short summary of the work, or of a section or excerpt of it. */
+        public static final String PUBLICATION_TAG_ABSTRACT = "doc-abstract";
+
+        /** A section that acknowledges contributions to the work. */
+        public static final String PUBLICATION_TAG_ACKNOWLEDGMENTS = "doc-acknowledgments";
+
+        /** A closing statement, typically about how the work came to be or what followed it. */
+        public static final String PUBLICATION_TAG_AFTERWORD = "doc-afterword";
+
+        /** Supplemental information placed after the main content. */
+        public static final String PUBLICATION_TAG_APPENDIX = "doc-appendix";
+
+        /** A link back to a related location, such as from a note to where it's referenced. */
+        public static final String PUBLICATION_TAG_BACK_LINK = "doc-backlink";
+
+        /** A list of external sources cited in the work. */
+        public static final String PUBLICATION_TAG_BIBLIOGRAPHY = "doc-bibliography";
+
+        /** A reference to a bibliography entry. */
+        public static final String PUBLICATION_TAG_BIBLIOGRAPHY_REFERENCE = "doc-biblioref";
+
+        /** A major thematic section of the work. */
+        public static final String PUBLICATION_TAG_CHAPTER = "doc-chapter";
+
+        /** Production notes for the edition, such as the typeface used. */
+        public static final String PUBLICATION_TAG_COLOPHON = "doc-colophon";
+
+        /** A section that summarizes the work or wraps up its narrative. */
+        public static final String PUBLICATION_TAG_CONCLUSION = "doc-conclusion";
+
+        /** A cover image, typically showing the title and author. */
+        public static final String PUBLICATION_TAG_COVER = "doc-cover";
+
+        /** An acknowledgment of the source of third-party content, such as a photo. */
+        public static final String PUBLICATION_TAG_CREDIT = "doc-credit";
+
+        /** A collection of credits. */
+        public static final String PUBLICATION_TAG_CREDITS = "doc-credits";
+
+        /** An inscription dedicating the work to one or more people. */
+        public static final String PUBLICATION_TAG_DEDICATION = "doc-dedication";
+
+        /** A collection of notes at the end of the work or of a section. */
+        public static final String PUBLICATION_TAG_ENDNOTES = "doc-endnotes";
+
+        /** A quotation at the start of the work or a section that sets its theme or mood. */
+        public static final String PUBLICATION_TAG_EPIGRAPH = "doc-epigraph";
+
+        /**
+         * A concluding section of narrative that comments on the work's events, typically from a
+         * later time.
+         */
+        public static final String PUBLICATION_TAG_EPILOGUE = "doc-epilogue";
+
+        /** A list of corrections made after publication. */
+        public static final String PUBLICATION_TAG_ERRATA = "doc-errata";
+
+        /** An illustration of a key concept, such as a code listing or case study. */
+        public static final String PUBLICATION_TAG_EXAMPLE = "doc-example";
+
+        /** Ancillary information, such as a citation or comment, about a referenced passage. */
+        public static final String PUBLICATION_TAG_FOOTNOTE = "doc-footnote";
+
+        /** An introductory section, typically written by someone other than the author. */
+        public static final String PUBLICATION_TAG_FOREWORD = "doc-foreword";
+
+        /** A list of terms used in the work, with their definitions. */
+        public static final String PUBLICATION_TAG_GLOSSARY = "doc-glossary";
+
+        /** A reference to a glossary definition. */
+        public static final String PUBLICATION_TAG_GLOSSARY_REFERENCE = "doc-glossref";
+
+        /** A detailed list of links to the subjects, names and topics in the work. */
+        public static final String PUBLICATION_TAG_INDEX = "doc-index";
+
+        /** A section that introduces the scope or nature of the work. */
+        public static final String PUBLICATION_TAG_INTRODUCTION = "doc-introduction";
+
+        /**
+         * A reference to a footnote or endnote, typically a superscript number or symbol.
+         */
+        public static final String PUBLICATION_TAG_NOTE_REFERENCE = "doc-noteref";
+
+        /** A warning about the consequences of an action or event. */
+        public static final String PUBLICATION_TAG_NOTICE = "doc-notice";
+
+        /**
+         * The point where one page of a paginated edition ends and the next begins. Its accessible
+         * name is normally the number of the page that follows.
+         */
+        public static final String PUBLICATION_TAG_PAGE_BREAK = "doc-pagebreak";
+
+        /**
+         * Text at the bottom of a page that gives context about the work and the reader's place in
+         * it.
+         */
+        public static final String PUBLICATION_TAG_PAGE_FOOTER = "doc-pagefooter";
+
+        /**
+         * Text at the top of a page that gives context about the work and the reader's place in
+         * it.
+         */
+        public static final String PUBLICATION_TAG_PAGE_HEADER = "doc-pageheader";
+
+        /** A list of links to the page breaks in the content. */
+        public static final String PUBLICATION_TAG_PAGE_LIST = "doc-pagelist";
+
+        /**
+         * A major division of the work that groups related sections, such as several chapters.
+         */
+        public static final String PUBLICATION_TAG_PART = "doc-part";
+
+        /** An introductory section, typically written by the author. */
+        public static final String PUBLICATION_TAG_PREFACE = "doc-preface";
+
+        /**
+         * An introductory section that sets the background, typically as part of the narrative.
+         */
+        public static final String PUBLICATION_TAG_PROLOGUE = "doc-prologue";
+
+        /** A quotation from the content, set apart to draw attention to it. */
+        public static final String PUBLICATION_TAG_PULL_QUOTE = "doc-pullquote";
+
+        /** Content structured as questions and answers, such as an interview or FAQ. */
+        public static final String PUBLICATION_TAG_QUESTIONS_AND_ANSWERS = "doc-qna";
+
+        /** An explanatory or alternate title for the work or a section. */
+        public static final String PUBLICATION_TAG_SUBTITLE = "doc-subtitle";
+
+        /** An ordered list of links to the major headings in the content. */
+        public static final String PUBLICATION_TAG_TABLE_OF_CONTENTS = "doc-toc";
+
+        /** Helpful information that clarifies the content. */
+        public static final String PUBLICATION_TAG_TIP = "doc-tip";
+
+        /**
+         * Instantiates a new PublicationInfoCompat.
+         *
+         * @param tag The publication tag for this node.
+         * @throws IllegalArgumentException if {@code tag} is empty.
+         */
+        public PublicationInfoCompat(@NonNull @PublicationTag String tag) {
+            // TODO(b/575192538): Revisit before this leaves preview.
+            this(checkTag(tag), null);
+        }
+
+        /**
+         * Instantiates a new PublicationInfoCompat that holds its own data rather than wrapping a
+         * platform object, such as one stored in a node's extras.
+         *
+         * @param tag The publication tag for this node.
+         * @param attributes The attributes.
+         */
+        PublicationInfoCompat(@NonNull String tag, @Nullable Bundle attributes) {
+            super(null, EXTRAS_TYPE, tag, attributes);
+        }
+
+        /**
+         * {@inheritDoc}
+         */
+        @Override
+        @NonNull
+        @PublicationTag
+        public String getTag() {
+            return Objects.requireNonNull(super.getTag());
+        }
+
+        private static @NonNull String checkTag(@NonNull String tag) {
+            if (Objects.requireNonNull(tag).isEmpty()) {
+                throw new IllegalArgumentException("Tag cannot be empty");
+            }
+            return tag;
+        }
+    }
+
+    /**
      * Class with information if a node is a range.
      */
     public static class RangeInfoCompat {
@@ -1738,7 +2489,31 @@ public class AccessibilityNodeInfoCompat {
      * </ul>
      */
     public static final class SelectionPositionCompat {
+        /**
+         * The offset represents an index into the text returned by
+         * {@link AccessibilityNodeInfoCompat#getText()}.
+         */
+        @PreviewAccessibilityApi
+        public static final int OFFSET_TYPE_TEXT = 0;
+
+        /**
+         * The offset represents a position between the children of this position's node, used with
+         * {@link AccessibilityNodeInfoCompat#getChild(int)}. The offset bounds are from 0 to
+         * {@link AccessibilityNodeInfoCompat#getChildCount()}, inclusive. An offset of 0 represents
+         * the position conceptually before the first child, and an offset equal to the child
+         * count represents the position after the last child.
+         */
+        @PreviewAccessibilityApi
+        public static final int OFFSET_TYPE_CHILD = 1;
+
+        @PreviewAccessibilityApi
+        @IntDef({OFFSET_TYPE_TEXT, OFFSET_TYPE_CHILD})
+        @Retention(RetentionPolicy.SOURCE)
+        @RestrictTo(LIBRARY_GROUP_PREFIX)
+        public @interface OffsetType {}
+
         final SelectionPosition mPosition;
+        final @OffsetType int mOffsetType;
 
         /**
          * Instantiates a new SelectionPositionCompat.
@@ -1748,12 +2523,10 @@ public class AccessibilityNodeInfoCompat {
          * @param offset The offset for a {@link SelectionPositionCompat} within {@code view}'s text
          *     content, which should be a value between 0 and the length of {@code view}'s text.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionPositionCompat(@NonNull AccessibilityNodeInfoCompat node, int offset) {
-            if (BuildCompat.isAtLeastB_1()) {
-                mPosition = new SelectionPosition(node.unwrap(), offset);
-            } else {
-                mPosition = null;
-            }
+            this(BuildCompat.isAtLeastB_1() ? new SelectionPosition(node.unwrap(), offset) : null,
+                    OFFSET_TYPE_TEXT);
         }
 
         /**
@@ -1764,12 +2537,10 @@ public class AccessibilityNodeInfoCompat {
          * @param offset The offset for a selection position within {@code view}'s text content,
          *     which should be a value between 0 and the length of {@code view}'s text.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionPositionCompat(@NonNull View view, int offset) {
-            if (BuildCompat.isAtLeastB_1()) {
-                mPosition = new SelectionPosition(view, offset);
-            } else {
-                mPosition = null;
-            }
+            this(BuildCompat.isAtLeastB_1() ? new SelectionPosition(view, offset) : null,
+                    OFFSET_TYPE_TEXT);
         }
 
         /**
@@ -1781,12 +2552,11 @@ public class AccessibilityNodeInfoCompat {
          * @param offset The offset for a selection position within the virtual descendant's text
          *     content, which should be a value between 0 and the length of the descendant's text.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionPositionCompat(@NonNull View view, int virtualDescendantId, int offset) {
-            if (BuildCompat.isAtLeastB_1()) {
-                mPosition = new SelectionPosition(view, virtualDescendantId, offset);
-            } else {
-                mPosition = null;
-            }
+            this(BuildCompat.isAtLeastB_1()
+                    ? new SelectionPosition(view, virtualDescendantId, offset) : null,
+                    OFFSET_TYPE_TEXT);
         }
 
         /**
@@ -1794,12 +2564,16 @@ public class AccessibilityNodeInfoCompat {
          *
          * @param position The underlying SelectionPosition to wrap.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionPositionCompat(@NonNull SelectionPosition position) {
-            if (BuildCompat.isAtLeastB_1()) {
-                mPosition = position;
-            } else {
-                mPosition = null;
-            }
+            // TODO(b/509618749): Read offset type natively from platform position
+            // if SDK >= 37.1.
+            this(position, OFFSET_TYPE_TEXT);
+        }
+
+        SelectionPositionCompat(@Nullable SelectionPosition position, @OffsetType int offsetType) {
+            mPosition = BuildCompat.isAtLeastB_1() ? position : null;
+            mOffsetType = offsetType;
         }
 
         /**
@@ -1816,7 +2590,6 @@ public class AccessibilityNodeInfoCompat {
             } else {
                 return null;
             }
-
         }
 
         /**
@@ -1837,6 +2610,51 @@ public class AccessibilityNodeInfoCompat {
         }
 
         /**
+         * Returns the offset type.
+         *
+         * If this instance was created without specifying an offset type, this will default to
+         * {@link #OFFSET_TYPE_TEXT}.
+         */
+        @PreviewAccessibilityApi
+        public @OffsetType int getOffsetType() {
+            return mOffsetType;
+        }
+
+        /**
+         * @return The view associated with {@code this} {@link SelectionPositionCompat}.
+         *     Will return null if the view is not attached to a window.
+         *
+         * Compatibility:
+         * <ul>
+         *     <li>API &lt: 36.1: Always returns {@code null}</li>
+         * </ul>
+         */
+        public @Nullable View getView() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+                return Api37Impl.getView(mPosition);
+            } else {
+                return null;
+            }
+        }
+
+        /**
+         * @return A value representing the virtual descendant id of the
+         *     {@link SelectionPositionCompat}
+         *
+         * Compatibility:
+         * <ul>
+         *     <li>API &lt: 36.1: Always returns {@code -1}</li>
+         * </ul>
+         */
+        public int getVirtualDescendantId() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+                return Api37Impl.getVirtualDescendantId(mPosition);
+            } else {
+                return -1;
+            }
+        }
+
+        /**
          * Compatibility:
          * <ul>
          *     <li>API &lt: 36.1: Always returns {@code 0}</li>
@@ -1845,7 +2663,9 @@ public class AccessibilityNodeInfoCompat {
         @Override
         public int hashCode() {
             if (BuildCompat.isAtLeastB_1()) {
-                return mPosition != null ? mPosition.hashCode() : 0;
+                int result = mPosition != null ? mPosition.hashCode() : 0;
+                result = 31 * result + mOffsetType;
+                return result;
             } else {
                 return 0;
             }
@@ -1854,18 +2674,109 @@ public class AccessibilityNodeInfoCompat {
         /**
          * Compatibility:
          * <ul>
-         *     <li>API &lt: 36.1: Always returns {@code false}</li>
+         *     <li>API &lt: 36.1: Returns {@code true} if this object is identical to {@code other},
+         *     else {@code false}</li>
          * </ul>
          */
         @Override
         public boolean equals(Object other) {
             if (BuildCompat.isAtLeastB_1()) {
-                return mPosition != null ? mPosition.equals(other) : false;
+                if (!(other instanceof SelectionPositionCompat)) {
+                    return false;
+                }
+                SelectionPositionCompat otherCompat = (SelectionPositionCompat) other;
+                return (mPosition != null ? mPosition.equals(otherCompat.mPosition) : false)
+                        && mOffsetType == otherCompat.mOffsetType;
             } else {
-                return false;
+                return this == other;
+            }
+        }
+
+        /**
+         * Builder for creating {@link SelectionPositionCompat} objects.
+         */
+        @PreviewAccessibilityApi
+        public static final class Builder {
+            private AccessibilityNodeInfoCompat mNode;
+            private View mView;
+            private int mVirtualDescendantId = NO_ID;
+            private final int mOffset;
+            private @OffsetType int mOffsetType = OFFSET_TYPE_TEXT;
+
+            /**
+             * Creates a new Builder.
+             *
+             * @param node The {@link AccessibilityNodeInfoCompat} for the node of this position.
+             * @param offset The offset for the position.
+             */
+            public Builder(@NonNull AccessibilityNodeInfoCompat node, int offset) {
+                mNode = node;
+                mOffset = offset;
+            }
+
+            /**
+             * Creates a new Builder.
+             *
+             * @param view The {@link View} containing the text associated with this selection.
+             * @param offset The offset for the position.
+             */
+            public Builder(@NonNull View view, int offset) {
+                mView = view;
+                mOffset = offset;
+            }
+
+            /**
+             * Creates a new Builder.
+             *
+             * @param view The view whose virtual descendant is associated with the
+             *     selection position.
+             * @param virtualDescendantId The virtual descendant id.
+             * @param offset The offset for the position.
+             */
+            public Builder(@NonNull View view, int virtualDescendantId, int offset) {
+                mView = view;
+                mVirtualDescendantId = virtualDescendantId;
+                mOffset = offset;
+            }
+
+            /**
+             * Sets the offset type for the position.
+             *
+             * @param offsetType The scheme dictating how the offset should be interpreted.
+             * @return This builder.
+             * @throws IllegalArgumentException If the {@code offsetType} is unknown.
+             */
+            @NonNull
+            public Builder setOffsetType(@OffsetType int offsetType) {
+                if (offsetType != OFFSET_TYPE_TEXT && offsetType != OFFSET_TYPE_CHILD) {
+                    throw new IllegalArgumentException("Unknown offsetType: " + offsetType);
+                }
+                mOffsetType = offsetType;
+                return this;
+            }
+
+            /**
+             * Creates a new {@link SelectionPositionCompat} instance.
+             */
+            @NonNull
+            public SelectionPositionCompat build() {
+                SelectionPosition platformObj = null;
+                if (BuildCompat.isAtLeastB_1()) {
+                    // TODO(b/509618749): Use platform Builder to set offset type natively
+                    // if SDK >= 37.1.
+                    if (mNode != null) {
+                        platformObj = new SelectionPosition(mNode.unwrap(), mOffset);
+                    } else if (mVirtualDescendantId != NO_ID) {
+                        platformObj = new SelectionPosition(mView, mVirtualDescendantId, mOffset);
+                    } else {
+                        platformObj = new SelectionPosition(mView, mOffset);
+                    }
+                }
+                return new SelectionPositionCompat(platformObj, mOffsetType);
             }
         }
     }
+
 
     /**
      * Compat class for AccessibilityNodeInfo.Selection, which is a class that
@@ -1880,7 +2791,9 @@ public class AccessibilityNodeInfoCompat {
      * </ul>
      */
     public static final class SelectionCompat {
-        final Selection mSelection;
+        private final Selection mSelection;
+        private final SelectionPositionCompat mStart;
+        private final SelectionPositionCompat mEnd;
 
         /**
          * Instantiates a new SelectionCompat.
@@ -1888,12 +2801,17 @@ public class AccessibilityNodeInfoCompat {
          * @param start The start of the extended selection.
          * @param end The end of the extended selection.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionCompat(@NonNull SelectionPositionCompat start,
                 @NonNull SelectionPositionCompat end) {
             if (BuildCompat.isAtLeastB_1()) {
                 mSelection = new Selection(start.mPosition, end.mPosition);
+                mStart = start;
+                mEnd = end;
             } else {
                 mSelection = null;
+                mStart = null;
+                mEnd = null;
             }
         }
 
@@ -1902,11 +2820,21 @@ public class AccessibilityNodeInfoCompat {
          *
          * @param selection The underlying Selection to wrap.
          */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
         public SelectionCompat(@Nullable Selection selection) {
-            if (BuildCompat.isAtLeastB_1()) {
+            this(selection, SelectionPositionCompat.OFFSET_TYPE_TEXT,
+                    SelectionPositionCompat.OFFSET_TYPE_TEXT);
+        }
+
+        SelectionCompat(@Nullable Selection selection, int startOffsetType, int endOffsetType) {
+            if (BuildCompat.isAtLeastB_1() && selection != null) {
                 mSelection = selection;
+                mStart = new SelectionPositionCompat(selection.getStart(), startOffsetType);
+                mEnd = new SelectionPositionCompat(selection.getEnd(), endOffsetType);
             } else {
                 mSelection = null;
+                mStart = null;
+                mEnd = null;
             }
         }
 
@@ -1919,11 +2847,7 @@ public class AccessibilityNodeInfoCompat {
          * </ul>
          */
         public @Nullable SelectionPositionCompat getStart() {
-            if (BuildCompat.isAtLeastB_1()) {
-                return new SelectionPositionCompat(mSelection.getStart());
-            } else {
-                return null;
-            }
+            return mStart;
         }
 
         /**
@@ -1935,11 +2859,17 @@ public class AccessibilityNodeInfoCompat {
          * </ul>
          */
         public @Nullable SelectionPositionCompat getEnd() {
-            if (BuildCompat.isAtLeastB_1()) {
-                return new SelectionPositionCompat(mSelection.getEnd());
-            } else {
-                return null;
-            }
+            return mEnd;
+        }
+
+        /**
+         * Returns the underlying platform {@link Selection} object.
+         *
+         * @return The platform {@link Selection} object, or {@code null} if the compat object
+         *     was created on an API level lower than 36.1.
+         */
+        public @Nullable Selection unwrap() {
+            return mSelection;
         }
 
         /**
@@ -1951,7 +2881,9 @@ public class AccessibilityNodeInfoCompat {
         @Override
         public int hashCode() {
             if (BuildCompat.isAtLeastB_1()) {
-                return mSelection != null ? mSelection.hashCode() : 0;
+                int result = mStart != null ? mStart.hashCode() : 0;
+                result = 31 * result + (mEnd != null ? mEnd.hashCode() : 0);
+                return result;
             } else {
                 return 0;
             }
@@ -1960,15 +2892,97 @@ public class AccessibilityNodeInfoCompat {
         /**
          * Compatibility:
          * <ul>
-         *     <li>API &lt: 36.1: Always returns {@code false}</li>
+         *     <li>API &lt: 36.1: Returns {@code true} if this object is identical to {@code obj},
+         *     else {@code false}</li>
          * </ul>
          */
         @Override
         public boolean equals(Object obj) {
             if (BuildCompat.isAtLeastB_1()) {
-                return mSelection != null ? mSelection.equals(obj) : false;
+                if (!(obj instanceof SelectionCompat)) {
+                    return false;
+                }
+                SelectionCompat other = (SelectionCompat) obj;
+                return (mStart != null ? mStart.equals(other.mStart) : other.mStart == null)
+                        && (mEnd != null ? mEnd.equals(other.mEnd) : other.mEnd == null);
             } else {
-                return false;
+                return this == obj;
+            }
+        }
+
+        /**
+         * Writes and returns a new {@link Bundle} that represents this {@link SelectionCompat}
+         * as action arguments.
+         * <p>
+         * The returned {@link Bundle} is intended to be used directly by an accessibility service
+         * as the action arguments when performing the
+         * {@link AccessibilityActionCompat#ACTION_SET_EXTENDED_SELECTION} action.
+         *
+         * @return A new {@link Bundle} representing this selection.
+         */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
+        @NonNull
+        public Bundle toActionArguments() {
+            Bundle bundle = new Bundle();
+            if (BuildCompat.isAtLeastB_1()) {
+                if (mSelection != null) {
+                    bundle.putParcelable(ACTION_ARGUMENT_SELECTION_PARCELABLE, mSelection);
+                }
+                if (mStart != null) {
+                    bundle.putInt(EXTRA_SELECTION_START_OFFSET_TYPE, mStart.getOffsetType());
+                }
+                if (mEnd != null) {
+                    bundle.putInt(EXTRA_SELECTION_END_OFFSET_TYPE, mEnd.getOffsetType());
+                }
+            }
+            return bundle;
+        }
+
+        /**
+         * Instantiates a new {@link SelectionCompat} from a {@link Bundle} of action arguments.
+         * <p>
+         * Applications or providers implementing
+         * {@link AccessibilityNodeProviderCompat#performAction(int, int, Bundle)} are expected
+         * to use this constructor to reconstruct the {@link SelectionCompat} from the arguments
+         * Bundle of an {@link AccessibilityActionCompat#ACTION_SET_EXTENDED_SELECTION} request.
+         *
+         * @param actionArguments The bundle containing the selection and offset types.
+         * @throws IllegalArgumentException If the bundle does not contain the required
+         *     {@link #ACTION_ARGUMENT_SELECTION_PARCELABLE} key or contains an invalid offset type.
+         */
+        @OptIn(markerClass = PreviewAccessibilityApi.class)
+        public SelectionCompat(@NonNull Bundle actionArguments) {
+            if (BuildCompat.isAtLeastB_1()) {
+                if (!actionArguments.containsKey(ACTION_ARGUMENT_SELECTION_PARCELABLE)) {
+                    throw new IllegalArgumentException("Bundle must contain "
+                            + ACTION_ARGUMENT_SELECTION_PARCELABLE);
+                }
+                mSelection = actionArguments.getParcelable(ACTION_ARGUMENT_SELECTION_PARCELABLE);
+                int startOffsetType = actionArguments.getInt(EXTRA_SELECTION_START_OFFSET_TYPE,
+                        SelectionPositionCompat.OFFSET_TYPE_TEXT);
+                int endOffsetType = actionArguments.getInt(EXTRA_SELECTION_END_OFFSET_TYPE,
+                        SelectionPositionCompat.OFFSET_TYPE_TEXT);
+                if (startOffsetType != SelectionPositionCompat.OFFSET_TYPE_TEXT
+                        && startOffsetType != SelectionPositionCompat.OFFSET_TYPE_CHILD) {
+                    throw new IllegalArgumentException("Unknown start offset type: "
+                            + startOffsetType);
+                }
+                if (endOffsetType != SelectionPositionCompat.OFFSET_TYPE_TEXT
+                        && endOffsetType != SelectionPositionCompat.OFFSET_TYPE_CHILD) {
+                    throw new IllegalArgumentException("Unknown end offset type: "
+                            + endOffsetType);
+                }
+                if (mSelection != null) {
+                    mStart = new SelectionPositionCompat(mSelection.getStart(), startOffsetType);
+                    mEnd = new SelectionPositionCompat(mSelection.getEnd(), endOffsetType);
+                } else {
+                    mStart = null;
+                    mEnd = null;
+                }
+            } else {
+                mSelection = null;
+                mStart = null;
+                mEnd = null;
             }
         }
     }
@@ -2029,6 +3043,14 @@ public class AccessibilityNodeInfoCompat {
 
     private static final String CHECKED_KEY =
             "androidx.view.accessibility.AccessibilityNodeInfoCompat.CHECKED_KEY";
+
+    @VisibleForTesting
+    static final String EXTRA_SELECTION_START_OFFSET_TYPE =
+            "androidx.view.accessibility.AccessibilityNodeInfoCompat.SELECTION_START_OFFSET_TYPE";
+
+    @VisibleForTesting
+    static final String EXTRA_SELECTION_END_OFFSET_TYPE =
+            "androidx.view.accessibility.AccessibilityNodeInfoCompat.SELECTION_END_OFFSET_TYPE";
 
     // These don't line up with the internal framework constants, since they are independent
     // and we might as well get all 32 bits of utility here.
@@ -2327,8 +3349,9 @@ public class AccessibilityNodeInfoCompat {
      *
      * @see AccessibilityActionCompat#ACTION_SET_EXTENDED_SELECTION
      */
+    @SuppressLint("ActionValue")
     public static final String ACTION_ARGUMENT_SELECTION_PARCELABLE =
-            "androidx.core.view.accessibility.action.ARGUMENT_SELECTION_PARCELABLE";
+            "android.view.accessibility.action.ARGUMENT_SELECTION_PARCELABLE";
 
     /**
      * Argument for whether when moving at granularity to extend the selection
@@ -2535,6 +3558,8 @@ public class AccessibilityNodeInfoCompat {
 
     /**
      * Checked state for a node that is not checked.
+     * <p>
+     * This value may represent similar states based on the node's {@code className}.
      *
      * @see #getChecked()
      * @see #setChecked(int)
@@ -2543,6 +3568,8 @@ public class AccessibilityNodeInfoCompat {
 
     /**
      * Checked state for a node that is checked.
+     * <p>
+     * This value may represent similar states based on the node's {@code className}.
      *
      * @see #getChecked()
      * @see #setChecked(int)
@@ -2550,9 +3577,12 @@ public class AccessibilityNodeInfoCompat {
     public static final int CHECKED_STATE_TRUE = 1;
 
     /**
-     * Checked state for a node that is partially checked. For example,
-     * when a checkbox owns a number of sub-options and they have
-     * different states, then the main checkbox is in a partially-checked state.
+     * Checked state for a node that is partially checked.
+     * <p>
+     * For example, a check box representing multiple sub-options that have different states may be
+     * considered partially checked.
+     * <p>
+     * This value may represent similar states based on the node's {@code className}.
      *
      * @see #getChecked()
      * @see #setChecked(int)
@@ -3546,12 +4576,18 @@ public class AccessibilityNodeInfoCompat {
     /**
      * Gets the checked state of this node.
      * <p>
-     * Note that this is only meaningful when {@link #isCheckable()} returns {@code true}.
+     * This value is only meaningful when {@link #isCheckable()} returns {@code true}.
+     * <p>
+     * This property may also be used to indicate similar internal states for nodes that have
+     * different visual appearances, such as a {@link android.widget.ToggleButton} that is pressed
+     * or unpressed, or a {@link android.widget.Switch} that is on or off. Accessibility services
+     * may choose to interpret and convey these states differently based on the value returned by
+     * {@link #getClassName()}, which indicates the type of UI element this node represents.
      *
      * @see #setCheckable(boolean)
      * @see #isCheckable()
      * @see #setChecked(int)
-     * @return The checked state, one of:
+     * @return the checked state of this node, one of:
      *          <ul>
      *          <li>{@link AccessibilityNodeInfoCompat#CHECKED_STATE_FALSE}
      *          <li>{@link AccessibilityNodeInfoCompat#CHECKED_STATE_TRUE}
@@ -3570,26 +4606,33 @@ public class AccessibilityNodeInfoCompat {
     }
 
     /**
-     * Sets the checked state of this node. This is only meaningful
-     * when {@link #isCheckable()} returns {@code true}.
-     * <p><strong>Note:</strong> Cannot be called from an
-     *   {@link android.accessibilityservice.AccessibilityService}. This class is made immutable
-     *   before being delivered to an AccessibilityService.
+     * Sets the checked state of this node.
+     * <p>
+     * This value is only meaningful when {@link #isCheckable()} returns {@code true}.
+     * <p>
+     * This property may also be used to indicate similar internal states for nodes that have
+     * different visual appearances, such as a {@link android.widget.ToggleButton} that is pressed
+     * or unpressed, or a {@link android.widget.Switch} that is on or off. Accessibility services
+     * may choose to interpret and convey these states differently based on the value returned by
+     * {@link #getClassName()}, which indicates the type of UI element this node represents.
+     *
+     * <p>
+     *   <strong>Note:</strong> Cannot be called from an
+     *   {@link android.accessibilityservice.AccessibilityService}.
+     *   This class is made immutable before being delivered to an AccessibilityService.
+     * </p>
      *
      * @see #setCheckable(boolean)
      * @see #isCheckable()
      * @see #getChecked()
-     * @param checked The checked state. One of
+     * @param checked the checked state for this node, one of
      *          <ul>
      *          <li>{@link AccessibilityNodeInfoCompat#CHECKED_STATE_FALSE}
      *          <li>{@link AccessibilityNodeInfoCompat#CHECKED_STATE_TRUE}
      *          <li>{@link AccessibilityNodeInfoCompat#CHECKED_STATE_PARTIAL}
      *          </ul>
      * @throws IllegalStateException If called from an AccessibilityService.
-     * @throws IllegalArgumentException if {@code checked} is not one of
-     * {@link AccessibilityNodeInfoCompat#CHECKED_STATE_FALSE},
-     *          {@link AccessibilityNodeInfoCompat#CHECKED_STATE_TRUE}, or
-     *          {@link AccessibilityNodeInfoCompat#CHECKED_STATE_PARTIAL}.
+     * @throws IllegalArgumentException If {@code checked} is not one of the supported values.
      */
     public void setChecked(@CheckedState int checked) {
         if (Build.VERSION.SDK_INT >= 36) {
@@ -4564,6 +5607,62 @@ public class AccessibilityNodeInfoCompat {
     }
 
     /**
+     * Gets additional structured data properties of this node. This is only populated for nodes
+     * that offer additional structured data, like a mathematical expression.
+     *
+     * <p>This also returns structured data that
+     * {@link #setStructuredDataInfo(StructuredDataInfoCompat)} stored in this node's extras on API
+     * levels where the platform class for its type isn't available.
+     *
+     * @return A subclass of {@link StructuredDataInfoCompat} representing the type and
+     *         additional structured data for this node, or {@code null} if this node does not have
+     *         additional structured data attached.
+     * @see #setStructuredDataInfo(StructuredDataInfoCompat)
+     */
+    @Nullable
+    public StructuredDataInfoCompat getStructuredDataInfo() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+            StructuredDataInfoCompat structuredDataInfo =
+                    Api37Impl.getStructuredDataInfoCompat(mInfo);
+            if (structuredDataInfo != null) {
+                return structuredDataInfo;
+            }
+        }
+
+        return StructuredDataInfoCompat.readFromExtras(mInfo.getExtras());
+    }
+
+    /**
+     * Sets additional structured data properties of this node, such as for a mathematical
+     * expression.
+     *
+     * <p>On API levels where the platform class for the type of {@code structuredDataInfoCompat}
+     * isn't available, it's stored in this node's extras instead, where accessibility services can
+     * read it with {@link #getStructuredDataInfo()}.
+     *
+     * @param structuredDataInfoCompat The {@link StructuredDataInfoCompat} object (e.g., an
+     *                                 instance of {@link MathInfoCompat}) describing the node, or
+     *                                 {@code null} to clear it.
+     * @see #getStructuredDataInfo()
+     */
+    public void setStructuredDataInfo(@Nullable StructuredDataInfoCompat structuredDataInfoCompat) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+            Api37Impl.setStructuredDataInfo(mInfo, structuredDataInfoCompat == null
+                    ? null : structuredDataInfoCompat.mStructuredDataInfo);
+        }
+
+        Bundle extras = mInfo.getExtras();
+        if (extras != null) {
+            // Always clear any previous value from the extras, so that it can't be returned after
+            // it's replaced by a value stored in the platform field.
+            StructuredDataInfoCompat.removeFromExtras(extras);
+            if (structuredDataInfoCompat != null) {
+                structuredDataInfoCompat.writeToExtras(extras);
+            }
+        }
+    }
+
+    /**
      * Gets the range info if this node is a range.
      *
      * @return The range.
@@ -4607,9 +5706,7 @@ public class AccessibilityNodeInfoCompat {
     }
 
     /**
-     * Gets the
-     * {@link android.view.accessibility.AccessibilityNodeInfo#Selection selection}
-     * of this node.
+     * Gets the {@link Selection selection} of this node.
      *
      * @return The selection, or {@code null} if the node has no selection.
      *
@@ -4618,17 +5715,25 @@ public class AccessibilityNodeInfoCompat {
      *     <li>API &lt: 36.1: Always returns {@code null}</li>
      * </ul>
      */
+    @OptIn(markerClass = PreviewAccessibilityApi.class)
     @Nullable
     public SelectionCompat getSelection() {
-        // Temporarily no-op'ed due to b/459474438.
-        /*
         if (BuildCompat.isAtLeastB_1()) {
             Selection selection = mInfo.getSelection();
             if (selection != null) {
-                return new SelectionCompat(selection);
+                int startOffsetType = SelectionPositionCompat.OFFSET_TYPE_TEXT;
+                int endOffsetType = SelectionPositionCompat.OFFSET_TYPE_TEXT;
+                // TODO(b/509618749): Read natively from platform selection if
+                // SDK >= 37.1.
+                if (mInfo.getExtras() != null) {
+                    startOffsetType = mInfo.getExtras().getInt(EXTRA_SELECTION_START_OFFSET_TYPE,
+                            SelectionPositionCompat.OFFSET_TYPE_TEXT);
+                    endOffsetType = mInfo.getExtras().getInt(EXTRA_SELECTION_END_OFFSET_TYPE,
+                            SelectionPositionCompat.OFFSET_TYPE_TEXT);
+                }
+                return new SelectionCompat(selection, startOffsetType, endOffsetType);
             }
         }
-        */
 
         return null;
     }
@@ -5458,9 +6563,7 @@ public class AccessibilityNodeInfoCompat {
     }
 
     /**
-     * Sets the
-     * {@link android.view.accessibility.AccessibilityNodeInfo#Selection selection}
-     * of this node.
+     * Sets the {@link Selection selection} of this node.
      *
      * <p>
      * <strong>Note:</strong> Cannot be called from an
@@ -5477,17 +6580,29 @@ public class AccessibilityNodeInfoCompat {
      *
      * @throws IllegalStateException If called from an AccessibilityService.
      */
+    @OptIn(markerClass = PreviewAccessibilityApi.class)
     public void setSelection(@Nullable SelectionCompat selection) {
-        // Temporarily no-op'ed due to b/459474438.
-        /*
         if (BuildCompat.isAtLeastB_1()) {
-            if (selection == null) {
+            if (selection == null || selection.unwrap() == null) {
                 mInfo.setSelection(null);
+                if (mInfo.getExtras() != null) {
+                    mInfo.getExtras().remove(EXTRA_SELECTION_START_OFFSET_TYPE);
+                    mInfo.getExtras().remove(EXTRA_SELECTION_END_OFFSET_TYPE);
+                }
             } else {
-                mInfo.setSelection(selection.mSelection);
+                mInfo.setSelection(selection.unwrap());
+                // TODO(b/509618749): Skip writing to extras once platform API is ready
+                // (SDK >= 37.1) and we can set it natively via platform Builder.
+                SelectionPositionCompat start = selection.getStart();
+                SelectionPositionCompat end = selection.getEnd();
+                if (start != null && end != null) {
+                    mInfo.getExtras().putInt(EXTRA_SELECTION_START_OFFSET_TYPE,
+                            start.getOffsetType());
+                    mInfo.getExtras().putInt(EXTRA_SELECTION_END_OFFSET_TYPE,
+                            end.getOffsetType());
+                }
             }
         }
-        */
     }
 
     /**
@@ -6303,7 +7418,9 @@ public class AccessibilityNodeInfoCompat {
             List<AccessibilityNodeInfo> labels = info.getLabeledByList();
             List<AccessibilityNodeInfoCompat> compatLabels = new ArrayList<>(labels.size());
             for (AccessibilityNodeInfo labeledByInfo : labels) {
-                compatLabels.add(AccessibilityNodeInfoCompat.wrap(labeledByInfo));
+                if (labeledByInfo != null) {
+                    compatLabels.add(AccessibilityNodeInfoCompat.wrap(labeledByInfo));
+                }
             }
             return compatLabels;
         }
@@ -6344,6 +7461,81 @@ public class AccessibilityNodeInfoCompat {
 
         public static AccessibilityNodeInfo.AccessibilityAction getActionSetExtendedSelection() {
             return AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_EXTENDED_SELECTION;
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+    private static class Api37Impl {
+        private Api37Impl() {
+            // This class is non instantiable.
+        }
+
+        public static View getView(SelectionPosition selectionPosition) {
+            return selectionPosition.getView();
+        }
+
+        public static int getVirtualDescendantId(SelectionPosition selectionPosition) {
+            return selectionPosition.getVirtualDescendantId();
+        }
+
+        @NonNull
+        public static MathInfo createMathInfo(@NonNull String tag) {
+            return new MathInfo(tag);
+        }
+
+        public static void setStructuredDataInfo(
+                @Nullable AccessibilityNodeInfo nodeInfo,
+                @Nullable StructuredDataInfo structuredDataInfo) {
+            if (nodeInfo == null) {
+                return;
+            }
+
+            nodeInfo.setStructuredDataInfo(structuredDataInfo);
+        }
+
+        @Nullable
+        public static StructuredDataInfoCompat getStructuredDataInfoCompat(
+                @Nullable AccessibilityNodeInfo nodeInfo) {
+            if (nodeInfo == null) {
+                return null;
+            }
+
+            StructuredDataInfo structuredDataInfo = nodeInfo.getStructuredDataInfo();
+            if (structuredDataInfo instanceof MathInfo) {
+                return new MathInfoCompat((MathInfo) structuredDataInfo);
+            }
+            // No structured data, or a type this version of the library doesn't know.
+            return null;
+        }
+
+        @Nullable
+        public static String getStructuredDataInfoTag(
+                @NonNull StructuredDataInfo structuredDataInfo) {
+            return structuredDataInfo.getTag();
+        }
+
+        public static void putStructuredDataInfoAttribute(
+                @NonNull StructuredDataInfo structuredDataInfo,
+                @NonNull String attributeKey,
+                @NonNull String value) {
+            structuredDataInfo.putAttribute(attributeKey, value);
+        }
+
+        public static void removeStructuredDataInfoAttribute(
+                @NonNull StructuredDataInfo structuredDataInfo, @NonNull String attributeKey) {
+            structuredDataInfo.removeAttribute(attributeKey);
+        }
+
+        @Nullable
+        public static String getStructuredDataInfoAttribute(
+                @NonNull StructuredDataInfo structuredDataInfo, @NonNull String attributeKey) {
+            return structuredDataInfo.getAttribute(attributeKey);
+        }
+
+        @NonNull
+        public static Map<String, String> getStructuredDataInfoAttributes(
+                @NonNull StructuredDataInfo structuredDataInfo) {
+            return structuredDataInfo.getAttributes();
         }
     }
 }

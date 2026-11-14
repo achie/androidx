@@ -54,9 +54,8 @@ import androidx.compose.ui.unit.dp
  * containing the two label slots in the middle and a slot for the selection control at the end.
  *
  * The [SelectableChip] is Stadium shaped and has a max height designed to take no more than two
- * lines of text of [Typography.button] style. With localisation and/or large font sizes, the
- * [SelectableChip] height adjusts to accommodate the contents. The label and secondary label should
- * be consistently aligned.
+ * lines of text. With localisation and/or large font sizes, the [SelectableChip] height adjusts to
+ * accommodate the contents. The label and secondary label should be consistently aligned.
  *
  * The recommended set of [SelectableChipColors] can be obtained from [SelectableChipDefaults], e.g.
  * [SelectableChipDefaults.selectableChipColors].
@@ -80,7 +79,7 @@ import androidx.compose.ui.unit.dp
  *   [SelectableChipDefaults.IconSize]. In order to correctly render when the Chip is not enabled
  *   the icon must set its alpha value to [LocalContentAlpha].
  * @param secondaryLabel A slot for providing the chip's secondary label. The contents are expected
- *   to be text which is "start" aligned if there is an icon preset and "start" or "center" aligned
+ *   to be text which is "start" aligned if there is an icon present and "start" or "center" aligned
  *   if not. label and secondaryLabel contents should be consistently aligned.
  * @param colors [SelectableChipColors] that will be used to resolve the background and content
  *   color for this chip in different states, see [SelectableChipDefaults.selectableChipColors].
@@ -183,9 +182,9 @@ public fun SelectableChip(
  * control will have a visual effect applied to provide a "divider" between the two tappable areas.
  *
  * The [SplitSelectableChip] is Stadium shaped and has a max height designed to take no more than
- * two lines of text of [Typography.button] style. With localisation and/or large font sizes, the
- * [SplitSelectableChip] height adjusts to accommodate the contents. The label and secondary label
- * should be consistently aligned.
+ * two lines of text. With localisation and/or large font sizes, the [SplitSelectableChip] height
+ * adjusts to accommodate the contents. The label and secondary label should be consistently
+ * aligned.
  *
  * The recommended set of [SplitSelectableChipColors] can be obtained from [SelectableChipDefaults],
  * e.g. [SelectableChipDefaults.splitSelectableChipColors].
@@ -501,7 +500,7 @@ public object SelectableChipDefaults {
      *
      * @param backgroundColor The background color of this [SplitSelectableChip] when enabled
      * @param contentColor The content color of this [SplitSelectableChip] when enabled.
-     * @param secondaryContentColor The secondary content color of this[SplitSelectableChip] when
+     * @param secondaryContentColor The secondary content color of this [SplitSelectableChip] when
      *   enabled
      * @param selectedSelectionControlColor The selection control content color of this
      *   [SplitSelectableChip] when enabled.

@@ -16,8 +16,7 @@
 
 package androidx.camera.camera2.pipe.internal
 
-import androidx.annotation.RestrictTo
-import androidx.camera.camera2.pipe.CameraId
+import androidx.camera.common.CameraId
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -26,7 +25,6 @@ import kotlinx.coroutines.flow.StateFlow
  * cameras changes, for instance when the camera access priorities have changed or when a particular
  * camera has become available.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 internal interface CameraStatusMonitor : AutoCloseable {
 
     /** Gets the state flow of the availability of the current camera. */

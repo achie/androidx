@@ -30,6 +30,7 @@ import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 
+import androidx.annotation.OptIn;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.VisibleForTesting;
 import androidx.camera.core.Logger;
@@ -38,6 +39,8 @@ import androidx.camera.core.impl.annotation.ExecutedBy;
 import androidx.camera.core.impl.utils.executor.CameraXExecutors;
 import androidx.camera.core.impl.utils.futures.FutureCallback;
 import androidx.camera.core.impl.utils.futures.Futures;
+import androidx.camera.video.AudioProcessor;
+import androidx.camera.video.ExperimentalAudioApi;
 import androidx.camera.video.internal.BufferProvider;
 import androidx.camera.video.internal.encoder.InputBuffer;
 import androidx.concurrent.futures.CallbackToFutureAdapter;
@@ -48,7 +51,9 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -80,6 +85,7 @@ public final class AudioSource {
      */
     @VisibleForTesting
     static final long DEFAULT_START_RETRY_INTERVAL_MS = 3000L;
+    private static final long AMPLITUDE_UPDATE_INTERVAL_NS = MILLISECONDS.toNanos(200L);
 
     enum InternalState {
         /** The initial state or when {@link #stop} is called after started. */
@@ -133,12 +139,20 @@ public final class AudioSource {
     boolean mAudioStreamSilenced;
     boolean mMuted;
     private byte @Nullable [] mZeroBytes;
-    @SuppressWarnings("WeakerAccess") /* synthetic accessor */
-    double mAudioAmplitude;
     long mAmplitudeTimestamp = 0;
     private final int mAudioFormat;
     @VisibleForTesting
     public final int mAudioSource;
+
+    final AudioProcessingPipeline mAudioProcessingPipeline;
+    private final AudioSettings mOutputAudioSettings;
+    @VisibleForTesting
+    final int mReadBufferSize;
+    private @Nullable ByteBuffer mReadBuffer;
+    // The frame size of the audio before processing, as read from the AudioStream.
+    private final int mInputBytesPerFrame;
+    // Maps processed output frames back to the capture timestamps of their input.
+    private final ProcessedAudioTimestampTracker mTimestampTracker;
 
     /**
      * Creates an AudioSource for the given settings.
@@ -158,26 +172,39 @@ public final class AudioSource {
      *                           attribution source, setting this context will have no effect.
      *                           This context will not be retained beyond the scope of the
      *                           constructor.
+     * @param audioProcessors    The ordered list of audio processors.
+     * @param audioStreamFactory The audio stream factory.
      * @throws UnsupportedOperationException if the combination of sample rate, channel count,
      *                                       and audio format in the provided settings is
      *                                       unsupported.
      * @throws AudioSourceAccessException    if the audio device is not available or cannot be
      *                                       initialized with the given settings.
      */
+    @OptIn(markerClass = ExperimentalAudioApi.class)
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public AudioSource(@NonNull AudioSettings settings, @NonNull Executor executor,
-            @Nullable Context attributionContext) throws AudioSourceAccessException {
-        this(settings, executor, attributionContext, AudioStreamImpl::new,
+            @Nullable Context attributionContext, @NonNull List<AudioProcessor> audioProcessors,
+            @NonNull AudioStreamFactory audioStreamFactory) throws AudioSourceAccessException {
+        this(settings, executor, attributionContext, audioProcessors, audioStreamFactory,
                 DEFAULT_START_RETRY_INTERVAL_MS);
     }
 
     @VisibleForTesting
+    @OptIn(markerClass = ExperimentalAudioApi.class)
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     AudioSource(@NonNull AudioSettings settings, @NonNull Executor executor,
-            @Nullable Context attributionContext, @NonNull AudioStreamFactory audioStreamFactory,
+            @Nullable Context attributionContext, @NonNull List<AudioProcessor> audioProcessors,
+            @NonNull AudioStreamFactory audioStreamFactory,
             long startRetryIntervalMs) throws AudioSourceAccessException {
         mExecutor = CameraXExecutors.newSequentialExecutor(executor);
         mStartRetryIntervalNs = MILLISECONDS.toNanos(startRetryIntervalMs);
+        mAudioProcessingPipeline = new AudioProcessingPipeline(audioProcessors);
+        mOutputAudioSettings = mAudioProcessingPipeline.configure(settings);
+        int bytesPerFrame = settings.getBytesPerFrame();
+        mInputBytesPerFrame = bytesPerFrame;
+        mTimestampTracker = new ProcessedAudioTimestampTracker(settings.getCaptureSampleRate(),
+                mOutputAudioSettings.getCaptureSampleRate());
+        mReadBufferSize = Math.max(4096 / bytesPerFrame, 1024) * bytesPerFrame;
         try {
             mAudioStream = new BufferedAudioStream(audioStreamFactory.create(settings,
                     attributionContext), settings);
@@ -188,6 +215,21 @@ public final class AudioSource {
         mSilentAudioStream = new SilentAudioStream(settings);
         mAudioFormat = settings.getAudioFormat();
         mAudioSource = settings.getAudioSource();
+    }
+
+    /**
+     * Gets the output {@link AudioSettings} after passing through the audio processor chain.
+     *
+     * <p>If no audio processors are configured, the returned output audio settings are identical to
+     * the input {@link AudioSettings}.
+     */
+    public @NonNull AudioSettings getOutputAudioSettings() {
+        return mOutputAudioSettings;
+    }
+
+    @VisibleForTesting
+    public @NonNull Executor getExecutor() {
+        return mExecutor;
     }
 
     @SuppressWarnings("WeakerAccess") /* synthetic accessor */
@@ -248,7 +290,7 @@ public final class AudioSource {
      * the audio source will be started unmuted by default.
      */
     public void start() {
-        mExecutor.execute(() -> start(mMuted));
+        mExecutor.execute(() -> startInternal(mMuted));
     }
 
     /**
@@ -266,28 +308,31 @@ public final class AudioSource {
      * <li>Retry internally with a fixed interval.</li>
      * <li>Write silent audio to the BufferProvider until a successful retry or {@link #stop()}
      * is called.
-     * <li>Trigger {@link AudioSourceCallback#onSilenceStateChanged(boolean, int)} with {@code true}
+     * <li>Trigger {@link AudioSourceCallback#onSilenceStateChanged(boolean)} with {@code true}
      * on the first failure and {@code false} on the successful retry.</li>
      *
      * @param muted {@code true} to start the audio source muted, otherwise {@code false}.
      */
     public void start(boolean muted) {
-        mExecutor.execute(() -> {
-            switch (mState) {
-                case CONFIGURED:
-                    mNotifiedSilenceState.set(null);
-                    mNotifiedSuspendState.set(false);
-                    setState(STARTED);
-                    mute(muted);
-                    updateSendingAudio();
-                    break;
-                case STARTED:
-                    // Do nothing
-                    break;
-                case RELEASED:
-                    throw new AssertionError("AudioSource is released");
-            }
-        });
+        mExecutor.execute(() -> startInternal(muted));
+    }
+
+    @ExecutedBy("mExecutor")
+    private void startInternal(boolean muted) {
+        switch (mState) {
+            case CONFIGURED:
+                mNotifiedSilenceState.set(null);
+                mNotifiedSuspendState.set(false);
+                setState(STARTED);
+                muteInternal(muted);
+                updateSendingAudio();
+                break;
+            case STARTED:
+                // Do nothing
+                break;
+            case RELEASED:
+                throw new AssertionError("AudioSource is released");
+        }
     }
 
     /**
@@ -315,7 +360,7 @@ public final class AudioSource {
     /**
      * Releases the AudioSource.
      *
-     * <p>Once the AudioSource is released, it can not be used any more.
+     * <p>Once the AudioSource is released, it can not be used anymore.
      */
     public @NonNull ListenableFuture<Void> release() {
         return CallbackToFutureAdapter.getFuture(completer -> {
@@ -326,9 +371,10 @@ public final class AudioSource {
                             // Fall-through
                         case CONFIGURED:
                             resetBufferProvider(null);
+                            stopSendingAudio();
                             mSilentAudioStream.release();
                             mAudioStream.release();
-                            stopSendingAudio();
+                            resetAudioProcessors();
                             setState(RELEASED);
                             break;
                         case RELEASED:
@@ -370,25 +416,28 @@ public final class AudioSource {
         });
     }
 
-    /** Mutes or un-mutes the audio source. */
+    /** Mutes or unmutes the audio source. */
     public void mute(boolean muted) {
-        mExecutor.execute(() -> {
-            switch (mState) {
-                case CONFIGURED:
-                    // Fall-through
-                case STARTED:
-                    if (mMuted == muted) {
-                        return;
-                    }
-                    mMuted = muted;
-                    if (mState == STARTED) {
-                        notifySilenced();
-                    }
-                    break;
-                case RELEASED:
-                    throw new AssertionError("AudioSource is released");
-            }
-        });
+        mExecutor.execute(() -> muteInternal(muted));
+    }
+
+    @ExecutedBy("mExecutor")
+    private void muteInternal(boolean muted) {
+        switch (mState) {
+            case CONFIGURED:
+                // Fall-through
+            case STARTED:
+                if (mMuted == muted) {
+                    return;
+                }
+                mMuted = muted;
+                if (mState == STARTED) {
+                    notifySilenced();
+                }
+                break;
+            case RELEASED:
+                throw new AssertionError("AudioSource is released");
+        }
     }
 
     @ExecutedBy("mExecutor")
@@ -404,7 +453,7 @@ public final class AudioSource {
         }
         if (bufferProvider != null) {
             mBufferProvider = bufferProvider;
-            mStateObserver = new Observable.Observer<BufferProvider.State>() {
+            mStateObserver = new Observable.Observer<>() {
                 @ExecutedBy("mExecutor")
                 @Override
                 public void onNewData(BufferProvider.@Nullable State state) {
@@ -428,7 +477,7 @@ public final class AudioSource {
                 }
             };
 
-            mAcquireBufferCallback = new FutureCallback<InputBuffer>() {
+            mAcquireBufferCallback = new FutureCallback<>() {
                 @ExecutedBy("mExecutor")
                 @Override
                 public void onSuccess(InputBuffer inputBuffer) {
@@ -442,30 +491,20 @@ public final class AudioSource {
                         //  between silence and real audio. The gap should be filled with
                         //  silence audio.
                     }
-                    // If the audio stream fails to start, SilentAudioStream will be used.
-                    AudioStream audioStream = getCurrentAudioStream();
-                    ByteBuffer byteBuffer = inputBuffer.getByteBuffer();
-                    AudioStream.PacketInfo packetInfo = audioStream.read(byteBuffer);
-                    if (packetInfo.getSizeInBytes() > 0) {
-                        if (mMuted) {
-                            overrideBySilence(byteBuffer, packetInfo.getSizeInBytes());
-                        }
-                        // should only be ENCODING_PCM_16BIT for now at least
-                        // reads incoming bytebuffer for amplitude value every .2 seconds
-                        if (mCallbackExecutor != null
-                                && (packetInfo.getTimestampNs() - mAmplitudeTimestamp) >= 200) {
-                            mAmplitudeTimestamp = packetInfo.getTimestampNs();
-                            postMaxAmplitude(byteBuffer);
-                        }
-                        byteBuffer.limit(byteBuffer.position() + packetInfo.getSizeInBytes());
-                        inputBuffer.setPresentationTimeUs(
-                                NANOSECONDS.toMicros(packetInfo.getTimestampNs()));
-                        inputBuffer.submit();
+                    if (!mAudioProcessingPipeline.isOperational()) {
+                        dispatchDirectAudio(inputBuffer);
+                        sendNextAudio();
                     } else {
-                        Logger.w(TAG, "Unable to read data from AudioStream.");
-                        inputBuffer.cancel();
+                        try {
+                            processAndDispatchAudio(inputBuffer);
+                            sendNextAudio();
+                        } catch (AudioSourceAccessException e) {
+                            Logger.w(TAG, "Audio processing failed", e);
+                            flushAudioProcessors();
+                            inputBuffer.cancel();
+                            notifyError(e);
+                        }
                     }
-                    sendNextAudio();
                 }
 
                 @ExecutedBy("mExecutor")
@@ -608,6 +647,11 @@ public final class AudioSource {
         mIsSendingAudio = false;
         Logger.d(TAG, "stopSendingAudio");
         mAudioStream.stop();
+        mSilentAudioStream.stop();
+        // Stopping the stream ends the continuous audio being sent, whether the recording is
+        // stopped or paused, or the BufferProvider is replaced or removed. Discard audio buffered
+        // in the processors as well, so it isn't mixed with audio sent after sending restarts.
+        flushAudioProcessors();
     }
 
     @SuppressWarnings("WeakerAccess") /* synthetic accessor */
@@ -639,14 +683,154 @@ public final class AudioSource {
                 maxAmplitude = Math.max(maxAmplitude, Math.abs(shortBuffer.get()));
             }
 
-            maxAmplitude = maxAmplitude / Short.MAX_VALUE;
-
-            mAudioAmplitude = maxAmplitude;
+            // Math.abs(Short.MIN_VALUE) is 32768, which is larger than Short.MAX_VALUE
+            // (32767), so the normalized value has to be clamped to keep it within
+            // [0.0, 1.0].
+            maxAmplitude = Math.min(maxAmplitude / Short.MAX_VALUE, 1.0);
 
             if (executor != null && callback != null) {
-                executor.execute(() -> callback.onAmplitudeValue(mAudioAmplitude));
+                final double amplitudeToReport = maxAmplitude;
+                executor.execute(() -> callback.onAmplitudeValue(amplitudeToReport));
             }
         }
+    }
+
+    @ExecutedBy("mExecutor")
+    private void dispatchDirectAudio(@NonNull InputBuffer inputBuffer) {
+        // If the audio stream fails to start, SilentAudioStream will be used.
+        AudioStream audioStream = getCurrentAudioStream();
+        ByteBuffer byteBuffer = inputBuffer.getByteBuffer();
+        AudioStream.PacketInfo packetInfo = audioStream.read(byteBuffer);
+        if (packetInfo.getSizeInBytes() > 0) {
+            byteBuffer.limit(byteBuffer.position() + packetInfo.getSizeInBytes());
+            if (mMuted) {
+                overrideBySilence(byteBuffer, packetInfo.getSizeInBytes());
+            }
+            // should only be ENCODING_PCM_16BIT for now at least
+            // reads incoming bytebuffer for amplitude value every .2 seconds
+            if (mCallbackExecutor != null
+                    && (packetInfo.getTimestampNs() - mAmplitudeTimestamp)
+                    >= AMPLITUDE_UPDATE_INTERVAL_NS) {
+                mAmplitudeTimestamp = packetInfo.getTimestampNs();
+                postMaxAmplitude(byteBuffer);
+            }
+            inputBuffer.setPresentationTimeUs(
+                    NANOSECONDS.toMicros(packetInfo.getTimestampNs()));
+            inputBuffer.submit();
+        } else {
+            Logger.w(TAG, "Unable to read data from AudioStream.");
+            inputBuffer.cancel();
+        }
+    }
+
+    @ExecutedBy("mExecutor")
+    private void processAndDispatchAudio(@NonNull InputBuffer inputBuffer)
+            throws AudioSourceAccessException {
+        try {
+            // Drain existing output from the pipeline first. Skip draining until an input packet
+            // has been queued, so that every dispatched output frame has a capture timestamp to
+            // be mapped to.
+            ByteBuffer output;
+            if (mTimestampTracker.hasTrackedInput()) {
+                output = mAudioProcessingPipeline.getOutput();
+                if (output.hasRemaining()) {
+                    dispatchToInputBuffer(inputBuffer, output);
+                    return;
+                }
+            }
+
+            // No pending output. Read next packet from AudioStream.
+            AudioStream audioStream = getCurrentAudioStream();
+            if (mReadBuffer == null || mReadBuffer.capacity() < mReadBufferSize) {
+                mReadBuffer = ByteBuffer.allocateDirect(mReadBufferSize)
+                        .order(ByteOrder.nativeOrder());
+            }
+            mReadBuffer.clear();
+            AudioStream.PacketInfo packetInfo = audioStream.read(mReadBuffer);
+            if (packetInfo.getSizeInBytes() > 0) {
+                mReadBuffer.limit(mReadBuffer.position() + packetInfo.getSizeInBytes());
+                if (mMuted) {
+                    overrideBySilence(mReadBuffer, packetInfo.getSizeInBytes());
+                }
+                if (mCallbackExecutor != null
+                        && (packetInfo.getTimestampNs() - mAmplitudeTimestamp)
+                        >= AMPLITUDE_UPDATE_INTERVAL_NS) {
+                    mAmplitudeTimestamp = packetInfo.getTimestampNs();
+                    postMaxAmplitude(mReadBuffer);
+                }
+                mTimestampTracker.onInputQueued(
+                        NANOSECONDS.toMicros(packetInfo.getTimestampNs()),
+                        packetInfo.getSizeInBytes() / mInputBytesPerFrame);
+
+                mAudioProcessingPipeline.queueInput(mReadBuffer);
+                output = mAudioProcessingPipeline.getOutput();
+                if (output.hasRemaining()) {
+                    dispatchToInputBuffer(inputBuffer, output);
+                } else {
+                    inputBuffer.cancel();
+                }
+            } else {
+                Logger.w(TAG, "Unable to read data from AudioStream.");
+                inputBuffer.cancel();
+            }
+        } catch (Throwable t) {
+            throw new AudioSourceAccessException("Error processing audio with AudioProcessor", t);
+        }
+    }
+
+    @ExecutedBy("mExecutor")
+    private void dispatchToInputBuffer(@NonNull InputBuffer inputBuffer,
+            @NonNull ByteBuffer processedBuffer) {
+        ByteBuffer encoderBuffer = inputBuffer.getByteBuffer();
+        int bytesPerFrame = Math.max(1, mOutputAudioSettings.getBytesPerFrame());
+        int toCopy = Math.min(processedBuffer.remaining(), encoderBuffer.remaining());
+        toCopy = (toCopy / bytesPerFrame) * bytesPerFrame;
+        if (toCopy == 0) {
+            if (processedBuffer.remaining() < bytesPerFrame) {
+                // Drop unaligned trailing bytes to prevent livelock on subsequent buffers.
+                Logger.w(TAG, "Dropping " + processedBuffer.remaining()
+                        + " unaligned trailing bytes from AudioProcessor.");
+                processedBuffer.position(processedBuffer.limit());
+            }
+            inputBuffer.cancel();
+            return;
+        }
+        int positionBefore = encoderBuffer.position();
+        int oldLimit = processedBuffer.limit();
+        processedBuffer.limit(processedBuffer.position() + toCopy);
+        encoderBuffer.put(processedBuffer);
+        processedBuffer.limit(oldLimit);
+        encoderBuffer.limit(encoderBuffer.position()).position(positionBefore);
+
+        long presentationTimeUs =
+                mTimestampTracker.takeOutputPresentationTimeUs(toCopy / bytesPerFrame);
+
+        inputBuffer.setPresentationTimeUs(presentationTimeUs);
+        inputBuffer.submit();
+
+        if (processedBuffer.remaining() < bytesPerFrame) {
+            if (processedBuffer.remaining() > 0) {
+                Logger.w(TAG, "Dropping " + processedBuffer.remaining()
+                        + " unaligned trailing bytes from AudioProcessor.");
+                processedBuffer.position(processedBuffer.limit());
+            }
+        }
+    }
+
+    @ExecutedBy("mExecutor")
+    private void flushAudioProcessors() {
+        if (mReadBuffer != null) {
+            mReadBuffer.position(mReadBuffer.limit());
+        }
+        mAudioProcessingPipeline.flush();
+        mTimestampTracker.reset();
+    }
+
+    @ExecutedBy("mExecutor")
+    private void resetAudioProcessors() {
+        mReadBuffer = null;
+        mAudioProcessingPipeline.reset();
+        mTimestampTracker.reset();
     }
 
 
@@ -700,6 +884,9 @@ public final class AudioSource {
 
         /**
          * The method called to retrieve audio amplitude values.
+         *
+         * @param maxAmplitude the maximum amplitude of the latest audio data, normalized to the
+         *                     range [0.0, 1.0].
          */
         void onAmplitudeValue(double maxAmplitude);
     }

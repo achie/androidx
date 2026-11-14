@@ -27,6 +27,7 @@ import android.graphics.Rect;
 import android.graphics.Shader;
 import android.os.Environment;
 
+import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.RcPlatformServices;
 import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.WireBuffer;
@@ -43,6 +44,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.text.DecimalFormat;
+import java.util.Arrays;
 
 public class TestUtils {
 
@@ -210,7 +212,10 @@ public class TestUtils {
      * @param appContext
      */
     public static void saveDoc(String name, RemoteDocument doc, Context appContext) {
-        WireBuffer wb = doc.getDocument().getBuffer().getBuffer();
+        WireBuffer wb = new WireBuffer();
+        for (Operation op : doc.getDocument().getOperations()) {
+            Operation.writeRecursive(op, wb);
+        }
         int len = wb.getSize();
         byte[] buff = wb.getBuffer();
 
@@ -328,6 +333,42 @@ public class TestUtils {
         void run(RemoteComposeContextAndroid foo);
     }
 
+    static byte[] createDoc(final Callback cb) {
+        RemoteComposeContextAndroid doc =
+                new RemoteComposeContextAndroid(
+                        600,
+                        600,
+                        "Demo",
+                        sPlatform,
+                        doc1 -> {
+                            if (cb != null) {
+                                cb.run(doc1);
+                            }
+
+                            return null;
+                        });
+
+        return Arrays.copyOf(doc.buffer(), doc.bufferSize());
+    }
+
+    static byte[] createDoc(Profile profile, final Callback cb) {
+        RemoteComposeContextAndroid doc =
+                new RemoteComposeContextAndroid(
+                        600,
+                        600,
+                        "Demo",
+                        profile,
+                        doc1 -> {
+                            if (cb != null) {
+                                cb.run(doc1);
+                            }
+
+                            return null;
+                        });
+
+        return Arrays.copyOf(doc.buffer(), doc.bufferSize());
+    }
+
     static RemoteDocument createDocument(RemoteContext context, final Callback cb) {
         RemoteComposeContextAndroid doc =
                 new RemoteComposeContextAndroid(
@@ -351,8 +392,8 @@ public class TestUtils {
         return recreatedDocument;
     }
 
-    static RemoteDocument createDocument(RemoteContext context, int apiLevel,
-            int profilesMask, final Callback cb) {
+    static RemoteDocument createDocument(
+            RemoteContext context, int apiLevel, int profilesMask, final Callback cb) {
         RemoteComposeContextAndroid doc =
                 new RemoteComposeContextAndroid(
                         600,
@@ -377,8 +418,8 @@ public class TestUtils {
         return recreatedDocument;
     }
 
-    static RemoteDocument createDocument(RemoteContext context,
-            Profile profile, final Callback cb) {
+    static RemoteDocument createDocument(
+            RemoteContext context, Profile profile, final Callback cb) {
         RemoteComposeContextAndroid doc =
                 new RemoteComposeContextAndroid(
                         600,
@@ -400,6 +441,7 @@ public class TestUtils {
                 new RemoteDocument(new ByteArrayInputStream(buffer, 0, bufferSize));
         return recreatedDocument;
     }
+
     private static String memSize(int size) {
         DecimalFormat df = new DecimalFormat("#.0##");
         if (size > 1024 * 1024) {
@@ -543,11 +585,7 @@ public class TestUtils {
     }
 
     static Bitmap docToBitmap(
-            int w,
-            int h,
-            Context appContext,
-            RemoteDocument doc,
-            ModifyCanvas modifyCanvas) {
+            int w, int h, Context appContext, RemoteDocument doc, ModifyCanvas modifyCanvas) {
         Bitmap bitmap = blank(w, h);
         RemoteComposeView remoteCanvas = new RemoteComposeView(appContext);
         remoteCanvas.setDocument(doc);

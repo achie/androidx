@@ -16,6 +16,7 @@
 package androidx.compose.remote.core.operations.layout.modifiers;
 
 import androidx.annotation.RestrictTo;
+import androidx.compose.remote.core.CoreDocument;
 import androidx.compose.remote.core.Operation;
 import androidx.compose.remote.core.RemoteContext;
 import androidx.compose.remote.core.VariableSupport;
@@ -52,11 +53,14 @@ public abstract class DimensionInModifierOperation extends Operation
     public void updateVariables(@NonNull RemoteContext context) {
         mV1 = Float.isNaN(mValue1) ? context.getFloat(Utils.idFromNan(mValue1)) : mValue1;
         mV2 = Float.isNaN(mValue2) ? context.getFloat(Utils.idFromNan(mValue2)) : mValue2;
-        if (mV1 != -1) {
-            mV1 = mV1 * context.getDensity();
-        }
-        if (mV2 != -1) {
-            mV2 = mV2 * context.getDensity();
+        if (context.getDensityBehavior() != CoreDocument.DENSITY_BEHAVIOR_PIXELS) {
+            float density = context.getDensity();
+            if (mV1 != -1) {
+                mV1 = mV1 * density;
+            }
+            if (mV2 != -1) {
+                mV2 = mV2 * density;
+            }
         }
     }
 
@@ -95,6 +99,11 @@ public abstract class DimensionInModifierOperation extends Operation
         return mV1;
     }
 
+    /** Returns the raw minimum constraint source, preserving NaN-encoded variable IDs. */
+    public float getRawMin() {
+        return mValue1;
+    }
+
     /**
      * Returns the max value
      *
@@ -104,8 +113,33 @@ public abstract class DimensionInModifierOperation extends Operation
         return mV2;
     }
 
+    /** Returns the raw maximum constraint source, preserving NaN-encoded variable IDs. */
+    public float getRawMax() {
+        return mValue2;
+    }
+
     @Override
     public void serializeToString(int indent, @NonNull StringSerializer serializer) {
         serializer.append(indent, "DIMENSION = [" + getMin() + ", " + getMax() + "]");
+    }
+
+    /**
+     * Apply constraints
+     *
+     * @param width
+     * @return
+     */
+    public float applyWidthConstraint(float width) {
+        return width;
+    }
+
+    /**
+     * Apply constraints
+     *
+     * @param height
+     * @return
+     */
+    public float applyHeightConstraint(float height) {
+        return height;
     }
 }

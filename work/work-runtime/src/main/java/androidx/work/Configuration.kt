@@ -15,10 +15,16 @@
  */
 package androidx.work
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.annotation.IntRange
 import androidx.annotation.RestrictTo
+import androidx.annotation.VisibleForTesting
+import androidx.core.content.ContextCompat
 import androidx.core.util.Consumer
 import androidx.tracing.Trace
 import androidx.work.impl.DefaultRunnableScheduler
@@ -27,11 +33,10 @@ import androidx.work.impl.utils.INITIAL_ID
 import androidx.work.multiprocess.RemoteWorkManager.DEFAULT_SESSION_TIMEOUT_MILLIS
 import androidx.work.multiprocess.RemoteWorkManager.MAX_SESSION_TIMEOUT_MILLIS
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
+import kotlin.jvm.JvmStatic
+import kotlin.jvm.JvmSynthetic
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineDispatcher
@@ -46,7 +51,6 @@ import kotlinx.coroutines.asExecutor
  *
  * To set a custom Configuration for WorkManager, see [WorkManager.initialize].
  */
-@OptIn(ExperimentalConfigurationApi::class)
 public class Configuration internal constructor(builder: Builder) {
     /** The [Executor] used by [WorkManager] to execute [Worker]s. */
     public val executor: Executor
@@ -149,6 +153,28 @@ public class Configuration internal constructor(builder: Builder) {
     /** @return `true` If the default task [Executor] is being used */
     @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public val isUsingDefaultTaskExecutor: Boolean
 
+    /**
+     * @return `true` if remote worker cancellation propagation is enabled. Note: This flag guards
+     *   the cancellation propagation fix to allow running it experimentally to verify that
+     *   reliability metrics remain stable before removing the flag permanently.
+     */
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public val isRemoteCancellationPropagationFixEnabled: Boolean
+
+    /**
+     * `true` if multiprocess isolation is enabled. When enabled, every process owns an independent
+     * [WorkManager] instance and database, [defaultProcessName] is ignored, and initialization is
+     * deferred until [WorkManager.getInstance] is first called.
+     *
+     * Note: `internal` + `@JvmSynthetic` while the feature is validated, so [Configuration] gains
+     * no non-synthetic accessor for it before the public API shape is finalized. Java callers in
+     * `work-runtime` read it via [androidx.work.impl.IsolationInternalBridge], which (like any
+     * `@RestrictTo` API) is enforced by lint only.
+     *
+     * @return `true` if multiprocess isolation is enabled for [WorkManager].
+     */
+    @get:JvmSynthetic internal val isProcessIsolationEnabled: Boolean
+
     // Note: public experimental properties are not allowed because the accessors will not appear
     // experimental to Java clients. There is a public accessor for this property below.
     @property:ExperimentalConfigurationApi
@@ -164,17 +190,73 @@ public class Configuration internal constructor(builder: Builder) {
         return isMarkingJobsAsImportantWhileForeground
     }
 
-    @property:ExperimentalConfigurationApi
-    private val workExecutionEventListener: WorkExecutionEventListener?
+    @property:ExperimentalConfigurationApi private val isJobSchedulerPersistenceEnabled: Boolean
 
-    /** The [WorkExecutionEventListener] that listens to work execution events for all workers. */
+    private val jobSchedulerPersistenceLock = Any()
+
+    @Volatile private var effectiveJobSchedulerPersistence: Boolean? = null
+
+    /**
+     * Returns `true` if WorkManager persists jobs with JobScheduler instead of rescheduling them on
+     * boot. See [Builder.setJobSchedulerPersistenceEnabled].
+     */
     @ExperimentalConfigurationApi
-    public fun getWorkExecutionEventListener(): WorkExecutionEventListener? {
-        return workExecutionEventListener
+    public fun isJobSchedulerPersistenceEnabled(): Boolean {
+        return isJobSchedulerPersistenceEnabled
     }
 
-    /** The [Executor] that runs the [workExecutionEventListener] callbacks */
-    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public val workExecutionEventExecutor: Executor
+    /**
+     * Returns `true` if jobs should be persisted with [android.app.job.JobScheduler].
+     *
+     * This requires both [isJobSchedulerPersistenceEnabled] and the
+     * `android.permission.RECEIVE_BOOT_COMPLETED` permission, without which
+     * [android.app.job.JobScheduler] rejects persisted jobs. If the permission was removed from the
+     * merged manifest, this logs a warning once and falls back to non-persisted jobs.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun isJobSchedulerPersistenceEffective(context: Context): Boolean {
+        if (!isJobSchedulerPersistenceEnabled) {
+            return false
+        }
+        effectiveJobSchedulerPersistence?.let {
+            return it
+        }
+        return synchronized(jobSchedulerPersistenceLock) {
+            effectiveJobSchedulerPersistence
+                ?: (ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECEIVE_BOOT_COMPLETED,
+                    ) == PackageManager.PERMISSION_GRANTED)
+                    .also { hasBootPermission ->
+                        if (!hasBootPermission) {
+                            Logger.get()
+                                .warning(
+                                    TAG,
+                                    "JobScheduler persistence is enabled, but " +
+                                        "android.permission.RECEIVE_BOOT_COMPLETED is not " +
+                                        "granted. Falling back to non-persisted jobs.",
+                                )
+                        }
+                        effectiveJobSchedulerPersistence = hasBootPermission
+                    }
+        }
+    }
+
+    @property:ExperimentalEventsApi private val executionEventListener: ExecutionEventListener?
+
+    /** The [ExecutionEventListener] that listens to work execution events for all workers. */
+    @ExperimentalEventsApi
+    public fun getExecutionEventListener(): ExecutionEventListener? {
+        return executionEventListener
+    }
+
+    @property:ExperimentalEventsApi private val scheduleEventListener: ScheduleEventListener?
+
+    /** The [ScheduleEventListener] that listens to work execution events for all workers. */
+    @ExperimentalEventsApi
+    public fun getScheduleEventListener(): ScheduleEventListener? {
+        return scheduleEventListener
+    }
 
     /**
      * @return The [Tracer] instance that can be used by [WorkManager] to record trace spans when
@@ -182,13 +264,38 @@ public class Configuration internal constructor(builder: Builder) {
      */
     @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) public val tracer: Tracer
 
+    private val enableRepresentativeJobs: Boolean
+
+    private val enableGreedyScheduler: Boolean
+
+    /**
+     * Specifies whether WorkManager will prioritize unique constraints when scheduling with
+     * JobScheduler. This is intended to reduce the risk of starvation when many jobs with similar
+     * constraints are scheduled.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun isRepresentativeJobsEnabled(): Boolean {
+        return enableRepresentativeJobs
+    }
+
+    /**
+     * Specifies whether the in-process opportunistic greedy scheduler is enabled
+     *
+     * This is enabled by default and should only be disabled for experimental purposes.
+     */
+    @ExperimentalConfigurationApi
+    public fun isGreedySchedulerEnabled(): Boolean {
+        return enableGreedyScheduler
+    }
+
     init {
         val builderWorkerDispatcher = builder.workerContext
 
         executor =
             builder.executor
                 ?: builderWorkerDispatcher?.asExecutor()
-                ?: createDefaultExecutor(isTaskExecutor = false)
+                ?: Dispatchers.Default.limitedParallelism(calculateExecutorParallelismLimit())
+                    .asExecutor()
 
         workerCoroutineContext =
             when {
@@ -203,7 +310,7 @@ public class Configuration internal constructor(builder: Builder) {
         // This executor is used for *both* WorkManager's tasks and Room's query executor.
         // So this should not be a single threaded executor. Writes will still be serialized
         // as this will be wrapped with an SerialExecutor.
-        taskExecutor = builder.taskExecutor ?: createDefaultExecutor(isTaskExecutor = true)
+        taskExecutor = builder.taskExecutor ?: Dispatchers.Default.asExecutor()
         clock = builder.clock ?: SystemClock()
         workerFactory = builder.workerFactory ?: DefaultWorkerFactory
         inputMergerFactory = builder.inputMergerFactory ?: NoOpInputMergerFactory
@@ -226,9 +333,14 @@ public class Configuration internal constructor(builder: Builder) {
         remoteSessionTimeoutMillis = builder.remoteSessionTimeoutMillis
         contentUriTriggerWorkersLimit = builder.contentUriTriggerWorkersLimit
         isMarkingJobsAsImportantWhileForeground = builder.markJobsAsImportantWhileForeground
-        workExecutionEventListener = builder.workExecutionEventListener
-        workExecutionEventExecutor = builder.workExecutionEventExecutor ?: executor
+        isJobSchedulerPersistenceEnabled = builder.jobSchedulerPersistenceEnabled
+        executionEventListener = builder.executionEventListener
+        scheduleEventListener = builder.scheduleEventListener
         tracer = builder.tracer ?: createDefaultTracer()
+        enableRepresentativeJobs = builder.enableRepresentativeJobs
+        enableGreedyScheduler = builder.enableGreedyScheduler
+        isRemoteCancellationPropagationFixEnabled = builder.remoteCancellationPropagationFixEnabled
+        isProcessIsolationEnabled = builder.processIsolationEnabled
     }
 
     /** A Builder for [Configuration]s. */
@@ -252,9 +364,14 @@ public class Configuration internal constructor(builder: Builder) {
         internal var maxSchedulerLimit: Int = MIN_SCHEDULER_LIMIT
         internal var contentUriTriggerWorkersLimit: Int = DEFAULT_CONTENT_URI_TRIGGERS_WORKERS_LIMIT
         internal var markJobsAsImportantWhileForeground: Boolean = true
-        internal var workExecutionEventListener: WorkExecutionEventListener? = null
-        internal var workExecutionEventExecutor: Executor? = null
+        internal var jobSchedulerPersistenceEnabled: Boolean = false
+        internal var executionEventListener: ExecutionEventListener? = null
+        internal var scheduleEventListener: ScheduleEventListener? = null
         internal var tracer: Tracer? = null
+        internal var enableRepresentativeJobs: Boolean = false
+        internal var enableGreedyScheduler: Boolean = true
+        internal var remoteCancellationPropagationFixEnabled: Boolean = false
+        internal var processIsolationEnabled: Boolean = false
 
         /** Creates a new [Configuration.Builder]. */
         public constructor()
@@ -288,8 +405,15 @@ public class Configuration internal constructor(builder: Builder) {
             contentUriTriggerWorkersLimit = configuration.contentUriTriggerWorkersLimit
             markJobsAsImportantWhileForeground =
                 configuration.isMarkingJobsAsImportantWhileForeground
-            workExecutionEventListener = configuration.workExecutionEventListener
+            jobSchedulerPersistenceEnabled = configuration.isJobSchedulerPersistenceEnabled
+            executionEventListener = configuration.executionEventListener
+            scheduleEventListener = configuration.scheduleEventListener
             tracer = configuration.tracer
+            enableRepresentativeJobs = configuration.isRepresentativeJobsEnabled()
+            enableGreedyScheduler = configuration.isGreedySchedulerEnabled()
+            remoteCancellationPropagationFixEnabled =
+                configuration.isRemoteCancellationPropagationFixEnabled
+            processIsolationEnabled = configuration.isProcessIsolationEnabled
         }
 
         /**
@@ -589,35 +713,63 @@ public class Configuration internal constructor(builder: Builder) {
         }
 
         /**
-         * Set a [WorkExecutionEventListener] to run whenever work execution events occur for any
-         * worker.
+         * Sets whether WorkManager persists jobs with JobScheduler instead of rescheduling them on
+         * boot.
          *
-         * By default, these callbacks will be invoked on a thread bound to
-         * [Configuration.executor].
+         * When `true`, jobs are scheduled with [android.app.job.JobInfo.Builder.setPersisted] and
+         * the `BOOT_COMPLETED` receiver is disabled unless there is unfinished work with
+         * [Constraints.contentUriTriggers], which JobScheduler cannot persist.
          *
-         * @param listener [WorkExecutionEventListener] to set
-         * @return This [Builder] instance
+         * * Requires `android.permission.RECEIVE_BOOT_COMPLETED`, which WorkManager declares in its
+         *   manifest. Do not remove it when enabling this option; JobScheduler rejects persisted
+         *   jobs without it, so WorkManager falls back to non-persisted jobs.
+         * * Changing this value takes effect on the next initialization: existing JobScheduler jobs
+         *   whose persistence does not match are cancelled and rescheduled.
+         * * WorkManager no longer initializes on boot, so boot-time cleanup (e.g. resetting work
+         *   interrupted by the reboot) runs when the process next starts.
+         * * On API levels below 30, the first initialization after a reboot still cancels and
+         *   reschedules all jobs.
+         *
+         * Defaults to `false`.
+         *
+         * @param enabled `true` to persist jobs with JobScheduler
+         * @return this [Builder]
          */
         @ExperimentalConfigurationApi
-        public fun setWorkExecutionEventListener(listener: WorkExecutionEventListener?): Builder {
-            return setWorkExecutionEventListener(listener, /* executor= */ null)
+        public fun setJobSchedulerPersistenceEnabled(enabled: Boolean): Builder {
+            this.jobSchedulerPersistenceEnabled = enabled
+            return this
         }
 
         /**
-         * Set a [WorkExecutionEventListener] to run whenever work execution events occur for any
+         * Set a [ExecutionEventListener] to run whenever work execution events occur for any
          * worker.
          *
-         * @param listener [WorkExecutionEventListener] to set
-         * @param executor [Executor] to handle events
+         * These callbacks will be invoked on a thread bound to [Configuration.taskExecutor].
+         *
+         * @param listener [ExecutionEventListener] to set
          * @return This [Builder] instance
          */
-        @ExperimentalConfigurationApi
-        public fun setWorkExecutionEventListener(
-            listener: WorkExecutionEventListener?,
-            executor: Executor?,
-        ): Builder {
-            this.workExecutionEventListener = listener
-            this.workExecutionEventExecutor = executor
+        @SuppressLint("ExecutorRegistration") // Developer can configure taskExecutor directly
+        @ExperimentalEventsApi
+        public fun setExecutionEventListener(listener: ExecutionEventListener): Builder {
+            this.executionEventListener = listener
+            return this
+        }
+
+        /**
+         * Set a [ScheduleEventListener] to run whenever work scheduling events occur for any
+         * worker.
+         *
+         * These callbacks will be invoked on a thread bound to [Configuration.taskExecutor].
+         *
+         * @param listener [ScheduleEventListener] to set
+         * @return This [Builder] instance
+         */
+        @SuppressLint("ExecutorRegistration") // Developer can configure taskExecutor directly
+        @ExperimentalEventsApi
+        public fun setScheduleEventListener(listener: ScheduleEventListener): Builder {
+            this.scheduleEventListener = listener
             return this
         }
 
@@ -630,6 +782,69 @@ public class Configuration internal constructor(builder: Builder) {
         @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
         public fun setTracer(tracer: Tracer): Builder {
             this.tracer = tracer
+            return this
+        }
+
+        /**
+         * Specifies whether WorkManager will prioritize unique constraints when scheduling with
+         * JobScheduler. This is intended to reduce the risk of starvation when many jobs with
+         * similar constraints are scheduled.
+         *
+         * @param enabled whether to enable representative jobs
+         * @return This [Builder] instance
+         */
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+        public fun setRepresentativeJobsEnabled(enabled: Boolean): Builder {
+            this.enableRepresentativeJobs = enabled
+            return this
+        }
+
+        /**
+         * Specifies whether the in-process opportunistic greedy scheduler should be enabled.
+         *
+         * This is enabled by default and should only be disabled for experimental purposes.
+         *
+         * @param enabled whether to enable the greedy scheduler
+         * @return This [Builder] instance
+         */
+        @ExperimentalConfigurationApi
+        public fun setGreedySchedulerEnabled(enabled: Boolean): Builder {
+            this.enableGreedyScheduler = enabled
+            return this
+        }
+
+        /**
+         * Specifies whether remote worker cancellation propagation is enabled.
+         *
+         * Note: This flag guards the cancellation propagation fix to allow running it
+         * experimentally to verify that reliability metrics remain stable before removing the flag
+         * permanently.
+         *
+         * @param enabled `true` to enable remote worker cancellation propagation
+         * @return This [Builder] instance
+         */
+        @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+        public fun setRemoteCancellationPropagationFixEnabled(enabled: Boolean): Builder {
+            this.remoteCancellationPropagationFixEnabled = enabled
+            return this
+        }
+
+        /**
+         * Specifies whether multiprocess isolation is enabled for [WorkManager]. When enabled,
+         * every process owns an independent [WorkManager] instance and database,
+         * [defaultProcessName] is ignored, and initialization is deferred until
+         * [WorkManager.getInstance] is first called.
+         *
+         * Note: `internal` + `@JvmSynthetic` while the feature is validated, so this function is
+         * not part of the public or restricted API surface of [Configuration.Builder] and does not
+         * expose a non-synthetic `Builder` setter before the public API shape is finalized.
+         *
+         * @param enabled `true` to enable multiprocess isolation
+         * @return This [Builder] instance
+         */
+        @JvmSynthetic
+        internal fun setProcessIsolationEnabled(enabled: Boolean): Builder {
+            this.processIsolationEnabled = enabled
             return this
         }
 
@@ -648,7 +863,9 @@ public class Configuration internal constructor(builder: Builder) {
      * initialization of WorkManager. To do this:
      * - Disable `androidx.work.WorkManagerInitializer` in your manifest
      * - Implement the [Configuration.Provider] interface on your [android.app.Application] class
-     * - Use [WorkManager.getInstance] when accessing WorkManager (NOT [WorkManager.getInstance])
+     * - Use [`WorkManager.getInstance(Context)`](https://developer.android.com/reference/androidx/work/WorkManager#getInstance(android.content.Context))
+     *   when accessing WorkManager (NOT
+     *   [`WorkManager.getInstance`](https://developer.android.com/reference/androidx/work/WorkManager#getInstance()))
      *
      * Note that on-demand initialization may delay some useful features of WorkManager such as
      * automatic rescheduling of work following a crash and recovery from the application being
@@ -667,28 +884,21 @@ public class Configuration internal constructor(builder: Builder) {
          * [android.app.job.JobScheduler] or [android.app.AlarmManager].
          */
         public const val MIN_SCHEDULER_LIMIT: Int = 20
+
+        /** Calculates the maximum number of threads the executor should use. */
+        @VisibleForTesting
+        @JvmStatic
+        @JvmName("calculateExecutorParallelismLimit")
+        internal fun calculateExecutorParallelismLimit(): Int {
+            // This value is the same as the core pool size for AsyncTask#THREAD_POOL_EXECUTOR.
+            return max(1, min(Runtime.getRuntime().availableProcessors() - 1, 4))
+        }
     }
 }
 
+private val TAG = Logger.tagWithPrefix("Configuration")
+
 internal const val DEFAULT_CONTENT_URI_TRIGGERS_WORKERS_LIMIT = 8
-
-private fun createDefaultExecutor(isTaskExecutor: Boolean): Executor {
-    val factory =
-        object : ThreadFactory {
-            private val threadCount = AtomicInteger(0)
-
-            override fun newThread(runnable: Runnable): Thread {
-                // Thread names are constrained to a max of 15 characters by the Linux Kernel.
-                val prefix = if (isTaskExecutor) "WM.task-" else "androidx.work-"
-                return Thread(runnable, "$prefix${threadCount.incrementAndGet()}")
-            }
-        }
-    return Executors.newFixedThreadPool(
-        // This value is the same as the core pool size for AsyncTask#THREAD_POOL_EXECUTOR.
-        max(2, min(Runtime.getRuntime().availableProcessors() - 1, 4)),
-        factory,
-    )
-}
 
 private fun createDefaultTracer(): Tracer {
     // Delegate to AndroidX Tracing while leaving the implementation open-ended for a pluggable

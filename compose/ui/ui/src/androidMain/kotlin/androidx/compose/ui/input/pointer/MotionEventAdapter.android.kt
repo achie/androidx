@@ -19,6 +19,7 @@ package androidx.compose.ui.input.pointer
 import android.os.Build
 import android.util.SparseBooleanArray
 import android.util.SparseLongArray
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.MotionEvent.ACTION_CANCEL
 import android.view.MotionEvent.ACTION_DOWN
@@ -40,6 +41,7 @@ import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
 import androidx.collection.LongSparseArray
 import androidx.collection.set
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.indirect.AndroidIndirectPointerEvent
 import androidx.compose.ui.input.indirect.IndirectPointerEventPrimaryDirectionalMotionAxis
@@ -123,6 +125,45 @@ internal class MotionEventAdapter {
     private var previousSource = -1
 
     /**
+     * A piece of tracking data to infer whether we are currently in the middle of a trackpad fake
+     * finger gesture.
+     */
+    private var isInFakeFingerGesture: Boolean = false
+
+    /**
+     * A piece of tracking data for whether we are currently reinterpreting the fake finger gesture
+     * as a mouse event.
+     */
+    private var isReinterpretingFakeFingerGesture: Boolean = false
+
+    /**
+     * A piece of tracking data to infer the cursor location reinterpreting a fake finger gesture
+     * that is coming from the trackpad. When a two finger swipe is ongoing, the fake finger will
+     * start from this offset, and then wander like a finger on a touchscreen would to achieve the
+     * equivalent swipe distance. The fake finger motion event doesn't currently publicly expose the
+     * raw cursor position, so we need to keep track of it ourselves and reset it appropriately.
+     */
+    private var inferredCursorRawOffset: Offset? = null
+
+    private var lastHoverRawOffset: Offset? = null
+
+    /** Tracks whether a two-finger trackpad pan gesture is currently ongoing. */
+    internal var isTrackpadPanOngoing: Boolean = false
+        private set
+
+    /** Tracks whether any pointer is currently pressed down. */
+    private var isAnyPointerDown: Boolean = false
+
+    /** Resets the fake finger gesture tracking data, in preparation for a new gesture. */
+    private fun resetFakeFingerGesture() {
+        isInFakeFingerGesture = false
+        isReinterpretingFakeFingerGesture = false
+        inferredCursorRawOffset = null
+        isTrackpadPanOngoing = false
+        isAnyPointerDown = false
+    }
+
+    /**
      * Converts a single [MotionEvent] from an Android event stream into a [PointerInputEvent], or
      * null if the [MotionEvent.getActionMasked] is [ACTION_CANCEL].
      *
@@ -132,6 +173,7 @@ internal class MotionEventAdapter {
      * @param motionEvent The MotionEvent to process.
      * @return The PointerInputEvent or null if the event action was ACTION_CANCEL.
      */
+    @OptIn(ExperimentalComposeUiApi::class)
     internal fun convertToPointerInputEvent(
         motionEvent: MotionEvent,
         positionCalculator: PositionCalculator,
@@ -140,22 +182,70 @@ internal class MotionEventAdapter {
         if (action == ACTION_CANCEL || action == ACTION_OUTSIDE) {
             motionEventToComposePointerIdMap.clear()
             activeHoverIds.clear()
+            resetFakeFingerGesture()
+            lastHoverRawOffset = null
             return null
         }
         clearOnDeviceChange(motionEvent)
-
-        addFreshIds(motionEvent)
+        // If a new touch stream starts (ACTION_DOWN) and it is not classified as a trackpad
+        // swipe or pinch, we must reset any stale hover-induced trackpad gesture states.
+        // This handles cases where a hover exit event was discarded by the synthetic hover exit
+        // optimization in AndroidComposeView (which occurs when hover exit is immediately
+        // followed by a touch down of the same device in the same frame).
+        if (action == ACTION_DOWN) {
+            val isTrackpadGesture =
+                Build.VERSION.SDK_INT >= 34 &&
+                    (motionEvent.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
+                        motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH)
+            if (!isTrackpadGesture) {
+                resetFakeFingerGesture()
+            }
+        }
+        if (action == ACTION_DOWN || action == ACTION_POINTER_DOWN) {
+            isAnyPointerDown = true
+        }
 
         val isHover =
             action == ACTION_HOVER_ENTER ||
                 action == ACTION_HOVER_MOVE ||
                 action == ACTION_HOVER_EXIT
 
+        // Trackpad gestures on API 34+ dispatch interleaved ACTION_HOVER_MOVE events during the
+        // active touch swipe gesture (with classification NONE). To prevent these interleaved
+        // hover events from incorrectly resetting gesture state mid-swipe, we only allow
+        // hover moves to execute the reset if no pointer is currently pressed down. Hover
+        // enter/exit events will still always reset the state to ensure transitions are
+        // handled correctly.
+        val shouldResetHover =
+            (action == ACTION_HOVER_ENTER ||
+                action == ACTION_HOVER_EXIT ||
+                (action == ACTION_HOVER_MOVE && !isAnyPointerDown)) &&
+                (Build.VERSION.SDK_INT < 34 ||
+                    (motionEvent.classification != MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE &&
+                        motionEvent.classification != MotionEvent.CLASSIFICATION_PINCH))
+
+        if (shouldResetHover) {
+            resetFakeFingerGesture()
+        }
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            if (motionEvent.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE) {
+                isTrackpadPanOngoing = true
+            } else if (motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH) {
+                isTrackpadPanOngoing = false
+            }
+        }
+
+        addFreshIds(motionEvent)
+
         val isScroll = action == ACTION_SCROLL
 
-        if (isHover) {
+        if (isHover && !isAnyPointerDown) {
             val hoverId = motionEvent.getPointerId(motionEvent.actionIndex)
             activeHoverIds.put(hoverId, true)
+            if (action == ACTION_HOVER_MOVE || action == ACTION_HOVER_ENTER) {
+                lastHoverRawOffset = Offset(motionEvent.rawX, motionEvent.rawY)
+            }
         }
 
         val upIndex =
@@ -167,26 +257,134 @@ internal class MotionEventAdapter {
 
         pointers.clear()
 
-        // This converts the MotionEvent into a list of PointerInputEventData, and updates
-        // internal record keeping.
-        for (i in 0 until motionEvent.pointerCount) {
-            pointers.add(
-                createPointerInputEventData(
-                    positionCalculator,
-                    motionEvent,
-                    i,
-                    // "pressed" means:
-                    // 1. we're not hovered
-                    // 2. we didn't get UP event for a pointer
-                    // 3. button on the mouse is pressed BUT it's not a "scroll" simulated button
-                    !isHover && i != upIndex && (!isScroll || motionEvent.buttonState != 0),
-                )
-            )
+        // For record keeping, determine if we are in a fake finger gesture
+        if (motionEvent.actionMasked == ACTION_DOWN) {
+            val isFakeFingerGestureByClassification =
+                Build.VERSION.SDK_INT >= 34 &&
+                    (motionEvent.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
+                        motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH)
+
+            val isFakeFingerGestureByNoButtonStateAndSource =
+                motionEvent.buttonState == 0 &&
+                    (motionEvent.isFromSource(InputDevice.SOURCE_MOUSE) ||
+                        motionEvent.isFromSource(InputDevice.SOURCE_TOUCHPAD))
+
+            if (
+                isFakeFingerGestureByClassification || isFakeFingerGestureByNoButtonStateAndSource
+            ) {
+                isInFakeFingerGesture = true
+            }
         }
 
+        // `isTrackpadPanOngoing` is checked here to maintain the active Pan classification for
+        // the entire duration of the swipe stream, including on intermediate move and up/cancel
+        // events where the OS does not report the classification.
+        val isSwipe =
+            Build.VERSION.SDK_INT >= 34 &&
+                (motionEvent.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
+                    isTrackpadPanOngoing)
+        val isPinch =
+            Build.VERSION.SDK_INT >= 34 &&
+                motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH
+        val shouldReinterpretPinch =
+            isPinch &&
+                ((motionEvent.actionMasked == ACTION_DOWN && lastHoverRawOffset != null) ||
+                    (motionEvent.actionMasked != ACTION_DOWN && isReinterpretingFakeFingerGesture))
+
+        if (Build.VERSION.SDK_INT >= 34 && (isSwipe || shouldReinterpretPinch)) {
+            isReinterpretingFakeFingerGesture = true
+            // If this is the second fake finger touching down for a pinch, we can calculate the
+            // true midpoint (cursor position) and update inferredCursorRawOffset. Otherwise,
+            // if this is the start of the fake finger action down (or inferredCursorRawOffset is
+            // not yet initialized), store the location of the first fake finger as a proxy.
+            if (
+                motionEvent.actionMasked == ACTION_POINTER_DOWN &&
+                    motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH &&
+                    motionEvent.pointerCount == 2
+            ) {
+                inferredCursorRawOffset =
+                    Offset(
+                        (motionEvent.getRawX(0) + motionEvent.getRawX(1)) / 2f,
+                        (motionEvent.getRawY(0) + motionEvent.getRawY(1)) / 2f,
+                    )
+            } else if (motionEvent.actionMasked == ACTION_DOWN || inferredCursorRawOffset == null) {
+                inferredCursorRawOffset =
+                    if (motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH) {
+                        lastHoverRawOffset ?: Offset(motionEvent.getRawX(0), motionEvent.getRawY(0))
+                    } else {
+                        Offset(motionEvent.getRawX(0), motionEvent.getRawY(0))
+                    }
+            }
+
+            pointers.add(
+                createPointerInputEventData(
+                    positionCalculator = positionCalculator,
+                    motionEvent = motionEvent,
+                    rawPositionOverride = inferredCursorRawOffset,
+                    index = 0,
+                    pressed = false,
+                )
+            )
+        } else {
+            isReinterpretingFakeFingerGesture = false
+
+            // The default case:
+            // This converts the MotionEvent into a list of PointerInputEventData, and updates
+            // internal record keeping.
+            for (i in 0 until motionEvent.pointerCount) {
+                pointers.add(
+                    createPointerInputEventData(
+                        positionCalculator = positionCalculator,
+                        motionEvent = motionEvent,
+                        rawPositionOverride = null,
+                        index = i,
+                        // "pressed" means:
+                        // 1. we're not hovered
+                        // 2. we didn't get UP event for a pointer
+                        // 3. button on the mouse is pressed BUT it's not a "scroll" simulated
+                        // button
+                        pressed =
+                            !isHover && i != upIndex && (!isScroll || motionEvent.buttonState != 0),
+                    )
+                )
+            }
+        }
+
+        val activeGesture =
+            if (isTrackpadPanOngoing) {
+                PointerClassification.Pan
+            } else if (Build.VERSION.SDK_INT >= 34) {
+                when (motionEvent.classification) {
+                    MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE -> PointerClassification.Pan
+                    MotionEvent.CLASSIFICATION_PINCH -> PointerClassification.Pinch
+                    MotionEvent.CLASSIFICATION_AMBIGUOUS_GESTURE -> PointerClassification.Ambiguous
+                    MotionEvent.CLASSIFICATION_DEEP_PRESS -> PointerClassification.DeepPress
+                    else -> PointerClassification.None
+                }
+            } else {
+                PointerClassification.None
+            }
+        val isHoverExit = motionEvent.actionMasked == ACTION_HOVER_EXIT
+        val isTrackpadPanExit =
+            isHoverExit &&
+                (Build.VERSION.SDK_INT < 34 ||
+                    motionEvent.classification != MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE)
+
+        if (
+            motionEvent.actionMasked == ACTION_UP ||
+                motionEvent.actionMasked == ACTION_CANCEL ||
+                isTrackpadPanExit
+        ) {
+            resetFakeFingerGesture()
+        }
         removeStaleIds(motionEvent)
 
-        return PointerInputEvent(motionEvent.eventTime, pointers, motionEvent)
+        return PointerInputEvent(
+            uptime = motionEvent.eventTime,
+            pointers = pointers,
+            motionEvent = motionEvent,
+            activeGesture = activeGesture,
+        )
     }
 
     /*
@@ -262,6 +460,8 @@ internal class MotionEventAdapter {
                     previousUptimeMillis = previousData?.uptime ?: motionEvent.eventTime,
                     previousPosition = previousData?.position ?: currentLocation,
                     previousPressed = previousData?.down ?: false,
+                    motionEvent = motionEvent,
+                    motionEventIndex = index,
                 )
             }
 
@@ -376,18 +576,52 @@ internal class MotionEventAdapter {
         val toolType = motionEvent.getToolType(0)
         val source = motionEvent.source
 
-        if (toolType != previousToolType || source != previousSource) {
+        val isTrackpadOrMouseSource =
+            source == InputDevice.SOURCE_MOUSE || source == InputDevice.SOURCE_TOUCHPAD
+
+        val deviceChanged =
+            if (isTrackpadOrMouseSource) {
+                source != previousSource ||
+                    // Trackpads on API 34+ toggle the tool type from TOOL_TYPE_MOUSE (while
+                    // hovering) to TOOL_TYPE_FINGER (during two-finger swipe gestures). To prevent
+                    // this normal transition from being incorrectly treated as a physical device
+                    // change (which would clear pointer mappings and break gesture tracking), we
+                    // allow transitions between mouse and finger tool types on mouse/trackpad
+                    // sources without resetting device state.
+                    (toolType != previousToolType &&
+                        toolType != MotionEvent.TOOL_TYPE_MOUSE &&
+                        toolType != MotionEvent.TOOL_TYPE_FINGER)
+            } else {
+                toolType != previousToolType || source != previousSource
+            }
+
+        if (deviceChanged) {
             previousToolType = toolType
             previousSource = source
             activeHoverIds.clear()
             motionEventToComposePointerIdMap.clear()
+            resetFakeFingerGesture()
+            lastHoverRawOffset = null
         }
     }
 
-    /** Creates a new PointerInputEventData. */
+    /**
+     * Creates a new PointerInputEventData.
+     *
+     * @param rawPositionOverride if specified, the offset to use for the raw position of the
+     *   pointer input event data, overriding whatever is in the [motionEvent]. This will result in
+     *   both [PointerInputEventData.position] and [PointerInputEventData.positionOnScreen] being
+     *   overridden, but _not_ [PointerInputEventData.originalEventPosition]. This is supported on
+     *   Android Q and above for all indices and for the first index on Android P and below. For
+     *   non-zero indices on Android P and below for, the derivation of the position works
+     *   differently, where the raw position is derived from the normal position, so therefore the
+     *   [rawPositionOverride] has no effect. Currently we have no usages of a non-null
+     *   `rawPositionOverride` on Android P and below, so that case can't be reached.
+     */
     private fun createPointerInputEventData(
         positionCalculator: PositionCalculator,
         motionEvent: MotionEvent,
+        rawPositionOverride: Offset?,
         index: Int,
         pressed: Boolean,
     ): PointerInputEventData {
@@ -398,22 +632,35 @@ internal class MotionEventAdapter {
 
         val pressure = motionEvent.getPressure(index)
 
-        var position = Offset(motionEvent.getX(index), motionEvent.getY(index))
-        val originalPositionEventPosition = position.copy()
         val rawPosition: Offset
+        val position: Offset
+        val originalPositionEventPosition = Offset(motionEvent.getX(index), motionEvent.getY(index))
         if (index == 0) {
-            rawPosition = Offset(motionEvent.rawX, motionEvent.rawY)
+            rawPosition = rawPositionOverride ?: Offset(motionEvent.rawX, motionEvent.rawY)
             position = positionCalculator.screenToLocal(rawPosition)
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            rawPosition = MotionEventHelper.toRawOffset(motionEvent, index)
+            rawPosition = rawPositionOverride ?: MotionEventHelper.toRawOffset(motionEvent, index)
             position = positionCalculator.screenToLocal(rawPosition)
         } else {
+            position = originalPositionEventPosition
             rawPosition = positionCalculator.localToScreen(position)
         }
+
         val toolType =
             when (motionEvent.getToolType(index)) {
                 TOOL_TYPE_UNKNOWN -> PointerType.Unknown
-                TOOL_TYPE_FINGER -> PointerType.Touch
+                TOOL_TYPE_FINGER -> {
+                    // Convert trackpad events to mouse events when it is safe to do so.
+                    if (
+                        (motionEvent.isFromSource(InputDevice.SOURCE_MOUSE) ||
+                            motionEvent.isFromSource(InputDevice.SOURCE_TOUCHPAD)) &&
+                            (!isInFakeFingerGesture || isReinterpretingFakeFingerGesture)
+                    ) {
+                        PointerType.Mouse
+                    } else {
+                        PointerType.Touch
+                    }
+                }
                 TOOL_TYPE_STYLUS -> PointerType.Stylus
                 TOOL_TYPE_MOUSE -> PointerType.Mouse
                 TOOL_TYPE_ERASER -> PointerType.Eraser
@@ -427,11 +674,40 @@ internal class MotionEventAdapter {
                 val y = getHistoricalY(index, pos)
                 if (x.fastIsFinite() && y.fastIsFinite()) {
                     val originalEventPosition = Offset(x, y) // hit path will convert to local
+                    val isPan =
+                        Build.VERSION.SDK_INT >= 34 &&
+                            (motionEvent.classification ==
+                                MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE || isTrackpadPanOngoing)
+
                     val historicalChange =
                         HistoricalChange(
-                            getHistoricalEventTime(pos),
-                            originalEventPosition,
-                            originalEventPosition,
+                            uptimeMillis = getHistoricalEventTime(pos),
+                            position = originalEventPosition,
+                            scaleFactor =
+                                getHistoricalAxisValue(
+                                        MotionEvent.AXIS_GESTURE_PINCH_SCALE_FACTOR,
+                                        index,
+                                        pos,
+                                    )
+                                    .takeIf { it > 0 } ?: 1f,
+                            panOffset =
+                                if (Build.VERSION.SDK_INT >= 29 && isPan) {
+                                    Offset(
+                                        motionEvent.getHistoricalAxisValue(
+                                            MotionEvent.AXIS_GESTURE_SCROLL_X_DISTANCE,
+                                            index,
+                                            pos,
+                                        ),
+                                        motionEvent.getHistoricalAxisValue(
+                                            MotionEvent.AXIS_GESTURE_SCROLL_Y_DISTANCE,
+                                            index,
+                                            pos,
+                                        ),
+                                    )
+                                } else {
+                                    Offset.Zero
+                                },
+                            originalEventPosition = originalEventPosition,
                         )
                     historical.add(historicalChange)
                 }
@@ -463,19 +739,53 @@ internal class MotionEventAdapter {
                 Offset.Zero
             }
 
+        /**
+         * The gesture scale factor. Note that because this is a multiplicative factor, `1` is the
+         * identity value that indicates no change - so we need to manually handle the case of
+         * seeing a `0` indicating that the axis is missing.
+         */
+        val gestureScaleFactor =
+            if (
+                Build.VERSION.SDK_INT >= 29 &&
+                    motionEvent.classification == MotionEvent.CLASSIFICATION_PINCH
+            ) {
+                motionEvent
+                    .getAxisValue(MotionEvent.AXIS_GESTURE_PINCH_SCALE_FACTOR, index)
+                    .takeIf { it > 0 } ?: 1f
+            } else {
+                1f
+            }
+
+        /** The offset for scrolling, expressed as a delta in pixel coordinates. */
+        val isPan =
+            Build.VERSION.SDK_INT >= 34 &&
+                (motionEvent.classification == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE ||
+                    isTrackpadPanOngoing)
+        val gesturePanOffset =
+            if (Build.VERSION.SDK_INT >= 29 && isPan) {
+                Offset(
+                    motionEvent.getAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_X_DISTANCE, index),
+                    motionEvent.getAxisValue(MotionEvent.AXIS_GESTURE_SCROLL_Y_DISTANCE, index),
+                )
+            } else {
+                Offset.Zero
+            }
+
         val activeHover = activeHoverIds.get(motionEvent.getPointerId(index), false)
         return PointerInputEventData(
-            pointerId,
-            motionEvent.eventTime,
-            rawPosition,
-            position,
-            pressed,
-            pressure,
-            toolType,
-            activeHover,
-            historical,
-            scrollDelta,
-            originalPositionEventPosition,
+            id = pointerId,
+            uptime = motionEvent.eventTime,
+            positionOnScreen = rawPosition,
+            position = position,
+            down = pressed,
+            pressure = pressure,
+            type = toolType,
+            activeHover = activeHover,
+            historical = historical,
+            scrollDelta = scrollDelta,
+            scaleGestureFactor = gestureScaleFactor,
+            panGestureOffset = gesturePanOffset,
+            originalEventPosition = originalPositionEventPosition,
         )
     }
 }

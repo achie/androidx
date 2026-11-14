@@ -20,7 +20,7 @@ plugins {
 }
 
 android {
-    compileSdk = 36
+    compileSdk { version = release(37) }
     namespace = "androidx.camera.integration.macrobenchmark"
     targetProjectPath = ":camera:integration-tests:camera-macrobenchmark-target"
     experimentalProperties["android.experimental.self-instrumenting"] = true
@@ -29,7 +29,7 @@ android {
 // Create a release build type and make sure it's the only one enabled.
 // This is needed because we benchmark the release build type only.
 android.buildTypes { release {} }
-androidComponents { beforeVariants(selector().all()) { enabled = buildType == 'release' } }
+androidComponents { beforeVariants(selector().all()) { enabled = buildType == "release" } }
 
 dependencies {
     implementation(project(":benchmark:benchmark-junit4"))
@@ -37,7 +37,6 @@ dependencies {
     implementation(project(":internal-testutils-benchmark-macro"))
 
     implementation(project(":camera:camera-camera2"))
-    implementation(project(":camera:camera-camera2-pipe-integration"))
     implementation(project(":camera:camera-testing"))
 
     implementation(libs.testRules)

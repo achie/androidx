@@ -1,0 +1,476 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.compose.remote.creation.dsl
+
+import androidx.compose.remote.core.CoreDocument
+import androidx.compose.remote.core.RcPlatformServices
+import androidx.compose.remote.core.RcProfiles
+import androidx.compose.remote.creation.RemoteComposeWriter
+import androidx.compose.remote.creation.profile.Profile
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RcScopeTest {
+
+    private val testProfile =
+        Profile(
+            CoreDocument.DOCUMENT_API_LEVEL,
+            RcProfiles.PROFILE_ANDROIDX,
+            RcPlatformServices.None,
+        ) { _, profile, _ ->
+            RemoteComposeWriter(profile)
+        }
+
+    @Test
+    fun testResourceAddition() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        val text = scope.remoteText("test")
+        val color = scope.remoteColor(0xFFFF0000.toInt())
+        val float = scope.remoteFloat(10f)
+        val int = scope.remoteInteger(5)
+
+        // Basic verification that IDs are assigned (starts from 0 or 1 usually)
+        // We don't necessarily care about the exact ID in this unit test,
+        // but that the scope call delegates to writer.
+        assertEquals(true, text.id >= 0)
+        assertEquals(true, color.id >= 0)
+        assertEquals(true, java.lang.Float.isNaN(float.toFloat()))
+        assertEquals(true, int.id >= 0)
+    }
+
+    @Test
+    fun testNamedResources() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        val namedFloat = scope.remoteNamedFloat("var1", 1.0f)
+        val namedInt = scope.remoteNamedInteger("var2", 2)
+
+        assertEquals(true, java.lang.Float.isNaN(namedFloat.toFloat()))
+        assertEquals(true, namedInt.id >= 0)
+    }
+
+    @Test
+    fun testRcFloatToText() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        val f = scope.remoteFloat(12.34f)
+        val text = f.format(2, 2)
+        val padded =
+            f.format(2, 2, RcTextFromFloatSpec.of(padPre = RcTextFromFloatSpec.PadPre.Zero))
+        val scoped =
+            scope.createTextFromFloat(
+                f,
+                2,
+                2,
+                RcTextFromFloatSpec.of(padAfter = RcTextFromFloatSpec.PadAfter.Zero),
+            )
+
+        assertEquals(true, text.id >= 0)
+        assertEquals(true, padded.id >= 0)
+        assertEquals(true, scoped.id >= 0)
+    }
+
+    @Test
+    fun testExtensionRcFloatToText() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val f = 12.34f.rf
+            val text = f.format(2, 2)
+            assertEquals(true, text.id >= 0)
+        }
+    }
+
+    @Test
+    fun testPathOperations() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            Canvas {
+                val path = remotePath(0f, 0f)
+                path.lineTo(10f, 10f)
+                path.moveTo(20f, 20f)
+                path.close()
+
+                drawPath(path.toPath())
+
+                // Test the new lambda overload
+                val path2 = remotePath(0f, 0f)
+                path2.lineTo(100f, 100f)
+                path2.quadTo(150f, 50f, 200f, 100f)
+                path2.cubicTo(220f, 120f, 240f, 80f, 250f, 100f)
+                path2.arcTo(0f, 0f, 100f, 100f, 0f, 90f, false)
+                path2.arcTo(25f, 25f, 0f, false, true, 50f, 50f)
+
+                drawPath(path2.toPath())
+            }
+        }
+    }
+
+    @Test
+    fun testRcPathDataAndRemotePathData() {
+        val path = RcPathData()
+        assertTrue(path.isEmpty)
+        path.moveTo(0f, 0f)
+        path.arcTo(0f, 0f, 100f, 100f, 0f, 90f, false)
+        assertFalse(path.isEmpty)
+        assertTrue(path.base.createFloatArray().isNotEmpty())
+
+        val pathAvd =
+            parseAvdPathData(
+                "M 0 0 h 20 v 10 l -5 5 c 1 2 3 4 5 6 s 1 2 3 4 q 1 2 3 4 t 2 2 a 25 25 0 0 1 50 50 z"
+            )
+        assertTrue(pathAvd.base.createFloatArray().isNotEmpty())
+
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+        scope.apply {
+            Canvas {
+                val p1 = remotePathData(path)
+                val p2 = remotePathData("M 0 0 L 10 10 Z")
+                val p3 = remotePathData {
+                    moveTo(0f, 0f)
+                    lineTo(25f, 25f)
+                    close()
+                }
+                drawPath(p1)
+                drawPath(p2)
+                drawPath(p3)
+            }
+        }
+    }
+
+    @Test
+    fun testCanvasOperations() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            Canvas {
+                save()
+                clipRect(0f, 0f, 100f, 100f)
+                drawRect(10f, 10f, 50f, 50f)
+                restore()
+
+                save {
+                    scale(2f, 2f)
+                    drawCircle(0f, 0f, 10f)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testLayouts() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            Box {
+                Column {
+                    Text("Hello")
+                    Spacer(Modifier.height(10f))
+                    Row { Text("World") }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testDrawingAndPaint() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcCanvasScopeImpl(writer)
+
+        scope.apply {
+            paint {
+                color(0xFFFF0000.toInt())
+                strokeWidth(2f)
+            }
+            drawRect(0f, 0f, 100f, 100f)
+            drawCircle(50f, 50f, 25f)
+            drawLine(0f, 0f, 100f, 100f)
+
+            val textId = remoteText("Hello")
+            drawTextAnchored(textId, 50f, 50f, 0.5f, 0.5f)
+        }
+    }
+
+    @Test
+    fun testTextStyles() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val style = remoteTextStyle(fontSize = 20.rsp, color = 0xFF00FF00.toInt())
+            assertEquals(true, style.id >= 0)
+            Text("Styled Text", fontSize = 20.rsp)
+        }
+    }
+
+    @Test
+    fun testColorsAndTheming() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val color = remoteColor(0xFFFF0000.toInt())
+            val themed = remoteThemedColor(0xFFFFFFFF.toInt(), 0xFF000000.toInt())
+            val named = remoteNamedColor("my_color", 0xFF00FF00.toInt())
+
+            assertEquals(true, color.id >= 0)
+            assertEquals(true, themed.id >= 0)
+            assertEquals(true, named.id >= 0)
+        }
+    }
+
+    @Test
+    fun testBitmaps() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val bitmap = remoteBitmapUrl("https://example.com/image.png")
+            val namedBitmap = remoteNamedBitmapUrl("my_image", "https://example.com/image2.png")
+            val rawBitmap = remoteBitmap(4, 4, byteArrayOf(1, 2, 3))
+            val namedRawBitmap = remoteNamedBitmap("raw_image", 4, 4, byteArrayOf(1, 2, 3))
+            val offscreen = createOffscreenBitmap()
+            val font = remoteFont(byteArrayOf(0, 1, 0, 0))
+            val flag = remoteBoolean(true)
+
+            assertEquals(true, bitmap.id >= 0)
+            assertEquals(true, namedBitmap.id >= 0)
+            assertEquals(true, rawBitmap.id >= 0)
+            assertEquals(true, namedRawBitmap.id >= 0)
+            assertEquals(true, offscreen.id >= 0)
+            assertEquals(true, font.id >= 0)
+            assertEquals(true, flag.handle >= 0L)
+        }
+    }
+
+    @Test
+    fun testLoops() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            Canvas {
+                loop(0.rf, 10.rf, 100.rf) { i -> drawCircle(i, 50.rf, 5.rf) }
+                loop(0.rf, 10f, 100.rf) { i -> drawCircle(i, 60.rf, 5.rf) }
+            }
+        }
+    }
+
+    @Test
+    fun testModifiers() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val visAnim = defineVisibilityAnimation { _, _, _, _, _ -> }
+            Box(
+                modifier =
+                    Modifier.size(100f)
+                        .padding(10f)
+                        .background(0xFFFF0000.toInt())
+                        .clip(RcShape.roundedCorner(5f))
+                        .animationSpec(
+                            enterAnimation = RcEnterExitAnimation.FadeIn,
+                            exitAnimation = RcEnterExitAnimation.SlideBottom,
+                            enterSequence = RcAnimationSequence.After,
+                            enterAnimationFunction = visAnim,
+                        )
+                        .semantics {
+                            role(RcRole.Button)
+                            mode(RcSemanticsMode.Merge)
+                        }
+            ) {
+                Text("With Modifier", modifier = Modifier.clip(RcShape.Rectangle))
+            }
+        }
+    }
+
+    @Test
+    fun testHeaderTagsGradientsAndCircleText() {
+        val supportedOps =
+            requireNotNull(
+                    androidx.compose.remote.core.Operations.getOperations(
+                        CoreDocument.DOCUMENT_API_LEVEL,
+                        RcProfiles.PROFILE_ANDROIDX,
+                    )
+                )
+                .keySet() + setOf(androidx.compose.remote.core.Operations.DRAW_TEXT_ON_CIRCLE)
+        val circleProfile =
+            Profile(
+                CoreDocument.DOCUMENT_API_LEVEL,
+                RcProfiles.PROFILE_ANDROIDX,
+                RcPlatformServices.None,
+                { supportedOps },
+            ) { _, profile, _ ->
+                RemoteComposeWriter(profile)
+            }
+        val bytes =
+            createRcBuffer(
+                RcProfile(circleProfile),
+                RcHeaderTag.docWidth(200),
+                RcHeaderTag.docHeight(150),
+                RcHeaderTag.desiredFps(60),
+                RcHeaderTag.contentDescription("Header test"),
+                RcHeaderTag.densityBehavior(RcDensityBehavior.Dp),
+                RcHeaderTag.debug(0),
+            ) {
+                val c1 = remoteColor(0xFFFF0000.toInt())
+                val c2 = remoteColor(0xFF0000FF.toInt())
+                val glyphImg = createBitmap(8, 8)
+                val font =
+                    createBitmapFont(
+                        listOf(bitmapFontGlyph("A", glyphImg, 0, 0, 0, 0, 8, 8)),
+                        kerningTable = mapOf("AV" to -2),
+                    )
+                assertTrue(font.id >= 0)
+                val sampleText = remoteText("A")
+                val bitmapWidth = sampleText.measure(font, RcBitmapTextMeasure.Width)
+                val textWidth =
+                    textMeasure(
+                        sampleText,
+                        RcTextMeasureMode.Width or RcTextMeasureMode.MonospaceWidth,
+                    )
+                assertTrue(java.lang.Float.isNaN(bitmapWidth.toFloat()))
+                assertTrue(java.lang.Float.isNaN(textWidth.toFloat()))
+
+                Canvas {
+                    paint {
+                        linearGradient(0f, 0f, 100f, 100f, listOf(c1, RcColor.None, c2))
+                        radialGradient(50f, 50f, 40f, listOf(c1, c2))
+                        sweepGradient(50f, 50f, listOf(c1, c2))
+                    }
+                    drawTextOnCircle(
+                        text = remoteText("Arc"),
+                        centerX = 100f,
+                        centerY = 75f,
+                        radius = 50f,
+                        startAngle = 0f,
+                        warpRadiusOffset = 0f,
+                        alignment = RcCircleTextAlignment.Center,
+                        placement = RcCircleTextPlacement.Outside,
+                    )
+                }
+            }
+        assertTrue(bytes.isNotEmpty())
+    }
+
+    @Test
+    fun testDataAndStateManagement() {
+        val writer = RemoteComposeWriter(testProfile)
+        val scope = RcScopeImpl(writer)
+
+        scope.apply {
+            val intArray = remoteIntArray(intArrayOf(1, 2, 3))
+            val dynamicArray = remoteDynamicFloatArray(10f)
+            val namedFloatArray = remoteNamedFloatArray("arr", floatArrayOf(1.0f, 2.0f))
+            val floatList = remoteFloatList(floatArrayOf(1.0f, 2.0f))
+            val floatMap = remoteFloatMap(listOf("key1", "key2"), floatArrayOf(1.0f, 2.0f))
+
+            assertEquals(true, java.lang.Float.isNaN(intArray.toFloat()))
+            assertEquals(true, java.lang.Float.isNaN(dynamicArray.toFloat()))
+            assertEquals(true, java.lang.Float.isNaN(namedFloatArray.toFloat()))
+            assertEquals(true, java.lang.Float.isNaN(floatList.toFloat()))
+            assertEquals(true, java.lang.Float.isNaN(floatMap.toFloat()))
+
+            setArrayValue(dynamicArray, 0.rf, 5.rf)
+        }
+    }
+
+    @Test
+    fun testDefineMacroAndInflateWithValueAndBlockArgs() {
+        val bytes =
+            createRcBuffer(RcProfile(testProfile), experimental = true) {
+                Box {
+                    val cardMacro =
+                        defineMacro("card", listOf("title", "tint", "slot")) { args ->
+                            Column(modifier = Modifier.background(args["tint"]!!.asColor())) {
+                                Text(args["title"]!!.asText())
+                                args["slot"]!!.insertArgument()
+                            }
+                        }
+
+                    val titleText = remoteText("Card Title")
+                    val tintColor = remoteColor(0xFF112233.toInt())
+                    cardMacro.inflate {
+                        text("title", titleText)
+                        color("tint", tintColor)
+                        block("slot") {
+                            Text("Slot Body")
+                            CustomComponent(
+                                "custom_widget",
+                                properties = listOf(RcCustomProperty.int(1, 5)),
+                            )
+                        }
+                    }
+                }
+            }
+
+        val doc = CoreDocument()
+        val buffer =
+            androidx.compose.remote.core.RemoteComposeBuffer.fromInputStream(
+                java.io.ByteArrayInputStream(bytes)
+            )
+        doc.initFromBuffer(buffer)
+        assertTrue(bytes.isNotEmpty())
+    }
+
+    @Test
+    fun testBeginEndGlobalMatchesScopedGlobal() {
+        val directBytes =
+            createRcBuffer(RcProfile(testProfile)) {
+                Box {
+                    beginGlobal()
+                    val firstColor = remoteNamedColor("color.first", 0xFFFF0000.toInt())
+                    val secondColor = remoteNamedColor("color.second", 0xFF00FF00.toInt())
+                    endGlobal()
+
+                    Text("First", color = firstColor)
+                    Text("Second", color = secondColor)
+                }
+            }
+
+        val scopedBytes =
+            createRcBuffer(RcProfile(testProfile)) {
+                Box {
+                    val (firstColor, secondColor) =
+                        global {
+                            val c1 = remoteNamedColor("color.first", 0xFFFF0000.toInt())
+                            val c2 = remoteNamedColor("color.second", 0xFF00FF00.toInt())
+                            c1 to c2
+                        }
+
+                    Text("First", color = firstColor)
+                    Text("Second", color = secondColor)
+                }
+            }
+
+        assertArrayEquals(scopedBytes, directBytes)
+    }
+}

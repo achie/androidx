@@ -24,14 +24,14 @@ import androidx.annotation.GuardedBy
 import androidx.annotation.VisibleForTesting
 import androidx.camera.camera2.compat.StreamConfigurationMapCompat
 import androidx.camera.camera2.compat.quirk.CameraQuirks
-import androidx.camera.camera2.compat.workaround.OutputSizesCorrector
+import androidx.camera.camera2.compat.workaround.ExtraSupportedSurfaceCombinationsContainer
 import androidx.camera.camera2.config.CameraAppComponent
 import androidx.camera.camera2.config.CameraModule
 import androidx.camera.camera2.impl.Camera2Logger
 import androidx.camera.camera2.impl.FeatureCombinationQueryImpl
-import androidx.camera.camera2.pipe.CameraId
 import androidx.camera.camera2.pipe.CameraPipe
 import androidx.camera.camera2.pipe.DoNotDisturbException
+import androidx.camera.common.CameraId
 import androidx.camera.core.InitializationException
 import androidx.camera.core.featuregroup.impl.FeatureCombinationQuery
 import androidx.camera.core.impl.AttachedSurfaceInfo
@@ -42,6 +42,7 @@ import androidx.camera.core.impl.SurfaceConfig
 import androidx.camera.core.impl.SurfaceStreamSpecQueryResult
 import androidx.camera.core.impl.UseCaseConfig
 import androidx.camera.core.impl.stabilization.VideoStabilization
+import androidx.camera.core.impl.utils.ContextUtil
 import androidx.core.util.Preconditions
 
 /**
@@ -51,12 +52,17 @@ import androidx.core.util.Preconditions
  * outputs, and its internal state is updated transactionally.
  */
 public class CameraSurfaceAdapter(
-    private val context: Context,
+    context: Context,
     cameraComponent: Any?,
     availableCameraIds: Set<String>,
+    private val extraSupportedSurfaceCombinations: String? = null,
 ) : CameraDeviceSurfaceManager {
+    private val context: Context = ContextUtil.getPersistentApplicationContext(context)
     private val component = cameraComponent as CameraAppComponent
     private val lock = Any()
+
+    private val extraSupportedSurfaceCombinationsContainer =
+        ExtraSupportedSurfaceCombinationsContainer(extraSupportedSurfaceCombinations)
 
     @GuardedBy("lock")
     private var supportedSurfaceCombinationMap = mapOf<String, SupportedSurfaceCombination>()
@@ -136,10 +142,7 @@ public class CameraSurfaceAdapter(
                 val cameraQuirks =
                     CameraQuirks(
                         cameraMetadata,
-                        StreamConfigurationMapCompat(
-                            streamConfigurationMap,
-                            OutputSizesCorrector(cameraMetadata, streamConfigurationMap),
-                        ),
+                        StreamConfigurationMapCompat(streamConfigurationMap, cameraMetadata),
                     )
                 newMap[cameraId] =
                     SupportedSurfaceCombination(
@@ -157,6 +160,7 @@ public class CameraSurfaceAdapter(
                         } else {
                             FeatureCombinationQuery.NO_OP_FEATURE_COMBINATION_QUERY
                         },
+                        extraSupportedSurfaceCombinationsContainer,
                     )
             }
         } catch (e: DoNotDisturbException) {
@@ -208,7 +212,7 @@ public class CameraSurfaceAdapter(
      */
     @VisibleForTesting
     internal fun checkIfSupportedCombinationExist(cameraId: String): Boolean {
-        return supportedSurfaceCombinationMap.containsKey(cameraId)
+        return synchronized(lock) { supportedSurfaceCombinationMap.containsKey(cameraId) }
     }
 
     /**
@@ -235,7 +239,7 @@ public class CameraSurfaceAdapter(
         videoStabilization: VideoStabilization,
         hasVideoCapture: Boolean,
         isFeatureComboInvocation: Boolean,
-        findMaxSupportedFrameRate: Boolean,
+        findSupportedFrameRateRanges: Boolean,
     ): SurfaceStreamSpecQueryResult {
 
         Preconditions.checkArgument(
@@ -256,7 +260,7 @@ public class CameraSurfaceAdapter(
             videoStabilization,
             hasVideoCapture,
             isFeatureComboInvocation,
-            findMaxSupportedFrameRate,
+            findSupportedFrameRateRanges,
         )
     }
 }

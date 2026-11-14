@@ -26,14 +26,13 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -42,7 +41,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class TextFieldToolbarTest {
-    @get:Rule val rule = createComposeRule(StandardTestDispatcher())
+    @get:Rule val rule = createComposeRule()
 
     val TAG = "TestBasicTextField"
 
@@ -55,11 +54,12 @@ class TextFieldToolbarTest {
     @Test
     fun btf1_decorationBoxNotCallInnerTextField_longPress_doNotCrash() {
         rule.setContent {
+            @Suppress("DEPRECATION") // b/552879150
             BasicTextField(
                 modifier = Modifier.testTag(TAG),
                 value = TextFieldValue(),
                 onValueChange = {},
-                decorationBox = { innerTextField ->
+                decorationBox = {
                     Box(modifier = Modifier.size(50.dp, 50.dp).background(Color.Red))
                 },
             )
@@ -76,9 +76,7 @@ class TextFieldToolbarTest {
             BasicTextField(
                 modifier = Modifier.testTag(TAG),
                 state = state,
-                decorator = { innerTextField ->
-                    Box(modifier = Modifier.size(50.dp, 50.dp).background(Color.Red))
-                },
+                decorator = { Box(modifier = Modifier.size(50.dp, 50.dp).background(Color.Red)) },
             )
         }
 

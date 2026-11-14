@@ -14,36 +14,36 @@
  * limitations under the License.
  */
 
-@file:OptIn(ExperimentalRemotePlayerApi::class)
-
 package androidx.compose.remote.player.compose.creation
 
 import android.graphics.Path
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.remote.core.CoreDocument
 import androidx.compose.remote.core.RcProfiles.PROFILE_WIDGETS
 import androidx.compose.remote.core.operations.BitmapFontData
 import androidx.compose.remote.core.operations.Header
 import androidx.compose.remote.creation.RemoteComposeWriter
-import androidx.compose.remote.player.compose.ExperimentalRemotePlayerApi
-import androidx.compose.remote.player.compose.RemoteComposePlayerFlags
+import androidx.compose.remote.creation.compose.capture.heightDp
+import androidx.compose.remote.creation.compose.capture.widthDp
 import androidx.compose.remote.player.compose.RemoteDocumentPlayer
 import androidx.compose.remote.player.compose.SCREENSHOT_GOLDEN_DIRECTORY
-import androidx.compose.remote.player.compose.test.rule.ComposeScreenshotTestRule
 import androidx.compose.remote.player.compose.test.util.createBitmap
 import androidx.compose.remote.player.compose.test.util.getCoreDocument
+import androidx.compose.remote.player.compose.test.utils.RemoteScreenshotTestRule
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
 import androidx.test.filters.SdkSuppress
 import androidx.test.screenshot.matchers.MSSIMMatcher
-import org.junit.After
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,42 +52,14 @@ import org.junit.runners.JUnit4
 @MediumTest
 @SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
 @RunWith(JUnit4::class)
-class DrawOperationsComposeTest {
+class DrawOperationsTest {
     // Remote Compose player is called directly in this test so it uses a Compose rule to avoid
     // nesting Remote Compose players.
     @get:Rule
     val composeTestRule =
-        ComposeScreenshotTestRule(
+        RemoteScreenshotTestRule(
             moduleDirectory = SCREENSHOT_GOLDEN_DIRECTORY,
-            matcher = MSSIMMatcher(threshold = 0.999),
-        )
-
-    @Before
-    fun setUp() {
-        RemoteComposePlayerFlags.isViewPlayerEnabled = false
-    }
-
-    @After
-    fun tearDown() {
-        RemoteComposePlayerFlags.isViewPlayerEnabled = true
-    }
-
-    @Test
-    fun drawOperationsInGrid() {
-        composeTestRule.drawOperationsInGrid()
-    }
-}
-
-@MediumTest
-@SdkSuppress(minSdkVersion = 35, maxSdkVersion = 35)
-@RunWith(JUnit4::class)
-class DrawOperationsViewTest {
-    // Remote Compose player is called directly in this test so it uses a Compose rule to avoid
-    // nesting Remote Compose players.
-    @get:Rule
-    val composeTestRule =
-        ComposeScreenshotTestRule(
-            moduleDirectory = SCREENSHOT_GOLDEN_DIRECTORY,
+            context = ApplicationProvider.getApplicationContext(),
             matcher = MSSIMMatcher(threshold = 0.999),
         )
 
@@ -97,7 +69,7 @@ class DrawOperationsViewTest {
     }
 }
 
-private fun ComposeScreenshotTestRule.drawOperationsInGrid() {
+private fun RemoteScreenshotTestRule.drawOperationsInGrid() {
     val documents: Array<CoreDocument> =
         arrayOf(
             drawBitmap(),
@@ -129,34 +101,44 @@ private fun ComposeScreenshotTestRule.drawOperationsInGrid() {
             drawTweenPath(),
             drawTweenPathWithPath(),
             drawOutsideBounds(),
+            drawBitmapFontTextRunWithGlyphSpacing(),
+            drawBitmapTextAnchoredWithGlyphSpacing(),
         )
 
     val columns = 5
 
-    runScreenshotTest {
-        val density = LocalDensity.current.density
-        val itemWidth = (100f / density).toInt()
-        val itemHeight = (100f / density).toInt()
+    composeTestRule.setContent {
+        Box(
+            modifier =
+                Modifier.width(remoteCreationDisplayInfo.widthDp)
+                    .height(remoteCreationDisplayInfo.heightDp)
+                    .testTag(RemoteScreenshotTestRule.ROOT_TEST_TAG)
+        ) {
+            val density = LocalDensity.current.density
+            val itemWidth = (100f / density).toInt()
+            val itemHeight = (100f / density).toInt()
 
-        Column(modifier = Modifier.fillMaxSize()) {
-            for (i in 0 until documents.size step columns) {
-                Row {
-                    for (j in 0 until columns) {
-                        val index = i + j
-                        if (index >= documents.size) break
+            Column(modifier = Modifier.fillMaxSize()) {
+                for (i in 0 until documents.size step columns) {
+                    Row {
+                        for (j in 0 until columns) {
+                            val index = i + j
+                            if (index >= documents.size) break
 
-                        RemoteDocumentPlayer(
-                            documents[index],
-                            itemWidth,
-                            itemHeight,
-                            modifier = Modifier.padding(10.dp).testTag("index=$index"),
-                            debugMode = 1,
-                        )
+                            RemoteDocumentPlayer(
+                                documents[index],
+                                itemWidth,
+                                itemHeight,
+                                modifier = Modifier.padding(10.dp).testTag("index=$index"),
+                                debugMode = 1,
+                            )
+                        }
                     }
                 }
             }
         }
     }
+    verifyScreenshot()
 }
 
 private fun drawBitmap() = getCoreDocument {
@@ -330,7 +312,19 @@ private fun drawBitmapFontTextRun() = getCoreDocument {
             BitmapFontData.Glyph("B", bitmapId, 10, 0, 0, 0, 10, 10),
         )
     val bitmapFontId = addBitmapFont(glyphs)
-    drawBitmapFontTextRun(textId, bitmapFontId, 0, 2, 10f, 50f)
+    drawBitmapFontTextRun(textId, bitmapFontId, 0, 2, 10f, 50f, 0f)
+}
+
+private fun drawBitmapFontTextRunWithGlyphSpacing() = getCoreDocument {
+    val textId = textCreateId("AB")
+    val bitmapId = storeBitmap(createBitmap())
+    val glyphs =
+        arrayOf(
+            BitmapFontData.Glyph("A", bitmapId, 0, 0, 0, 0, 10, 10),
+            BitmapFontData.Glyph("B", bitmapId, 10, 0, 0, 0, 10, 10),
+        )
+    val bitmapFontId = addBitmapFont(glyphs)
+    drawBitmapFontTextRun(textId, bitmapFontId, 0, 2, 10f, 50f, -10f)
 }
 
 private fun drawTextAnchored() = getCoreDocument {
@@ -353,7 +347,7 @@ private fun drawBitmapTextAnchored() =
                 BitmapFontData.Glyph("B", bitmapId, 10, 0, 0, 0, 10, 10),
             )
         val bitmapFontId = addBitmapFont(glyphs)
-        drawBitmapTextAnchored("AB", bitmapFontId, 0f, 2f, 50f, 50f, 0.5f, 0.5f)
+        drawBitmapTextAnchored("AB", bitmapFontId, 0f, 2f, 50f, 50f, 0.5f, 0.5f, 0f)
     }
 
 private fun drawBitmapTextAnchoredWithTextId() =
@@ -368,7 +362,21 @@ private fun drawBitmapTextAnchoredWithTextId() =
                 BitmapFontData.Glyph("B", bitmapId, 10, 0, 0, 0, 10, 10),
             )
         val bitmapFontId = addBitmapFont(glyphs)
-        drawBitmapTextAnchored(textId, bitmapFontId, 0f, 2f, 50f, 50f, 0.5f, 0.5f)
+        drawBitmapTextAnchored(textId, bitmapFontId, 0f, 2f, 50f, 50f, 0.5f, 0.5f, 0f)
+    }
+
+private fun drawBitmapTextAnchoredWithGlyphSpacing() =
+    getCoreDocument(
+        extraTags = arrayOf(RemoteComposeWriter.HTag(Header.DOC_PROFILES, PROFILE_WIDGETS))
+    ) {
+        val bitmapId = storeBitmap(createBitmap())
+        val glyphs =
+            arrayOf(
+                BitmapFontData.Glyph("A", bitmapId, 0, 0, 0, 0, 10, 10),
+                BitmapFontData.Glyph("B", bitmapId, 10, 0, 0, 0, 10, 10),
+            )
+        val bitmapFontId = addBitmapFont(glyphs)
+        drawBitmapTextAnchored("AB", bitmapFontId, 0f, 2f, 50f, 50f, 0.5f, 0.5f, -10f)
     }
 
 private fun drawTweenPath() = getCoreDocument {

@@ -27,7 +27,28 @@ import androidx.compose.ui.unit.IntOffset
 /** Receiver scope being used by the item content parameter of [LazyVerticalGrid]. */
 @Stable
 @LazyGridScopeMarker
-sealed interface LazyGridItemScope {
+public sealed interface LazyGridItemScope {
+    /**
+     * Returns the number of cross-axis cells resolved from [GridCells].
+     *
+     * Equals the number of columns in [LazyVerticalGrid] or rows in [LazyHorizontalGrid], matching
+     * [LazyGridItemSpanScope.maxLineSpan] and [LazyGridLayoutInfo.maxSpan]. For example, in a
+     * 3-column [LazyVerticalGrid], this value is `3` for every item regardless of its
+     * [GridItemSpan].
+     *
+     * [LazyVerticalGrid] and [LazyHorizontalGrid] resolve [GridCells] constraints before
+     * subcomposing items, so this property returns the resolved count (always at least `1`) on the
+     * first frame.
+     *
+     * Backed by snapshot [androidx.compose.runtime.State]: reading this property during item
+     * composition, layout (such as [androidx.compose.ui.layout.layout]), or draw (such as
+     * [androidx.compose.ui.draw.drawBehind]) invalidates only that phase when the resolved count
+     * changes (for example, when resizing a [GridCells.Adaptive] grid).
+     *
+     * @sample androidx.compose.foundation.samples.LazyGridCrossAxisCellCountSample
+     */
+    public val crossAxisCellCount: Int
+
     /**
      * This modifier animates the item appearance (fade in), disappearance (fade out) and placement
      * changes (such as an item reordering).
@@ -44,7 +65,7 @@ sealed interface LazyGridItemScope {
      * @param fadeOutSpec an animation specs to use for animating the item disappearance. When null
      *   is provided the item will be disappearance without animations.
      */
-    fun Modifier.animateItem(
+    public fun Modifier.animateItem(
         fadeInSpec: FiniteAnimationSpec<Float>? = spring(stiffness = Spring.StiffnessMediumLow),
         placementSpec: FiniteAnimationSpec<IntOffset>? =
             spring(

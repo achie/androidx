@@ -13,27 +13,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("TYPEALIAS_EXPANSION_DEPRECATION")
 
 package androidx.xr.scenecore
 
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
-import androidx.xr.arcore.Plane
+import androidx.annotation.RestrictTo
+import androidx.xr.arcore.PlaneLabel
+import androidx.xr.arcore.PlaneType
+import androidx.xr.runtime.RequiresSpatialApi
+import androidx.xr.runtime.SpatialApiVersions
 import androidx.xr.runtime.math.FloatSize2d
 import androidx.xr.runtime.math.FloatSize3d
 import androidx.xr.runtime.math.IntSize2d
-import androidx.xr.runtime.math.Matrix4
-import androidx.xr.runtime.math.Matrix4.Companion.fromQuaternion
-import androidx.xr.runtime.math.Quaternion
 import androidx.xr.runtime.math.Ray
-import androidx.xr.runtime.math.Vector3
 import androidx.xr.scenecore.HitTestResult.SurfaceType
 import androidx.xr.scenecore.InputEvent.HitInfo
 import androidx.xr.scenecore.ScenePose.HitTestFilter
+import androidx.xr.scenecore.SurfaceEntity.Shape.TriangleMesh
 import androidx.xr.scenecore.runtime.AnchorEntity as RtAnchorEntity
 import androidx.xr.scenecore.runtime.AnchorPlacement as RtAnchorPlacement
 import androidx.xr.scenecore.runtime.Dimensions as RtDimensions
+import androidx.xr.scenecore.runtime.DirectExecutor
+import androidx.xr.scenecore.runtime.DistanceAttenuation as RtDistanceAttenuation
 import androidx.xr.scenecore.runtime.HitTestResult as RtHitTestResult
 import androidx.xr.scenecore.runtime.HitTestResult.HitTestSurfaceType as RtHitTestSurfaceType
 import androidx.xr.scenecore.runtime.InputEvent as RtInputEvent
@@ -44,6 +45,8 @@ import androidx.xr.scenecore.runtime.PerceivedResolutionResult as RtPerceivedRes
 import androidx.xr.scenecore.runtime.PixelDimensions as RtPixelDimensions
 import androidx.xr.scenecore.runtime.PlaneSemantic as RtPlaneSemantic
 import androidx.xr.scenecore.runtime.PlaneType as RtPlaneType
+import androidx.xr.scenecore.runtime.PointSourceParams as RtPointSourceParams
+import androidx.xr.scenecore.runtime.ResizableComponent
 import androidx.xr.scenecore.runtime.ResizeEvent as RtResizeEvent
 import androidx.xr.scenecore.runtime.ScenePose.HitTestFilter as RtHitTestFilter
 import androidx.xr.scenecore.runtime.SceneRuntime
@@ -52,22 +55,12 @@ import androidx.xr.scenecore.runtime.SpatialCapabilities as RtSpatialCapabilitie
 import androidx.xr.scenecore.runtime.SpatialPointerIcon as RtSpatialPointerIcon
 import androidx.xr.scenecore.runtime.SpatialPointerIconType as RtSpatialPointerIconType
 import androidx.xr.scenecore.runtime.SpatialVisibility as RtSpatialVisibility
+import androidx.xr.scenecore.runtime.SurfaceEntity.Shape.TriangleMesh as RtTriangleMesh
 import androidx.xr.scenecore.runtime.TextureSampler as RtTextureSampler
 import com.google.common.util.concurrent.ListenableFuture
-import java.util.concurrent.Executor
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
-
-internal class HandlerExecutor(val handler: Handler) : Executor {
-    override fun execute(command: Runnable) {
-        handler.post(command)
-    }
-
-    companion object {
-        val mainThreadExecutor: Executor = HandlerExecutor(Handler(Looper.getMainLooper()))
-    }
-}
 
 /**
  * Extension function that converts a [androidx.xr.runtime.math.FloatSize3d] to
@@ -103,7 +96,8 @@ internal fun RtDimensions.toFloatSize2d(): FloatSize2d {
  * Extension function that converts a [androidx.xr.runtime.math.IntSize2d] to
  * [androidx.xr.scenecore.runtime.PixelDimensions].
  */
-internal fun IntSize2d.toRtPixelDimensions(): RtPixelDimensions {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun IntSize2d.toRtPixelDimensions(): RtPixelDimensions {
     return RtPixelDimensions(width, height)
 }
 
@@ -111,18 +105,18 @@ internal fun IntSize2d.toRtPixelDimensions(): RtPixelDimensions {
  * Extension function that converts a [androidx.xr.scenecore.runtime.PixelDimensions] to
  * [IntSize2d].
  */
-internal fun RtPixelDimensions.toIntSize2d(): IntSize2d {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtPixelDimensions.toIntSize2d(): IntSize2d {
     return IntSize2d(width, height)
 }
 
 /**
  * Extension function that converts [PlaneOrientation] to [androidx.xr.scenecore.runtime.PlaneType].
  */
-internal fun Int.toRtPlaneType(): RtPlaneType {
+internal fun PlaneOrientation.toRtPlaneType(): RtPlaneType {
     return when (this) {
         PlaneOrientation.HORIZONTAL -> RtPlaneType.HORIZONTAL
         PlaneOrientation.VERTICAL -> RtPlaneType.VERTICAL
-        PlaneOrientation.ANY -> RtPlaneType.ANY
         else -> error("Unknown Plane Type: $PlaneOrientation")
     }
 }
@@ -131,13 +125,12 @@ internal fun Int.toRtPlaneType(): RtPlaneType {
  * Extension function that converts [PlaneSemanticType] to
  * [androidx.xr.scenecore.runtime.PlaneSemantic].
  */
-internal fun Int.toRtPlaneSemantic(): RtPlaneSemantic {
+internal fun PlaneSemanticType.toRtPlaneSemantic(): RtPlaneSemantic {
     return when (this) {
         PlaneSemanticType.WALL -> RtPlaneSemantic.WALL
         PlaneSemanticType.FLOOR -> RtPlaneSemantic.FLOOR
         PlaneSemanticType.CEILING -> RtPlaneSemantic.CEILING
         PlaneSemanticType.TABLE -> RtPlaneSemantic.TABLE
-        PlaneSemanticType.ANY -> RtPlaneSemantic.ANY
         else -> error("Unknown Plane Semantic: $PlaneSemanticType")
     }
 }
@@ -149,6 +142,7 @@ internal fun Space.toRtSpace(): Int {
     return when (this) {
         Space.PARENT -> RtSpace.PARENT
         Space.ACTIVITY -> RtSpace.ACTIVITY
+        @Suppress("DEPRECATION") // TODO - b/415320653
         Space.REAL_WORLD -> RtSpace.REAL_WORLD
         else -> error("Unknown Space Value: $this")
     }
@@ -157,9 +151,12 @@ internal fun Space.toRtSpace(): Int {
 /**
  * Extension function that converts a [androidx.xr.scenecore.runtime.MoveEvent] to a [MoveEvent].
  */
-internal fun RtMoveEvent.toMoveEvent(entityManager: EntityManager): MoveEvent {
-
-    disposedEntity?.let { entityManager.removeEntity(it) }
+internal fun RtMoveEvent.toMoveEvent(entityRegistry: EntityRegistry): MoveEvent? {
+    disposedEntity?.let { entityRegistry.removeEntity(it) }
+    // This can be null if the parent Entity wrapper has been garbage-collected (e.g., for an
+    // AnchorEntity that the application didn't retain a strong reference to) while a runtime
+    // event was being processed.
+    val parentEntity = entityRegistry.getEntityForRtEntity(initialParent) ?: return null
     return MoveEvent(
         moveState.toMoveState(),
         Ray(initialInputRay.origin, initialInputRay.direction),
@@ -168,18 +165,18 @@ internal fun RtMoveEvent.toMoveEvent(entityManager: EntityManager): MoveEvent {
         currentPose,
         previousScale.x,
         currentScale.x,
-        entityManager.getEntityForRtEntity(initialParent)!!,
+        parentEntity,
         updatedParent?.let {
-            entityManager.getEntityForRtEntity(it)
-                ?: AnchorEntity.create(it as RtAnchorEntity, entityManager)
+            entityRegistry.getEntityForRtEntity(it)
+                ?: AnchorSpace.create(it as RtAnchorEntity, entityRegistry)
         },
     )
 }
 
 /** Extension function that converts a [RtHitInfo] to a [HitInfo]. */
-internal fun RtHitInfo.toHitInfo(entityManager: EntityManager): HitInfo? {
+internal fun RtHitInfo.toHitInfo(entityRegistry: EntityRegistry): HitInfo? {
     // TODO: b/377541143 - Replace instance equality check in EntityManager.
-    val hitEntity = entityManager.getEntityForRtEntity(inputEntity)
+    val hitEntity = entityRegistry.getEntityForRtEntity(inputEntity)
     return if (hitEntity == null) {
         null
     } else {
@@ -190,9 +187,9 @@ internal fun RtHitInfo.toHitInfo(entityManager: EntityManager): HitInfo? {
 /**
  * Extension function that converts a [androidx.xr.scenecore.runtime.InputEvent] to a [InputEvent].
  */
-internal fun RtInputEvent.toInputEvent(entityManager: EntityManager): InputEvent {
+internal fun RtInputEvent.toInputEvent(entityRegistry: EntityRegistry): InputEvent {
     val hitInfos = mutableListOf<HitInfo>()
-    hitInfoList.forEach { it.toHitInfo(entityManager)?.let { element -> hitInfos.add(element) } }
+    hitInfoList.forEach { it.toHitInfo(entityRegistry)?.let { element -> hitInfos.add(element) } }
     return InputEvent(
         source.toInputEventSource(),
         pointerType.toInputEventPointer(),
@@ -210,7 +207,8 @@ private fun checkBitfield(value: Int, mask: Int): Boolean = ((value and mask) ==
  * Extension function that converts a [androidx.xr.scenecore.runtime.SpatialCapabilities] to a
  * [SpatialCapability].
  */
-internal fun RtSpatialCapabilities.toSpatialCapabilities(): Set<SpatialCapability> {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtSpatialCapabilities.toSpatialCapabilities(): Set<SpatialCapability> {
     val caps = HashSet<SpatialCapability>()
     with(RtSpatialCapabilities) {
         if (checkBitfield(capabilities, SPATIAL_CAPABILITY_3D_CONTENT)) {
@@ -239,7 +237,8 @@ internal fun RtSpatialCapabilities.toSpatialCapabilities(): Set<SpatialCapabilit
  * Extension function that converts a [androidx.xr.scenecore.runtime.SpatialVisibility] to a
  * [SpatialVisibility] constant.
  */
-internal fun RtSpatialVisibility.toSpatialVisibility(): SpatialVisibility {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtSpatialVisibility.toSpatialVisibility(): SpatialVisibility {
     return visibility.toSpatialVisibilityValue()
 }
 
@@ -272,23 +271,29 @@ internal fun Set<AnchorPlacement>.toRtAnchorPlacement(
     return rtAnchorPlacementSet
 }
 
-/** Extension function that converts an ARCore [Plane.Type] to a Scene [PlaneOrientationValue] */
-internal fun Plane.Type.toSceneCoreOrientation(): @PlaneOrientationValue Int =
+/** Extension function that converts an ARCore [PlaneType] to a Scene [PlaneOrientation] */
+internal fun PlaneType.toSceneCoreOrientation(): PlaneOrientation =
     when (this) {
-        Plane.Type.HORIZONTAL_UPWARD_FACING -> PlaneOrientation.HORIZONTAL
-        Plane.Type.HORIZONTAL_DOWNWARD_FACING -> PlaneOrientation.HORIZONTAL
-        Plane.Type.VERTICAL -> PlaneOrientation.VERTICAL
+        PlaneType.HORIZONTAL_UPWARD_FACING -> PlaneOrientation.HORIZONTAL
+        PlaneType.HORIZONTAL_DOWNWARD_FACING -> PlaneOrientation.HORIZONTAL
+        PlaneType.VERTICAL -> PlaneOrientation.VERTICAL
         else -> error("Unknown plane orientation: $this")
     }
 
-/** Extension function that converts an ARCore [Plane.Label] to a Scene [PlaneSemanticTypeValue] */
-internal fun Plane.Label.toSceneCoreSemanticType(): @PlaneSemanticTypeValue Int =
+/**
+ * Extension function that converts an ARCore [androidx.xr.arcore.PlaneLabel] to a Scene
+ * [PlaneSemanticType]
+ */
+// TODO: b/500464864 - Cleanup when PlaneSemanticType.ANY is removed.
+@Suppress("DEPRECATION")
+internal fun PlaneLabel.toSceneCoreSemanticType(): PlaneSemanticType =
     when (this) {
-        Plane.Label.FLOOR -> PlaneSemanticType.FLOOR
-        Plane.Label.TABLE -> PlaneSemanticType.TABLE
-        Plane.Label.WALL -> PlaneSemanticType.WALL
-        Plane.Label.CEILING -> PlaneSemanticType.CEILING
-        Plane.Label.UNKNOWN -> PlaneSemanticType.ANY
+        PlaneLabel.FLOOR -> PlaneSemanticType.FLOOR
+        PlaneLabel.TABLE -> PlaneSemanticType.TABLE
+        PlaneLabel.WALL -> PlaneSemanticType.WALL
+        PlaneLabel.CEILING -> PlaneSemanticType.CEILING
+        // TODO: b/500464864 - Cleanup when PlaneSemanticType.ANY is removed.
+        PlaneLabel.UNKNOWN -> PlaneSemanticType.ANY
         else -> error("Unknown semantic type: $this")
     }
 
@@ -448,7 +453,8 @@ internal fun Int.toRtHitTestFilter(): Int {
 }
 
 /** Extension function that converts a [RtHitTestSurfaceType] to a [HitTestResult.SurfaceType]. */
-internal fun Int.toHitTestSurfaceType(): Int {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun Int.toHitTestSurfaceType(): Int {
     return when (this) {
         RtHitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_UNKNOWN -> SurfaceType.UNKNOWN
         RtHitTestSurfaceType.HIT_TEST_RESULT_SURFACE_TYPE_PLANE -> SurfaceType.PLANE
@@ -461,16 +467,12 @@ internal fun Int.toHitTestSurfaceType(): Int {
  * Extension function that converts a [androidx.xr.scenecore.runtime.HitTestResult] to a
  * [HitTestResult].
  */
-internal fun RtHitTestResult.toHitTestResult(): HitTestResult? {
-    if (hitPosition == null) {
-        return null
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtHitTestResult.toHitTestResult(): HitTestResult? {
+    return if (hitPosition == null) {
+        null
     } else {
-        return HitTestResult(
-            hitPosition!!,
-            surfaceNormal,
-            surfaceType.toHitTestSurfaceType(),
-            distance,
-        )
+        HitTestResult(hitPosition!!, surfaceNormal, surfaceType.toHitTestSurfaceType(), distance)
     }
 }
 
@@ -526,93 +528,38 @@ internal fun AlphaMode.toRtKhronosPbrMaterialSpec(): RtKhronosPbrMaterialSpec {
     )
 }
 
-/**
- * Gets the rotation relative to the plane to rotate the entity to be parallel to the plane.
- *
- * @param proposedRotation the initial rotation of the entity.
- * @param planeRotation the rotation of the plane.
- * @return the rotation of the panel rotated to be parallel to the plane relative to the plane.
- */
-internal fun rotateEntityToPlane(
-    proposedRotation: Quaternion,
-    planeRotation: Quaternion,
-): Quaternion {
-    // The y-vector of the plane is the normal of the plane. We need to rotate the panel so that
-    // the y-vector of the panel points along the plane and the z-vector is normal to the plane.
-    // Otherwise the panel will be sticking out of the plane.
-
-    // Create a rotation matrix from the quaternion of the plane to extract the normal.
-    val planeMatrix = fromQuaternion(planeRotation)
-    // Create a rotation matrix from the quaternion for the proposed pose.
-    val proposedRotationMatrix = fromQuaternion(proposedRotation)
-
-    // The z-vector of the panel should be the normal of the plane (which is the y-vector of the
-    // plane) so that the panel will be facing out of the plane.
-    val planeMatrixData = planeMatrix.data
-    val zRotation =
-        Vector3(planeMatrixData[4], planeMatrixData[5], planeMatrixData[6]).toNormalized()
-    // Get the x-vector of the panel so that we can use it to create the y-vector that is in the
-    // direction of the panel.
-    val poseMatrixData = proposedRotationMatrix.data
-    val poseVectorX =
-        Vector3(poseMatrixData[0], poseMatrixData[1], poseMatrixData[2]).toNormalized()
-    // The y-vector is the cross product of the panel x-vector and the z-vector.
-    val yRotation = zRotation.cross(poseVectorX).toNormalized()
-    // The x-vector is the cross product of the y-vector and the z-vector so that they will all
-    // be orthogonal.
-    val xRotation = yRotation.cross(zRotation).toNormalized()
-    // Create a new rotation matrix from the x, y, and z vectors.
-    val rotationMatrix = getRotationMatrixFromAxes(xRotation, yRotation, zRotation)
-    return rotationMatrix.rotation
-}
-
-private fun getRotationMatrixFromAxes(xAxis: Vector3, yAxis: Vector3, zAxis: Vector3): Matrix4 {
-    return Matrix4(
-        floatArrayOf(
-            xAxis.x,
-            xAxis.y,
-            xAxis.z,
-            0f,
-            yAxis.x,
-            yAxis.y,
-            yAxis.z,
-            0f,
-            zAxis.x,
-            zAxis.y,
-            zAxis.z,
-            0f,
-            0f,
-            0f,
-            0f,
-            1f,
-        )
-    )
-}
+@ResizableComponent.GeometryGestureType
+internal fun ResizeGestureMode.toRtGeometryInteractionType(): Int =
+    when (this) {
+        ResizeGestureMode.NONE -> ResizableComponent.GeometryGestureType.NONE
+        ResizeGestureMode.ONE_HANDED -> ResizableComponent.GeometryGestureType.ONE_HANDED
+        ResizeGestureMode.TWO_HANDED -> ResizableComponent.GeometryGestureType.TWO_HANDED
+        else -> ResizableComponent.GeometryGestureType.ALL
+    }
 
 /**
  * Extension function that converts a [androidx.xr.scenecore.runtime.PerceivedResolutionResult] to
  * [PerceivedResolutionResult].
  */
-internal fun RtPerceivedResolutionResult.toPerceivedResolutionResult(): PerceivedResolutionResult {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtPerceivedResolutionResult.toPerceivedResolutionResult(): PerceivedResolutionResult {
     return when (this) {
         is RtPerceivedResolutionResult.Success ->
             PerceivedResolutionResult.Success(this.perceivedResolution.toIntSize2d())
         is RtPerceivedResolutionResult.EntityTooClose -> PerceivedResolutionResult.EntityTooClose()
-        is RtPerceivedResolutionResult.InvalidCameraView ->
-            PerceivedResolutionResult.InvalidCameraView()
+        is RtPerceivedResolutionResult.InvalidRenderViewpoint ->
+            PerceivedResolutionResult.InvalidRenderViewpoint()
     }
 }
 
 internal suspend fun <T> ListenableFuture<T>.awaitSuspending(): T {
     val deferred = CompletableDeferred<T>(coroutineContext[Job])
-    val futureBeingAwaited = this
 
     this.addListener(
         Runnable {
             try {
                 deferred.complete(this.get())
             } catch (e: Throwable) {
-                Log.e("AwaitSuspending", "ListenableFuture failed: $futureBeingAwaited", e)
                 deferred.completeExceptionally(e)
             }
         },
@@ -622,8 +569,93 @@ internal suspend fun <T> ListenableFuture<T>.awaitSuspending(): T {
     return deferred.await()
 }
 
-internal object DirectExecutor : Executor {
-    override fun execute(command: Runnable) {
-        command.run()
+internal fun RtTriangleMesh.toTriangleMesh(): TriangleMesh {
+    return TriangleMesh(positions = positions, texCoords = texCoords, indices = indices)
+}
+
+internal fun TriangleMesh.toRtTriangleMesh(): RtTriangleMesh {
+    return RtTriangleMesh(positions = positions, texCoords = texCoords, indices = indices)
+}
+
+/* Spatial Audio */
+@RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+internal fun RtDistanceAttenuation.toDistanceAttenuation(): DistanceAttenuation {
+    return when (distanceRolloffModel) {
+        RtDistanceAttenuation.ROLLOFF_MODEL_AUTO -> DistanceAttenuation.Auto
+        RtDistanceAttenuation.ROLLOFF_MODEL_NONE -> DistanceAttenuation.None
+        RtDistanceAttenuation.ROLLOFF_MODEL_NATURAL -> DistanceAttenuation.Natural(minDistance)
+        RtDistanceAttenuation.ROLLOFF_MODEL_LINEAR ->
+            DistanceAttenuation.Linear(minDistance, maxDistance, gainAtMaxDistance)
+        RtDistanceAttenuation.ROLLOFF_MODEL_CUSTOM ->
+            DistanceAttenuation.Custom(minDistance, maxDistance, gainAtMaxDistance, rolloffFactor)
+        else -> DistanceAttenuation.Auto
+    }
+}
+
+/** Extension function that converts a [RtPointSourceParams] to a [PointSourceParams]. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public fun RtPointSourceParams.toPointSourceParams(): PointSourceParams {
+    return PointSourceParams(this)
+}
+
+/** Converts a [DistanceAttenuation] to a [RtDistanceAttenuation]. */
+@RequiresSpatialApi(SpatialApiVersions.SPATIAL_API_V4)
+internal fun distanceAttenuationToRtDistanceAttenuation(
+    distanceAttenuation: DistanceAttenuation
+): RtDistanceAttenuation {
+    return when (distanceAttenuation) {
+        is DistanceAttenuation.Auto ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_AUTO,
+                1.0f,
+                500.0f,
+                0.0f,
+                1.0f,
+            )
+
+        is DistanceAttenuation.None ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_NONE,
+                1.0f,
+                500.0f,
+                1.0f,
+                0.0f,
+            )
+
+        is DistanceAttenuation.Natural ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_NATURAL,
+                distanceAttenuation.minDistance,
+                500.0f,
+                0.0f,
+                1.0f,
+            )
+
+        is DistanceAttenuation.Linear ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_LINEAR,
+                distanceAttenuation.minDistance,
+                distanceAttenuation.maxDistance,
+                distanceAttenuation.gainAtMaxDistance,
+                1.0f,
+            )
+
+        is DistanceAttenuation.Custom ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_CUSTOM,
+                distanceAttenuation.minDistance,
+                distanceAttenuation.maxDistance,
+                distanceAttenuation.gainAtMaxDistance,
+                distanceAttenuation.rolloffFactor,
+            )
+
+        else ->
+            RtDistanceAttenuation(
+                RtDistanceAttenuation.ROLLOFF_MODEL_AUTO,
+                1.0f,
+                500.0f,
+                0.0f,
+                1.0f,
+            )
     }
 }

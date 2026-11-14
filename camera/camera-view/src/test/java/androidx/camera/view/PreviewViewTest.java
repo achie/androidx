@@ -19,13 +19,19 @@ package androidx.camera.view;
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
+import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.os.Build;
 import android.util.Size;
+import android.view.Display;
+import android.view.Surface;
 import android.view.Window;
 import android.widget.FrameLayout;
 
@@ -34,9 +40,13 @@ import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCapture.ScreenFlash;
 import androidx.camera.core.SurfaceRequest;
+import androidx.camera.core.impl.Identifier;
+import androidx.camera.core.impl.SessionProcessor;
 import androidx.camera.core.impl.utils.executor.CameraXExecutors;
 import androidx.camera.testing.fakes.FakeCamera;
 import androidx.camera.testing.fakes.FakeCameraInfoInternal;
+import androidx.camera.testing.impl.fakes.FakeCameraConfig;
+import androidx.camera.testing.impl.fakes.FakeSessionProcessor;
 import androidx.camera.view.internal.compat.quirk.QuirkInjector;
 import androidx.camera.view.internal.compat.quirk.SurfaceViewNotCroppedByParentQuirk;
 import androidx.camera.view.internal.compat.quirk.SurfaceViewStretchedQuirk;
@@ -52,6 +62,8 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowWindow;
 
+import java.util.Collections;
+
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {Config.ALL_SDKS})
 public class PreviewViewTest {
@@ -62,11 +74,7 @@ public class PreviewViewTest {
     @Before
     public void setUp() {
         mPreviewView = new PreviewView(mAppContext);
-        try {
-            mWindow = ShadowWindow.create(mAppContext);
-        } catch (ClassNotFoundException e) {
-            Assume.assumeTrue("Failed to create shadow window", false);
-        }
+        mWindow = ShadowWindow.create(mAppContext);
     }
 
     @After
@@ -80,6 +88,38 @@ public class PreviewViewTest {
         // Assert: SurfaceView is used.
         assertThat(PreviewView.shouldUseTextureView(
                 createSurfaceRequestCompatibleWithSurfaceView(),
+                PreviewView.ImplementationMode.PERFORMANCE)).isFalse();
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.Q)
+    public void noCameraTransform_useSurfaceView() {
+        // Assert: SurfaceView is used, since it can apply the remaining rotation on API 29+.
+        assertThat(PreviewView.shouldUseTextureView(
+                createSurfaceRequestWithoutCameraTransform(),
+                PreviewView.ImplementationMode.PERFORMANCE)).isFalse();
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.N_MR1, maxSdk = Build.VERSION_CODES.P)
+    public void noCameraTransformBelowApi29_useTextureView() {
+        // Assert: TextureView is used, since SurfaceView can't apply the remaining rotation.
+        assertThat(PreviewView.shouldUseTextureView(
+                createSurfaceRequestWithoutCameraTransform(),
+                PreviewView.ImplementationMode.PERFORMANCE)).isTrue();
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.N_MR1, maxSdk = Build.VERSION_CODES.P)
+    public void noCameraTransformBelowApi29_notReuseSurfaceViewImplementation() {
+        // Arrange:
+        FrameLayout parent = new FrameLayout(ApplicationProvider.getApplicationContext());
+        PreviewTransformation transformation = new PreviewTransformation();
+
+        // Assert:
+        assertThat(PreviewView.shouldReuseImplementation(
+                new SurfaceViewImplementation(parent, transformation),
+                createSurfaceRequestWithoutCameraTransform(),
                 PreviewView.ImplementationMode.PERFORMANCE)).isFalse();
     }
 
@@ -103,6 +143,36 @@ public class PreviewViewTest {
         assertThat(PreviewView.shouldUseTextureView(
                 createSurfaceRequestCompatibleWithSurfaceView(),
                 PreviewView.ImplementationMode.PERFORMANCE)).isTrue();
+    }
+
+    @Test
+    @Config(sdk = {Build.VERSION_CODES.TIRAMISU})
+    public void surfaceViewExtensionSessionQuirk_withExtension_useTextureView() {
+        // Assert: TextureView is used when Extension is enabled on API 33 where
+        // SurfaceViewNotSupportedInExtensionSessionQuirk is loaded.
+        assertThat(PreviewView.shouldUseTextureView(
+                createSurfaceRequestCompatibleWithSurfaceView(/* isExtensionEnabled= */ true),
+                PreviewView.ImplementationMode.PERFORMANCE)).isTrue();
+    }
+
+    @Test
+    @Config(sdk = {Build.VERSION_CODES.TIRAMISU})
+    public void surfaceViewExtensionSessionQuirk_withoutExtension_useSurfaceView() {
+        // Assert: SurfaceView is still used when Extension is not enabled even if
+        // SurfaceViewNotSupportedInExtensionSessionQuirk is loaded on API 33.
+        assertThat(PreviewView.shouldUseTextureView(
+                createSurfaceRequestCompatibleWithSurfaceView(/* isExtensionEnabled= */ false),
+                PreviewView.ImplementationMode.PERFORMANCE)).isFalse();
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void surfaceViewNoExtensionSessionQuirk_withExtension_useSurfaceView() {
+        // Assert: SurfaceView is used on API 34+ where the quirk is not loaded even when
+        // Extension is enabled.
+        assertThat(PreviewView.shouldUseTextureView(
+                createSurfaceRequestCompatibleWithSurfaceView(/* isExtensionEnabled= */ true),
+                PreviewView.ImplementationMode.PERFORMANCE)).isFalse();
     }
 
     @Test
@@ -248,10 +318,33 @@ public class PreviewViewTest {
     }
 
     private SurfaceRequest createSurfaceRequestCompatibleWithSurfaceView() {
+        return createSurfaceRequestCompatibleWithSurfaceView(/* isExtensionEnabled= */ false);
+    }
+
+    private SurfaceRequest createSurfaceRequestCompatibleWithSurfaceView(
+            boolean isExtensionEnabled) {
         FakeCameraInfoInternal cameraInfoInternal = new FakeCameraInfoInternal();
         cameraInfoInternal.setImplementationType(CameraInfo.IMPLEMENTATION_TYPE_CAMERA2);
-        return new SurfaceRequest(new Size(800, 600),
-                new FakeCamera(null, cameraInfoInternal), () -> {});
+        FakeCamera fakeCamera = new FakeCamera(null, cameraInfoInternal);
+        if (isExtensionEnabled) {
+            FakeSessionProcessor sessionProcessor = new FakeSessionProcessor(
+                    /* postviewSupportedSizes= */ null,
+                    /* supportedCameraOperations= */ Collections.emptySet(),
+                    /* extensionSpecificChars= */ Collections.emptyList(),
+                    SessionProcessor.TYPE_CAMERA2_EXTENSION);
+            fakeCamera.setExtendedConfig(new FakeCameraConfig(sessionProcessor,
+                    /* postviewSupported= */ false, /* captureProcessProgressSupported= */ false,
+                    Identifier.create(new Object())));
+        }
+        return new SurfaceRequest(new Size(800, 600), fakeCamera, () -> {});
+    }
+
+    private SurfaceRequest createSurfaceRequestWithoutCameraTransform() {
+        SurfaceRequest surfaceRequest = createSurfaceRequestCompatibleWithSurfaceView();
+        surfaceRequest.updateTransformationInfo(SurfaceRequest.TransformationInfo.of(
+                new Rect(0, 0, 800, 600), /* rotationDegrees= */ 90, Surface.ROTATION_0,
+                /* hasCameraTransform= */ false, new Matrix(), /* mirroring= */ false));
+        return surfaceRequest;
     }
 
     private ScreenFlash createScreenFlash(boolean assumeNoFailure) {
@@ -306,5 +399,44 @@ public class PreviewViewTest {
 
         // 6. Verify the stopListeningToDisplayChange method was NEVER called
         Mockito.verify(previewViewSpy, never()).stopListeningToDisplayChange();
+    }
+
+    @Test
+    @Config(sdk = {Config.ALL_SDKS}, instrumentedPackages = {"androidx.camera.view"})
+    public void controllerAutoAttached_whenLayoutCompletes() {
+        PreviewView previewViewSpy = Mockito.spy(mPreviewView);
+        Display display = Mockito.mock(Display.class);
+        when(previewViewSpy.getDisplay()).thenReturn(display);
+        when(previewViewSpy.isAttachedToWindow()).thenReturn(true);
+
+        CameraController cameraController = Mockito.mock(CameraController.class);
+
+        // Set controller when dimensions are 0 (unmeasured).
+        when(previewViewSpy.getWidth()).thenReturn(0);
+        when(previewViewSpy.getHeight()).thenReturn(0);
+        previewViewSpy.setController(cameraController);
+
+        // Verify controller is not attached before layout pass.
+        verify(cameraController, never()).attachPreviewSurface(any(), any());
+
+        // Simulate layout pass with positive dimensions.
+        when(previewViewSpy.getWidth()).thenReturn(640);
+        when(previewViewSpy.getHeight()).thenReturn(480);
+        previewViewSpy.onLayout(true, 0, 0, 640, 480);
+
+        // Verify attachPreviewSurface was automatically invoked once layout completed.
+        verify(cameraController, times(1)).attachPreviewSurface(any(), any());
+
+        // Subsequent layout with same size does not trigger duplicate attachment.
+        previewViewSpy.onLayout(false, 0, 0, 640, 480);
+        verify(cameraController, times(1)).attachPreviewSurface(any(), any());
+
+        // When view is detached from window, controller is cleared.
+        previewViewSpy.onDetachedFromWindow();
+        verify(cameraController, times(1)).clearPreviewSurface();
+
+        // When re-attached and laid out, controller is auto-attached again.
+        previewViewSpy.onLayout(false, 0, 0, 640, 480);
+        verify(cameraController, times(2)).attachPreviewSurface(any(), any());
     }
 }

@@ -21,7 +21,17 @@ import androidx.annotation.RestrictTo
 /**
  * Represents a XR Runtime PointSourceParams
  *
- * @param entity the SceneCore [Entity] for this instance.
+ * @param distanceAttenuation [DistanceAttenuation] distance attenuation configuration
+ * @param directivityBalance The balance between an omnidirectional (0.0f) and a fully directional
+ *   (1.0f) sound.
+ * @param directivitySharpness Controls the sharpness of the directional sound cone. Higher values
+ *   result in a more focused sound beam. Must be >= 1.0.
+ * @param spread The spread angle value in degrees between 0.0 and 360.0
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
-public class PointSourceParams(public val entity: Entity) {}
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public data class PointSourceParams(
+    public val distanceAttenuation: DistanceAttenuation = DistanceAttenuation(),
+    public val directivityBalance: Float = 0.0f,
+    public val directivitySharpness: Float = 1.0f,
+    public val spread: Float = 0.0f,
+)

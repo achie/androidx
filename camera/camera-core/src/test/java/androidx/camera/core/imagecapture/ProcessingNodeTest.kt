@@ -20,6 +20,7 @@ import android.graphics.ImageFormat.JPEG
 import android.graphics.ImageFormat.RAW_SENSOR
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureResult
 import android.os.Build
 import android.os.Looper.getMainLooper
 import androidx.camera.core.ImageCapture
@@ -33,6 +34,7 @@ import androidx.camera.core.imagecapture.Utils.SENSOR_TO_BUFFER
 import androidx.camera.core.imagecapture.Utils.WIDTH
 import androidx.camera.core.imagecapture.Utils.createProcessingRequest
 import androidx.camera.core.imagecapture.Utils.createTakePictureRequest
+import androidx.camera.core.impl.CameraCaptureResult
 import androidx.camera.core.impl.utils.executor.CameraXExecutors.isSequentialExecutor
 import androidx.camera.core.impl.utils.executor.CameraXExecutors.mainThreadExecutor
 import androidx.camera.core.impl.utils.futures.Futures
@@ -46,6 +48,7 @@ import androidx.camera.testing.impl.TestImageUtil.createRawFakeImageProxy
 import androidx.camera.testing.impl.fakes.FakeImageInfo
 import androidx.camera.testing.impl.fakes.FakeImageProxy
 import com.google.common.truth.Truth.assertThat
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,6 +77,12 @@ class ProcessingNodeTest {
     fun setUp() {
         processingNodeIn = ProcessingNode.In.of(JPEG, listOf(JPEG))
         node.transform(processingNodeIn)
+    }
+
+    @After
+    fun tearDown() {
+        // Process any pending looper updates to prevent leaks
+        shadowOf(getMainLooper()).idle()
     }
 
     @Test
@@ -160,7 +169,7 @@ class ProcessingNodeTest {
         // Act: process the request.
         val rawImage =
             createRawFakeImageProxy(
-                CameraCaptureResultImageInfo(CAMERA_CAPTURE_RESULT),
+                captureResultImageInfo(mock(CaptureResult::class.java)),
                 WIDTH,
                 HEIGHT,
             )
@@ -198,19 +207,19 @@ class ProcessingNodeTest {
                 Futures.immediateFuture(null),
             )
 
-        // Act: process the request.
+        // Act: process the JPEG image.
         val jpegBytes = createJpegBytes(WIDTH, HEIGHT)
         val jpegImage = createJpegFakeImageProxy(jpegBytes)
         processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, jpegImage))
         shadowOf(getMainLooper()).idle()
 
-        // Assert: the image is saved.
-        assertThat(callback.onDiskResult).isNull()
+        // Assert: JPEG on-disk result is delivered.
+        assertThat(callback.onDiskResults.size).isEqualTo(1)
 
-        // Act: process the request.
+        // Act: process the RAW image.
         val rawImage =
             createRawFakeImageProxy(
-                CameraCaptureResultImageInfo(CAMERA_CAPTURE_RESULT),
+                captureResultImageInfo(mock(CaptureResult::class.java)),
                 WIDTH,
                 HEIGHT,
             )
@@ -221,8 +230,125 @@ class ProcessingNodeTest {
         processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, rawImage))
         shadowOf(getMainLooper()).idle()
 
-        // Assert: the image is saved.
-        assertThat(callback.onDiskResult).isNotNull()
+        // Assert: RAW on-disk result is also delivered, making total results 2.
+        assertThat(callback.onDiskResults.size).isEqualTo(2)
+    }
+
+    @Test
+    fun consecutiveRawCaptures_useCurrentCaptureResult() {
+        verifyConsecutiveRawCaptures(isSimultaneousCapture = false)
+    }
+
+    @Test
+    fun consecutiveRawJpegCaptures_useCurrentCaptureResult() {
+        verifyConsecutiveRawCaptures(isSimultaneousCapture = true)
+    }
+
+    private fun verifyConsecutiveRawCaptures(isSimultaneousCapture: Boolean) {
+        val formats = if (isSimultaneousCapture) listOf(RAW_SENSOR, JPEG) else listOf(RAW_SENSOR)
+        processingNodeIn = ProcessingNode.In.of(RAW_SENSOR, formats)
+        node.transform(processingNodeIn)
+        val inputs = mutableListOf<DngImage2Disk.In>()
+        val operation = mock(DngImage2Disk::class.java)
+        node.mDngImage2Disk = operation
+        `when`(operation.apply(any(DngImage2Disk.In::class.java))).thenAnswer { invocation ->
+            inputs.add(invocation.getArgument(0))
+            mock(ImageCapture.OutputFileResults::class.java)
+        }
+        val results = List(2) { mock(CaptureResult::class.java) }
+
+        // A missing result after successful captures must not reuse the last metadata.
+        (results + listOf<CaptureResult?>(null)).forEachIndexed { index, result ->
+            val callback = FakeTakePictureCallback()
+            val request =
+                ProcessingRequest(
+                    { listOf() },
+                    createTakePictureRequest(
+                        OUTPUT_FILE_OPTIONS,
+                        if (isSimultaneousCapture) SECONDARY_OUTPUT_FILE_OPTIONS else null,
+                        Rect(0, 0, WIDTH, HEIGHT),
+                        SENSOR_TO_BUFFER,
+                        ROTATION_DEGREES,
+                        /*jpegQuality=*/ 100,
+                        isSimultaneousCapture = isSimultaneousCapture,
+                    ),
+                    callback,
+                    Futures.immediateFuture(null),
+                )
+            if (isSimultaneousCapture) {
+                val jpeg = createJpegFakeImageProxy(createJpegBytes(WIDTH, HEIGHT))
+                processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, jpeg))
+            }
+            val raw = createRawFakeImageProxy(captureResultImageInfo(result), WIDTH, HEIGHT)
+            processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, raw))
+            shadowOf(getMainLooper()).idle()
+
+            if (result == null) {
+                assertThat(callback.processFailure?.imageCaptureError)
+                    .isEqualTo(ImageCapture.ERROR_UNKNOWN)
+                assertThat(inputs).hasSize(results.size)
+                assertThat(raw.isClosed).isTrue()
+            } else {
+                assertThat(callback.processFailure).isNull()
+                assertThat(callback.onDiskResults).hasSize(formats.size)
+                assertThat(inputs[index].captureResult).isSameInstanceAs(result)
+            }
+        }
+    }
+
+    private fun captureResultImageInfo(result: CaptureResult?) =
+        CameraCaptureResultImageInfo(
+            object : CameraCaptureResult by CAMERA_CAPTURE_RESULT {
+                override fun getCaptureResult(): CaptureResult? = result
+            }
+        )
+
+    @Test
+    fun processRequest_hasInMemoryResult_whenSimultaneousCaptureEnabled() {
+        // Arrange: create a request with callback.
+        processingNodeIn = ProcessingNode.In.of(RAW_SENSOR, listOf(RAW_SENSOR, JPEG))
+        node.transform(processingNodeIn)
+
+        val callback = FakeTakePictureCallback()
+        val request =
+            ProcessingRequest(
+                { listOf() },
+                createTakePictureRequest(
+                    null,
+                    null,
+                    Rect(0, 0, WIDTH, HEIGHT),
+                    SENSOR_TO_BUFFER,
+                    ROTATION_DEGREES,
+                    /*jpegQuality=*/ 100,
+                    isSimultaneousCapture = true,
+                ),
+                callback,
+                Futures.immediateFuture(null),
+            )
+
+        // Act: process the JPEG image.
+        val jpegBytes = createJpegBytes(WIDTH, HEIGHT)
+        val jpegImage = createJpegFakeImageProxy(jpegBytes)
+        processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, jpegImage))
+        shadowOf(getMainLooper()).idle()
+
+        // Assert: JPEG in-memory result is delivered.
+        assertThat(callback.inMemoryResults.size).isEqualTo(1)
+        assertThat(callback.inMemoryResults[0].format).isEqualTo(JPEG)
+
+        // Act: process the RAW image.
+        val rawImage =
+            createRawFakeImageProxy(
+                CameraCaptureResultImageInfo(CAMERA_CAPTURE_RESULT),
+                WIDTH,
+                HEIGHT,
+            )
+        processingNodeIn.edge.accept(ProcessingNode.InputPacket.of(request, rawImage))
+        shadowOf(getMainLooper()).idle()
+
+        // Assert: RAW in-memory result is also delivered, making total results 2.
+        assertThat(callback.inMemoryResults.size).isEqualTo(2)
+        assertThat(callback.inMemoryResults[1].format).isEqualTo(RAW_SENSOR)
     }
 
     @Test
@@ -326,9 +452,10 @@ class ProcessingNodeTest {
         processingNodeIn.edge.accept(input)
         shadowOf(getMainLooper()).idle()
 
-        // Assert: receives a process failure.
+        // Assert: receives a process failure and closes the input ImageProxy.
         assertThat(takePictureCallback.processFailure)
             .isInstanceOf(ImageCaptureException::class.java)
+        assertThat(image.isClosed).isTrue()
     }
 
     @Test

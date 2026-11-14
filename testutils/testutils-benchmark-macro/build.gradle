@@ -15,29 +15,55 @@
  */
 
 /**
- * This file was created using the `create_project.py` script located in the
- * `<AndroidX root>/development/project-creator` directory.
+ * This file was created using the `createProject` gradle task (./gradlew createProject)
  *
- * Please use that script when creating a new project, rather than copying an existing project and
+ * Please use the task when creating a new project, rather than copying an existing project and
  * modifying its settings.
  */
+import androidx.build.AndroidXConfig
 import androidx.build.SoftwareType
+import com.android.build.api.variant.HasAndroidTest
 
 plugins {
     id("AndroidXPlugin")
     id("com.android.library")
+    // Needed for @Composable test content in androidTest (MacrobenchUiAutomatorExtensionsTest).
+    id("AndroidXComposePlugin")
 }
 
 dependencies {
     implementation(project(":benchmark:benchmark-macro"))
     implementation(project(":benchmark:benchmark-macro-junit4"))
-    implementation(project(":tracing:tracing-perfetto-binary"))
     implementation(project(":test:uiautomator:uiautomator"))
     implementation(project(":test:uiautomator:uiautomator-shell"))
+    implementation(libs.testExtJunit)
+
+    // AndroidXComposePlugin applies the Compose compiler plugin to all Kotlin compilation tasks in
+    // this module (including main), which requires Compose Runtime on the compile classpath.
+    compileOnly(project(":compose:runtime:runtime"))
+
+    androidTestImplementation(project(":compose:foundation:foundation"))
+    androidTestImplementation(project(":compose:runtime:runtime"))
+    androidTestImplementation(project(":compose:ui:ui"))
+    androidTestImplementation(project(":compose:ui:ui-test-junit4"))
+    androidTestImplementation(libs.testExtJunit)
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.truth)
+    androidTestRuntimeOnly(project(":compose:test-utils"))
 }
 
 android {
     namespace = "androidx.testutils.macrobenchmark"
+}
+
+androidComponents {
+    def testDataPath = new File(
+            AndroidXConfig.getPrebuiltsRoot(project),
+            "androidx/traceprocessor/testdata").absolutePath
+    onVariants(selector().all()) { variant ->
+        def androidTestAssets = (variant as HasAndroidTest).androidTest.sources.assets
+        androidTestAssets.addStaticSourceDirectory(testDataPath)
+    }
 }
 
 androidx {

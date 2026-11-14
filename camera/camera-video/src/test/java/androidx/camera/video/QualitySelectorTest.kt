@@ -68,9 +68,10 @@ class QualitySelectorTest {
         val sortedQualities = Quality.getSortedQualities()
 
         assertThat(sortedQualities[0]).isEqualTo(Quality.UHD)
-        assertThat(sortedQualities[1]).isEqualTo(Quality.FHD)
-        assertThat(sortedQualities[2]).isEqualTo(Quality.HD)
-        assertThat(sortedQualities[3]).isEqualTo(Quality.SD)
+        assertThat(sortedQualities[1]).isEqualTo(Quality.QHD)
+        assertThat(sortedQualities[2]).isEqualTo(Quality.FHD)
+        assertThat(sortedQualities[3]).isEqualTo(Quality.HD)
+        assertThat(sortedQualities[4]).isEqualTo(Quality.SD)
     }
 
     @Test
@@ -124,6 +125,19 @@ class QualitySelectorTest {
             // Act.
             QualitySelector.fromOrderedList(emptyList())
         }
+    }
+
+    @Test
+    fun getPrioritizedQualities_withNoneSelector_returnsEmpty() {
+        // Arrange.
+        val qualitySelector = QualitySelector.NONE
+
+        // Act.
+        val supportedQualities = videoCapabilities.getSupportedQualities(SDR)
+        val selectedQualities = qualitySelector.getPrioritizedQualities(supportedQualities)
+
+        // Assert.
+        assertThat(selectedQualities).isEmpty()
     }
 
     @Test

@@ -1,0 +1,264 @@
+/*
+ * Copyright (C) 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.test.backup.host
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * What `androidx.test.backup.BackupRestoreTestRunner` reported for one device action.
+ *
+ * The action's payload arrives as [inlinePayload], in one result or, when it is too large for one,
+ * joined from the parts of the result. Runners of earlier versions wrote a large payload to a
+ * device file at [payloadPath] instead, which the caller reads with [parseOverflowFile].
+ *
+ * @property runnerFailure the failure the runner reported, or that decoding its output produced;
+ *   null if the runner reported success
+ * @property inlinePayload the action's payload as a JSON object string, if the runner printed it
+ * @property payloadPath the device file holding the action's payload, if a runner of an earlier
+ *   version wrote it to one
+ */
+internal class BackupRunnerReport(
+    val runnerFailure: BackupActionResult.Failure?,
+    val inlinePayload: String?,
+    val payloadPath: String?,
+) {
+
+    /** Returns the result of [actionClassName], given its payload as a JSON object string. */
+    fun resultFor(payloadJson: String, actionClassName: String): BackupActionResult =
+        reconcile(runnerFailure, toActionResult(parseStringMap(payloadJson), actionClassName))
+
+    /**
+     * Combines the runner's verdict with the one derived from the payload.
+     *
+     * The payload decides the message, but a failure reported by the runner is never downgraded to
+     * a success, so a runner that is stricter than the payload rule still wins. The payload's data
+     * is kept either way, without the status and error that a failure reports itself.
+     */
+    private fun reconcile(
+        runnerFailure: BackupActionResult.Failure?,
+        fromPayload: BackupActionResult,
+    ): BackupActionResult =
+        if (runnerFailure != null && fromPayload is BackupActionResult.Success) {
+            BackupActionResult.Failure(
+                runnerFailure.errorMessage,
+                runnerFailure.stackTrace,
+                failureData(fromPayload.data),
+            )
+        } else {
+            fromPayload
+        }
+
+    /**
+     * Converts a device action's result payload into a [BackupActionResult].
+     *
+     * An action reports a problem in-band through [BackupActionOutputKeys.STATUS] rather than by
+     * throwing. Reading it here keeps the host correct even against a runner that reports only
+     * whether the action threw, and supplies the specific error message.
+     *
+     * This mirrors `androidx.test.backup.BackupDeviceActionResult.isSuccess` exactly, so the device
+     * and the host never disagree about the same payload:
+     * - A reported status decides on its own. Only the recognized failure value
+     *   [BackupActionValues.STATUS_FAILURE] marks the action as failed; `status` is a generic key
+     *   that custom actions legitimately publish their own vocabulary through, so an unrecognized
+     *   value is reported as a success rather than being guessed at.
+     * - With no status at all, a non-empty [BackupActionOutputKeys.ERROR] marks the action as
+     *   failed, so an action that reports only an error is not read as passing.
+     *
+     * Actions that want their failures honored should use
+     * `androidx.test.backup.BackupDeviceActionResult.failure`, which emits the recognized value.
+     */
+    private fun toActionResult(
+        dataMap: Map<String, String>,
+        actionClassName: String,
+    ): BackupActionResult {
+        val status = dataMap[BackupActionOutputKeys.STATUS]
+        val error = dataMap[BackupActionOutputKeys.ERROR]
+        if (status != null) {
+            if (status.equals(BackupActionValues.STATUS_FAILURE, ignoreCase = true)) {
+                return BackupActionResult.Failure(
+                    errorMessage =
+                        error
+                            ?: "$actionClassName reported ${BackupActionOutputKeys.STATUS}='$status' without an " +
+                                "${BackupActionOutputKeys.ERROR} message.",
+                    data = failureData(dataMap),
+                )
+            }
+        } else if (!error.isNullOrEmpty()) {
+            return BackupActionResult.Failure(error, data = failureData(dataMap))
+        }
+        return BackupActionResult.Success(dataMap)
+    }
+
+    /**
+     * Returns the data of a failed action: [dataMap] without its [BackupActionOutputKeys.STATUS]
+     * and [BackupActionOutputKeys.ERROR], which [BackupActionResult.Failure] reports itself.
+     */
+    private fun failureData(dataMap: Map<String, String>): Map<String, String> =
+        dataMap - BackupActionOutputKeys.STATUS - BackupActionOutputKeys.ERROR
+
+    companion object {
+        /** Start of the line on which `am instrument` prints the result of the runner. */
+        private const val RESULT_LINE_PREFIX = "INSTRUMENTATION_RESULT: resultJson="
+
+        /** Start of the line of a status that carries one part of a result sent in parts. */
+        private const val RESULT_PART_PREFIX = "INSTRUMENTATION_STATUS: resultPart="
+
+        /** Start of the result line with the number of parts of a result sent in parts. */
+        private const val RESULT_PARTS_PREFIX = "INSTRUMENTATION_RESULT: resultParts="
+
+        /** Start of the result line with the length of a result sent in parts. */
+        private const val RESULT_LENGTH_PREFIX = "INSTRUMENTATION_RESULT: resultLength="
+
+        /** Number of characters of the runner's output that a failure message shows. */
+        private const val MAX_SHOWN_OUTPUT_CHARS = 8 * 1024
+
+        private const val KEY_IS_SUCCESS = "isSuccess"
+        private const val KEY_ERROR_MESSAGE = "errorMessage"
+        private const val KEY_STACK_TRACE = "stackTrace"
+        private const val KEY_PAYLOAD_PATH = "payload_path"
+        private const val KEY_PAYLOAD_JSON = "payloadJson"
+
+        /**
+         * Decodes the output of an `am instrument` run of the runner.
+         *
+         * The runner prints a result that is too large for one Binder transaction in parts, as
+         * statuses, before a final result that names how many parts there are.
+         *
+         * Output that carries no result, a result with missing parts, or a result that is not valid
+         * JSON, is reported as a [runnerFailure] with no payload.
+         */
+        fun parse(stdout: String): BackupRunnerReport {
+            val lines = stdout.lines()
+            val inlineJson =
+                lines
+                    .firstOrNull { it.startsWith(RESULT_LINE_PREFIX) }
+                    ?.removePrefix(RESULT_LINE_PREFIX)
+                    ?.trim()
+            val json =
+                if (!inlineJson.isNullOrEmpty()) {
+                    inlineJson
+                } else {
+                    val partCount =
+                        lines.valueAfter(RESULT_PARTS_PREFIX)?.toIntOrNull()
+                            ?: return failed(
+                                "No execution result was received from device. " +
+                                    shownOutput("stdout", stdout)
+                            )
+                    // Parts are never trimmed: one can start or end within a JSON string.
+                    val parts =
+                        lines
+                            .filter { it.startsWith(RESULT_PART_PREFIX) }
+                            .map { it.removePrefix(RESULT_PART_PREFIX) }
+                    val joined = parts.joinToString("")
+                    val length = lines.valueAfter(RESULT_LENGTH_PREFIX)?.toIntOrNull()
+                    if (parts.size != partCount || (length != null && joined.length != length)) {
+                        return failed(
+                            "Received ${parts.size} of the $partCount parts of the result from " +
+                                "device, with ${joined.length} of ${length ?: "?"} characters."
+                        )
+                    }
+                    joined
+                }
+            val result =
+                try {
+                    Json.parseToJsonElement(json).jsonObject
+                } catch (e: Exception) {
+                    return failed(
+                        "Failed to parse runner output JSON: ${e.message}. " +
+                            shownOutput("JSON", json)
+                    )
+                }
+            val runnerFailure =
+                if (result.boolean(KEY_IS_SUCCESS) == true) {
+                    null
+                } else {
+                    BackupActionResult.Failure(
+                        errorMessage =
+                            result.string(KEY_ERROR_MESSAGE) ?: "Unknown device failure.",
+                        stackTrace = result.string(KEY_STACK_TRACE),
+                    )
+                }
+            return BackupRunnerReport(
+                runnerFailure = runnerFailure,
+                inlinePayload = result.string(KEY_PAYLOAD_JSON),
+                payloadPath = result.string(KEY_PAYLOAD_PATH),
+            )
+        }
+
+        /** Returns what follows [prefix] on the first of these lines that starts with it. */
+        private fun List<String>.valueAfter(prefix: String): String? = firstOrNull {
+            it.startsWith(prefix)
+        }
+            ?.removePrefix(prefix)
+            ?.trim()
+
+        /**
+         * Returns [output] of the runner, named [name], as a failure message shows it: only its end
+         * if it is long, without the second half of a surrogate pair at the start.
+         */
+        private fun shownOutput(name: String, output: String): String {
+            if (output.length <= MAX_SHOWN_OUTPUT_CHARS) return "Raw $name:\n$output"
+            val end =
+                output.takeLast(MAX_SHOWN_OUTPUT_CHARS).let {
+                    if (it.first().isLowSurrogate()) it.substring(1) else it
+                }
+            return "Last ${end.length} of ${output.length} characters of raw $name:\n$end"
+        }
+
+        /**
+         * Returns the payload held by an overflow file that a runner of an earlier version wrote,
+         * as a JSON object string.
+         *
+         * @throws IllegalArgumentException if [content] is not a JSON object
+         */
+        fun parseOverflowFile(content: String): String =
+            Json.parseToJsonElement(content).jsonObject.string(KEY_PAYLOAD_JSON) ?: ""
+
+        private fun failed(message: String) =
+            BackupRunnerReport(
+                runnerFailure = BackupActionResult.Failure(message),
+                inlinePayload = null,
+                payloadPath = null,
+            )
+
+        private fun JsonObject.string(key: String): String? =
+            this[key]?.jsonPrimitive?.contentOrNull
+
+        private fun JsonObject.boolean(key: String): Boolean? =
+            this[key]?.jsonPrimitive?.booleanOrNull
+
+        /** Returns the primitive members of the JSON object [json] as strings; empty if invalid. */
+        private fun parseStringMap(json: String): Map<String, String> {
+            if (json.isEmpty()) return emptyMap()
+            return try {
+                buildMap {
+                    for ((key, element) in Json.parseToJsonElement(json).jsonObject) {
+                        (element as? JsonPrimitive)?.contentOrNull?.let { put(key, it) }
+                    }
+                }
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        }
+    }
+}

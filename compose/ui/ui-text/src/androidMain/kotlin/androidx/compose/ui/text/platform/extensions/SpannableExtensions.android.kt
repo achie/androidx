@@ -17,14 +17,12 @@
 package androidx.compose.ui.text.platform.extensions
 
 import android.graphics.Typeface
-import android.os.Build
 import android.text.Spannable
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.LeadingMarginSpan
-import android.text.style.LocaleSpan
 import android.text.style.MetricAffectingSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.ScaleXSpan
@@ -56,7 +54,6 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.intersect
-import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.platform.style.CustomBulletSpan
 import androidx.compose.ui.text.platform.style.DrawStyleSpan
@@ -66,6 +63,7 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextGeometricTransform
 import androidx.compose.ui.text.style.TextIndent
+import androidx.compose.ui.text.style.isApplicable
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
@@ -199,8 +197,8 @@ internal fun Spannable.setLineHeight(
                     lineHeight = resolvedLineHeight,
                     startIndex = 0,
                     endIndex = endIndex,
-                    trimFirstLineTop = lineHeightStyle.trim.isTrimFirstLineTop(),
-                    trimLastLineBottom = lineHeightStyle.trim.isTrimLastLineBottom(),
+                    trimFirstLineTop = lineHeightStyle.trim.trimsFirstLineTop,
+                    trimLastLineBottom = lineHeightStyle.trim.trimsLastLineBottom,
                     topRatio = lineHeightStyle.alignment.topRatio,
                     mode = lineHeightStyle.mode,
                 ),
@@ -222,7 +220,7 @@ internal fun Spannable.setLineHeight(
     }
 }
 
-private fun resolveLineHeightInPx(
+internal fun resolveLineHeightInPx(
     lineHeight: TextUnit,
     contextFontSize: Float,
     density: Density,
@@ -504,12 +502,7 @@ internal fun Spannable.setBackground(color: Color, start: Int, end: Int) {
 internal fun Spannable.setLocaleList(localeList: LocaleList?, start: Int, end: Int) {
     localeList?.let {
         setSpan(
-            if (Build.VERSION.SDK_INT >= 24) {
-                LocaleListHelperMethods.localeSpan(it)
-            } else {
-                val locale = if (it.isEmpty()) Locale.current else it[0]
-                LocaleSpan(locale.platformLocale)
-            },
+            LocaleListHelperMethods.localeSpan(it),
             start,
             end,
         )
@@ -571,7 +564,9 @@ internal fun Spannable.setColor(color: Color, start: Int, end: Int) {
 
 @OptIn(InternalPlatformTextApi::class)
 private fun Spannable.setBaselineShift(baselineShift: BaselineShift?, start: Int, end: Int) {
-    baselineShift?.let { setSpan(BaselineShiftSpan(it.multiplier), start, end) }
+    if (baselineShift?.isApplicable == true) {
+        setSpan(BaselineShiftSpan(baselineShift.multiplier), start, end)
+    }
 }
 
 private fun Spannable.setBrush(brush: Brush?, alpha: Float, start: Int, end: Int) {

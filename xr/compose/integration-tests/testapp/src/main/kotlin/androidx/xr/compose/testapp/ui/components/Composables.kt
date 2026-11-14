@@ -52,6 +52,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.UiComposable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -62,9 +63,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.xr.compose.subspace.MovePolicy
 import androidx.xr.compose.subspace.SpatialPanel
+import androidx.xr.compose.subspace.SubspaceComposable
 import androidx.xr.compose.subspace.layout.SubspaceModifier
+import androidx.xr.compose.subspace.layout.movable
 import androidx.xr.compose.subspace.layout.size
 import androidx.xr.compose.testapp.R
 import androidx.xr.compose.testapp.ui.theme.Purple40
@@ -119,15 +121,16 @@ fun TestCaseButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
+@SubspaceComposable
 fun CommonTestPanel(
     size: DpVolumeSize,
     title: String,
     showBottomBar: Boolean,
     onClickBackArrow: (() -> Unit)?,
     onClickRecreate: (() -> Unit)? = null,
-    composable: @Composable (padding: PaddingValues) -> Unit,
+    composable: @Composable @UiComposable (padding: PaddingValues) -> Unit,
 ) {
-    SpatialPanel(modifier = SubspaceModifier.size(size), dragPolicy = MovePolicy()) {
+    SpatialPanel(modifier = SubspaceModifier.size(size).movable()) {
         CommonTestScaffold(title, showBottomBar, "", onClickBackArrow, onClickRecreate, composable)
     }
 }
@@ -140,7 +143,7 @@ fun CommonTestScaffold(
     bottomBarText: String = "",
     onClickBackArrow: (() -> Unit)? = null,
     onClickRecreate: (() -> Unit)? = null,
-    content: @Composable (padding: PaddingValues) -> Unit,
+    content: @Composable @UiComposable (padding: PaddingValues) -> Unit,
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
@@ -293,5 +296,40 @@ fun ColumnWithCenterText(padding: PaddingValues = PaddingValues(0.dp, 0.dp, 0.dp
             color = Color.Black,
             style = TextStyle(fontSize = 20.sp),
         )
+    }
+}
+
+@Composable
+fun ColumnWithTextAndButton(
+    padding: PaddingValues = PaddingValues(0.dp, 0.dp, 0.dp),
+    text: String,
+    buttonText: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.background(color = Purple80).fillMaxSize().padding(padding),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = text,
+            textAlign = TextAlign.Center,
+            color = Color.Black,
+            style = TextStyle(fontSize = 20.sp),
+        )
+        Button(
+            onClick = onClick,
+            modifier = Modifier.padding(2.dp).fillMaxWidth(fraction = 0.8f),
+            shape = RoundedCornerShape(3.dp),
+            colors =
+                ButtonColors(
+                    containerColor = PurpleGrey80,
+                    contentColor = Color.Black,
+                    disabledContentColor = Color.Gray,
+                    disabledContainerColor = Color.DarkGray,
+                ),
+        ) {
+            Text(buttonText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }

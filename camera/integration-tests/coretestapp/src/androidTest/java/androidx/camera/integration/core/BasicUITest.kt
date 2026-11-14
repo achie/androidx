@@ -17,31 +17,31 @@
 package androidx.camera.integration.core
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.view.SurfaceView
 import android.view.TextureView
 import androidx.camera.camera2.Camera2Config
-import androidx.camera.camera2.pipe.integration.CameraPipeConfig
+import androidx.camera.integration.core.CameraXActivity.BIND_PREVIEW
+import androidx.camera.integration.core.CameraXActivity.BIND_VIDEO_CAPTURE
+import androidx.camera.integration.core.CameraXActivity.INTENT_EXTRA_AUDIO_CHANNEL_COUNT
+import androidx.camera.integration.core.CameraXActivity.INTENT_EXTRA_AUDIO_SOURCE
+import androidx.camera.integration.core.CameraXActivity.INTENT_EXTRA_USE_CASE_COMBINATION
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.testing.impl.CameraPipeConfigTestRule
 import androidx.camera.testing.impl.CameraUtil
 import androidx.camera.testing.impl.CoreAppTestUtil
+import androidx.camera.testing.impl.RequireForegroundRule
+import androidx.camera.video.AudioSpec
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.espresso.Espresso
-import androidx.test.espresso.action.ViewActions
-import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.filters.LargeTest
-import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import androidx.test.uiautomator.UiDevice
 import androidx.testutils.withActivity
 import com.google.common.truth.Truth.assertThat
 import java.util.concurrent.TimeUnit
 import leakcanary.DetectLeaksAfterTestSuccess
-import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -53,24 +53,18 @@ import org.junit.runners.Parameterized
 /** Tests basic UI operation when using CoreTest app. */
 @LargeTest
 @RunWith(Parameterized::class)
-class BasicUITest(private val implName: String, private val cameraConfig: String) {
-
-    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+class BasicUITest(private val implName: String) {
 
     @get:Rule
-    val cameraPipeConfigTestRule =
-        CameraPipeConfigTestRule(active = implName == CameraPipeConfig::class.simpleName)
+    val requireForegroundRule = RequireForegroundRule {
+        assumeTrue(CameraUtil.deviceHasCamera())
+        CoreAppTestUtil.assumeCompatibleDevice()
+    }
 
     @get:Rule
     val useCamera =
         CameraUtil.grantCameraPermissionAndPreTestAndPostTest(
-            CameraUtil.PreTestCameraIdList(
-                if (implName == Camera2Config::class.simpleName) {
-                    Camera2Config.defaultConfig()
-                } else {
-                    CameraPipeConfig.defaultConfig()
-                }
-            )
+            CameraUtil.PreTestCameraIdList(Camera2Config.defaultConfig())
         )
 
     @get:Rule
@@ -94,37 +88,15 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
         }
 
     private val launchIntent =
-        Intent(ApplicationProvider.getApplicationContext(), CameraXActivity::class.java).apply {
-            putExtra(CameraXActivity.INTENT_EXTRA_CAMERA_IMPLEMENTATION, cameraConfig)
-            putExtra(CameraXActivity.INTENT_EXTRA_CAMERA_IMPLEMENTATION_NO_HISTORY, true)
-        }
+        Intent(ApplicationProvider.getApplicationContext(), CameraXActivity::class.java)
 
     @Before
     fun setUp() {
-        assumeTrue(CameraUtil.deviceHasCamera())
-        CoreAppTestUtil.assumeCompatibleDevice()
-        // Use the natural orientation throughout these tests to ensure the activity isn't
-        // recreated unexpectedly. This will also freeze the sensors until
-        // mDevice.unfreezeRotation() in the tearDown() method. Any simulated rotations will be
-        // explicitly initiated from within the test.
-        device.setOrientationNatural()
-        // Clear the device UI and check if there is no dialog or lock screen on the top of the
-        // window before start the test.
-        CoreAppTestUtil.prepareDeviceUI(InstrumentationRegistry.getInstrumentation())
-    }
-
-    @After
-    fun tearDown() {
-        // Returns to Home to restart next test.
-        device.pressHome()
-        device.waitForIdle(IDLE_TIMEOUT_MS)
-        // Unfreeze rotation so the device can choose the orientation via its own policy. Be nice
-        // to other tests :)
-        device.unfreezeRotation()
-
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val cameraProvider = ProcessCameraProvider.getInstance(context)[10, TimeUnit.SECONDS]
-        cameraProvider.shutdownAsync()[10, TimeUnit.SECONDS]
+        requireForegroundRule.deferCleanup {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val cameraProvider = ProcessCameraProvider.getInstance(context)[10, TimeUnit.SECONDS]
+            cameraProvider.shutdownAsync()[10, TimeUnit.SECONDS]
+        }
     }
 
     @Test
@@ -141,7 +113,7 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
 
             // Click to disable the imageAnalysis use case.
             if (scenario.withActivity { imageAnalysis != null }) {
-                Espresso.onView(withId(R.id.AnalysisToggle)).perform(ViewActions.click())
+                scenario.clickView(R.id.AnalysisToggle)
 
                 // Wait for Preview start to ensure the UseCase is bound to the camera.
                 scenario.waitForViewfinderIdle()
@@ -149,7 +121,7 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
 
             if (scenario.withActivity { imageAnalysis == null }) {
                 // Act. ImageAnalysis is null(disable), do click to enable use imageAnalysis case.
-                Espresso.onView(withId(R.id.AnalysisToggle)).perform(ViewActions.click())
+                scenario.clickView(R.id.AnalysisToggle)
 
                 // Assert. Verify the ImageAnalysis is processing output.
                 scenario.waitForImageAnalysisIdle()
@@ -165,7 +137,7 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
             scenario.waitForViewfinderIdle()
             // Click to disable the preview use case.
             if (scenario.withActivity { preview != null }) {
-                Espresso.onView(withId(R.id.PreviewToggle)).perform(ViewActions.click())
+                scenario.clickView(R.id.PreviewToggle)
 
                 // Try to take a Picture to ensure the UseCase is bound to the camera.
                 scenario.takePictureAndWaitForImageSavedIdle()
@@ -173,7 +145,7 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
 
             if (scenario.withActivity { preview == null }) {
                 // Act. Preview is null(disable), do click to enable preview use case.
-                Espresso.onView(withId(R.id.PreviewToggle)).perform(ViewActions.click())
+                scenario.clickView(R.id.PreviewToggle)
 
                 // Assert. Verify the Preview is processing output.
                 scenario.waitForViewfinderIdle()
@@ -198,22 +170,74 @@ class BasicUITest(private val implName: String, private val cameraConfig: String
         }
     }
 
+    @SuppressLint("RestrictedApiAndroidX")
+    @Test
+    fun testVideoCaptureDefaultAudioConfig() {
+        val intent =
+            Intent(launchIntent).apply {
+                putExtra(INTENT_EXTRA_USE_CASE_COMBINATION, BIND_PREVIEW or BIND_VIDEO_CAPTURE)
+            }
+        ActivityScenario.launch<CameraXActivity>(intent).use { scenario ->
+            scenario.waitForViewfinderIdle()
+            assumeTrue(scenario.withActivity { videoCapture != null })
+
+            scenario.withActivity {
+                val recorder = requireNotNull(videoCapture).output
+                assertThat(recorder.audioSource).isEqualTo(AudioSpec.SOURCE_UNSPECIFIED)
+                assertThat(recorder.targetAudioChannelCount).isEqualTo(0)
+            }
+        }
+    }
+
+    @SuppressLint("RestrictedApiAndroidX")
+    @Test
+    fun testVideoCaptureAudioIntentExtras() {
+        val intent =
+            Intent(launchIntent).apply {
+                putExtra(INTENT_EXTRA_USE_CASE_COMBINATION, BIND_PREVIEW or BIND_VIDEO_CAPTURE)
+                putExtra(INTENT_EXTRA_AUDIO_SOURCE, AudioSpec.SOURCE_MIC)
+                putExtra(INTENT_EXTRA_AUDIO_CHANNEL_COUNT, AudioSpec.CHANNEL_COUNT_STEREO)
+            }
+        ActivityScenario.launch<CameraXActivity>(intent).use { scenario ->
+            scenario.waitForViewfinderIdle()
+            assumeTrue(scenario.withActivity { videoCapture != null })
+
+            scenario.withActivity {
+                val recorder = requireNotNull(videoCapture).output
+                assertThat(recorder.audioSource).isEqualTo(AudioSpec.SOURCE_MIC)
+                assertThat(recorder.targetAudioChannelCount)
+                    .isEqualTo(AudioSpec.CHANNEL_COUNT_STEREO)
+            }
+        }
+    }
+
+    @SuppressLint("RestrictedApiAndroidX")
+    @Test
+    fun testVideoCaptureInvalidAudioIntentExtras() {
+        val intent =
+            Intent(launchIntent).apply {
+                putExtra(INTENT_EXTRA_USE_CASE_COMBINATION, BIND_PREVIEW or BIND_VIDEO_CAPTURE)
+                putExtra(INTENT_EXTRA_AUDIO_SOURCE, 999)
+                putExtra(INTENT_EXTRA_AUDIO_CHANNEL_COUNT, 0)
+            }
+        ActivityScenario.launch<CameraXActivity>(intent).use { scenario ->
+            scenario.waitForViewfinderIdle()
+            assumeTrue(scenario.withActivity { videoCapture != null })
+
+            scenario.withActivity {
+                val recorder = requireNotNull(videoCapture).output
+                assertThat(recorder.audioSource).isEqualTo(AudioSpec.SOURCE_UNSPECIFIED)
+                assertThat(recorder.targetAudioChannelCount).isEqualTo(0)
+            }
+        }
+    }
+
     companion object {
         private const val IDLE_TIMEOUT_MS = 3_000L
         private const val TAG = "BasicUITest"
 
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
-        fun data() =
-            listOf(
-                arrayOf(
-                    Camera2Config::class.simpleName,
-                    CameraXViewModel.CAMERA2_IMPLEMENTATION_OPTION,
-                ),
-                arrayOf(
-                    CameraPipeConfig::class.simpleName,
-                    CameraXViewModel.CAMERA_PIPE_IMPLEMENTATION_OPTION,
-                ),
-            )
+        fun data() = listOf(arrayOf(Camera2Config::class.simpleName))
     }
 }

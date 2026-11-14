@@ -125,9 +125,6 @@ class DatabaseProcessor(baseContext: Context, val element: XTypeElement) {
 
         val hasForeignKeys = entities.any { it.foreignKeys.isNotEmpty() }
 
-        val hasClearAllTables =
-            roomDatabaseTypeElement.getDeclaredMethods().any { it.name == "clearAllTables" }
-
         val version = dbAnnotation.getAsInt("version")
         context.checker.check(
             predicate = version > 0,
@@ -147,7 +144,6 @@ class DatabaseProcessor(baseContext: Context, val element: XTypeElement) {
                 daoFunctions = daoFunctions,
                 exportSchema = exportSchema,
                 enableForeignKeys = hasForeignKeys,
-                overrideClearAllTables = hasClearAllTables,
                 constructorObject = constructorObject,
             )
         database.autoMigrations = processAutoMigrations(element, dbAnnotation, database.bundle)
@@ -369,22 +365,20 @@ class DatabaseProcessor(baseContext: Context, val element: XTypeElement) {
         entities: List<Entity>,
         views: List<DatabaseView>,
     ) {
-        val entitiesInfo =
-            entities.map {
-                Triple(
-                    it.tableName.lowercase(Locale.US),
-                    it.typeName.toString(context.codeLanguage),
-                    it.element,
-                )
-            }
-        val viewsInfo =
-            views.map {
-                Triple(
-                    it.viewName.lowercase(Locale.US),
-                    it.typeName.toString(context.codeLanguage),
-                    it.element,
-                )
-            }
+        val entitiesInfo = entities.map {
+            Triple(
+                it.tableName.lowercase(Locale.US),
+                it.typeName.toString(context.codeLanguage),
+                it.element,
+            )
+        }
+        val viewsInfo = views.map {
+            Triple(
+                it.viewName.lowercase(Locale.US),
+                it.typeName.toString(context.codeLanguage),
+                it.element,
+            )
+        }
         (entitiesInfo + viewsInfo)
             .groupBy { (name, _, _) -> name }
             .filter { it.value.size > 1 }
@@ -542,8 +536,11 @@ class DatabaseProcessor(baseContext: Context, val element: XTypeElement) {
             // If no @ConstructedBy is present then validate target is JVM (including Android)
             // since reflection is available in those platforms and a database constructor is not
             // needed.
+            val suppressConstructorRequirement =
+                SuppressWarningProcessor.getSuppressedWarnings(element)
+                    .contains(Warning.NO_DATABASE_CONSTRUCTOR)
             context.checker.check(
-                predicate = context.isJvmOnlyTarget(),
+                predicate = suppressConstructorRequirement || context.isJvmOnlyTarget(),
                 element = element,
                 errorMsg = ProcessorErrors.MISSING_CONSTRUCTED_BY_ANNOTATION,
             )

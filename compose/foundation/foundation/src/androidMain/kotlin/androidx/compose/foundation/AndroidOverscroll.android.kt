@@ -43,7 +43,6 @@ import androidx.compose.ui.geometry.center
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.NativeCanvas
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.draw
@@ -80,7 +79,7 @@ import kotlin.math.roundToInt
  *   before drawing it if the platform effect is a glow effect, otherwise ignored.
  */
 @Composable
-fun rememberPlatformOverscrollFactory(
+public fun rememberPlatformOverscrollFactory(
     glowColor: Color = DefaultGlowColor,
     glowDrawPadding: PaddingValues = DefaultGlowPaddingValues,
 ): OverscrollFactory {
@@ -219,7 +218,7 @@ private class StretchOverscrollNode(
             drawContent()
             return
         }
-        val maxElevation = MaxSupportedElevation.toPx()
+        val maxElevation = MaxSupportedElevation.roundToPx()
         var needsInvalidate = false
         with(edgeEffectWrapper) {
             val shouldDrawVerticalStretch = shouldDrawVerticalStretch()
@@ -235,7 +234,7 @@ private class StretchOverscrollNode(
                     renderNode.setPosition(
                         0,
                         0,
-                        canvas.width + (maxElevation.roundToInt() * 2),
+                        canvas.width + (maxElevation * 2),
                         canvas.height,
                     )
                 // Drawing horizontal stretch, so expand the height to prevent clipping
@@ -244,7 +243,7 @@ private class StretchOverscrollNode(
                         0,
                         0,
                         canvas.width,
-                        canvas.height + (maxElevation.roundToInt() * 2),
+                        canvas.height + (maxElevation * 2),
                     )
                 // Not drawing any stretch, so early return - we can draw into the existing canvas
                 else -> {
@@ -341,8 +340,8 @@ private class StretchOverscrollNode(
             // we need to re-center the content in the RenderNode.
             // We 'clip' in the direction of the stretch, so in that case there is no extra space
             // and hence no need to translate. Otherwise, add the extra space.
-            val left = if (shouldDrawHorizontalStretch) 0f else maxElevation
-            val top = if (shouldDrawVerticalStretch) 0f else maxElevation
+            val left = if (shouldDrawHorizontalStretch) 0f else maxElevation.toFloat()
+            val top = if (shouldDrawVerticalStretch) 0f else maxElevation.toFloat()
             val outerDraw = this@draw
             with(outerDraw) {
                 draw(this, this.layoutDirection, Canvas(recordingCanvas), size) {
@@ -380,26 +379,26 @@ private class StretchOverscrollNode(
                 isRightNegationStretched()
         }
 
-    private fun drawLeftStretch(left: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun drawLeftStretch(left: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         return drawWithRotation(rotationDegrees = 270f, edgeEffect = left, canvas = canvas)
     }
 
-    private fun drawTopStretch(top: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun drawTopStretch(top: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         return drawWithRotation(rotationDegrees = 0f, edgeEffect = top, canvas = canvas)
     }
 
-    private fun drawRightStretch(right: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun drawRightStretch(right: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         return drawWithRotation(rotationDegrees = 90f, edgeEffect = right, canvas = canvas)
     }
 
-    private fun drawBottomStretch(bottom: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun drawBottomStretch(bottom: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         return drawWithRotation(rotationDegrees = 180f, edgeEffect = bottom, canvas = canvas)
     }
 
     private fun drawWithRotation(
         rotationDegrees: Float,
         edgeEffect: EdgeEffect,
-        canvas: NativeCanvas,
+        canvas: android.graphics.Canvas,
     ): Boolean {
         if (rotationDegrees == 0f) {
             val needsInvalidate = edgeEffect.draw(canvas)
@@ -456,7 +455,7 @@ private class GlowOverscrollNode(
         }
     }
 
-    private fun DrawScope.drawLeftGlow(left: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun DrawScope.drawLeftGlow(left: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         val offset =
             Offset(-size.height, glowDrawPadding.calculateLeftPadding(layoutDirection).toPx())
         return drawWithRotationAndOffset(
@@ -467,7 +466,7 @@ private class GlowOverscrollNode(
         )
     }
 
-    private fun DrawScope.drawTopGlow(top: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun DrawScope.drawTopGlow(top: EdgeEffect, canvas: android.graphics.Canvas): Boolean {
         val offset = Offset(0f, glowDrawPadding.calculateTopPadding().toPx())
         return drawWithRotationAndOffset(
             rotationDegrees = 0f,
@@ -477,7 +476,10 @@ private class GlowOverscrollNode(
         )
     }
 
-    private fun DrawScope.drawRightGlow(right: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun DrawScope.drawRightGlow(
+        right: EdgeEffect,
+        canvas: android.graphics.Canvas,
+    ): Boolean {
         val width = size.width.roundToInt()
         val rightPadding = glowDrawPadding.calculateRightPadding(layoutDirection)
         val offset = Offset(0f, -width.toFloat() + rightPadding.toPx())
@@ -489,7 +491,10 @@ private class GlowOverscrollNode(
         )
     }
 
-    private fun DrawScope.drawBottomGlow(bottom: EdgeEffect, canvas: NativeCanvas): Boolean {
+    private fun DrawScope.drawBottomGlow(
+        bottom: EdgeEffect,
+        canvas: android.graphics.Canvas,
+    ): Boolean {
         val bottomPadding = glowDrawPadding.calculateBottomPadding().toPx()
         val offset = Offset(-size.width, -size.height + bottomPadding)
         return drawWithRotationAndOffset(
@@ -504,7 +509,7 @@ private class GlowOverscrollNode(
         rotationDegrees: Float,
         offset: Offset,
         edgeEffect: EdgeEffect,
-        canvas: NativeCanvas,
+        canvas: android.graphics.Canvas,
     ): Boolean {
         val restore = canvas.save()
         canvas.rotate(rotationDegrees)
@@ -1068,5 +1073,6 @@ private fun destretchMultiplier(source: NestedScrollSource): Float =
 private const val FlingDestretchFactor = 4f
 
 /** From [EdgeEffect] defaults */
-private val DefaultGlowColor = Color(0xff666666)
+private val DefaultGlowColor
+    get() = Color(0xff666666)
 private val DefaultGlowPaddingValues = PaddingValues()

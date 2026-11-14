@@ -18,19 +18,23 @@ package androidx.room3.integration.multiplatformtestapp.test
 
 import androidx.kruth.assertThat
 import androidx.kruth.assertThrows
+import androidx.room3.ColumnTypeConverter
+import androidx.room3.ColumnTypeConverters
 import androidx.room3.ConstructedBy
 import androidx.room3.Dao
+import androidx.room3.DaoReturnTypeConverter
+import androidx.room3.DaoReturnTypeConverters
 import androidx.room3.Database
 import androidx.room3.Entity
 import androidx.room3.Insert
+import androidx.room3.OperationType
 import androidx.room3.PrimaryKey
-import androidx.room3.ProvidedTypeConverter
+import androidx.room3.ProvidedColumnTypeConverter
 import androidx.room3.Query
 import androidx.room3.RoomDatabase
 import androidx.room3.RoomDatabaseConstructor
-import androidx.room3.TypeConverter
-import androidx.room3.TypeConverters
 import androidx.room3.integration.multiplatformtestapp.test.BaseTypeConverterTest.TestDatabase
+import androidx.room3.util.getQualifiedName
 import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 
@@ -39,7 +43,7 @@ abstract class BaseTypeConverterTest {
 
     @Test
     fun entityWithConverter() = runTest {
-        val database = getDatabaseBuilder().addTypeConverter(BarConverter()).build()
+        val database = getDatabaseBuilder().addColumnTypeConverter(BarConverter()).build()
         val entity = TestEntity(1, Foo(1979), Bar("Mujer Boricua"))
         database.getDao().insertItem(entity)
         assertThat(database.getDao().getItem(1)).isEqualTo(entity)
@@ -48,7 +52,7 @@ abstract class BaseTypeConverterTest {
 
     @Test
     fun entityWithSubclassedConverter() = runTest {
-        val database = getDatabaseBuilder().addTypeConverter(SubBarConverter()).build()
+        val database = getDatabaseBuilder().addColumnTypeConverter(SubBarConverter()).build()
         val entity = TestEntity(1, Foo(2018), Bar("Estamos Bien"))
         database.getDao().insertItem(entity)
         assertThat(database.getDao().getItem(1)).isEqualTo(entity)
@@ -60,8 +64,9 @@ abstract class BaseTypeConverterTest {
         assertThrows<IllegalArgumentException> { getDatabaseBuilder().build() }
             .hasMessageThat()
             .isEqualTo(
-                "A required type converter (" +
-                    "${BarConverter::class.qualifiedName}) for ${TestDao::class.qualifiedName} is " +
+                "A required column type converter (" +
+                    "${BarConverter::class.getQualifiedName()}) for " +
+                    "${TestDao::class.getQualifiedName()} is " +
                     "missing in the database configuration."
             )
     }
@@ -70,26 +75,57 @@ abstract class BaseTypeConverterTest {
     fun extraTypeConverter() {
         assertThrows<IllegalArgumentException> {
                 getDatabaseBuilder()
-                    .addTypeConverter(BarConverter())
-                    .addTypeConverter(FooConverter)
+                    .addColumnTypeConverter(BarConverter())
+                    .addColumnTypeConverter(FooConverter)
                     .build()
             }
             .hasMessageThat()
-            .startsWith("Unexpected type converter")
+            .startsWith("Unexpected column type converter")
+    }
+
+    @Test
+    fun daoReturnTypeConverterOnFunction() = runTest {
+        val database = getDatabaseBuilder().addColumnTypeConverter(BarConverter()).build()
+        val entity = TestEntity(1, Foo(1979), Bar("Mujer Boricua"))
+        database.getDao().insertItem(entity)
+
+        val daoBoxed = database.getDao().getDaoBoxedItem(1)
+        assertThat(daoBoxed).isNotInstanceOf<FunctionBox<*>>()
+        assertThat(daoBoxed.value).isEqualTo(entity)
+
+        val functionBoxed = database.getDao().getFunctionBoxedItem(1)
+        assertThat(functionBoxed).isInstanceOf<FunctionBox<*>>()
+        assertThat(functionBoxed.value).isEqualTo(entity)
+
+        assertThat(database.getDao().allItemsGetter.fetch()).containsExactly(entity)
+
+        database.close()
     }
 
     @Database(entities = [TestEntity::class], version = 1, exportSchema = false)
-    @TypeConverters(FooConverter::class, BarConverter::class)
+    @ColumnTypeConverters(FooConverter::class, BarConverter::class)
     @ConstructedBy(BaseTypeConverterTest_TestDatabaseConstructor::class)
     abstract class TestDatabase : RoomDatabase() {
         abstract fun getDao(): TestDao
     }
 
     @Dao
+    @DaoReturnTypeConverters(DaoBoxConverter::class)
     interface TestDao {
         @Insert suspend fun insertItem(item: TestEntity)
 
         @Query("SELECT * FROM TestEntity WHERE id = :id") suspend fun getItem(id: Long): TestEntity
+
+        @Query("SELECT * FROM TestEntity WHERE id = :id")
+        suspend fun getDaoBoxedItem(id: Long): Box<TestEntity>
+
+        @DaoReturnTypeConverters(FunctionBoxConverter::class)
+        @Query("SELECT * FROM TestEntity WHERE id = :id")
+        suspend fun getFunctionBoxedItem(id: Long): Box<TestEntity>
+
+        @get:DaoReturnTypeConverters(GetterBoxConverter::class)
+        @get:Query("SELECT * FROM TestEntity")
+        val allItemsGetter: LazyBox<List<TestEntity>>
     }
 
     @Entity data class TestEntity(@PrimaryKey val id: Long, val foo: Foo, val bar: Bar)
@@ -98,17 +134,40 @@ abstract class BaseTypeConverterTest {
 
     data class Bar(val text: String)
 
-    object FooConverter {
-        @TypeConverter fun toFoo(number: Int): Foo = Foo(number)
+    open class Box<T>(val value: T)
 
-        @TypeConverter fun fromFoo(foo: Foo): Int = foo.number
+    class FunctionBox<T>(value: T) : Box<T>(value)
+
+    class LazyBox<T>(val fetch: suspend () -> T)
+
+    object DaoBoxConverter {
+        @DaoReturnTypeConverter([OperationType.READ])
+        suspend fun <T> convert(executeAndConvert: suspend () -> T): Box<T> =
+            Box(executeAndConvert())
     }
 
-    @ProvidedTypeConverter
-    open class BarConverter {
-        @TypeConverter fun toBar(text: String): Bar = Bar(text)
+    object FunctionBoxConverter {
+        @DaoReturnTypeConverter([OperationType.READ])
+        suspend fun <T> convert(executeAndConvert: suspend () -> T): Box<T> =
+            FunctionBox(executeAndConvert())
+    }
 
-        @TypeConverter fun fromBar(bar: Bar): String = bar.text
+    object GetterBoxConverter {
+        @DaoReturnTypeConverter([OperationType.READ])
+        fun <T> convert(executeAndConvert: suspend () -> T): LazyBox<T> = LazyBox(executeAndConvert)
+    }
+
+    object FooConverter {
+        @ColumnTypeConverter fun toFoo(number: Int): Foo = Foo(number)
+
+        @ColumnTypeConverter fun fromFoo(foo: Foo): Int = foo.number
+    }
+
+    @ProvidedColumnTypeConverter
+    open class BarConverter {
+        @ColumnTypeConverter fun toBar(text: String): Bar = Bar(text)
+
+        @ColumnTypeConverter fun fromBar(bar: Bar): String = bar.text
     }
 
     class SubBarConverter : BarConverter()

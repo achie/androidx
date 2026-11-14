@@ -1,0 +1,126 @@
+/*
+ * Copyright 2026 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.compose.remote.player.compose.embedded
+
+import androidx.annotation.RestrictTo
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.remote.core.CoreDocument
+import androidx.compose.remote.core.RemoteContext
+import androidx.compose.remote.core.operations.ComponentValue
+import androidx.compose.remote.core.operations.TouchExpression
+import androidx.compose.remote.player.compose.embedded.doc.GraphContext
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.State
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.unit.IntSize
+
+internal val LocalCoreDocument: ProvidableCompositionLocal<CoreDocument> = compositionLocalOf {
+    throw IllegalStateException("No document")
+}
+
+/**
+ * The pure-Compose [GraphContext] that resolves *computed* operations (color/text/float/int
+ * expressions, attributes, lookups) via `derivedStateOf`. Resolvers route a computed id through it;
+ * leaf variables read the snapshot store directly. Null when no graph is installed (shouldn't
+ * happen inside [RcPlayer]).
+ */
+internal val LocalGraphContext: ProvidableCompositionLocal<GraphContext?> = compositionLocalOf {
+    null
+}
+
+@get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public val LocalRemoteContext: ProvidableCompositionLocal<RemoteContext> = compositionLocalOf {
+    throw IllegalStateException("No remote context")
+}
+
+internal val LocalComponentValueMap: ProvidableCompositionLocal<Map<Int, List<ComponentValue>>> =
+    compositionLocalOf {
+        emptyMap()
+    }
+
+internal val LocalComponentValueStateMap:
+    ProvidableCompositionLocal<Map<Int, MutableState<Float>>> =
+    compositionLocalOf {
+        emptyMap()
+    }
+
+internal val LocalComponentTouchExpressionsMap:
+    ProvidableCompositionLocal<Map<Int, List<TouchExpression>>> =
+    compositionLocalOf {
+        emptyMap()
+    }
+
+internal val LocalHasTouchExpressions: ProvidableCompositionLocal<Boolean> = compositionLocalOf {
+    false
+}
+
+internal class RootLayoutCoordinatesHolder(var coordinates: LayoutCoordinates? = null) {
+    /** The player size last published to the core document, or null before the first placement. */
+    var publishedSize: IntSize? = null
+}
+
+internal val LocalRootLayoutCoordinates: ProvidableCompositionLocal<RootLayoutCoordinatesHolder> =
+    compositionLocalOf {
+        RootLayoutCoordinatesHolder()
+    }
+
+internal val LocalCurrentTimeMillis: ProvidableCompositionLocal<State<Float>> = compositionLocalOf {
+    mutableFloatStateOf(0f)
+}
+
+/** Host-action callback (id, value) for `HostAction`/`RunAction` clicks. Default no-op. */
+internal val LocalRemoteActionHandler: ProvidableCompositionLocal<(Int, String?) -> Unit> =
+    compositionLocalOf {
+        { _, _ -> }
+    }
+
+/**
+ * Host named-action callback (name, resolved value) for `HostNamedAction` clicks. Default no-op.
+ */
+internal val LocalRemoteNamedActionHandler: ProvidableCompositionLocal<(String, Any?) -> Unit> =
+    compositionLocalOf {
+        { _, _ -> }
+    }
+
+/**
+ * [RcTypefaceResolver] for resolving typefaces in the embedded player. Null when using the default
+ * built-in resolver.
+ */
+@get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public val LocalRcTypefaceResolver: ProvidableCompositionLocal<RcTypefaceResolver?> =
+    compositionLocalOf {
+        null
+    }
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public val LocalSharedTransitionScope: ProvidableCompositionLocal<SharedTransitionScope?> =
+    compositionLocalOf {
+        null
+    }
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public val LocalAnimatedVisibilityScope: ProvidableCompositionLocal<AnimatedVisibilityScope?> =
+    compositionLocalOf {
+        null
+    }

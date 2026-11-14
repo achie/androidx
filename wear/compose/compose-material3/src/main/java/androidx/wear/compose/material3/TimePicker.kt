@@ -47,9 +47,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -62,7 +64,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.focused
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
@@ -78,6 +79,7 @@ import androidx.compose.ui.unit.min
 import androidx.compose.ui.util.fastFlatMap
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastMapNotNull
+import androidx.wear.compose.foundation.LocalReduceMotion
 import androidx.wear.compose.material3.ButtonDefaults.buttonColors
 import androidx.wear.compose.material3.internal.Icons
 import androidx.wear.compose.material3.internal.Plurals
@@ -96,21 +98,38 @@ import java.util.Locale
  *
  * This component is designed to take most/all of the screen and utilizes large fonts.
  *
+ * For custom backgrounds like gradients or images wrap the TimePicker in a MaterialTheme with the
+ * colorScheme background set to [Color.Unspecified].
+ *
  * Example of a [TimePicker]:
  *
  * @sample androidx.wear.compose.material3.samples.TimePickerSample
+ *
+ * ![TimePickerSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimePickerSample_CompositeImage.png)
  *
  * Example of a [TimePicker] with seconds:
  *
  * @sample androidx.wear.compose.material3.samples.TimePickerWithSecondsSample
  *
+ * ![TimePickerWithSecondsSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimePickerWithSecondsSample_CompositeImage.png)
+ *
  * Example of a 12 hour clock [TimePicker]:
  *
  * @sample androidx.wear.compose.material3.samples.TimePickerWith12HourClockSample
  *
- * Example of a [TimePicker] with just minutes and seconds:
+ * ![TimePickerWith12HourClockSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimePickerWith12HourClockSample_CompositeImage.png)
+ *
+ * Example of a [TimePicker] with just minutes and seconds (deprecated - use [DurationPicker]
+ * instead):
  *
  * @sample androidx.wear.compose.material3.samples.TimePickerWithMinutesAndSecondsSample
+ *
+ * ![TimePickerWithMinutesAndSecondsSample Composite
+ * Image](https://developer.android.com/wear/images/design/WearComposeM3_TimePickerWithMinutesAndSecondsSample_CompositeImage.png)
+ *
  * @param initialTime The initial time to be displayed in the TimePicker.
  * @param onTimePicked The callback that is called when the user confirms the time selection. It
  *   provides the selected time as [LocalTime]. Note that any time components not displayed in the
@@ -119,7 +138,7 @@ import java.util.Locale
  * @param modifier Modifier to be applied to the `Box` containing the UI elements.
  * @param timePickerType The different [TimePickerType] supported by this time picker. It indicates
  *   whether to show seconds or AM/PM selector as well as hours and minutes.
- * @param colors [TimePickerColors] be applied to the TimePicker.
+ * @param colors [TimePickerColors] to be applied to the TimePicker.
  * @param initialSelection The initial time component to be selected when the `TimePicker` is first
  *   displayed. By default, this is the first available time component based on the [timePickerType]
  *   and the device's locale (e.g., the hour component for a [TimePickerType.HoursMinutes24H]
@@ -129,6 +148,7 @@ import java.util.Locale
  */
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
+@Suppress("DEPRECATION")
 public fun TimePicker(
     initialTime: LocalTime,
     onTimePicked: (LocalTime) -> Unit,
@@ -251,13 +271,16 @@ public fun TimePicker(
             selectedElement = current
         } else {
             selectedElement = findNextElement(current)
-            if (selectedElement == TimePickerSelection.ConfirmButton) {
-                focusRequesterConfirmButton.requestFocus()
-            }
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().alpha(fullyDrawn.value)) {
+    LaunchedEffect(selectedElement) {
+        if (selectedElement == TimePickerSelection.ConfirmButton) {
+            focusRequesterConfirmButton.requestFocus()
+        }
+    }
+
+    Box(modifier = modifier.suppressStatusBar().fillMaxSize().alpha(fullyDrawn.value)) {
 
         // Allow more room for the initial instruction heading under TalkBack
         val maxTextLines = if (selectedElement == TimePickerSelection.None) 2 else 1
@@ -281,11 +304,11 @@ public fun TimePicker(
                         TimePickerSelection.Second -> secondString
                         TimePickerSelection.None ->
                             if (touchExplorationServicesEnabled) instructionHeadingString else ""
-                        else -> ""
+                        else -> null
                     }
 
                 FadeLabel(
-                    text = heading,
+                    text = heading ?: "",
                     animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
                     modifier =
                         Modifier.height(headingHeight)
@@ -295,7 +318,13 @@ public fun TimePicker(
                             )
                             .fillMaxWidth()
                             .align(Alignment.CenterHorizontally)
-                            .semantics(mergeDescendants = true) { heading() },
+                            .then(
+                                if (heading != null) {
+                                    Modifier.semantics(mergeDescendants = true) { heading() }
+                                } else {
+                                    Modifier.drawWithContent {}.clearAndSetSemantics {}
+                                }
+                            ),
                     color = colors.pickerLabelColor,
                     style = layoutConfig.labelTextStyle,
                     maxLines = maxTextLines,
@@ -338,12 +367,7 @@ public fun TimePicker(
 
                     onTimePicked(confirmedTime)
                 },
-                modifier =
-                    Modifier.semantics {
-                            focused = (selectedElement == TimePickerSelection.ConfirmButton)
-                        }
-                        .focusRequester(focusRequesterConfirmButton)
-                        .focusable(),
+                modifier = Modifier.focusRequester(focusRequesterConfirmButton).focusable(),
                 buttonSize = EdgeButtonSize.Small,
                 colors =
                     buttonColors(
@@ -360,8 +384,20 @@ public fun TimePicker(
         }
     }
 
+    val isReduceMotionEnabled = LocalReduceMotion.current
+
     if (!inspectionMode) {
-        LaunchedEffect(Unit) { fullyDrawn.animateTo(1f) }
+        LaunchedEffect(Unit) {
+            if (isReduceMotionEnabled) {
+                // Await one frame to allow the ScalingLazyColumn layout positioning to settle
+                // silently before revealing the UI, avoiding a 1-frame visual stutter where
+                // static elements (like the colon separator) appear before the digit columns.
+                withFrameNanos {}
+                fullyDrawn.snapTo(1f)
+            } else {
+                fullyDrawn.animateTo(1f)
+            }
+        }
     }
 }
 
@@ -393,7 +429,7 @@ public fun TimePicker(
  * @param modifier Modifier to be applied to the `Box` containing the UI elements.
  * @param timePickerType The different [TimePickerType] supported by this time picker. It indicates
  *   whether to show seconds or AM/PM selector as well as hours and minutes.
- * @param colors [TimePickerColors] be applied to the TimePicker.
+ * @param colors [TimePickerColors] to be applied to the TimePicker.
  */
 @Deprecated(
     "This overload is provided for backwards compatibility with Compose for Wear OS 1.5. " +
@@ -429,10 +465,22 @@ public value class TimePickerType internal constructor(internal val value: Int) 
         public val HoursMinutesSeconds24H: TimePickerType = TimePickerType(1)
         /** Displays three columns for hours (12-hour format), minutes and AM/PM label. */
         public val HoursMinutesAmPm12H: TimePickerType = TimePickerType(2)
-        /** Displays two columns for minutes and seconds */
+        /**
+         * Displays two columns for minutes and seconds.
+         *
+         * For configuring countdown timers or elapsed durations, prefer using [DurationPicker] with
+         * [DurationPickerType.MinutesSeconds].
+         *
+         * @see DurationPicker
+         */
+        @Deprecated(
+            "Use DurationPicker with DurationPickerType.MinutesSeconds for countdown timers or " +
+                "elapsed durations."
+        )
         public val MinutesSeconds: TimePickerType = TimePickerType(3)
     }
 
+    @Suppress("DEPRECATION")
     override fun toString(): String =
         when (this) {
             HoursMinutes24H -> "HoursMinutes24H"
@@ -575,7 +623,7 @@ public class TimePickerColors(
     public val confirmButtonContainerColor: Color,
 ) {
     /**
-     * Returns a copy of this TimePickerColors( optionally overriding some of the values.
+     * Returns a copy of this TimePickerColors, optionally overriding some of the values.
      *
      * @param selectedPickerContentColor The content color of selected picker.
      * @param unselectedPickerContentColor The content color of unselected pickers.
@@ -631,6 +679,7 @@ public class TimePickerColors(
     }
 }
 
+@Suppress("DEPRECATION")
 private val TimePickerType.isTwoColumnPicker
     get() = this == TimePickerType.HoursMinutes24H || this == TimePickerType.MinutesSeconds
 
@@ -1173,6 +1222,7 @@ private fun createDescription(
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Immutable
+@Suppress("DEPRECATION")
 private class PickerLocaleConfig(val locale: Locale, val timePickerType: TimePickerType) {
     val is12hour: Boolean = timePickerType == TimePickerType.HoursMinutesAmPm12H
 

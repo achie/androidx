@@ -19,6 +19,7 @@ package androidx.car.app.navigation;
 import static androidx.car.app.TestUtils.createDateTimeWithZone;
 
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -26,13 +27,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.pm.PackageManager;
 import android.os.RemoteException;
 
+import androidx.car.app.HandshakeInfo;
 import androidx.car.app.HostDispatcher;
 import androidx.car.app.ICarHost;
 import androidx.car.app.IOnDoneCallback;
 import androidx.car.app.model.Distance;
 import androidx.car.app.navigation.model.Destination;
+import androidx.car.app.navigation.model.NavigationVoiceAssistantCapabilities;
 import androidx.car.app.navigation.model.Step;
 import androidx.car.app.navigation.model.TravelEstimate;
 import androidx.car.app.navigation.model.Trip;
@@ -50,6 +54,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.internal.DoNotInstrument;
 
@@ -115,6 +120,17 @@ public class NavigationManagerTest {
                     @Override
                     public void navigationEnded() throws RemoteException {
                         mMockNavHost.navigationEnded();
+                    }
+
+                    @Override
+                    public void setVoiceAssistantCapabilities(Bundleable capabilities)
+                            throws RemoteException {
+                        mMockNavHost.setVoiceAssistantCapabilities(capabilities);
+                    }
+
+                    @Override
+                    public int getInterfaceVersion() {
+                        return super.VERSION;
                     }
                 };
         when(mMockCarHost.getHost(any())).thenReturn(navHostStub.asBinder());
@@ -289,6 +305,87 @@ public class NavigationManagerTest {
                 mNavigationListener);
 
         verify(mNavigationListener).onAutoDriveEnabled();
+    }
+
+    @Test
+    public void canSetVoiceAssistantCapabilities_returnsTrueForAutomotive() {
+        mTestCarContext.updateHandshakeInfo(new HandshakeInfo("com.example.host", 9));
+        Shadows.shadowOf(mTestCarContext.getPackageManager()).setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, true);
+
+        assertTrue(mNavigationManager.canSetVoiceAssistantCapabilities());
+    }
+
+    @Test
+    public void setVoiceAssistantCapabilities_sendsCapabilities() throws RemoteException {
+        mTestCarContext.updateHandshakeInfo(new HandshakeInfo("com.example.host", 9));
+        Shadows.shadowOf(mTestCarContext.getPackageManager()).setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, true);
+
+        NavigationVoiceAssistantCapabilities capabilities =
+                new NavigationVoiceAssistantCapabilities.Builder()
+                        .addSupportedAction(
+                                NavigationVoiceAssistantCapabilities.ACTION_ALLOW_AND_AVOID_FERRIES)
+                        .build();
+
+        mNavigationManager.setVoiceAssistantCapabilities(capabilities);
+
+        verify(mMockNavHost).setVoiceAssistantCapabilities(any(Bundleable.class));
+    }
+
+    @Test
+    public void setVoiceAssistantCapabilities_unsupportedApiLevel_throwsException() {
+        // API level < 9
+        mTestCarContext.updateHandshakeInfo(new HandshakeInfo("com.example.host", 8));
+        Shadows.shadowOf(mTestCarContext.getPackageManager()).setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, true);
+
+        NavigationVoiceAssistantCapabilities capabilities =
+                new NavigationVoiceAssistantCapabilities.Builder()
+                        .build();
+
+        assertThrows(IllegalStateException.class,
+                () -> mNavigationManager.setVoiceAssistantCapabilities(capabilities));
+    }
+
+    @Test
+    public void setVoiceAssistantCapabilities_unsupportedSystemFeature_throwsException() {
+        mTestCarContext.updateHandshakeInfo(new HandshakeInfo("com.example.host", 9));
+        Shadows.shadowOf(mTestCarContext.getPackageManager()).setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, false);
+
+        NavigationVoiceAssistantCapabilities capabilities =
+                new NavigationVoiceAssistantCapabilities.Builder()
+                        .build();
+
+        assertThrows(IllegalStateException.class,
+                () -> mNavigationManager.setVoiceAssistantCapabilities(capabilities));
+    }
+
+    @Test
+    public void setVoiceAssistantCapabilities_notMainThread_throwsException()
+            throws Exception {
+        mTestCarContext.updateHandshakeInfo(new HandshakeInfo("com.example.host", 9));
+        Shadows.shadowOf(mTestCarContext.getPackageManager()).setSystemFeature(
+                PackageManager.FEATURE_AUTOMOTIVE, true);
+
+        NavigationVoiceAssistantCapabilities capabilities =
+                new NavigationVoiceAssistantCapabilities.Builder()
+                        .build();
+
+        java.util.concurrent.atomic.AtomicReference<Exception> exception =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread thread = new Thread(() -> {
+            try {
+                mNavigationManager.setVoiceAssistantCapabilities(capabilities);
+            } catch (Exception e) {
+                exception.set(e);
+            }
+        });
+        thread.start();
+        thread.join();
+
+        assertTrue(exception.get() instanceof IllegalStateException);
     }
 
     static class SynchronousExecutor implements Executor {

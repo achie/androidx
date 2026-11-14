@@ -25,19 +25,21 @@ package androidx.camera.viewfinder.core
  * @property width The requested surface width.
  * @property height The requested surface height.
  * @property implementationMode The [ImplementationMode] to apply to the viewfinder. Defaults to
- *   `null`, which will use the viewfinder's default implementation mode.
+ *   `null`, which chooses a compatible default (including [ImplementationMode.EMBEDDED] on API
+ *   levels below 29 for [TransformationMode.PRE_APPLIED] sources). Setting a non-null mode
+ *   overrides compatibility defaults.
  * @property requestId An optional request ID to allow requests to be differentiated via [equals].
  *   Defaults to `null`.
  * @constructor Creates a new surface request with given resolution, and optional implementation
  *   mode request ID.
  */
-class ViewfinderSurfaceRequest
+public class ViewfinderSurfaceRequest
 @JvmOverloads
 constructor(
-    val width: Int,
-    val height: Int,
-    val implementationMode: ImplementationMode? = null,
-    val requestId: String? = null,
+    public val width: Int,
+    public val height: Int,
+    public val implementationMode: ImplementationMode? = null,
+    public val requestId: String? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -74,7 +76,7 @@ constructor(
      * while keeping the rest unchanged.
      */
     @JvmSynthetic
-    fun copy(
+    public fun copy(
         width: Int = this.width,
         height: Int = this.height,
         implementationMode: ImplementationMode? = this.implementationMode,

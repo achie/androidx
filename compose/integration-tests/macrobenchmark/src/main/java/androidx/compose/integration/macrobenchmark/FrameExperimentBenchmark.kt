@@ -20,11 +20,13 @@ import android.content.Intent
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingGfxInfoMetric
-import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.testutils.createCompilationParams
+import androidx.testutils.defaultComposeScrollingMetrics
+import androidx.testutils.defaultMemoryMetrics
+import androidx.tracing.trace
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -59,7 +61,10 @@ class FrameExperimentBenchmark {
     private fun benchmark(mode: FrameMode) {
         benchmarkRule.measureRepeated(
             packageName = PACKAGE_NAME,
-            metrics = listOf(FrameTimingMetric(), FrameTimingGfxInfoMetric()),
+            metrics =
+                defaultComposeScrollingMetrics() +
+                    FrameTimingGfxInfoMetric() +
+                    defaultMemoryMetrics(),
             compilationMode = CompilationMode.DEFAULT,
             iterations = 1,
             setupBlock = {
@@ -69,8 +74,10 @@ class FrameExperimentBenchmark {
                 startActivityAndWait(intent)
             },
         ) {
-            device.click(device.displayWidth / 2, device.displayHeight / 2)
-            Thread.sleep(4_000) // empirically enough to produce expected frames
+            trace("FrameExperiment#clickAndSettle") {
+                device.click(device.displayWidth / 2, device.displayHeight / 2)
+                Thread.sleep(4_000) // empirically enough to produce expected frames
+            }
         }
     }
 

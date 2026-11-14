@@ -28,66 +28,26 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.MultiResolutionImageReader
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.ExtensionSessionConfiguration
 import android.hardware.camera2.params.InputConfiguration
+import android.hardware.camera2.params.MultiResolutionStreamConfigurationMap
 import android.hardware.camera2.params.MultiResolutionStreamInfo
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
 import android.media.ImageWriter
-import android.os.Handler
+import android.util.Range
 import android.util.Size
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.camera.camera2.pipe.CameraMetadata
 import androidx.camera.camera2.pipe.CameraMetadata.Companion.availableVideoStabilizationModes
+import androidx.camera.camera2.pipe.CameraOnActiveOutputSurfacesListener
 import java.util.concurrent.Executor
-import kotlin.reflect.KClass
-
-@RequiresApi(24)
-internal object Api24Compat {
-    @JvmStatic
-    @Throws(CameraAccessException::class)
-    @Suppress("deprecation")
-    fun createCaptureSessionByOutputConfigurations(
-        cameraDevice: CameraDevice,
-        outputConfig: List<OutputConfiguration?>,
-        stateCallback: CameraCaptureSession.StateCallback,
-        handler: Handler?,
-    ) {
-        cameraDevice.createCaptureSessionByOutputConfigurations(
-            outputConfig,
-            stateCallback,
-            handler,
-        )
-    }
-
-    @JvmStatic
-    @Throws(CameraAccessException::class)
-    @Suppress("deprecation")
-    fun createReprocessableCaptureSessionByConfigurations(
-        cameraDevice: CameraDevice,
-        inputConfig: InputConfiguration,
-        outputs: List<OutputConfiguration?>,
-        stateCallback: CameraCaptureSession.StateCallback,
-        handler: Handler?,
-    ) {
-        cameraDevice.createReprocessableCaptureSessionByConfigurations(
-            inputConfig,
-            outputs,
-            stateCallback,
-            handler,
-        )
-    }
-
-    @JvmStatic
-    fun getSurfaceGroupId(outputConfiguration: OutputConfiguration): Int {
-        return outputConfiguration.surfaceGroupId
-    }
-}
 
 @RequiresApi(26)
 internal object Api26Compat {
@@ -230,8 +190,8 @@ internal object Api28Compat {
 
     @JvmStatic
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> unwrapAsHardwareBuffer(image: Image, type: KClass<T>): T? {
-        if (type == HardwareBuffer::class) {
+    fun <T : Any> unwrapAsHardwareBuffer(image: Image, type: Class<T>): T? {
+        if (type == HardwareBuffer::class.java) {
             return image.getHardwareBuffer() as T?
         }
         return null
@@ -241,10 +201,27 @@ internal object Api28Compat {
     fun getHardwareBuffer(image: Image): HardwareBuffer? {
         return image.hardwareBuffer
     }
+
+    @JvmStatic
+    fun getKeys(captureRequest: CaptureRequest): List<CaptureRequest.Key<*>> {
+        return captureRequest.keys
+    }
+
+    @JvmStatic
+    fun getKeys(captureResult: CaptureResult): List<CaptureResult.Key<*>> {
+        return captureResult.keys
+    }
 }
 
 @RequiresApi(29)
 internal object Api29Compat {
+    @JvmStatic
+    fun getKeysNeedingPermission(
+        cameraCharacteristics: CameraCharacteristics
+    ): List<CameraCharacteristics.Key<*>>? {
+        return cameraCharacteristics.keysNeedingPermission
+    }
+
     @JvmStatic
     fun imageReaderNewInstance(
         width: Int,
@@ -295,10 +272,9 @@ internal object Api31Compat {
             val inputData = inputConfigData.first()
             return InputConfiguration(inputData.width, inputData.height, inputData.format)
         }
-        val multiResolutionInput =
-            inputConfigData.map { input ->
-                MultiResolutionStreamInfo(input.width, input.height, cameraId)
-            }
+        val multiResolutionInput = inputConfigData.map { input ->
+            MultiResolutionStreamInfo(input.width, input.height, cameraId)
+        }
         return InputConfiguration(multiResolutionInput, inputConfigData.first().format)
     }
 
@@ -365,6 +341,19 @@ internal object Api31Compat {
         extension: Int,
         klass: Class<*>,
     ): List<Size> = extensionCharacteristics.getExtensionSupportedSizes(extension, klass)
+
+    @JvmStatic
+    fun getEstimatedCaptureLatencyRangeMillis(
+        extensionCharacteristics: CameraExtensionCharacteristics,
+        extension: Int,
+        captureSize: Size,
+        imageFormat: Int,
+    ): Range<Long>? =
+        extensionCharacteristics.getEstimatedCaptureLatencyRangeMillis(
+            extension,
+            captureSize,
+            imageFormat,
+        )
 }
 
 @RequiresApi(33)
@@ -455,10 +444,26 @@ internal object Api33Compat {
             }
             .build()
     }
+
+    @JvmStatic fun getDataSpace(image: Image) = image.dataSpace
+
+    @JvmStatic
+    fun setDataSpace(image: Image, value: Int) {
+        image.dataSpace = value
+    }
 }
 
 @RequiresApi(34)
 internal object Api34Compat {
+    @JvmStatic
+    fun setReadoutTimestampEnabled(outputConfiguration: OutputConfiguration, enabled: Boolean) {
+        outputConfiguration.setReadoutTimestampEnabled(enabled)
+    }
+
+    @JvmStatic
+    fun isReadoutTimestampEnabled(outputConfiguration: OutputConfiguration): Boolean =
+        outputConfiguration.isReadoutTimestampEnabled
+
     @JvmStatic
     fun isPostviewAvailable(
         extensionCharacteristics: CameraExtensionCharacteristics,
@@ -553,5 +558,71 @@ internal object Api35Compat {
         cameraCharacteristics: CameraCharacteristics
     ): List<CameraCharacteristics.Key<*>>? {
         return cameraCharacteristics.availableSessionCharacteristicsKeys
+    }
+
+    @JvmStatic
+    fun getExtensionKeys(
+        extensionCharacteristics: CameraExtensionCharacteristics,
+        extension: Int,
+    ): Set<CameraCharacteristics.Key<*>> {
+        return extensionCharacteristics.getKeys(extension)
+    }
+
+    @JvmStatic
+    fun <T> getExtensionCharacteristic(
+        extensionCharacteristics: CameraExtensionCharacteristics,
+        extension: Int,
+        key: CameraCharacteristics.Key<T>,
+    ): T? {
+        return extensionCharacteristics.get(extension, key)
+    }
+}
+
+@RequiresApi(37)
+internal object Api37Compat {
+    @JvmStatic
+    fun isExtensionSupported(
+        extensionCharacteristics: CameraExtensionCharacteristics,
+        extension: Int,
+    ): Boolean {
+        return extensionCharacteristics.isExtensionSupported(extension)
+    }
+
+    @JvmStatic
+    fun isConcurrentReadersSupported(
+        multiResolutionStreamConfigurationMap: MultiResolutionStreamConfigurationMap,
+        format: Int,
+    ): Boolean {
+        return multiResolutionStreamConfigurationMap.isConcurrentReadersSupported(format)
+    }
+
+    @JvmStatic
+    fun buildMultiResolutionImageReader(
+        streams: Collection<MultiResolutionStreamInfo>,
+        format: Int,
+        maxImages: Int,
+        usage: Long? = null,
+        concurrentOutputsEnabled: Boolean? = null,
+    ): MultiResolutionImageReader {
+        return MultiResolutionImageReader.Builder(streams, format, maxImages)
+            .apply {
+                if (usage != null) setUsage(usage)
+                if (concurrentOutputsEnabled != null) {
+                    setConcurrentOutputsEnabled(concurrentOutputsEnabled)
+                }
+            }
+            .build()
+    }
+
+    @JvmStatic
+    fun setOnActiveOutputSurfacesListener(
+        multiResolutionImageReader: MultiResolutionImageReader,
+        executor: Executor,
+        listener: CameraOnActiveOutputSurfacesListener,
+    ) {
+        multiResolutionImageReader.setOnActiveOutputSurfacesListener(
+            executor,
+            listener::onActiveOutputSurfaces,
+        )
     }
 }

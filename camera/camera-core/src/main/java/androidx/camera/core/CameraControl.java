@@ -19,53 +19,80 @@ package androidx.camera.core;
 import androidx.annotation.FloatRange;
 import androidx.annotation.IntRange;
 import androidx.annotation.RestrictTo;
+import androidx.camera.core.impl.MutableConfig;
+import androidx.camera.core.impl.MutableOptionsBundle;
 import androidx.camera.core.impl.utils.futures.Futures;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.jspecify.annotations.NonNull;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Future;
 
 /**
- * The {@link CameraControl} provides various asynchronous operations like zoom, focus and
- * metering which affects output of all {@link UseCase}s currently bound to that camera.
+ * Provides asynchronous camera operations, such as zoom, focus and metering, torch, and exposure
+ * compensation, that affect the output of all {@link UseCase}s currently bound to the camera.
  *
  * <p>The application can retrieve the {@link CameraControl} instance via
  * {@link Camera#getCameraControl()}. {@link CameraControl} is ready to start operations
  * immediately after {@link Camera} is retrieved and {@link UseCase}s are bound to that camera.
- * When all {@link UseCase}s are unbound, or when camera is closing or closed because
- * lifecycle onStop happens, the {@link CameraControl} will reject all operations.
  *
- * <p>Each method Of {@link CameraControl} returns a {@link ListenableFuture} which apps can use to
- * check the asynchronous result. If the operation is not allowed in current state, the returned
- * {@link ListenableFuture} will fail immediately with
- * {@link CameraControl.OperationCanceledException}.
+ * <p>Settings applied through this {@code CameraControl} remain in effect while
+ * {@link UseCase}s are bound to the camera, including when only some of the bound
+ * {@link UseCase}s are unbound. When all {@link UseCase}s are unbound from the camera, or when
+ * the camera is closed because the lifecycle it is bound to is stopped, pending operations fail
+ * with {@link CameraControl.OperationCanceledException}, and the zoom, torch, low-light boost,
+ * focus and metering, and exposure compensation settings are reset to their default values.
+ *
+ * <p>Each method of {@code CameraControl} returns a {@link ListenableFuture} which apps can use to
+ * check the asynchronous result. If an operation is not allowed in the current state, for example
+ * when the camera is closed, the returned {@link ListenableFuture} fails immediately with
+ * {@link CameraControl.OperationCanceledException}. If an operation is not supported by the
+ * current session configuration, for example when a CameraX extension is enabled, the returned
+ * {@link ListenableFuture} fails with {@link IllegalStateException}.
  */
 public interface CameraControl {
     /**
-     * Enable the torch or disable the torch.
+     * Enables or disables the torch.
      *
-     * <p>{@link CameraInfo#getTorchState()} can be used to query the torch state.
-     * If the camera doesn't have a flash unit (see {@link CameraInfo#hasFlashUnit()}), then the
-     * call will do nothing, the returned {@link ListenableFuture} will complete immediately with
-     * a failed result and the torch state will be {@link TorchState#OFF}.
+     * <p>{@link CameraInfo#getTorchState()} can be used to query or observe the torch state. When
+     * called while the camera is open and has a flash unit, {@link CameraInfo#getTorchState()} is
+     * updated without waiting for the camera to apply the change.
+     *
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalStateException} if the camera doesn't have a flash unit (see
+     * {@link CameraInfo#hasFlashUnit()}) or torch is not supported by the current session
+     * configuration. The call does nothing, the future fails immediately, and the torch state
+     * remains {@link TorchState#OFF}.
+     * <li>{@link OperationCanceledException} if a newer call is made or the camera is closed
+     * before completion.
+     * </ul>
+     *
+     * <p>Cancellation of the returned future is a no-op.
      *
      * <p>When the torch is enabled, the torch will remain enabled during photo capture regardless
      * of the flashMode setting. When the torch is disabled, flash will function as the flash mode
      * set by either {@link ImageCapture#setFlashMode(int)} or
      * {@link ImageCapture.Builder#setFlashMode(int)}.
      *
-     * @param torch true to turn on the torch, false to turn it off.
-     * @return A {@link ListenableFuture} which is successful when the torch was changed to the
-     * value specified. It fails when it is unable to change the torch state. Cancellation of
-     * this future is a no-op.
+     * <p>Torch and low-light boost (see {@link #enableLowLightBoostAsync(boolean)}) are mutually
+     * exclusive and follow a "last setting wins" policy. Enabling the torch will automatically
+     * turn off low-light boost if it is active. Disabling the torch will not restore low-light
+     * boost.
+     *
+     * @param torch {@code true} to turn on the torch, {@code false} to turn it off.
+     * @return a {@link ListenableFuture} that completes when the torch state has been updated on
+     * the camera.
      */
     @NonNull ListenableFuture<Void> enableTorch(boolean torch);
 
     /**
-     * Enables low-light boost mode.
+     * Enables or disables low-light boost mode.
      *
      * <p>Devices running Android 15 or higher can provide support for low-light boost. This
      * feature can automatically adjust the brightness of the preview, video or image analysis
@@ -91,28 +118,37 @@ public interface CameraControl {
      * <p>Note that this mode may interact with other configurations:
      *
      * <ul>
-     * <li>When low-light boost is on, the flash or torch functionality may be unavailable.
+     * <li>Low-light boost and torch (see {@link #enableTorch(boolean)}) are mutually exclusive
+     * and follow a "last setting wins" policy. Enabling low-light boost will automatically turn
+     * off the torch if it is active, and enabling the torch will automatically turn off low-light
+     * boost.
+     * <li>When capturing a picture with {@link ImageCapture} while low-light boost is active,
+     * flash (if enabled by {@link ImageCapture#setFlashMode(int)}) is allowed to fire for the
+     * capture, and low-light boost will remain active for preview.
      * <li>When frame rate configuration results in an FPS exceeding 30, low-light boost will be
-     * disabled and the state will always be ({@link LowLightBoostState#OFF}).
-     * <li>Low-light boost is not currently supported for HDR 10-bit capture sessions. If the
-     * dynamic range configuration results in a 10-bit capture session, low-light boost will be
-     * disabled and the state will always be ({@link LowLightBoostState#OFF}).
+     * disabled and the state will always be {@link LowLightBoostState#OFF}.
      * </ul>
      *
-     * <p>Therefore, to use flash or torch functionality, low-light boost mode must be disabled.
-     * To ensure low-light boost mode functions correctly, the following conditions must be met:
+     * <p>To ensure low-light boost mode functions correctly, the frame rate must not exceed 30 FPS.
+     *
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
      * <ul>
-     * <li> The frame rate must not exceed 30 FPS.
-     * <li> The dynamic range setting must not be 10-bit.
+     * <li>{@link IllegalStateException} if low-light boost is not available because the device
+     * does not support it or there is a settings conflict. The failure reason is provided in the
+     * exception's message.
+     * <li>{@link OperationCanceledException} if a newer value is set or the camera is closed
+     * before completion.
      * </ul>
      *
-     * @param lowLightBoost true to turn on the low-light boost mode, false to turn it off.
-     * @return A {@link ListenableFuture} which is successful when the low-light boost mode was
-     * changed to the value specified. It fails with {@link IllegalStateException} when low-light
-     * boost is not available due to the device does not support it or there is a settings
-     * conflict. It fails with {@link OperationCanceledException} if a newer value is set or
-     * camera is closed. The failure reason will be provided in the exception' message.
-     * Cancellation of this future is a no-op.
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * <p>Use {@link CameraInfo#getLowLightBoostState()} to observe whether low-light boost is
+     * active.
+     *
+     * @param lowLightBoost {@code true} to turn on low-light boost mode, {@code false} to turn it
+     *                      off.
+     * @return a {@link ListenableFuture} that completes when low-light boost mode has been updated
+     * on the camera.
      * @see CameraInfo#isLowLightBoostSupported()
      */
     default @NonNull ListenableFuture<Void> enableLowLightBoostAsync(boolean lowLightBoost) {
@@ -122,33 +158,52 @@ public interface CameraControl {
     /**
      * Starts a focus and metering action configured by the {@link FocusMeteringAction}.
      *
-     * <p>It will trigger an auto focus action and enable AF/AE/AWB metering regions. The action
-     * is configured by a {@link FocusMeteringAction} which contains the configuration of
-     * multiple AF/AE/AWB {@link MeteringPoint}s and an auto-cancel duration. See
-     * {@link FocusMeteringAction} for more details.
+     * <p>By default, it triggers an autofocus scan and updates the AF/AE/AWB metering regions. The
+     * action is configured by a {@link FocusMeteringAction} which contains the configuration of
+     * multiple AF/AE/AWB {@link MeteringPoint}s, the 3A locking mode, and an auto-cancel duration.
+     * See {@link FocusMeteringAction} for more details.
      *
      * <p>Only one {@link FocusMeteringAction} is allowed to run at a time. If multiple
      * {@link FocusMeteringAction} are executed in a row, only the latest one will work and
-     * other actions will be cancelled.
+     * other actions will be cancelled. However, starting a new action does not unlock 3A
+     * components (AF, AE, or AWB) that were already locked by a previous action if they are not
+     * included in the new action's {@link FocusMeteringAction.Builder#setLockingMode(int) locking
+     * mode}. 3A locks are released and continuous autofocus is restored only when
+     * {@link #cancelFocusAndMetering()} is called or the latest action's auto-cancel duration is
+     * reached.
      *
      * <p>If the {@link FocusMeteringAction} specifies more AF/AE/AWB points than what is
      * supported on the current device, only the first point and then in order up to the number of
      * points supported by the device will be enabled.
      *
-     * <p>If none of the points with either AF/AE/AWB can be supported on the device or none of
-     * the points generates valid metering rectangles, the returned {@link ListenableFuture} in
-     * {@link CameraControl#startFocusAndMetering(FocusMeteringAction)} will fail immediately.
+     * <p>When autofocus completes and AF/AE/AWB regions are updated, the returned
+     * {@link ListenableFuture} completes with {@link FocusMeteringResult}. If autofocus does not
+     * converge within a time limit, the future completes with
+     * {@link FocusMeteringResult#isFocusSuccessful()} set to {@code false}, and continuous
+     * autofocus remains disabled until the action is cancelled. If no AF points are added,
+     * autofocus is not triggered and {@link FocusMeteringResult#isFocusSuccessful()} is
+     * {@code false}. If {@link FocusMeteringAction#FLAG_AF} is excluded from the locking mode,
+     * autofocus is not triggered and the future completes once the metering regions and any
+     * requested AE/AWB locks are updated.
      *
-     * @see FocusMeteringAction
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalArgumentException} if none of the specified AF/AE/AWB
+     * {@link MeteringPoint}s are supported on the device or none of the points generate valid
+     * metering rectangles. The future fails immediately.
+     * <li>{@link IllegalStateException} if focus and metering is not supported by the current
+     * session configuration.
+     * <li>{@link OperationCanceledException} if a newer action is started,
+     * {@link #cancelFocusAndMetering()} is called, the auto-cancel duration elapses, or the camera
+     * is closed before completion.
+     * </ul>
+     *
+     * <p>Cancellation of the returned future is a no-op.
      *
      * @param action the {@link FocusMeteringAction} to be executed.
-     * @return A {@link ListenableFuture} which completes with {@link FocusMeteringAction} when
-     * auto focus is done and AF/AE/AWB regions are updated. In case AF points are not added,
-     * auto focus will not be triggered and this {@link ListenableFuture} completes when
-     * AE/AWB regions are updated. It fails with {@link OperationCanceledException} if there is
-     * newer value being set or camera is closed. If none of the specified AF/AE/AWB
-     * {@link MeteringPoint} is supported, it fails with {@link IllegalArgumentException}.
-     * Cancellation of this future is a no-op.
+     * @return a {@link ListenableFuture} that completes with the {@link FocusMeteringResult} when
+     * the focus and metering action finishes.
+     * @see FocusMeteringAction
      */
     @NonNull ListenableFuture<FocusMeteringResult> startFocusAndMetering(
             @NonNull FocusMeteringAction action);
@@ -156,31 +211,49 @@ public interface CameraControl {
     /**
      * Cancels current {@link FocusMeteringAction} and clears AF/AE/AWB regions.
      *
-     * <p>Clear the AF/AE/AWB regions and update current AF mode to continuous AF (if
-     * supported). If current {@link FocusMeteringAction} has not completed, the returned
-     * {@link ListenableFuture} in {@link #startFocusAndMetering} will fail with
+     * <p>Clears the AF/AE/AWB regions, unlocks any 3A (AF, AE, AWB) locks acquired by
+     * {@link #startFocusAndMetering(FocusMeteringAction)}, and updates current AF mode to
+     * continuous AF (if supported). If current {@link FocusMeteringAction} has not completed, the
+     * returned {@link ListenableFuture} in {@link #startFocusAndMetering} will fail with
      * {@link OperationCanceledException}.
      *
-     * @return A {@link ListenableFuture} which completes when the AF/AE/AWB regions is clear and AF
-     * mode is set to continuous focus (if supported). Cancellation of this future is a no-op.
+     * <p>The returned {@link ListenableFuture} fails with {@link OperationCanceledException} if a
+     * newer focus and metering operation is started or the camera is closed before completion.
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @return a {@link ListenableFuture} that completes when the AF/AE/AWB regions are cleared,
+     * 3A locks are unlocked, and AF mode is set to continuous focus (if supported).
      */
     @NonNull ListenableFuture<Void> cancelFocusAndMetering();
 
     /**
      * Sets current zoom by ratio.
      *
-     * <p>It modifies both current zoomRatio and linearZoom so if apps are observing
-     * zoomRatio or linearZoom, they will get the update as well. If the ratio is
-     * smaller than {@link ZoomState#getMinZoomRatio()} or larger than
-     * {@link ZoomState#getMaxZoomRatio()}, the returned {@link ListenableFuture} will fail with
-     * {@link IllegalArgumentException} and it won't modify current zoom ratio. It is the
-     * applications' duty to clamp the ratio.
+     * <p>It modifies both current {@code zoomRatio} and {@code linearZoom} in
+     * {@link CameraInfo#getZoomState()}, so if apps are observing {@code zoomRatio} or
+     * {@code linearZoom}, they will get the update as well. When a valid ratio is provided, the
+     * {@link ZoomState} in {@link CameraInfo#getZoomState()} is updated immediately without
+     * waiting for the camera to apply the zoom, while the actual camera zoom adjustment is
+     * performed asynchronously.
      *
-     * @return a {@link ListenableFuture} which is finished when current repeating request
-     * result contains the requested zoom ratio. It fails with
-     * {@link OperationCanceledException} if there is newer value being set or camera is closed. If
-     * the ratio is out of range, it fails with {@link IllegalArgumentException}. Cancellation of
-     * this future is a no-op.
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalArgumentException} if the ratio is smaller than
+     * {@link ZoomState#getMinZoomRatio()} or larger than {@link ZoomState#getMaxZoomRatio()}. The
+     * current zoom ratio is not modified. It is the application's duty to clamp the ratio.
+     * <li>{@link IllegalStateException} if zoom is not supported by the current session
+     * configuration.
+     * <li>{@link OperationCanceledException} if a newer zoom value is set or the camera is closed
+     * before completion.
+     * </ul>
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @param ratio the zoom ratio to set, from {@link ZoomState#getMinZoomRatio()} to
+     *              {@link ZoomState#getMaxZoomRatio()} inclusive.
+     * @return a {@link ListenableFuture} that completes when the camera has applied the requested
+     * zoom.
      */
     @NonNull ListenableFuture<Void> setZoomRatio(float ratio);
 
@@ -191,66 +264,104 @@ public interface CameraControl {
      * value, for use with slider UI elements (while {@link #setZoomRatio(float)} works well
      * for pinch-zoom gestures).
      *
-     * <p>It modifies both current zoomRatio and linearZoom so if apps are observing
-     * zoomRatio or linearZoom, they will get the update as well. If the linearZoom is not in
-     * the range [0..1], the returned {@link ListenableFuture} will fail with
-     * {@link IllegalArgumentException} and it won't modify current linearZoom and zoomRatio. It is
-     * application's duty to clamp the linearZoom within [0..1].
+     * <p>It modifies both current {@code zoomRatio} and {@code linearZoom} in
+     * {@link CameraInfo#getZoomState()}, so if apps are observing {@code zoomRatio} or
+     * {@code linearZoom}, they will get the update as well. When a valid {@code linearZoom} is
+     * provided, the {@link ZoomState} in {@link CameraInfo#getZoomState()} is updated immediately
+     * without waiting for the camera to apply the zoom, while the actual camera zoom adjustment is
+     * performed asynchronously.
      *
-     * @return a {@link ListenableFuture} which is finished when current repeating request
-     * result contains the requested linearZoom. It fails with
-     * {@link OperationCanceledException} if there is newer value being set or camera is closed.
-     * If linearZoom is not in range [0..1], it fails with {@link IllegalArgumentException}.
-     * Cancellation of this future is a no-op.
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalArgumentException} if the linearZoom is not in the range {@code [0..1]}.
+     * The current linearZoom and zoomRatio are not modified. It is the application's duty to
+     * clamp the linearZoom within {@code [0..1]}.
+     * <li>{@link IllegalStateException} if zoom is not supported by the current session
+     * configuration.
+     * <li>{@link OperationCanceledException} if a newer zoom value is set or the camera is closed
+     * before completion.
+     * </ul>
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @param linearZoom the linear zoom value to set, in the range {@code [0..1]}.
+     * @return a {@link ListenableFuture} that completes when the camera has applied the requested
+     * zoom.
      */
     @NonNull ListenableFuture<Void> setLinearZoom(@FloatRange(from = 0f, to = 1f) float linearZoom);
 
     /**
-     * Set the exposure compensation value for the camera.
+     * Sets the exposure compensation index for the camera.
+     *
+     * <p>When a valid exposure compensation index is provided while the camera is open,
+     * {@link ExposureState#getExposureCompensationIndex()} (via
+     * {@link CameraInfo#getExposureState()}) is updated immediately, while the returned
+     * {@link ListenableFuture} completes asynchronously with the new target exposure index once
+     * auto-exposure converges to the target exposure.
      *
      * <p>Only one {@link #setExposureCompensationIndex} is allowed to run at the same time. If
      * multiple {@link #setExposureCompensationIndex} are executed in a row, only the latest one
-     * setting will be kept in the camera. The other actions will be cancelled and the
-     * ListenableFuture will fail with the {@link OperationCanceledException}. After all the
-     * previous actions is cancelled, the camera device will adjust the brightness according to
+     * setting will be kept in the camera. The other actions will be cancelled and their
+     * {@link ListenableFuture}s will fail with {@link OperationCanceledException}. After all the
+     * previous actions are cancelled, the camera device will adjust the brightness according to
      * the latest setting.
      *
-     * @param value the exposure compensation value to set on the camera which must be within
-     *              the range of ExposureState#getExposureCompensationRange(). If the exposure
-     *              compensation value is not in the range defined above, the returned
-     *              {@link ListenableFuture} will fail with {@link IllegalArgumentException} and
-     *              the value from ExposureState#getExposureCompensationIndex will not change.
-     * @return a {@link ListenableFuture} which is finished when the camera reaches the newly
-     * requested exposure target. Cancellation of this future is a no-op. The result of the
-     * ListenableFuture is the new target exposure value, or cancelled with the following
-     * exceptions,
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
      * <ul>
-     * <li>{@link OperationCanceledException} when the camera is closed or a
-     * new {@link #setExposureCompensationIndex} is called.
-     * <li>{@link IllegalArgumentException} while the exposure compensation value to ranging
-     * within {@link ExposureState#getExposureCompensationRange}.
+     * <li>{@link IllegalArgumentException} if exposure compensation is not supported on the
+     * camera (see {@link ExposureState#isExposureCompensationSupported()}) or {@code value} is
+     * outside {@link ExposureState#getExposureCompensationRange()}.
+     * <li>{@link IllegalStateException} if exposure compensation is not supported by the current
+     * session configuration.
+     * <li>{@link OperationCanceledException} if the camera is closed, or a newer
+     * {@link #setExposureCompensationIndex} call is made before the camera reaches the requested
+     * exposure target.
      * </ul>
+     *
+     * <p>When the future fails with {@link IllegalArgumentException} or
+     * {@link IllegalStateException}, it fails immediately without changing
+     * {@link ExposureState#getExposureCompensationIndex()}.
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @param value the exposure compensation index to set on the camera, within
+     *              {@link ExposureState#getExposureCompensationRange()}.
+     * @return a {@link ListenableFuture} that completes with the new target exposure compensation
+     * index when the camera reaches the requested exposure target.
      */
     @NonNull ListenableFuture<Integer> setExposureCompensationIndex(int value);
 
     /**
      * Sets torch strength level.
      *
-     * <p>The torch strength level only applies on the case that torch is turned on by
+     * <p>The torch strength level only applies when the torch is turned on by
      * {@link #enableTorch(boolean)} and doesn't affect other usages of the flash unit.
      *
      * <p>Use the value returned by {@link CameraInfo#getMaxTorchStrengthLevel()} to set the maximum
-     * level the device can provide and use {@code 1} to set the minimum level. If a level
-     * greater than the maximum value or less than {@code 1} is set, the returned
-     * {@link ListenableFuture} will fail with an {@link IllegalArgumentException} and it won't
-     * modify the torch strength.
+     * level the device can provide and use {@code 1} to set the minimum level. When a valid level
+     * is provided, {@link CameraInfo#getTorchStrengthLevel()} is updated without waiting for the
+     * camera to apply it. This method can also be called when the torch is currently
+     * {@link TorchState#OFF}, in which case the returned {@link ListenableFuture} completes
+     * immediately and the new strength level will take effect the next time
+     * {@link #enableTorch(boolean)} is called with {@code true}.
      *
-     * <p>If the device doesn't have a flash unit or doesn't support configuring torch strength
-     * level, the returned {@link ListenableFuture} will fail with an
-     * {@link UnsupportedOperationException}.
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalArgumentException} if the level is greater than
+     * {@link CameraInfo#getMaxTorchStrengthLevel()} or less than {@code 1}. The torch strength is
+     * not modified.
+     * <li>{@link UnsupportedOperationException} if the device doesn't have a flash unit or
+     * doesn't support configuring torch strength level (see
+     * {@link CameraInfo#isTorchStrengthSupported()}).
+     * <li>{@link OperationCanceledException} if a newer value is set or the camera is closed
+     * before the strength is applied.
+     * </ul>
      *
-     * @param torchStrengthLevel The desired torch strength level.
-     * @return a {@link ListenableFuture} that is completed when the torch strength has been
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @param torchStrengthLevel the desired torch strength level, from {@code 1} to
+     *                           {@link CameraInfo#getMaxTorchStrengthLevel()}.
+     * @return a {@link ListenableFuture} that completes when the torch strength level has been
      * applied.
      */
     @SuppressWarnings("AsyncSuffixFuture")
@@ -261,13 +372,137 @@ public interface CameraControl {
     }
 
     /**
-     * An exception representing a failure that the operation is canceled which might be caused by
-     * a new value is set or camera is closed.
+     * Applies interoperability configuration to this camera control.
+     *
+     * <p>To configure Camera2 options, use {@code Camera2Interop.forCameraControl(configurator)}
+     * (from the {@code camera-camera2} artifact) to create a configurator, then pass it to this
+     * method.
+     *
+     * <p>All parameters set within a single {@code configurator} are applied together atomically in
+     * a single repeating capture request update. Subsequent calls to {@code applyInteropAsync} add
+     * to or update the existing parameters incrementally without clearing previously set keys,
+     * unless explicitly cleared via methods such as
+     * {@code CameraControlCamera2Interop.clearCaptureRequestOption} or
+     * {@code CameraControlCamera2Interop.clearAllCaptureRequestOptions}. This overwrites options
+     * set with {@code SessionConfigInterop} via {@link SessionConfig.Builder#setInterop}.
+     *
+     * <p>The returned {@link ListenableFuture} fails with
+     * {@link CameraControl.OperationCanceledException} if a newer configuration is applied before
+     * this operation takes effect or if the camera is closed.
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * <p><b>Note:</b> Using Camera2 interop options can override internal CameraX
+     * configurations. If an option configured via interop conflicts with options required by
+     * CameraX internally, the option from Camera2Interop will override, which may result in
+     * unexpected behavior or interfere with 3A routines and camera control APIs.
+     *
+     * <p><b>Warning:</b> Callbacks configured via interop receive raw
+     * {@link android.hardware.camera2.CameraCaptureSession} instances. Directly invoking
+     * state-altering methods on these raw objects (such as
+     * {@link android.hardware.camera2.CameraCaptureSession#close()} or
+     * {@link android.hardware.camera2.CameraCaptureSession#abortCaptures()}) bypasses CameraX
+     * pipeline management and may cause state desynchronization, stream interruption, or
+     * application crashes.
+     *
+     * @param configurator the configurator that sets the interoperability options.
+     * @return a {@link ListenableFuture} that completes with {@code null} when the
+     * interoperability options have been applied.
+     */
+    default @NonNull ListenableFuture<Void> applyInteropAsync(
+            @NonNull InteropConfigurator<? super CameraControl> configurator) {
+        return Futures.immediateFailedFuture(new OperationCanceledException("Not supported!"));
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    default @NonNull MutableConfig getInteropMutableConfig() {
+        return MutableOptionsBundle.create();
+    }
+
+    /**
+     * Dynamically updates the active subset of {@link UseCase}s receiving camera frames.
+     *
+     * <p>The capture session is not reconfigured when the bound {@link SessionConfig} was
+     * configured for dynamic switching via
+     * {@link SessionConfig.Builder#setInitialEnabledUseCases}. Otherwise, the first call may
+     * reconfigure the capture session once to pre-attach an internal repeating stream when any
+     * bound {@link UseCase} (e.g. {@link ImageCapture} or {@code VideoCapture}) has no repeating
+     * stream of its own; subsequent calls do not reconfigure the session. Instead, the
+     * repeating request is updated so that only the specified {@link UseCase}s receive frames. The
+     * active set of enabled {@link UseCase}s is remembered and applied again if the capture session
+     * is re-created later.
+     *
+     * <p>Notes on disabled {@link UseCase}s (bound in the {@link SessionConfig} but excluded from
+     * {@code useCases}):
+     * <ul>
+     * <li>Disabling {@code VideoCapture} while a recording is in progress stops frame delivery to
+     * the recorder without automatically stopping or pausing the recording; the application should
+     * stop or pause the active recording before disabling {@code VideoCapture}.
+     * <li>Invoking {@link ImageCapture#takePicture} while {@link ImageCapture} is not in the
+     * enabled set fails with {@link ImageCapture#ERROR_INVALID_CAMERA}.
+     * <li>When CameraX groups multiple {@link UseCase}s into a single shared stream (stream
+     * sharing), enabling any grouped child {@link UseCase} keeps the shared stream and its active
+     * child outputs (such as {@link Preview} or an in-progress {@code VideoCapture} recording)
+     * running.
+     * <li>Because the underlying capture session remains configured for the union of all bound
+     * {@link UseCase}s, session-wide stream specifications (such as dynamic range, stream use case,
+     * and session parameters) stay fixed for the lifetime of the session while the repeating
+     * request template and per-request options update to reflect the currently enabled subset.
+     * </ul>
+     *
+     * <p>The returned {@link ListenableFuture} fails in the following cases:
+     * <ul>
+     * <li>{@link IllegalStateException} if no {@link SessionConfig} is bound, or if dynamic
+     * {@link UseCase} switching is not supported by the current session configuration (for
+     * example, when a CameraX extension or feature group is enabled, in concurrent or dual camera
+     * mode, or for a non-regular session).
+     * <li>{@link IllegalArgumentException} if {@code useCases} is empty, contains a
+     * {@link UseCase} not in the bound {@link SessionConfig#getUseCases()}, or requires an
+     * internal repeating stream that is not supported alongside the bound {@link SessionConfig}
+     * streams.
+     * <li>{@link OperationCanceledException} if the camera is not active (in which case the
+     * request is not retained) or the update is superseded by another call.
+     * </ul>
+     *
+     * <p>Cancellation of the returned future is a no-op.
+     *
+     * @param useCases The subset of {@link UseCase}s to enable. Must not be empty and must be a
+     *                 subset of the bound {@link SessionConfig#getUseCases()}.
+     * @return a {@link ListenableFuture} that completes when the first capture result of the
+     * repeating request for the updated {@link UseCase}s is received.
+     */
+    // TODO: b/532362193 - Make this public in next alpha
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    default @NonNull ListenableFuture<Void> setEnabledUseCasesAsync(
+            @NonNull List<@NonNull UseCase> useCases) {
+        return Futures.immediateFailedFuture(
+                new IllegalStateException("Dynamic UseCase switching is not supported"));
+    }
+
+    /**
+     * Dynamically updates the active subset of {@link UseCase}s receiving camera frames.
+     *
+     * @param useCases The subset of {@link UseCase}s to enable. Must not be empty and must be a
+     *                 subset of the bound {@link SessionConfig#getUseCases()}.
+     * @return a {@link ListenableFuture} that completes when the first capture result of the
+     * repeating request for the updated {@link UseCase}s is received.
+     * @see #setEnabledUseCasesAsync(List)
+     */
+    // TODO: b/532362193 - Make this public in next alpha
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    default @NonNull ListenableFuture<Void> setEnabledUseCasesAsync(
+            @NonNull UseCase @NonNull ... useCases) {
+        return setEnabledUseCasesAsync(Arrays.asList(Objects.requireNonNull(useCases)));
+    }
+
+    /**
+     * An exception indicating that a {@link CameraControl} operation was canceled, for example
+     * because a newer value was set or the camera was closed.
      *
      * <p>This is different from {@link CancellationException}. While
      * {@link CancellationException} means the {@link ListenableFuture} was cancelled by
-     * {@link Future#cancel(boolean)}, {@link OperationCanceledException} occurs when there is
-     * something wrong inside CameraControl and it has to cancel the operation.
+     * {@link Future#cancel(boolean)}, {@link OperationCanceledException} means that
+     * {@link CameraControl} canceled the operation itself.
      */
     final class OperationCanceledException extends Exception {
         @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
